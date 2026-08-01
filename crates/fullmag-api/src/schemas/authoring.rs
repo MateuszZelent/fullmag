@@ -46,6 +46,131 @@ pub struct StudyRuntimePatchRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SamplingPeriodPolicyResource {
+    AutoSincCutoff { nyquist_guard_factor: f64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AutomaticOutputSamplingResource {
+    FieldAuto {
+        name: String,
+        sample_period_policy: SamplingPeriodPolicyResource,
+    },
+    ScalarAuto {
+        name: String,
+        sample_period_policy: SamplingPeriodPolicyResource,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutomaticTableAutosaveResource {
+    pub table_id: String,
+    pub quantities: Vec<String>,
+    pub sample_period_policy: SamplingPeriodPolicyResource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageAutosaveLayoutResource {
+    Continuous,
+    Separate,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageAutosaveFormatResource {
+    Zarr,
+    Hdf5,
+    Txt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StageTableAutosaveResource {
+    #[serde(default = "default_table_autosave_resource_kind")]
+    pub kind: String,
+    #[serde(default = "default_table_autosave_resource_id")]
+    pub table_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_period_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_steps: Option<u64>,
+    pub quantities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FieldAutosaveResource {
+    #[serde(default = "default_field_autosave_resource_kind")]
+    pub kind: String,
+    pub quantity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_steps: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StageAutosaveResource {
+    #[serde(default = "default_stage_autosave_resource_kind")]
+    pub kind: String,
+    pub target: String,
+    pub layout: StageAutosaveLayoutResource,
+    pub format: StageAutosaveFormatResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<StageTableAutosaveResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<FieldAutosaveResource>,
+}
+
+impl StageAutosaveResource {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.kind != "stage_autosave" {
+            return Err("stage autosave kind must be 'stage_autosave'".into());
+        }
+        if self.target.is_empty()
+            || !self
+                .target
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_alphanumeric())
+            || !self.target.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+            })
+        {
+            return Err("stage autosave target is unsafe".into());
+        }
+        if self.table.is_none() && self.fields.is_empty() {
+            return Err("stage autosave requires a table or field policy".into());
+        }
+        if self.format == StageAutosaveFormatResource::Txt && !self.fields.is_empty() {
+            return Err("TXT stage autosave supports scalar tables only".into());
+        }
+        Ok(())
+    }
+}
+
+fn default_stage_autosave_resource_kind() -> String {
+    "stage_autosave".into()
+}
+
+fn default_field_autosave_resource_kind() -> String {
+    "field_autosave".into()
+}
+
+fn default_table_autosave_resource_kind() -> String {
+    "table_autosave".into()
+}
+
+fn default_table_autosave_resource_id() -> String {
+    "default".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SceneMetadataResource {
     pub id: String,
     pub name: String,
@@ -163,8 +288,13 @@ pub enum FieldDriveKindResource {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FieldTargetResource {
     Global {},
-    Object { object_id: String },
-    Region { object_id: String, region_id: String },
+    Object {
+        object_id: String,
+    },
+    Region {
+        object_id: String,
+        region_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -218,8 +348,13 @@ pub enum TimeDependenceResource {
         #[serde(default)]
         offset: f64,
     },
-    Pulse { t_on: f64, t_off: f64 },
-    PiecewiseLinear { points: Vec<[f64; 2]> },
+    Pulse {
+        t_on: f64,
+        t_off: f64,
+    },
+    PiecewiseLinear {
+        points: Vec<[f64; 2]>,
+    },
     SincPulse {
         cutoff_hz: f64,
         #[serde(default)]
@@ -1077,4 +1212,49 @@ pub struct AuthoringTransactionResponse {
     pub scene_revision: u64,
     #[schema(value_type = Object)]
     pub committed_scene: Value,
+}
+
+#[cfg(test)]
+mod stage_autosave_tests {
+    use super::*;
+
+    #[test]
+    fn stage_autosave_resource_round_trips_all_storage_choices() {
+        for format in ["zarr", "hdf5", "txt"] {
+            let resource: StageAutosaveResource = serde_json::from_value(serde_json::json!({
+                "kind": "stage_autosave",
+                "target": "main",
+                "layout": "continuous",
+                "format": format,
+                "table": {
+                    "kind": "table_autosave",
+                    "table_id": "default",
+                    "sample_period_s": 1e-12,
+                    "quantities": ["step", "t", "mx"]
+                },
+                "fields": []
+            }))
+            .unwrap();
+            resource.validate().unwrap();
+            assert_eq!(
+                serde_json::to_value(&resource).unwrap()["format"],
+                serde_json::json!(format)
+            );
+        }
+    }
+
+    #[test]
+    fn txt_stage_autosave_resource_rejects_field_requests() {
+        let resource: StageAutosaveResource = serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": "separate",
+            "format": "txt",
+            "fields": [{"quantity": "m", "every_seconds": 1e-12}]
+        }))
+        .unwrap();
+        assert!(resource
+            .validate()
+            .unwrap_err()
+            .contains("scalar tables only"));
+    }
 }

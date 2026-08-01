@@ -641,7 +641,7 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
     check(
         adaptive_header.find("GPU CUDA RK adaptive runtime module header") !=
                 std::string::npos &&
-            adaptive_header.find("struct GpuAdaptiveResult") !=
+            adaptive_header.find("using GpuAdaptiveResult = adaptive::AdaptiveStepDecision") !=
                 std::string::npos &&
             adaptive_header.find("gpu_rk_adaptive_pi_step(") !=
                 std::string::npos &&
@@ -727,7 +727,7 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             decision_source.find("gpu_rk_read_control_scalar_result(") !=
                 std::string::npos &&
-            decision_source.find("gpu_rk_adaptive_pi_step(ctx, error_norm)") !=
+            decision_source.find("gpu_rk_adaptive_pi_step(ctx, dt_attempt, error_norm, order_est)") !=
                 std::string::npos &&
             decision_source.find("cudaMemcpyAsync GPU RK adaptive decision control scalar device->host") !=
                 std::string::npos,

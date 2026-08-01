@@ -1,6 +1,5 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
 import {
   useMeshBuildCurrent,
   useMeshSharedDomainManifestResource,
@@ -12,7 +11,7 @@ import { shouldLoadRuntimeMeshBuild, shouldLoadRuntimeMeshManifest, shouldLoadRu
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { findCanonicalAirboxPart } from "./airboxMeshInspectorModel";
 import { useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
 
@@ -52,8 +51,8 @@ export function AirboxMeshOverviewPanel({ selection }: InspectorPanelProps) {
     manifest.data != null && manifest.data.revision < resource.revision;
 
   return (
-    <Accordion className="fm-inspector-panel" type="multiple" defaultValue={["mesh-overview"]}>
-      <InspectorSection value="mesh-overview" title="Airbox Mesh Overview" badge={stale ? "stale" : manifest.status}>
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="Airbox Mesh Overview" badge={stale ? "stale" : manifest.status}>
         <FieldRow label="Policy revision" value={String(resource.revision)} />
         <FieldRow label="Manifest revision" value={String(manifest.data?.revision ?? "unknown")} />
         <FieldRow
@@ -71,7 +70,7 @@ export function AirboxMeshOverviewPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Statistics status" value={`quality ${quality.status}; report ${report.status}`} />
         <FieldRow label="Topology status" value={manifest.status} />
         <FieldRow label="Build status" value={current.status} />
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

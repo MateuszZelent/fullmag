@@ -153,6 +153,15 @@ describe("dev-server launcher contract", () => {
     );
 
     expect(controlRoomLauncher).toContain("resolvePnpmInvocation");
+    expect(controlRoomLauncher).toContain(
+      "const browserOrigin = `http://localhost:${port}`",
+    );
+    expect(controlRoomLauncher).toContain(
+      "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin",
+    );
+    expect(controlRoomLauncher).not.toContain(
+      "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: apiTarget",
+    );
     expect(controlRoomLauncher).not.toContain(
       'process.platform === "win32" ? "pnpm.cmd" : "pnpm"',
     );

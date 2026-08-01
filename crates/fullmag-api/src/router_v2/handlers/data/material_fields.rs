@@ -50,23 +50,23 @@ pub async fn get_material_field_data_catalog(
             &snapshot.latest_fields,
             &assets,
         )
-            .into_iter()
-            .map(|resource| MaterialParameterFieldDataSummaryResource {
-                field_id: resource.field_id.clone(),
-                assignment_id: resource.assignment_id.clone(),
-                asset_id: resource.asset_id.clone(),
-                owner_object_id: resource.owner_object_id.clone(),
-                parameter: resource.parameter.clone(),
-                source_region_id: resource.source_region_id.clone(),
-                unit: resource.unit.clone(),
-                realization_status: resource.realization_status.clone(),
-                sample_count: resource.sample_count,
-                href: format!(
-                    "/v2/sessions/current/data/material-fields/{}",
-                    resource.field_id
-                ),
-            })
-            .collect(),
+        .into_iter()
+        .map(|resource| MaterialParameterFieldDataSummaryResource {
+            field_id: resource.field_id.clone(),
+            assignment_id: resource.assignment_id.clone(),
+            asset_id: resource.asset_id.clone(),
+            owner_object_id: resource.owner_object_id.clone(),
+            parameter: resource.parameter.clone(),
+            source_region_id: resource.source_region_id.clone(),
+            unit: resource.unit.clone(),
+            realization_status: resource.realization_status.clone(),
+            sample_count: resource.sample_count,
+            href: format!(
+                "/v2/sessions/current/data/material-fields/{}",
+                resource.field_id
+            ),
+        })
+        .collect(),
     }))
 }
 
@@ -103,10 +103,10 @@ pub async fn get_material_field_data(
         &snapshot.latest_fields,
         &assets,
     )
-        .into_iter()
-        .find(|resource| resource.field_id == field_id || resource.assignment_id == field_id)
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found(format!("material field '{field_id}' not found")))
+    .into_iter()
+    .find(|resource| resource.field_id == field_id || resource.assignment_id == field_id)
+    .map(Json)
+    .ok_or_else(|| ApiError::not_found(format!("material field '{field_id}' not found")))
 }
 
 fn material_field_data_resources(

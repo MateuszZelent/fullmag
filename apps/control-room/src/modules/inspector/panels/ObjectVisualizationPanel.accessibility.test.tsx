@@ -7,27 +7,51 @@ import {
   VisualizationToggleButton,
 } from "./ObjectVisualizationPanel";
 import {
+  NumberField,
+  VisualizationDisplayPassesSection,
+} from "./ObjectVisualizationTargetSection";
+import { DEFAULT_AIRBOX_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
+import {
   nextVisualizationRadioValue,
   visualizationSectionDisabledDescription,
 } from "./ObjectVisualizationPanelAccessibility";
 
 describe("ObjectVisualizationPanel accessibility controls", () => {
-  it("exposes Surface, Wireframe, Points, and Vectors as pressed toggles", () => {
+  it("renders one Airbox master control without duplicate geometry toggles", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationDisplayPassesSection
+        displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
+        passControlsDisabled
+        patch={vi.fn().mockResolvedValue(undefined)}
+        pending={false}
+        primitiveDisplayToggleVisible={false}
+        renderWarning={null}
+        settings={DEFAULT_AIRBOX_VISUALIZATION}
+        targetKind="airbox"
+      />,
+    );
+
+    expect(html).toContain('aria-label="Toggle target visibility"');
+    expect(html).toContain(">Visible</button>");
+    expect(html).toContain(">Vectors</button>");
+    expect(html).not.toContain('aria-label="Toggle surface shading"');
+    expect(html).not.toContain('aria-label="Toggle wireframe overlay"');
+  });
+
+  it("exposes only independent display overlays as pressed toggles", () => {
     const html = renderToStaticMarkup(
       <>
-        <VisualizationToggleButton active label="Surface" onClick={vi.fn()} />
-        <VisualizationToggleButton active={false} label="Wireframe" onClick={vi.fn()} />
-        <VisualizationToggleButton active label="Points" onClick={vi.fn()} />
+        <VisualizationToggleButton active label="Visible" onClick={vi.fn()} />
         <VisualizationToggleButton active={false} label="Vectors" onClick={vi.fn()} />
+        <VisualizationToggleButton active label="Frame" onClick={vi.fn()} />
       </>,
     );
 
     expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('aria-pressed="false"');
-    expect(html).toContain(">Surface</button>");
-    expect(html).toContain(">Wireframe</button>");
-    expect(html).toContain(">Points</button>");
+    expect(html).toContain(">Visible</button>");
     expect(html).toContain(">Vectors</button>");
+    expect(html).toContain(">Frame</button>");
   });
 
   it("announces why a disabled display control cannot be changed", () => {
@@ -95,9 +119,10 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain('aria-label="Projection"');
     expect(html).toContain('aria-label="Vector coloring"');
+    expect(html).toContain('data-slot="inspector-property-row"');
+    expect(html).toContain('data-slot="segmented-control"');
     expect(html).toContain('role="radio"');
     expect(html).toContain('aria-checked="true"');
-    expect(html).toContain('aria-checked="false"');
   });
 
   it("moves radio selection with horizontal arrow keys", () => {
@@ -124,5 +149,28 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
 
     expect(html).toContain('aria-label="Wireframe color picker"');
     expect(html).toContain('aria-label="Wireframe color value"');
+    expect(html).toContain('data-slot="inspector-property-row"');
+    expect(html).toContain('data-slot="visualization-color-control"');
+  });
+
+  it("renders numeric visualization controls as labelled Radix sliders", () => {
+    const html = renderToStaticMarkup(
+      <NumberField
+        label="Vector alpha"
+        max={100}
+        min={0}
+        unit="%"
+        value={72}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('data-slot="inspector-property-row"');
+    expect(html).toContain('data-slot="visualization-number-control"');
+    expect(html).toContain('aria-label="Vector alpha"');
+    expect(html).toContain('role="slider"');
+    expect(html).toContain('aria-valuemin="0"');
+    expect(html).toContain('aria-valuemax="100"');
+    expect(html).toContain("72%");
   });
 });

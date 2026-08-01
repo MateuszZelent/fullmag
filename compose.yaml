@@ -27,7 +27,11 @@ services:
     build:
       context: .
       dockerfile: docker/fem-gpu/Dockerfile
-    image: fullmag/fem-gpu:local
+      args:
+        FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
+        FULLMAG_HYPRE_GPU_ARCHITECTURES: "${FULLMAG_HYPRE_GPU_ARCHITECTURES:-60 70 80 89 90}"
+        FULLMAG_HYPRE_MEMORY_VARIANT: "${FULLMAG_HYPRE_MEMORY_VARIANT:-baseline}"
+    image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}
     working_dir: /workspace
     command: sleep infinity
     volumes:
@@ -43,6 +47,7 @@ services:
       FULLMAG_FEM_WITH_SLEPC: "ON"
       FULLMAG_FEM_GPU_MIN_NODES: "0"
       FULLMAG_FEM_MFEM_DEVICE: ceed-cuda:/gpu/cuda/shared
+      FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
       CMAKE_PREFIX_PATH: /opt/fullmag-deps
       LD_LIBRARY_PATH: /opt/fullmag-deps/lib
     gpus: all

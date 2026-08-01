@@ -28,12 +28,15 @@ public:
     Aos3MassBilinearTermwiseResult ms_weighted_aos3_mass_bilinear_termwise(
         const std::vector<double> &left_aos3_nodal_values,
         const std::vector<double> &right_aos3_nodal_values) const;
+    MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction(
+        const std::vector<double> &aos3_nodal_values) const;
 
 private:
     P1TetrahedralMaterialRealization realization_;
 };
 
-// Build exactly once after mesh/mask/material validation, before interactions.
+// Build the exact tetrahedral adapter for element-DG0 fields after validation.
+// Uniform and nodal-P1 coefficients bypass it and are realized directly by MFEM.
 bool initialize_material_runtime(Context &ctx, std::string &error);
 
 } // namespace fullmag::fem

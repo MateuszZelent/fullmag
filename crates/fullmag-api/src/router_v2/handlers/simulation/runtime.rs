@@ -23,6 +23,11 @@ use crate::schemas::hysteresis::{
     HysteresisSettleTraceEntrySchema, HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
     HysteresisStorageEstimateSchema,
 };
+use crate::schemas::preparation::{
+    PreparationClockAdjustment, PreparationExecutionSummary, PreparationFailureResource,
+    PreparationLogEntryResource, PreparationLogLevel, PreparationProgressStage, PreparationStageId,
+    PreparationStageStatus, PreparationStatus, SimulationPreparationResource,
+};
 use crate::schemas::relaxation::{
     canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm, StageMetricKind, StageMetricUnit,
     StageStopReason,
@@ -56,6 +61,242 @@ pub struct HysteresisExecutionTreeQuery {
     pub include_bookmarks: Option<bool>,
     pub include_warnings: Option<bool>,
     pub include_snapshots: Option<bool>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/simulation/preparation",
+    responses(
+        (status = 200, description = "Current simulation preparation resource", body = SimulationPreparationResource),
+        (status = 404, description = "Simulation preparation is not available", body = crate::schemas::common::ApiErrorResponse),
+    ),
+    tag = "simulation"
+)]
+pub async fn get_simulation_preparation(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SimulationPreparationResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let preparation = snapshot
+        .simulation_preparation
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("simulation preparation unavailable"))?;
+
+    const CANONICAL_STAGE_IDS: [&str; 9] = [
+        "runtime_startup",
+        "script_materialization",
+        "validation",
+        "planning",
+        "domain_preparation",
+        "meshing",
+        "mesh_postprocessing",
+        "solver_initialization",
+        "ready",
+    ];
+    if preparation.stages.len() != CANONICAL_STAGE_IDS.len()
+        || !preparation
+            .stages
+            .iter()
+            .map(|stage| stage.id.as_str())
+            .eq(CANONICAL_STAGE_IDS)
+    {
+        return Err(ApiError::internal(
+            "simulation preparation stages do not match the canonical nine-stage order",
+        ));
+    }
+
+    let stages = preparation
+        .stages
+        .iter()
+        .map(|stage| {
+            if stage.progress_percent.is_some_and(|percent| percent > 100) {
+                return Err(ApiError::internal(format!(
+                    "simulation preparation stage '{}' has progress above 100",
+                    stage.id
+                )));
+            }
+            Ok(PreparationProgressStage {
+                id: preparation_stage_id(&stage.id)?,
+                label: bounded_preparation_string(&stage.label, 128),
+                detail: bounded_preparation_string(&stage.detail, 1024),
+                status: preparation_stage_status(&stage.status)?,
+                started_at_unix_ms: stage.started_at_unix_ms,
+                completed_at_unix_ms: stage.completed_at_unix_ms,
+                duration_ms: stage.duration_ms,
+                clock_adjustment: stage.clock_adjustment.as_ref().map(|adjustment| {
+                    PreparationClockAdjustment {
+                        observed_at_unix_ms: adjustment.observed_at_unix_ms,
+                        stage_started_at_unix_ms: adjustment.stage_started_at_unix_ms,
+                        backward_delta_ms: adjustment.backward_delta_ms,
+                    }
+                }),
+                progress_percent: stage.progress_percent,
+                progress_label: stage
+                    .progress_label
+                    .as_deref()
+                    .map(|value| bounded_preparation_string(value, 256)),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let log_tail_start = preparation.log_tail.len().saturating_sub(200);
+    let log_tail = preparation.log_tail[log_tail_start..]
+        .iter()
+        .map(|entry| {
+            Ok(PreparationLogEntryResource {
+                timestamp_unix_ms: entry.timestamp_unix_ms,
+                level: preparation_log_level(&entry.level)?,
+                stage_id: preparation_stage_id(&entry.stage_id)?,
+                message: bounded_preparation_string(&entry.message, 2048),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let failure = preparation
+        .failure
+        .as_ref()
+        .map(|failure| -> Result<PreparationFailureResource, ApiError> {
+            Ok(PreparationFailureResource {
+                error_code: bounded_preparation_string(&failure.error_code, 128),
+                summary: bounded_preparation_string(&failure.summary, 1024),
+                detail: failure
+                    .detail
+                    .as_deref()
+                    .map(|value| bounded_preparation_string(value, 1024)),
+                stage_id: preparation_stage_id(&failure.stage_id)?,
+                diagnostics_correlation_id: failure
+                    .diagnostics_correlation_id
+                    .as_deref()
+                    .map(|value| bounded_preparation_string(value, 256)),
+            })
+        })
+        .transpose()?;
+
+    Ok(Json(SimulationPreparationResource {
+        preparation_id: bounded_preparation_string(&preparation.preparation_id, 128),
+        revision: preparation.revision,
+        status: preparation_status(&preparation.status)?,
+        active_stage_id: preparation
+            .active_stage_id
+            .as_deref()
+            .map(preparation_stage_id)
+            .transpose()?,
+        started_at_unix_ms: preparation.started_at_unix_ms,
+        completed_at_unix_ms: preparation.completed_at_unix_ms,
+        requested_execution: PreparationExecutionSummary {
+            backend: Some(bounded_preparation_string(
+                &snapshot.session.requested_backend,
+                128,
+            )),
+            device: Some(bounded_preparation_string(
+                &snapshot.session.requested_device,
+                128,
+            )),
+            precision: Some(bounded_preparation_string(
+                &snapshot.session.requested_precision,
+                128,
+            )),
+            mode: Some(bounded_preparation_string(
+                &snapshot.session.requested_mode,
+                128,
+            )),
+            runtime_family: None,
+            engine_id: None,
+            worker: None,
+        },
+        resolved_execution: resolved_preparation_execution(snapshot),
+        stages,
+        log_tail,
+        failure,
+    }))
+}
+
+fn resolved_preparation_execution(
+    snapshot: &SessionStateResponse,
+) -> Option<PreparationExecutionSummary> {
+    let session = &snapshot.session;
+    if session.resolved_backend.is_none()
+        && session.resolved_device.is_none()
+        && session.resolved_precision.is_none()
+        && session.resolved_mode.is_none()
+        && session.resolved_runtime_family.is_none()
+        && session.resolved_engine_id.is_none()
+        && session.resolved_worker.is_none()
+    {
+        return None;
+    }
+    Some(PreparationExecutionSummary {
+        backend: bounded_preparation_optional_string(session.resolved_backend.as_deref()),
+        device: bounded_preparation_optional_string(session.resolved_device.as_deref()),
+        precision: bounded_preparation_optional_string(session.resolved_precision.as_deref()),
+        mode: bounded_preparation_optional_string(session.resolved_mode.as_deref()),
+        runtime_family: bounded_preparation_optional_string(
+            session.resolved_runtime_family.as_deref(),
+        ),
+        engine_id: bounded_preparation_optional_string(session.resolved_engine_id.as_deref()),
+        worker: bounded_preparation_optional_string(session.resolved_worker.as_deref()),
+    })
+}
+
+fn bounded_preparation_optional_string(value: Option<&str>) -> Option<String> {
+    value.map(|value| bounded_preparation_string(value, 128))
+}
+
+fn bounded_preparation_string(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn preparation_status(value: &str) -> Result<PreparationStatus, ApiError> {
+    match value {
+        "connecting" => Ok(PreparationStatus::Connecting),
+        "running" => Ok(PreparationStatus::Running),
+        "ready" => Ok(PreparationStatus::Ready),
+        "failed" => Ok(PreparationStatus::Failed),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation status: {other}"
+        ))),
+    }
+}
+
+fn preparation_stage_id(value: &str) -> Result<PreparationStageId, ApiError> {
+    match value {
+        "runtime_startup" => Ok(PreparationStageId::RuntimeStartup),
+        "script_materialization" => Ok(PreparationStageId::ScriptMaterialization),
+        "validation" => Ok(PreparationStageId::Validation),
+        "planning" => Ok(PreparationStageId::Planning),
+        "domain_preparation" => Ok(PreparationStageId::DomainPreparation),
+        "meshing" => Ok(PreparationStageId::Meshing),
+        "mesh_postprocessing" => Ok(PreparationStageId::MeshPostprocessing),
+        "solver_initialization" => Ok(PreparationStageId::SolverInitialization),
+        "ready" => Ok(PreparationStageId::Ready),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation stage: {other}"
+        ))),
+    }
+}
+
+fn preparation_stage_status(value: &str) -> Result<PreparationStageStatus, ApiError> {
+    match value {
+        "pending" => Ok(PreparationStageStatus::Pending),
+        "active" => Ok(PreparationStageStatus::Active),
+        "completed" => Ok(PreparationStageStatus::Completed),
+        "failed" => Ok(PreparationStageStatus::Failed),
+        "skipped" => Ok(PreparationStageStatus::Skipped),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation stage status: {other}"
+        ))),
+    }
+}
+
+fn preparation_log_level(value: &str) -> Result<PreparationLogLevel, ApiError> {
+    match value {
+        "info" => Ok(PreparationLogLevel::Info),
+        "warning" => Ok(PreparationLogLevel::Warning),
+        "error" => Ok(PreparationLogLevel::Error),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation log level: {other}"
+        ))),
+    }
 }
 
 #[utoipa::path(
@@ -201,6 +442,7 @@ pub async fn get_stage_execution(
                     command_id: record.command_id.clone(),
                     started_at_unix_ms: record.started_at_unix_ms,
                     completed_at_unix_ms: record.completed_at_unix_ms,
+                    time_to_tolerance_seconds: time_to_tolerance_seconds(record),
                     reason: record.reason.clone().map(StageStopReason::from),
                     converged: record.converged,
                     artifact_refs: record.artifact_refs.clone(),
@@ -252,6 +494,161 @@ struct StageProgressProjection {
     progress_label: Option<String>,
     progress_detail: Option<String>,
     last_progress_unix_ms: Option<u64>,
+}
+
+fn time_to_tolerance_seconds(record: &StageExecutionRecord) -> Option<f64> {
+    if record.status != crate::types::StageLifecycleState::Completed || !record.converged {
+        return None;
+    }
+    let metric_matches_reason = matches!(
+        (record.reason, record.metric, record.metric_name.as_deref()),
+        (
+            Some(fullmag_ir::StageStopReason::Torque),
+            Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            Some("max_torque_apm")
+        ) | (
+            Some(fullmag_ir::StageStopReason::Energy),
+            Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
+            Some("total_energy_plateau_range_J")
+        )
+    );
+    if !metric_matches_reason {
+        return None;
+    }
+    let metric_value = record.metric_value?;
+    let threshold = record.threshold?;
+    if !metric_value.is_finite()
+        || !threshold.is_finite()
+        || metric_value < 0.0
+        || threshold < 0.0
+        || metric_value > threshold
+    {
+        return None;
+    }
+    let elapsed_ms = record
+        .completed_at_unix_ms?
+        .checked_sub(record.started_at_unix_ms?)?;
+    Some(elapsed_ms as f64 / 1_000.0)
+}
+
+#[cfg(test)]
+mod time_to_tolerance_tests {
+    use super::time_to_tolerance_seconds;
+    use crate::types::StageExecutionRecord;
+    use fullmag_ir::{StageMetricKind, StageStopReason};
+
+    fn completion(
+        reason: StageStopReason,
+        metric: StageMetricKind,
+        metric_name: &str,
+        metric_value: f64,
+        threshold: f64,
+    ) -> StageExecutionRecord {
+        serde_json::from_value(serde_json::json!({
+            "status": "completed",
+            "converged": true,
+            "reason": reason,
+            "metric": metric,
+            "metric_name": metric_name,
+            "metric_value": metric_value,
+            "threshold": threshold,
+            "started_at_unix_ms": 1_000,
+            "completed_at_unix_ms": 6_000,
+        }))
+        .expect("valid stage execution fixture")
+    }
+
+    #[test]
+    fn duration_is_exposed_only_for_tolerance_qualified_completion() {
+        for record in [
+            completion(
+                StageStopReason::Torque,
+                StageMetricKind::MaxTorqueApm,
+                "max_torque_apm",
+                5.0,
+                10.0,
+            ),
+            completion(
+                StageStopReason::Energy,
+                StageMetricKind::TotalEnergyPlateauRangeJ,
+                "total_energy_plateau_range_J",
+                1.0e-20,
+                2.0e-20,
+            ),
+        ] {
+            assert_eq!(time_to_tolerance_seconds(&record), Some(5.0));
+        }
+    }
+
+    #[test]
+    fn duration_fails_closed_for_incoherent_completion_records() {
+        let valid = completion(
+            StageStopReason::Torque,
+            StageMetricKind::MaxTorqueApm,
+            "max_torque_apm",
+            5.0,
+            10.0,
+        );
+        let mut invalid = Vec::new();
+
+        for (status, converged, reason) in [
+            ("completed", false, StageStopReason::MaxSteps),
+            ("completed", false, StageStopReason::MaxPseudotime),
+            ("completed", false, StageStopReason::MaxPhysicalTime),
+            ("cancelled", false, StageStopReason::UserCancelled),
+            ("failed", false, StageStopReason::BackendError),
+        ] {
+            let mut record = valid.clone();
+            record.status = serde_json::from_value(serde_json::json!(status)).unwrap();
+            record.converged = converged;
+            record.reason = Some(reason);
+            invalid.push(record);
+        }
+        let mutate = |change: fn(&mut StageExecutionRecord)| {
+            let mut record = valid.clone();
+            change(&mut record);
+            record
+        };
+        invalid.extend([
+            mutate(|record| record.reason = None),
+            mutate(|record| record.metric = None),
+            mutate(|record| record.metric_name = None),
+            mutate(|record| record.metric_value = None),
+            mutate(|record| record.threshold = None),
+            mutate(|record| record.metric_value = Some(f64::NAN)),
+            mutate(|record| record.threshold = Some(f64::INFINITY)),
+            mutate(|record| record.metric_value = Some(-1.0)),
+            mutate(|record| record.threshold = Some(-1.0)),
+            mutate(|record| record.metric_value = Some(11.0)),
+            mutate(|record| record.metric = Some(StageMetricKind::TotalEnergyPlateauRangeJ)),
+            mutate(|record| record.metric_name = Some("total_energy_plateau_range_J".to_string())),
+            mutate(|record| record.started_at_unix_ms = None),
+            mutate(|record| record.completed_at_unix_ms = None),
+            mutate(|record| record.started_at_unix_ms = Some(7_000)),
+        ]);
+
+        let mut stagnation = valid.clone();
+        stagnation.status = serde_json::from_value(serde_json::json!("failed")).unwrap();
+        stagnation.converged = false;
+        stagnation.reason = Some(StageStopReason::Gradient);
+        stagnation.metric = Some(StageMetricKind::NumericalStagnation);
+        stagnation.metric_name = Some("numerical_stagnation".to_string());
+        stagnation.metric_value = Some(1.0);
+        stagnation.threshold = Some(1.0);
+        invalid.push(stagnation);
+
+        for status in ["skipped", "stopped"] {
+            let mut record = valid.clone();
+            record.status = serde_json::from_value(serde_json::json!(status)).unwrap();
+            record.converged = false;
+            record.reason = None;
+            invalid.push(record);
+        }
+
+        for record in invalid {
+            assert_eq!(time_to_tolerance_seconds(&record), None, "{record:?}");
+        }
+    }
 }
 
 fn frequency_response_stage_progress(
@@ -952,7 +1349,7 @@ fn average_hysteresis_live_magnetization(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(mesh) = step.fem_mesh.as_ref().or(snapshot_mesh) {
+    if let Some(mesh) = snapshot_mesh {
         if let Some(weighted) = average_fem_magnetization_by_element_volume(values, mesh) {
             return Some(weighted);
         }
@@ -996,6 +1393,7 @@ fn average_fem_magnetization_by_element_volume(
     values: &[f64],
     mesh: &fullmag_runner::FemMeshPayload,
 ) -> Option<[f64; 3]> {
+    let tet_elements = mesh.require_tet4_elements().ok()?;
     let point_count = values.len() / 3;
     let mut total = [0.0; 3];
     let mut total_weight = 0.0;
@@ -1006,7 +1404,7 @@ fn average_fem_magnetization_by_element_volume(
         }
         let start = part.element_start as usize;
         let end = start.saturating_add(part.element_count as usize);
-        let Some(elements) = mesh.elements.get(start..end) else {
+        let Some(elements) = tet_elements.get(start..end) else {
             continue;
         };
         for element in elements {
@@ -1227,6 +1625,10 @@ pub async fn get_solver_status(
             &["execution_plan", "backend_plan", "integrator"],
         ),
         dt_seconds: latest.map(|value| value.dt),
+        error_estimate: latest_scalar_row.and_then(|value| value.error_estimate),
+        max_error: latest_scalar_row.and_then(|value| value.max_error),
+        dt_suggested_seconds: latest_scalar_row.and_then(|value| value.dt_suggested),
+        rejected_attempts: latest_scalar_row.map(|value| value.rejected_attempts),
         sim_time_seconds: latest.map(|value| value.time),
         pseudo_time_seconds: latest_scalar_row
             .and_then(|value| value.pseudo_time_s)
@@ -1734,6 +2136,7 @@ pub async fn get_command_detail(
         integrator: record.command.integrator.clone(),
         fixed_timestep: record.command.fixed_timestep,
         max_error: record.command.max_error,
+        solver_policy: record.command.solver_policy.clone(),
         relax_algorithm: record
             .command
             .relax_algorithm
@@ -1767,6 +2170,10 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             step: live_state.latest_step.step,
             time: live_state.latest_step.time,
             solver_dt: live_state.latest_step.dt,
+            error_estimate: None,
+            max_error: None,
+            dt_suggested: None,
+            rejected_attempts: 0,
             pseudo_time_s: live_state.latest_step.pseudo_time_s,
             active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
             mx: 0.0,
@@ -1797,6 +2204,10 @@ fn latest_solver_sample(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             step: live_state.latest_step.step,
             time: live_state.latest_step.time,
             solver_dt: live_state.latest_step.dt,
+            error_estimate: None,
+            max_error: None,
+            dt_suggested: None,
+            rejected_attempts: 0,
             pseudo_time_s: live_state.latest_step.pseudo_time_s,
             active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
             mx: 0.0,
@@ -1915,7 +2326,7 @@ fn latest_magnetization_average(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(mesh) = live_state.latest_step.fem_mesh.as_ref() {
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
         if let Some(average) = mesh
             .mesh_parts
             .iter()

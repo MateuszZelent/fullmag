@@ -53,4 +53,4 @@ if BACKEND == "fem":
 study.exchange()
 study.demag(realization="poisson_robin")
 study.solver(dt=1e-13)
-study.stages.add_relax(algorithm="llg_overdamped", max_steps=1, tol=1e-3)
+study.stages.add_relax(algorithm="llg_overdamped", max_steps=1, tolA=1e-3)

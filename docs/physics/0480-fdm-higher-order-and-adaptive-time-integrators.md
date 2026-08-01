@@ -485,3 +485,21 @@ Internal references:
 
 - `docs/physics/0200-llg-exchange-reference-engine.md`
 - `docs/physics/0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md`
+- `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
+
+## 9. Canonical time-policy reconciliation
+
+Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`,
+`LLG-TD-FIRST-DT-V1`, `LLG-TD-MAX-ERR-V1`, `LLG-TD-ATOMIC-V1`.
+
+The approved cross-backend contract is note 0960. In the convenience API,
+`fix_dt` is fixed-only. Adaptive RK uses `dt_initial`, `dt_min`, `dt_max`, and
+absolute `max_err`; when `dt_initial` is omitted, requested intent remains
+omitted and the resolved first attempt is exactly `dt_min`. The advanced
+`atol`/`rtol` object remains a separate tolerance mode.
+
+No FDM realization may infer omission from `dt_initial == dt_min`, substitute
+a global timestep sentinel, or force-accept an error failure at the floor.
+Such a failure is the typed `dt_min_exhausted` result. Fixed embedded RK23 or
+RK45 does not enter an adaptive retry lifecycle. A stiff time-domain method,
+when available, is an explicit user selection and never a hidden fallback.

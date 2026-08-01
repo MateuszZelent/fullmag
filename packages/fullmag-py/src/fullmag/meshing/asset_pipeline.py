@@ -41,7 +41,7 @@ from .gmsh_bridge import (
     generate_mesh_from_file,
     generate_shared_domain_mesh_from_components,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, _tetra_signed_volumes
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -103,8 +103,35 @@ def _is_stl_imported_geometry(geometry: Geometry) -> bool:
 class FrozenMagneticSubmeshPayload:
     mesh: MeshData
     region_markers: list[dict[str, object]]
-    interface_boundary_faces: np.ndarray
+    interface_facet_ordinals: np.ndarray
     magnetic_submesh_signatures: list[dict[str, object]]
+
+
+def _select_csr_items(
+    types: np.ndarray,
+    offsets: np.ndarray,
+    nodes: np.ndarray,
+    ordinals: np.ndarray,
+    *,
+    node_remap: dict[int, int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    selected_types = np.asarray(types[ordinals], dtype=np.str_)
+    selected_offsets = [0]
+    selected_nodes: list[int] = []
+    for ordinal in ordinals:
+        start = int(offsets[int(ordinal)])
+        stop = int(offsets[int(ordinal) + 1])
+        for node in nodes[start:stop]:
+            node_id = int(node)
+            selected_nodes.append(
+                node_remap[node_id] if node_remap is not None else node_id
+            )
+        selected_offsets.append(len(selected_nodes))
+    return (
+        selected_types,
+        np.asarray(selected_offsets, dtype=np.int64),
+        np.asarray(selected_nodes, dtype=np.int32),
+    )
 
 
 def _domain_mesh_mode_from_workflow(mesh_workflow: Mapping[str, object] | None) -> str | None:
@@ -185,15 +212,15 @@ def _load_frozen_magnetic_submesh_source(raw_source: object) -> FrozenMagneticSu
             candidate,
             context=str(report_path),
         )
-    interface_boundary_faces = np.asarray(mesh.boundary_faces, dtype=np.int32)
-    if interface_boundary_faces.size == 0:
+    interface_facet_ordinals = np.arange(mesh.n_boundary_faces, dtype=np.int64)
+    if interface_facet_ordinals.size == 0:
         raise ValueError(
-            "frozen_magnetic_submesh_source mesh must expose magnetic interface boundary_faces"
+            "frozen_magnetic_submesh_source mesh must expose magnetic interface facets"
         )
     return FrozenMagneticSubmeshPayload(
         mesh=mesh,
         region_markers=region_markers,
-        interface_boundary_faces=interface_boundary_faces,
+        interface_facet_ordinals=interface_facet_ordinals,
         magnetic_submesh_signatures=_magnetic_submesh_signatures(mesh, region_markers),
     )
 
@@ -222,38 +249,54 @@ def _extract_frozen_magnetic_submesh(
     if not np.any(magnetic_element_mask):
         raise ValueError(f"shared mesh contains no elements for magnetic marker {marker_int}")
 
-    magnetic_elements = np.asarray(shared_mesh.elements[magnetic_element_mask], dtype=np.int32)
-    used_nodes = np.unique(magnetic_elements.reshape(-1))
+    magnetic_ordinals = np.flatnonzero(magnetic_element_mask).astype(np.int64)
+    used_nodes = np.unique(
+        np.concatenate(
+            [shared_mesh.cell_node_ids(int(index)) for index in magnetic_ordinals]
+        )
+    )
     node_remap = {int(node_id): index for index, node_id in enumerate(used_nodes)}
-    remapped_elements = np.asarray(
-        [
-            [node_remap[int(node_id)] for node_id in element]
-            for element in magnetic_elements
-        ],
-        dtype=np.int32,
+    cell_types, cell_offsets, cell_nodes = _select_csr_items(
+        shared_mesh.cell_types,
+        shared_mesh.cell_offsets,
+        shared_mesh.cell_nodes,
+        magnetic_ordinals,
+        node_remap=node_remap,
     )
 
-    interface_faces: list[list[int]] = []
-    for face, boundary_marker in zip(
-        np.asarray(shared_mesh.boundary_faces, dtype=np.int32),
-        np.asarray(shared_mesh.boundary_markers, dtype=np.int32),
-        strict=False,
-    ):
+    interface_ordinals: list[int] = []
+    for facet_ordinal, boundary_marker in enumerate(shared_mesh.boundary_markers):
         if int(boundary_marker) != 10:
             continue
+        face = shared_mesh.facet_node_ids(facet_ordinal)
         if all(int(node_id) in node_remap for node_id in face):
-            interface_faces.append([node_remap[int(node_id)] for node_id in face])
-    if not interface_faces:
+            interface_ordinals.append(facet_ordinal)
+    if not interface_ordinals:
         raise ValueError(
-            f"shared mesh exposes no boundary/interface faces for magnetic marker {marker_int}"
+            f"shared mesh exposes no boundary/interface facets for magnetic marker {marker_int}"
         )
+    selected_interface_ordinals = np.asarray(interface_ordinals, dtype=np.int64)
+    facet_types, facet_offsets, facet_nodes = _select_csr_items(
+        shared_mesh.facet_types,
+        shared_mesh.facet_offsets,
+        shared_mesh.facet_nodes,
+        selected_interface_ordinals,
+        node_remap=node_remap,
+    )
 
     frozen_mesh = MeshData(
         nodes=np.asarray(shared_mesh.nodes[used_nodes], dtype=np.float64),
-        elements=remapped_elements,
-        element_markers=np.full(remapped_elements.shape[0], marker_int, dtype=np.int32),
-        boundary_faces=np.asarray(interface_faces, dtype=np.int32),
-        boundary_markers=np.full(len(interface_faces), 10, dtype=np.int32),
+        cell_types=cell_types,
+        cell_offsets=cell_offsets,
+        cell_nodes=cell_nodes,
+        cell_global_ordinals=shared_mesh.cell_global_ordinals[magnetic_ordinals],
+        element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.int32),
+        facet_types=facet_types,
+        facet_roles=shared_mesh.facet_roles[selected_interface_ordinals],
+        facet_offsets=facet_offsets,
+        facet_nodes=facet_nodes,
+        boundary_markers=np.full(len(interface_ordinals), 10, dtype=np.int32),
+        facet_global_ordinals=shared_mesh.facet_global_ordinals[selected_interface_ordinals],
         periodic_boundary_pairs=[
             dict(pair) for pair in shared_mesh.periodic_boundary_pairs
         ],
@@ -266,7 +309,10 @@ def _extract_frozen_magnetic_submesh(
     return FrozenMagneticSubmeshPayload(
         mesh=frozen_mesh,
         region_markers=frozen_region_markers,
-        interface_boundary_faces=frozen_mesh.boundary_faces,
+        interface_facet_ordinals=np.arange(
+            frozen_mesh.n_boundary_faces,
+            dtype=np.int64,
+        ),
         magnetic_submesh_signatures=_magnetic_submesh_signatures(
             frozen_mesh,
             frozen_region_markers,
@@ -347,11 +393,13 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
             merged_nodes.append(np.array(node, copy=True))
         air_node_map[index] = int(merged_index)
 
-    remapped_air_elements = air_node_map[np.asarray(air_mesh.elements, dtype=np.int32)]
-    merged_elements = np.vstack(
+    remapped_air_cell_nodes = air_node_map[air_mesh.cell_nodes]
+    merged_cell_types = np.concatenate([magnetic_mesh.cell_types, air_mesh.cell_types])
+    merged_cell_nodes = np.concatenate([magnetic_mesh.cell_nodes, remapped_air_cell_nodes])
+    merged_cell_offsets = np.concatenate(
         [
-            np.asarray(magnetic_mesh.elements, dtype=np.int32),
-            remapped_air_elements.astype(np.int32, copy=False),
+            magnetic_mesh.cell_offsets,
+            air_mesh.cell_offsets[1:] + len(magnetic_mesh.cell_nodes),
         ]
     )
     merged_element_markers = np.concatenate(
@@ -361,23 +409,34 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         ]
     )
     interface_face_keys = {
-        tuple(sorted(int(node) for node in face))
-        for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32)
+        tuple(sorted(int(node) for node in magnetic_mesh.facet_node_ids(int(ordinal))))
+        for ordinal in frozen.interface_facet_ordinals
     }
-    boundary_faces: list[np.ndarray] = []
+    facet_types: list[str] = []
+    facet_roles: list[str] = []
+    facet_offsets = [0]
+    facet_nodes: list[int] = []
     boundary_markers: list[int] = []
-    for face, marker in zip(air_mesh.boundary_faces, air_mesh.boundary_markers, strict=True):
-        remapped_face = air_node_map[np.asarray(face, dtype=np.int32)]
+    for ordinal, marker in enumerate(air_mesh.boundary_markers):
+        remapped_face = air_node_map[air_mesh.facet_node_ids(ordinal)]
         if tuple(sorted(int(node) for node in remapped_face)) in interface_face_keys:
             continue
-        boundary_faces.append(remapped_face.astype(np.int32, copy=False))
+        facet_types.append(str(air_mesh.facet_types[ordinal]))
+        facet_roles.append(str(air_mesh.facet_roles[ordinal]))
+        facet_nodes.extend(int(node) for node in remapped_face)
+        facet_offsets.append(len(facet_nodes))
         boundary_markers.append(int(marker))
 
     # Preserve the shared magnetic-air interface as an explicit certified
     # boundary role.  It is not an exterior air face, but the planner needs
     # the physical interface marker to prove role disjointness and coverage.
-    for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32):
-        boundary_faces.append(np.asarray(face, dtype=np.int32))
+    for ordinal in frozen.interface_facet_ordinals:
+        facet_types.append(str(magnetic_mesh.facet_types[int(ordinal)]))
+        facet_roles.append("material_interface")
+        facet_nodes.extend(
+            int(node) for node in magnetic_mesh.facet_node_ids(int(ordinal))
+        )
+        facet_offsets.append(len(facet_nodes))
         boundary_markers.append(10)
 
     periodic_boundary_pairs = [dict(pair) for pair in air_mesh.periodic_boundary_pairs]
@@ -397,14 +456,17 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
 
     return MeshData(
         nodes=np.asarray(merged_nodes, dtype=np.float64),
-        elements=merged_elements.astype(np.int32, copy=False),
+        cell_types=merged_cell_types,
+        cell_offsets=merged_cell_offsets,
+        cell_nodes=merged_cell_nodes,
         element_markers=merged_element_markers.astype(np.int32, copy=False),
-        boundary_faces=(
-            np.vstack(boundary_faces).astype(np.int32, copy=False)
-            if boundary_faces
-            else np.empty((0, 3), dtype=np.int32)
-        ),
+        facet_types=facet_types,
+        facet_roles=facet_roles,
+        facet_offsets=facet_offsets,
+        facet_nodes=facet_nodes,
         boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
+        cell_global_ordinals=np.arange(len(merged_cell_types), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
         periodic_boundary_pairs=periodic_boundary_pairs,
         periodic_node_pairs=periodic_node_pairs,
     )
@@ -414,7 +476,14 @@ def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as handle:
         handle.write("solid frozen_magnetic_boundary\n")
-        for face in np.asarray(mesh.boundary_faces, dtype=np.int32):
+        triangles: list[np.ndarray] = []
+        for ordinal, facet_type in enumerate(mesh.facet_types):
+            facet = mesh.facet_node_ids(ordinal)
+            if facet_type == "tri3":
+                triangles.append(facet)
+            else:
+                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
+        for face in triangles:
             v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
             normal = np.cross(v1 - v0, v2 - v0)
             norm = float(np.linalg.norm(normal))
@@ -733,6 +802,7 @@ def _generate_air_mesh_for_frozen_magnetic_submesh(
             order=int(hints.order),
             airbox=_airbox_with_clearance_for_frozen_surface(airbox, frozen.mesh),
             options=mesh_options,
+            provisional_interface_markers={10},
         )
     air_mask = _air_element_mask_outside_frozen_magnetic_submesh(generated, frozen)
     if not np.any(air_mask):
@@ -749,7 +819,7 @@ def _generate_air_mesh_for_frozen_magnetic_submesh(
         {node_id: node_id for node_id in kept_air_nodes},
     )
     retained_pair_ids = {str(pair.get("pair_id")) for pair in periodic_node_pairs}
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=np.asarray(generated.nodes, dtype=np.float64),
         elements=np.asarray(generated.elements[air_mask], dtype=np.int32),
         element_markers=np.zeros(int(np.count_nonzero(air_mask)), dtype=np.int32),
@@ -774,7 +844,22 @@ def _drop_degenerate_tetrahedra(
 ) -> MeshData:
     if mesh.n_elements == 0:
         return mesh
-    volumes = _tetra_signed_volumes(mesh)
+    tetra_ordinals = np.flatnonzero(mesh.cell_types == "tet4")
+    if tetra_ordinals.size == 0:
+        mesh.validate_strict(require_positive_orientation=True)
+        return mesh
+    tetra_nodes = np.asarray(
+        [mesh.cell_node_ids(int(index)) for index in tetra_ordinals],
+        dtype=np.int32,
+    )
+    p0 = mesh.nodes[tetra_nodes[:, 0]]
+    p1 = mesh.nodes[tetra_nodes[:, 1]]
+    p2 = mesh.nodes[tetra_nodes[:, 2]]
+    p3 = mesh.nodes[tetra_nodes[:, 3]]
+    volumes = (
+        np.linalg.det(np.stack([p1 - p0, p2 - p0, p3 - p0], axis=2))
+        / 6.0
+    )
     bbox = np.ptp(mesh.nodes, axis=0) if mesh.nodes.size else np.zeros(3, dtype=np.float64)
     scale = float(np.max(bbox))
     eps = max(
@@ -782,10 +867,18 @@ def _drop_degenerate_tetrahedra(
         FEM_TOPOLOGY_VOLUME_EPS,
         (scale if scale > 0.0 else 1.0) ** 3 * 1e-18,
     )
-    keep = np.abs(volumes) > eps
-    removed = int(np.count_nonzero(~keep))
+    keep_tetrahedra = np.abs(volumes) > eps
+    removed = int(np.count_nonzero(~keep_tetrahedra))
     if removed == 0:
+        if tetra_ordinals.size != mesh.n_elements:
+            mesh.validate_strict(require_positive_orientation=True)
         return mesh
+    if tetra_ordinals.size != mesh.n_elements:
+        raise ValueError(
+            "tetrahedral degenerate-cell cleanup is unavailable for mixed topology; "
+            f"found {removed} degenerate tet4 cells"
+        )
+    keep = keep_tetrahedra
     if removed == mesh.n_elements:
         raise ValueError(f"{context} produced only degenerate tetrahedra")
     marker = "shared_domain_degenerate_tetra_cleanup"
@@ -795,7 +888,7 @@ def _drop_degenerate_tetrahedra(
         f"{context}: removed {removed} degenerate tetrahedra below strict volume threshold"
     )
     boundary_faces, boundary_markers = _boundary_faces_for_kept_elements(mesh, keep)
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=mesh.nodes,
         elements=mesh.elements[keep],
         element_markers=mesh.element_markers[keep],
@@ -842,6 +935,14 @@ def _conformal_occ_degenerate_retry(
             "conformal_occ_delaunay_degenerate_retry_frontal",
         )
     return None
+
+
+def _conformal_occ_algorithm_name(algorithm_3d: int) -> str:
+    return {
+        ALGO_3D_DELAUNAY: "Delaunay",
+        ALGO_3D_FRONTAL: "Frontal",
+        ALGO_3D_HXT: "HXT",
+    }.get(int(algorithm_3d), f"algorithm_3d={int(algorithm_3d)}")
 
 
 def _surface_trimesh_kwargs_from_mesh_options(opts: MeshOptions) -> dict[str, object]:
@@ -916,17 +1017,24 @@ def _sanitize_surface_mesh_for_stl_export(surface: object) -> object:
 
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
-    boundary_faces = np.asarray(preview.get("boundary_faces", []), dtype=np.int32)
     if nodes.ndim != 2 or nodes.shape[1] != 3:
         raise ValueError("surface preview nodes must have shape (N, 3)")
-    if boundary_faces.ndim != 2 or (boundary_faces.size and boundary_faces.shape[1] != 3):
-        raise ValueError("surface preview boundary_faces must have shape (F, 3)")
     return MeshData(
         nodes=nodes,
-        elements=np.zeros((0, 4), dtype=np.int32),
+        cell_types=preview.get("cell_types", []),
+        cell_offsets=preview.get("cell_offsets", [0]),
+        cell_nodes=preview.get("cell_nodes", []),
         element_markers=np.zeros((0,), dtype=np.int32),
-        boundary_faces=boundary_faces,
-        boundary_markers=np.ones((boundary_faces.shape[0],), dtype=np.int32),
+        facet_types=preview.get("facet_types", []),
+        facet_roles=preview.get("facet_roles", []),
+        facet_offsets=preview.get("facet_offsets", [0]),
+        facet_nodes=preview.get("facet_nodes", []),
+        boundary_markers=np.ones(
+            (len(preview.get("facet_types", [])),),
+            dtype=np.int32,
+        ),
+        cell_global_ordinals=np.arange(len(preview.get("cell_types", [])), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(preview.get("facet_types", [])), dtype=np.int64),
     )
 
 
@@ -968,7 +1076,7 @@ def realize_fem_mesh_asset(
                 "is_preview": True,
                 "message": (
                     f"Surface preview ready for '{geometry.geometry_name}': "
-                    f"{len(preview['nodes'])} vertices, {len(preview['boundary_faces'])} faces"
+                    f"{len(preview['nodes'])} vertices, {len(preview['facet_types'])} faces"
                 ),
             }
         )
@@ -1405,7 +1513,14 @@ def _element_bounds_for_marker(
     mask = np.asarray(mesh.element_markers, dtype=np.int32) == int(marker)
     if not np.any(mask):
         return None
-    element_nodes = mesh.nodes[mesh.elements[mask].reshape(-1)]
+    element_nodes = mesh.nodes[
+        np.concatenate(
+            [
+                mesh.cell_node_ids(int(ordinal))
+                for ordinal in np.flatnonzero(mask)
+            ]
+        )
+    ]
     mins = element_nodes.min(axis=0)
     maxs = element_nodes.max(axis=0)
     return (
@@ -1476,15 +1591,22 @@ def _match_geometry_bounds_to_source_markers(
 
 
 def _count_nodes_for_element_mask(mesh: MeshData, element_mask: np.ndarray) -> int:
-    if mesh.elements.size == 0 or not np.any(element_mask):
-        return 0
-    return int(np.unique(mesh.elements[element_mask].reshape(-1)).size)
+    return int(_node_indices_for_element_mask(mesh, element_mask).size)
 
 
 def _node_indices_for_element_mask(mesh: MeshData, element_mask: np.ndarray) -> np.ndarray:
-    if mesh.elements.size == 0 or not np.any(element_mask):
+    normalized_mask = np.asarray(element_mask, dtype=np.bool_).reshape(-1)
+    if normalized_mask.size != mesh.n_elements:
+        raise ValueError(
+            "element mask length must match the mesh element count"
+        )
+    if mesh.n_elements == 0 or not np.any(normalized_mask):
         return np.asarray([], dtype=np.int64)
-    return np.unique(mesh.elements[element_mask].reshape(-1))
+    node_mask = np.repeat(
+        normalized_mask,
+        np.diff(np.asarray(mesh.cell_offsets, dtype=np.int64)),
+    )
+    return np.unique(np.asarray(mesh.cell_nodes)[node_mask])
 
 
 def _format_length_m(value: float) -> str:
@@ -1506,7 +1628,9 @@ def _element_metric_summary_for_mask(
     mesh: MeshData,
     element_mask: np.ndarray,
 ) -> dict[str, Any] | None:
-    if mesh.elements.size == 0 or not np.any(element_mask):
+    if mesh.n_elements == 0 or not np.any(element_mask):
+        return None
+    if not np.all(mesh.cell_types == "tet4"):
         return None
     points = np.asarray(mesh.nodes[mesh.elements[element_mask]], dtype=np.float64)
     edge_pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
@@ -1677,8 +1801,9 @@ def _emit_shared_domain_mesh_summary(
 ) -> None:
     emit_progress(
         "Total mesh: "
-        f"{mesh.elements.shape[0]} tetrahedra, {mesh.nodes.shape[0]} nodes, "
-        f"{mesh.boundary_faces.shape[0]} boundary faces"
+        f"{mesh.n_elements} "
+        f"{'tetrahedra' if np.all(mesh.cell_types == 'tet4') else 'volume cells'}, "
+        f"{mesh.nodes.shape[0]} nodes, {mesh.n_boundary_faces} boundary faces"
     )
 
     element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
@@ -1697,7 +1822,8 @@ def _emit_shared_domain_mesh_summary(
             covered_count += int(np.count_nonzero(part_mask))
         emit_progress(
             "Mesh partition check: "
-            f"{covered_count}/{mesh.elements.shape[0]} tetrahedra covered by "
+            f"{covered_count}/{mesh.n_elements} "
+            f"{'tetrahedra' if np.all(mesh.cell_types == 'tet4') else 'volume cells'} covered by "
             "mutually exclusive region markers"
         )
     if np.any(air_mask):
@@ -1729,7 +1855,8 @@ def _emit_shared_domain_mesh_summary(
                 air_size_suffix = ", " + ", ".join(parts)
         emit_progress(
             "Mesh part airbox: "
-            f"{int(np.count_nonzero(air_mask))} tetrahedra, "
+            f"{int(np.count_nonzero(air_mask))} "
+            f"{'tetrahedra' if np.all(mesh.cell_types == 'tet4') else 'volume cells'}, "
             f"{_count_nodes_for_element_mask(mesh, air_mask)} nodes"
             f"{air_size_suffix}"
         )
@@ -1769,7 +1896,8 @@ def _emit_shared_domain_mesh_summary(
                 part_size_suffix = ", " + ", ".join(parts)
         emit_progress(
             f"Mesh part {part_label}: "
-            f"{int(np.count_nonzero(part_mask))} tetrahedra, "
+            f"{int(np.count_nonzero(part_mask))} "
+            f"{'tetrahedra' if np.all(mesh.cell_types == 'tet4') else 'volume cells'}, "
             f"{_count_nodes_for_element_mask(mesh, part_mask)} nodes"
             f"{part_size_suffix}"
         )
@@ -1790,6 +1918,8 @@ def _magnetic_submesh_signatures(
     mesh: MeshData,
     region_markers: list[dict[str, object]],
 ) -> list[dict[str, object]]:
+    if not np.all(mesh.cell_types == "tet4"):
+        return []
     edge_pairs = np.asarray(
         [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
         dtype=np.int64,
@@ -2015,6 +2145,110 @@ def realize_fem_domain_mesh_asset(
     return mesh, region_markers
 
 
+def _qualified_mixed_per_geometry_body_hmax(
+    mesh_workflow: Mapping[str, object] | None,
+    geometries: list[Geometry],
+) -> float | None:
+    if not isinstance(mesh_workflow, Mapping):
+        return None
+    raw_per_geometry = mesh_workflow.get("per_geometry")
+    if raw_per_geometry in (None, []):
+        return None
+    if not isinstance(raw_per_geometry, list) or len(raw_per_geometry) != 1:
+        raise ValueError(
+            "qualified mixed shared-domain route rejects: per-geometry controls"
+        )
+    recipe = raw_per_geometry[0]
+    if not isinstance(recipe, Mapping) or len(geometries) != 1:
+        raise ValueError(
+            "qualified mixed shared-domain route rejects: per-geometry controls"
+        )
+
+    allowed_keys = {
+        "geometry",
+        "mode",
+        "hmax",
+        "maximum_element_size",
+        "hmin",
+        "minimum_element_size",
+        "order",
+        "interface_hmax",
+        "interface_thickness",
+        "transition_distance",
+        "edge_hmax",
+        "edge_thickness",
+        "edge_transition_distance",
+        "corner_hmax",
+        "corner_extent",
+        "corner_transition_distance",
+        "mesh_strategy",
+        "through_thickness_elements",
+        "through_thickness_distribution",
+        "sweep_face_meshing",
+        "topology",
+        "sweep_direction",
+        "element_family",
+        "transition_policy",
+        "exact_layer_count",
+    }
+    unsupported = sorted(str(key) for key in recipe if key not in allowed_keys)
+    body_hmax = _coerce_positive_float(recipe.get("maximum_element_size"))
+    alias_hmax = _coerce_positive_float(recipe.get("hmax"))
+    optional_size_keys = (
+        "interface_hmax",
+        "interface_thickness",
+        "transition_distance",
+        "edge_hmax",
+        "edge_thickness",
+        "edge_transition_distance",
+        "corner_hmax",
+        "corner_extent",
+        "corner_transition_distance",
+    )
+    invalid_size_keys = [
+        key
+        for key in optional_size_keys
+        if recipe.get(key) is not None
+        and _coerce_positive_float(recipe.get(key)) is None
+    ]
+    body_hmin = _coerce_positive_float(recipe.get("minimum_element_size"))
+    alias_hmin = _coerce_positive_float(recipe.get("hmin"))
+    hmin_is_canonical = (
+        recipe.get("minimum_element_size") is None
+        and recipe.get("hmin") is None
+    ) or (body_hmin is not None and alias_hmin == body_hmin)
+    geometry_names = _geometry_name_aliases(geometries[0].geometry_name)
+    canonical = (
+        recipe.get("geometry") in geometry_names
+        and recipe.get("mode") == "custom"
+        and body_hmax is not None
+        and alias_hmax == body_hmax
+        and hmin_is_canonical
+        and not invalid_size_keys
+        and recipe.get("order") == 1
+        and recipe.get("mesh_strategy") == "swept_prism"
+        and recipe.get("through_thickness_elements") is not None
+        and not isinstance(recipe.get("through_thickness_elements"), bool)
+        and isinstance(recipe.get("through_thickness_elements"), int)
+        and int(recipe["through_thickness_elements"]) in (1, 2, 3)
+        and recipe.get("through_thickness_distribution") == "fixed"
+        and recipe.get("sweep_face_meshing") == "triangular"
+        and recipe.get("topology") in (None, "prismatic")
+        and recipe.get("sweep_direction") == "auto"
+        and recipe.get("element_family") == "prism"
+        and recipe.get("transition_policy") == "pyramid_to_tetrahedra"
+        and recipe.get("exact_layer_count") is True
+    )
+    if unsupported or not canonical:
+        rejected = unsupported + invalid_size_keys
+        detail = f" ({', '.join(rejected)})" if rejected else ""
+        raise ValueError(
+            "qualified mixed shared-domain route rejects: "
+            f"per-geometry controls{detail}"
+        )
+    return body_hmax
+
+
 def _realize_fem_domain_mesh_asset_from_components_impl(
     geometries: list[Geometry],
     hints: FEM,
@@ -2119,7 +2353,74 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         if region.get("enabled", True)
         and _region_uses_conformal_occ_realization(region)
     ]
-    single_geometry_occ_direct = False
+    surface_mesh_options = _mesh_options_from_runtime_metadata(
+        mesh_workflow,
+        geometries=geometries,
+        default_hmax=float(hints.hmax),
+        bounds_by_name=None,
+        include_size_fields=False,
+    )
+    qualified_mixed_body_hmax: float | None = None
+    if surface_mesh_options.mesh_strategy == "swept_prism":
+        qualified_mixed_body_hmax = _qualified_mixed_per_geometry_body_hmax(
+            mesh_workflow,
+            geometries,
+        )
+        reasons: list[str] = []
+        raw_mesh_options = (
+            mesh_workflow.get("mesh_options", {})
+            if isinstance(mesh_workflow, Mapping)
+            else {}
+        )
+        if len(geometries) != 1 or not isinstance(geometries[0], Box):
+            reasons.append("exactly one Box geometry")
+        if frozen_payload is not None:
+            reasons.append("frozen magnetic submesh")
+        if per_object_recipes:
+            reasons.append("per-object mesh recipes")
+        if object_regions:
+            reasons.append("object/conformal regions")
+        if hints.order != 1:
+            reasons.append("element order")
+        if isinstance(raw_mesh_options, Mapping):
+            if raw_mesh_options.get("size_fields"):
+                reasons.append("local/size fields")
+            if (
+                raw_mesh_options.get("hmin") is not None
+                or raw_mesh_options.get("minimum_element_size") is not None
+            ):
+                reasons.append("minimum element size")
+            if raw_mesh_options.get("recombine") is True:
+                reasons.append("recombine")
+        for name, active in (
+            ("local/size fields", bool(surface_mesh_options.size_fields)),
+            ("boundary layers", surface_mesh_options.boundary_layer_count is not None),
+            ("optimizer", surface_mesh_options.optimize is not None),
+            ("periodic pairs", bool(surface_mesh_options.periodic_pair_ids)),
+            (
+                "layer count",
+                surface_mesh_options.through_thickness_elements not in (None, 1, 2, 3),
+            ),
+            ("non-fixed distribution", surface_mesh_options.through_thickness_distribution not in (None, "fixed")),
+            ("graded distribution", surface_mesh_options.through_thickness_element_ratio not in (None, 1.0)),
+            ("symmetric distribution", surface_mesh_options.through_thickness_symmetric),
+            ("non-triangular sweep face", surface_mesh_options.sweep_face_meshing not in (None, "triangular")),
+            ("2D algorithm", surface_mesh_options.algorithm_2d != 6),
+            ("3D algorithm", surface_mesh_options.algorithm_3d != 1),
+        ):
+            if active:
+                reasons.append(name)
+        if reasons:
+            raise ValueError(
+                "qualified mixed shared-domain route rejects: " + ", ".join(reasons)
+            )
+    mixed_shared_geo_direct = (
+        len(geometries) == 1
+        and isinstance(geometries[0], Box)
+        and airbox is not None
+        and surface_mesh_options.mesh_strategy == "swept_prism"
+    )
+    single_geometry_occ_direct = mixed_shared_geo_direct
     if (
         isinstance(mesh_workflow, Mapping)
         and bool(mesh_workflow.get("single_geometry_occ_direct")) is True
@@ -2131,13 +2432,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
 
     bounds_by_name: dict[str, tuple] = {}
     fallbacks_triggered: list[str] = []
-    surface_mesh_options = _mesh_options_from_runtime_metadata(
-        mesh_workflow,
-        geometries=geometries,
-        default_hmax=float(hints.hmax),
-        bounds_by_name=None,
-        include_size_fields=False,
-    )
     surface_trimesh_kwargs = _surface_trimesh_kwargs_from_mesh_options(surface_mesh_options)
     conformal_occ_direct = False
     if not single_geometry_occ_direct:
@@ -2262,7 +2556,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             per_object_recipes=per_object_recipes,
         )
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
-        if single_geometry_occ_direct:
+        if mixed_shared_geo_direct:
+            planned_build_mode = "single_geometry_geo_mixed"
+        elif single_geometry_occ_direct:
             planned_build_mode = "single_geometry_occ"
         elif conformal_occ_direct:
             planned_build_mode = "conformal_occ"
@@ -2292,40 +2588,101 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "message": "Preparing shared-domain mesh inputs",
             }
         )
-        emit_progress_event(
-            {
-                "kind": "mesh_build_phase",
-                "phase": "preparing_domain",
-                "message": "Preparing shared-domain inputs and mesh size fields",
-            }
-        )
-        if mesh_options.size_fields:
-            emit_progress(
-                f"Shared-domain local sizing active ({len(mesh_options.size_fields)} size fields)"
-            )
-
-        effective_hmax = float(hints.hmax)
-        if airbox is not None and airbox.maximum_element_size is not None and float(airbox.maximum_element_size) > effective_hmax:
-            effective_hmax = float(airbox.maximum_element_size)
-        for field in mesh_options.size_fields:
-            vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
-            if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
-                effective_hmax = float(vin)
-
         result: SharedDomainMeshResult | None = None
         build_mode = "component_aware"
+
+        def _emit_mesh_build_failed(exc: Exception) -> None:
+            payload: dict[str, object] = {
+                "kind": "mesh_build_failed",
+                "phase": latest_mesh_phase,
+                "shared_domain_build_mode": build_mode,
+                "effective_airbox_target": effective_airbox_target,
+                "effective_per_object_targets": effective_per_object_targets,
+                "used_size_field_kinds": used_size_field_kinds,
+                "fallbacks_triggered": fallbacks_triggered,
+                "rejected_element_types": [
+                    dict(element)
+                    for element in getattr(exc, "rejected_element_types", [])
+                ],
+                "operation_statuses": [
+                    status.to_dict()
+                    for status in _build_mesh_operation_statuses(
+                        geometries,
+                        mesh_options,
+                        airbox=airbox,
+                        build_mode=build_mode,
+                        fallbacks_triggered=fallbacks_triggered,
+                        mesh_workflow=mesh_workflow,
+                    )
+                ],
+                "error": str(exc),
+                "message": "Shared-domain mesh build failed",
+            }
+            if mixed_shared_geo_direct:
+                payload["mixed_layer_topology_rejection"] = {
+                    "schema_version": "mixed_layer_topology_rejection.v1",
+                    "certificate_status": "rejected",
+                    "requested_layer_count": int(
+                        mesh_options.through_thickness_elements or 0
+                    ),
+                    "rejection_reason": str(exc),
+                }
+            emit_progress_event(payload)
+
+        latest_mesh_phase = "preparing_domain"
         try:
+            emit_progress_event(
+                {
+                    "kind": "mesh_build_phase",
+                    "phase": latest_mesh_phase,
+                    "message": "Preparing shared-domain inputs and mesh size fields",
+                }
+            )
+            if mesh_options.size_fields:
+                emit_progress(
+                    f"Shared-domain local sizing active ({len(mesh_options.size_fields)} size fields)"
+                )
+
+            effective_hmax = (
+                qualified_mixed_body_hmax
+                if mixed_shared_geo_direct and qualified_mixed_body_hmax is not None
+                else float(hints.hmax)
+            )
+            if (
+                not mixed_shared_geo_direct
+                and airbox is not None
+                and airbox.maximum_element_size is not None
+                and float(airbox.maximum_element_size) > effective_hmax
+            ):
+                effective_hmax = float(airbox.maximum_element_size)
+            if not mixed_shared_geo_direct:
+                for field in mesh_options.size_fields:
+                    vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
+                    if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
+                        effective_hmax = float(vin)
+
+            latest_mesh_phase = "meshing"
             if single_geometry_occ_direct:
-                build_mode = "single_geometry_occ"
+                build_mode = (
+                    "single_geometry_geo_mixed"
+                    if mixed_shared_geo_direct
+                    else "single_geometry_occ"
+                )
                 emit_progress_event(
                     {
                         "kind": "mesh_build_phase",
                         "phase": "meshing",
-                        "message": "Generating direct OCC 3D tetrahedral mesh",
+                        "message": (
+                            "Generating shared-GEO prism/pyramid/tetrahedron mesh"
+                            if mixed_shared_geo_direct
+                            else "Generating direct OCC 3D tetrahedral mesh"
+                        ),
                     }
                 )
                 emit_progress(
-                    "Single-geometry OCC mesh path selected (skipping STL component import)"
+                    "Single-geometry shared-GEO mixed mesh path selected"
+                    if mixed_shared_geo_direct
+                    else "Single-geometry OCC mesh path selected (skipping STL component import)"
                 )
                 mesh = generate_mesh(
                     geometries[0],
@@ -2351,7 +2708,34 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             }
                         )
                         attempted_algorithms = {int(mesh_options.algorithm_3d)}
+                        attempt_index = 0
                         while True:
+                            attempt_index += 1
+                            current_algorithm_name = _conformal_occ_algorithm_name(
+                                int(mesh_options.algorithm_3d)
+                            )
+                            emit_progress(
+                                f"Conformal OCC mesh attempt {attempt_index} started with "
+                                f"{current_algorithm_name} (progress is indeterminate)"
+                            )
+                            emit_progress_event(
+                                {
+                                    "kind": "mesh_build_phase",
+                                    "phase": "meshing",
+                                    "attempt_index": attempt_index,
+                                    "algorithm_3d": current_algorithm_name,
+                                    "attempt_status": "active",
+                                    "progress_kind": "indeterminate",
+                                    "progress_label": (
+                                        f"Attempt {attempt_index} — {current_algorithm_name} — "
+                                        "progress indeterminate"
+                                    ),
+                                    "message": (
+                                        f"Conformal OCC mesh attempt {attempt_index} started "
+                                        f"with {current_algorithm_name}"
+                                    ),
+                                }
+                            )
                             result = generate_shared_domain_mesh_via_occ(
                                 geometries,
                                 hmax=effective_hmax,
@@ -2364,6 +2748,24 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 result.mesh.validate_strict(
                                     require_positive_orientation=True
                                 )
+                                emit_progress_event(
+                                    {
+                                        "kind": "mesh_build_phase",
+                                        "phase": "meshing",
+                                        "attempt_index": attempt_index,
+                                        "algorithm_3d": current_algorithm_name,
+                                        "attempt_status": "completed",
+                                        "progress_kind": "indeterminate",
+                                        "progress_label": (
+                                            f"Attempt {attempt_index} — {current_algorithm_name} — "
+                                            "completed"
+                                        ),
+                                        "message": (
+                                            f"Conformal OCC mesh attempt {attempt_index} completed "
+                                            f"with {current_algorithm_name}"
+                                        ),
+                                    }
+                                )
                                 break
                             except ValueError as exc:
                                 retry = (
@@ -2371,15 +2773,43 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                         mesh_options,
                                         attempted_algorithms,
                                     )
-                                    if "degenerate tetra volume" in str(exc)
+                                    if "degenerate" in str(exc) and "Jacobian" in str(exc)
                                     else None
                                 )
                                 if retry is None:
                                     raise
-                                retry_algorithm, retry_message, retry_marker = retry
+                                retry_algorithm, _retry_message, retry_marker = retry
                                 if retry_algorithm in attempted_algorithms:
                                     raise
-                                emit_progress(retry_message)
+                                emit_progress_event(
+                                    {
+                                        "kind": "mesh_build_phase",
+                                        "phase": "meshing",
+                                        "attempt_index": attempt_index,
+                                        "algorithm_3d": current_algorithm_name,
+                                        "attempt_status": "failed_recoverable",
+                                        "attempt_failure_reason": str(exc),
+                                        "next_algorithm_3d": _conformal_occ_algorithm_name(
+                                            retry_algorithm
+                                        ),
+                                        "progress_kind": "indeterminate",
+                                        "progress_label": (
+                                            f"Attempt {attempt_index} — {current_algorithm_name} — "
+                                            "failed; retrying"
+                                        ),
+                                        "message": (
+                                            f"Conformal OCC mesh attempt {attempt_index} failed "
+                                            f"with {current_algorithm_name}; retrying with "
+                                            f"{_conformal_occ_algorithm_name(retry_algorithm)}"
+                                        ),
+                                    }
+                                )
+                                emit_progress(
+                                    f"Conformal OCC mesh attempt {attempt_index} failed "
+                                    f"({current_algorithm_name}: {exc}); "
+                                    f"starting attempt {attempt_index + 1} with "
+                                    f"{_conformal_occ_algorithm_name(retry_algorithm)}"
+                                )
                                 fallbacks_triggered.append(retry_marker)
                                 attempted_algorithms.add(retry_algorithm)
                                 mesh_options = _dc_replace(
@@ -2527,190 +2957,205 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             airbox=airbox,
                             options=mesh_options,
                         )
-            emit_progress_event(
-                {
-                    "kind": "mesh_build_phase",
-                    "phase": "postprocessing",
-                    "message": "Classifying the shared-domain mesh and finalizing region markers",
-                }
-            )
         except Exception as exc:
-            emit_progress_event(
-                {
-                    "kind": "mesh_build_failed",
-                    "shared_domain_build_mode": build_mode,
-                    "effective_airbox_target": effective_airbox_target,
-                    "effective_per_object_targets": effective_per_object_targets,
-                    "used_size_field_kinds": used_size_field_kinds,
-                    "fallbacks_triggered": fallbacks_triggered,
-                    "rejected_element_types": [
-                        dict(element)
-                        for element in getattr(exc, "rejected_element_types", [])
-                    ],
-                    "operation_statuses": [
-                        status.to_dict()
-                        for status in _build_mesh_operation_statuses(
-                            geometries,
-                            mesh_options,
-                            airbox=airbox,
-                            build_mode=build_mode,
-                            fallbacks_triggered=fallbacks_triggered,
-                            mesh_workflow=mesh_workflow,
-                        )
-                    ],
-                    "error": str(exc),
-                    "message": "Shared-domain mesh build failed",
-                }
-            )
+            _emit_mesh_build_failed(exc)
             raise
 
-    if build_mode != "conformal_occ":
-        mesh = _drop_degenerate_tetrahedra(
-            mesh,
-            context=f"{build_mode} shared-domain mesh",
-            fallbacks_triggered=fallbacks_triggered,
+    latest_mesh_phase = "postprocessing"
+    try:
+        emit_progress_event(
+            {
+                "kind": "mesh_build_phase",
+                "phase": latest_mesh_phase,
+                "message": "Classifying the shared-domain mesh and finalizing region markers",
+            }
         )
+        if (
+            build_mode != "conformal_occ"
+            and getattr(mesh, "mixed_layer_topology_certificate", None) is None
+        ):
+            mesh = _drop_degenerate_tetrahedra(
+                mesh,
+                context=f"{build_mode} shared-domain mesh",
+                fallbacks_triggered=fallbacks_triggered,
+            )
 
-    # Classify elements back to geometries
-    source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
-    assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
-    region_markers: list[dict[str, object]] = []
-    object_region_markers: list[dict[str, object]] = []
-    if result is not None:
-        for used_marker, geometry in enumerate(geometries, start=1):
-            source_marker = result.component_marker_tags.get(geometry.geometry_name)
-            if source_marker is None:
-                raise ValueError(
-                    f"component-aware shared FEM domain mesh is missing a marker for geometry "
-                    f"'{geometry.geometry_name}'"
-                )
-            assigned_markers[source_markers == source_marker] = used_marker
-            region_markers.append(
-                {"geometry_name": geometry.geometry_name, "marker": used_marker}
-            )
-        next_marker = len(geometries) + 1
-        for region in conformal_object_regions:
-            region_id = str(region.get("region_id", "")).strip()
-            source_marker = result.object_region_marker_tags.get(region_id)
-            if source_marker is None:
-                raise ValueError(
-                    f"conformal shared FEM domain mesh is missing marker for "
-                    f"object region '{region_id}'"
-                )
-            assigned_markers[source_markers == source_marker] = next_marker
-            object_region_markers.append(
-                {"geometry_name": region_id, "marker": next_marker}
-            )
-            next_marker += 1
-    else:
-        marker_mapping = _match_geometry_bounds_to_source_markers(geometries, mesh)
-        if marker_mapping is not None:
+        # Classify elements back to geometries
+        source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+        assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
+        region_markers: list[dict[str, object]] = []
+        object_region_markers: list[dict[str, object]] = []
+        if result is not None:
             for used_marker, geometry in enumerate(geometries, start=1):
-                source_marker = marker_mapping.get(geometry.geometry_name)
+                source_marker = result.component_marker_tags.get(geometry.geometry_name)
                 if source_marker is None:
                     raise ValueError(
-                        f"shared FEM domain mesh classification could not map geometry "
-                        f"'{geometry.geometry_name}' to a source marker"
+                        f"component-aware shared FEM domain mesh is missing a marker for geometry "
+                        f"'{geometry.geometry_name}'"
                     )
                 assigned_markers[source_markers == source_marker] = used_marker
                 region_markers.append(
                     {"geometry_name": geometry.geometry_name, "marker": used_marker}
                 )
-        else:
-            element_centroids = mesh.nodes[mesh.elements].mean(axis=1)
-            used_marker = 1
-            for geometry in geometries:
-                inside = _contains_points_in_geometry(geometry, element_centroids)
-                overlap = inside & (assigned_markers != 0)
-                if np.any(overlap):
+            next_marker = len(geometries) + 1
+            for region in conformal_object_regions:
+                region_id = str(region.get("region_id", "")).strip()
+                source_marker = result.object_region_marker_tags.get(region_id)
+                if source_marker is None:
                     raise ValueError(
-                        f"shared FEM domain mesh classification overlapped for '{geometry.geometry_name}'"
+                        f"conformal shared FEM domain mesh is missing marker for "
+                        f"object region '{region_id}'"
                     )
-                assigned_markers[inside] = used_marker
-                region_markers.append(
-                    {"geometry_name": geometry.geometry_name, "marker": used_marker}
+                assigned_markers[source_markers == source_marker] = next_marker
+                object_region_markers.append(
+                    {"geometry_name": region_id, "marker": next_marker}
                 )
-                used_marker += 1
+                next_marker += 1
+        else:
+            marker_mapping = _match_geometry_bounds_to_source_markers(geometries, mesh)
+            if marker_mapping is not None:
+                for used_marker, geometry in enumerate(geometries, start=1):
+                    source_marker = marker_mapping.get(geometry.geometry_name)
+                    if source_marker is None:
+                        raise ValueError(
+                            f"shared FEM domain mesh classification could not map geometry "
+                            f"'{geometry.geometry_name}' to a source marker"
+                        )
+                    assigned_markers[source_markers == source_marker] = used_marker
+                    region_markers.append(
+                        {"geometry_name": geometry.geometry_name, "marker": used_marker}
+                    )
+            else:
+                element_centroids = np.asarray(
+                    [
+                        mesh.nodes[mesh.cell_node_ids(index)].mean(axis=0)
+                        for index in range(mesh.n_elements)
+                    ],
+                    dtype=np.float64,
+                )
+                used_marker = 1
+                for geometry in geometries:
+                    inside = _contains_points_in_geometry(geometry, element_centroids)
+                    overlap = inside & (assigned_markers != 0)
+                    if np.any(overlap):
+                        raise ValueError(
+                            f"shared FEM domain mesh classification overlapped for '{geometry.geometry_name}'"
+                        )
+                    assigned_markers[inside] = used_marker
+                    region_markers.append(
+                        {"geometry_name": geometry.geometry_name, "marker": used_marker}
+                    )
+                    used_marker += 1
 
-    if result is None and np.any(assigned_markers == 0):
-        magnetic_source_mask = source_markers == 1
-        if np.any(magnetic_source_mask & (assigned_markers == 0)):
-            raise ValueError(
-                "shared FEM domain mesh contains magnetic elements that could not be mapped "
-                "back to any geometry"
-            )
+        if result is None and np.any(assigned_markers == 0):
+            magnetic_source_mask = source_markers == 1
+            if np.any(magnetic_source_mask & (assigned_markers == 0)):
+                raise ValueError(
+                    "shared FEM domain mesh contains magnetic elements that could not be mapped "
+                    "back to any geometry"
+                )
 
-    classified_mesh = MeshData(
-        nodes=mesh.nodes,
-        elements=mesh.elements,
-        element_markers=assigned_markers,
-        boundary_faces=mesh.boundary_faces,
-        boundary_markers=mesh.boundary_markers,
-        periodic_boundary_pairs=mesh.periodic_boundary_pairs,
-        periodic_node_pairs=mesh.periodic_node_pairs,
-        quality=mesh.quality,
-        per_domain_quality=build_per_domain_quality_from_mesh_arrays(
-            mesh.nodes,
-            mesh.elements,
-            assigned_markers,
-            mesh.quality,
-        ) or mesh.per_domain_quality,
-    )
-    requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
-        geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
-        per_object_recipes=per_object_recipes,
-    )
-    _emit_shared_domain_mesh_summary(
-        classified_mesh, region_markers,
-        requested_airbox_hmax=requested_airbox_hmax,
-        requested_hmax_by_geometry=requested_hmax_by_geometry,
-    )
-    magnetic_submesh_signatures = _magnetic_submesh_signatures(
-        classified_mesh,
-        region_markers,
-    )
-    report = _build_shared_domain_build_report(
-        geometries,
-        hints,
-        airbox=airbox,
-        mesh_workflow=mesh_workflow,
-        per_object_recipes=per_object_recipes,
-        size_fields=list(mesh_options.size_fields),
-        region_markers=region_markers,
-        build_mode=build_mode,
-        fallbacks_triggered=fallbacks_triggered,
-        mesh_options=mesh_options,
-        selector_resolution=result.selector_resolution if result is not None else [],
-        boundary_layer_result=result.boundary_layer_result if result is not None else None,
-        orphan_entities=result.orphan_entities if result is not None else [],
-        magnetic_submesh_signatures=magnetic_submesh_signatures,
-    )
-    if object_regions is not None:
-        report = _dc_replace(
-            report,
-            object_region_markers=object_region_markers,
-            authored_regions_count=max(
-                report.authored_regions_count,
-                len(object_regions),
-            ),
-            realized_regions_count=max(
-                report.realized_regions_count,
-                len(object_region_markers),
+        tet4_only = bool(np.all(mesh.cell_types == "tet4"))
+        classified_mesh = MeshData(
+            nodes=mesh.nodes,
+            cell_types=mesh.cell_types,
+            cell_offsets=mesh.cell_offsets,
+            cell_nodes=mesh.cell_nodes,
+            element_markers=assigned_markers,
+            facet_types=mesh.facet_types,
+            facet_roles=mesh.facet_roles,
+            facet_offsets=mesh.facet_offsets,
+            facet_nodes=mesh.facet_nodes,
+            boundary_markers=mesh.boundary_markers,
+            cell_global_ordinals=mesh.cell_global_ordinals,
+            facet_global_ordinals=mesh.facet_global_ordinals,
+            cell_mesh_parts=mesh.cell_mesh_parts,
+            periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+            periodic_node_pairs=mesh.periodic_node_pairs,
+            periodic_mesh_certificate=mesh.periodic_mesh_certificate,
+            quality=mesh.quality,
+            per_domain_quality=(
+                build_per_domain_quality_from_mesh_arrays(
+                    mesh.nodes,
+                    mesh.elements,
+                    assigned_markers,
+                    mesh.quality,
+                )
+                if tet4_only
+                else None
+            ) or mesh.per_domain_quality,
+            realization_report=mesh.realization_report,
+            mixed_layer_topology_certificate=(
+                mesh.mixed_layer_topology_certificate
+                if np.array_equal(assigned_markers, mesh.element_markers)
+                else None
             ),
         )
-    emit_progress_event(
-        {
-            "kind": "mesh_build_summary",
-            "shared_domain_build_mode": report.build_mode,
-            "n_nodes": classified_mesh.n_nodes,
-            "n_elements": classified_mesh.n_elements,
-            "n_boundary_faces": classified_mesh.n_boundary_faces,
-            "mesh_statistics": classified_mesh.to_ir("shared_domain").get("mesh_statistics"),
-            **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
-            "message": "Shared-domain mesh build finished",
-        }
-    )
-    return classified_mesh, region_markers, report
+        requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
+            geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+        )
+        _emit_shared_domain_mesh_summary(
+            classified_mesh, region_markers,
+            requested_airbox_hmax=requested_airbox_hmax,
+            requested_hmax_by_geometry=requested_hmax_by_geometry,
+        )
+        magnetic_submesh_signatures = _magnetic_submesh_signatures(
+            classified_mesh,
+            region_markers,
+        )
+        report = _build_shared_domain_build_report(
+            geometries,
+            hints,
+            airbox=airbox,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+            size_fields=list(mesh_options.size_fields),
+            region_markers=region_markers,
+            build_mode=build_mode,
+            fallbacks_triggered=fallbacks_triggered,
+            mesh_options=mesh_options,
+            selector_resolution=result.selector_resolution if result is not None else [],
+            boundary_layer_result=result.boundary_layer_result if result is not None else None,
+            orphan_entities=result.orphan_entities if result is not None else [],
+            magnetic_submesh_signatures=magnetic_submesh_signatures,
+        )
+        if classified_mesh.mixed_layer_topology_certificate is not None:
+            report = _dc_replace(
+                report,
+                mixed_layer_topology_certificate=(
+                    classified_mesh.mixed_layer_topology_certificate.to_dict()
+                ),
+            )
+        if object_regions is not None:
+            report = _dc_replace(
+                report,
+                object_region_markers=object_region_markers,
+                authored_regions_count=max(
+                    report.authored_regions_count,
+                    len(object_regions),
+                ),
+                realized_regions_count=max(
+                    report.realized_regions_count,
+                    len(object_region_markers),
+                ),
+            )
+        emit_progress_event(
+            {
+                "kind": "mesh_build_summary",
+                "shared_domain_build_mode": report.build_mode,
+                "n_nodes": classified_mesh.n_nodes,
+                "n_elements": classified_mesh.n_elements,
+                "n_boundary_faces": classified_mesh.n_boundary_faces,
+                "mesh_statistics": classified_mesh.to_ir("shared_domain").get("mesh_statistics"),
+                **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
+                "message": "Shared-domain mesh build finished",
+            }
+        )
+        return classified_mesh, region_markers, report
+    except Exception as exc:
+        _emit_mesh_build_failed(exc)
+        raise
 
 
 def realize_fem_domain_mesh_asset_from_components(

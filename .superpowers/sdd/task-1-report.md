@@ -1,164 +1,298 @@
-# Task 1 Report: Airbox UI/Visualization Debug Contract
+# Task 1 report: canonical mixed-P1 contract and Gmsh feasibility fixture
 
 ## Result
 
-DONE_WITH_CONCERNS. The six Task 1 frontend-v2 specifications now define the
-canonical Airbox target/carrier split, exact Explorer hierarchy and stable ids,
-Inspector panel ownership, bounded demand-driven diagnostics, field evidence
-separation, and the kernel observation-service boundary.
+- Status: `DONE_WITH_CONCERNS`
+- Commit: `0b12322bfd732b6a7117571ec419eb587f10d74d`
+- Commit subject: `Define native mixed-P1 topology contract`
+- Scope: documentation and a frozen Gmsh feasibility fixture/test only; no
+  production meshing, native operator, runtime, SP4 scenario, or lockfile change.
 
-## Files changed
+## Changed files
 
-- `docs/specs/frontend-v2/01-module-kernel-architecture.md`
-- `docs/specs/frontend-v2/11-explorer-view.md`
-- `docs/specs/frontend-v2/13-inspector-and-property-editing.md`
-- `docs/specs/frontend-v2/17-performance-memory-profiler.md`
-- `docs/specs/frontend-v2/23-per-object-visualization-control.md`
-- `docs/specs/frontend-v2/25-viewport-3d-field-data-architecture.md`
+Committed:
 
-No source or test file was edited, staged, or committed. Existing changes in
-`23-per-object-visualization-control.md` were preserved and extended in place.
+- `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
+- `docs/adr/0021-native-mixed-p1-fem-topology.md`
+- `docs/architecture/backend-golden-masterplan.md`
+- `docs/physics/0101-swept-mesh-through-thickness.md`
+- `docs/physics/0104-thin-film-shared-domain-meshing.md`
+- `docs/physics/0105-fem-meshing-production-acceptance.md`
+- `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
+- `docs/physics/fem_demag_poisson.md`
+- `docs/specs/capability-matrix-v0.md`
+- `packages/fullmag-py/tests/fixtures/gmsh/mixed_prism_pyramid_airbox.geo`
+- `packages/fullmag-py/tests/test_mixed_element_meshing.py`
 
-## Prerequisite identity/stability audit
+Report only, written after the commit and not staged:
 
-The current dirty diff contains the prerequisite identity implementation:
+- `.superpowers/sdd/task-1-report.md`
 
-- `display.rs` filters synthetic Airbox objects and air-role carriers from the
-  target registry, retains only orphan part fallbacks, and canonicalizes legacy
-  Airbox overrides.
-- `router_v2/tests.rs` asserts one canonical `airbox`, no synthetic/air carrier
-  target, one orphan fallback, and legacy-override precedence/migration.
-- `visualizationTargetResolver.ts` resolves roles `air` and `airbox` to the
-  canonical `{kind: "airbox", id: "airbox"}` before registry part lookup; its
-  focused test covers a stale `part:__air__` registry entry.
-- Existing viewport tests cover the Airbox scoped query with
-  `scope_kind=airbox`, `scope_id=part:__air__`, demand planning, decoded field
-  adoption, and vector render planning. The Debug specs now state that target
-  registry filtering, role-first resolution, and the canonical Airbox vector
-  path are prerequisites to enabling Debug.
+Pre-existing user/controller state preserved and never staged:
 
-These prerequisite edits are present in the shared dirty worktree but are not
-committed by this task.
+- `.superpowers/sdd/progress.md`
 
-## Contract evidence
+## Contract delivered
 
-- Explorer spec records the exact Airbox/Object/Region Visualization Debug tree,
-  stable node ids, retained legacy ids, removal of the duplicate global Airbox
-  Quality node, and no-fetch Debug badges.
-- Inspector spec assigns distinct Airbox panels and the shared read-only
-  `VisualizationDebugPanel` to all three Debug selection kinds.
-- Performance spec caps snapshots at 64 KiB, samples at 12 points and 8
-  components, issues at 20, matched requests at 8, requires zero heavy FMVP
-  requests on open, and defines zero work when closed.
-- Visualization-control spec states `airbox` is the user target and
-  `part:__air__` its carrier, with Debug observing the former and reporting the
-  latter separately.
-- Field-data spec separates requested query, decoded payload, rendered derived
-  data, and backend metadata, including compatibility and evidence-source rules.
-- Module-kernel spec defines `VisualizationDebugController` as bounded,
-  demand-driven observation only, not server state/cache/transport, with HTTP v2
-  authoritative and WebSocket invalidation-only.
+- Defines the canonical target as `prism6` magnetic cells, `pyramid5` air
+  transition cells, `tet4` far-air cells, and `tri3 | quad4` facets.
+- Preserves the existing exchange, Zeeman, scalar-Poisson, and demag-energy
+  signs and SI units; the mesh change introduces no new physics.
+- Specifies topology-aware P1 basis/trace semantics, one-layer full-3D meaning,
+  shared-node conformity, magnetic region ownership, and CPU/GPU parity.
+- Defines a fail-closed exact-layer/shared-domain certificate, requested versus
+  resolved provenance, canonical capability vocabulary, FMMT v2 implications,
+  the narrow first workload, and explicit unsupported lanes.
+- Keeps all new capabilities `semantic_only` or `unsupported`; the feasibility
+  fixture does not claim `production_executable` or `validated` status.
+- Rejects silent prism-to-tet conversion, nonconforming coupling, 2.5D
+  reinterpretation, and a second Rust FEM implementation.
 
-## Verification commands and output
+## TDD evidence
+
+### RED
 
 Command:
 
-```text
-rg -n "airbox\.visualization\.debug|VisualizationDebugController|64 KiB" docs/specs/frontend-v2
+```bash
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_mixed_element_meshing.py -k gmsh_feasibility -vv
 ```
 
-Output:
+Expected failure before the fixture was added:
 
 ```text
-docs/specs/frontend-v2/01-module-kernel-architecture.md:114:`VisualizationDebugController` is a kernel-owned, opt-in diagnostic observation
-docs/specs/frontend-v2/01-module-kernel-architecture.md:124:bodies. It enforces bounded lists and a 64 KiB serialized snapshot limit.
-docs/specs/frontend-v2/23-per-object-visualization-control.md:69:The separate `VisualizationDebugController` is likewise not a visualization
-docs/specs/frontend-v2/17-performance-memory-profiler.md:31:`VisualizationDebugController` snapshot is capped at **64 KiB**. Per snapshot,
-docs/specs/frontend-v2/13-inspector-and-property-editing.md:52:| `airbox.visualization.debug` | `VisualizationDebugPanel` |
+AssertionError: missing frozen Gmsh feasibility fixture: .../mixed_prism_pyramid_airbox.geo
+1 failed
+exit 1
 ```
 
-Command:
+This was the intended missing-fixture failure from the new test, not a command
+or dependency failure.
+
+### GREEN
+
+The same exact command was rerun after the frozen Box-in-Box fixture was added
+and again after commit:
 
 ```text
-git diff --check -- docs/specs/frontend-v2/01-module-kernel-architecture.md docs/specs/frontend-v2/11-explorer-view.md docs/specs/frontend-v2/13-inspector-and-property-editing.md docs/specs/frontend-v2/17-performance-memory-profiler.md docs/specs/frontend-v2/23-per-object-visualization-control.md docs/specs/frontend-v2/25-viewport-3d-field-data-architecture.md
+packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology PASSED [100%]
+1 passed in 0.15s
+exit 0
 ```
 
-Output: empty; exit code 0.
+The test pins Gmsh `4.15.2` and proves:
 
-Command:
+- film cells are exactly `Prism 6`;
+- air cells contain exactly `Pyramid 5` and `Tetrahedron 4` topologies;
+- the film has exactly two normal-coordinate node planes;
+- film top/bottom facets are `Triangle 3` and laterals are `Quadrilateral 4`;
+- pyramid bases remain on the quadrilateral film transition;
+- tetrahedra exist in far air;
+- all film boundary faces have one film and one air owner with shared node IDs;
+- volume-face ownership is manifold, and explicit faces are neither duplicated
+  nor orphaned;
+- the production splitter module is not imported.
+
+The fixture is a closed Box-in-Box volume: an explicit outer Box surface loop
+contains the structured prism film boundary as the air volume's inner loop.
+
+## Repeated-error research and correction
+
+An initial attempt to force all-prism air failed twice. Per `AGENTS.md`, the
+Gmsh 4.15.2 reference manual was checked for structured extrusion and QuadTri
+transition behavior. The considered fixes were explicit `QuadTriAddVerts`, a
+dedicated transition volume, unstructured air bounded by the film's shared
+quadrilateral faces, and `TransfQuadTri`. The selected minimal fixture uses the
+last geometry contract with unstructured closed air: Gmsh inserts pyramids at
+the quadrilateral interface and tetrahedra farther away. A one-sided air block
+was rejected and replaced by the final closed Box-in-Box fixture.
+
+## Repository consistency
+
+Required command:
+
+```bash
+python3 scripts/check_repo_consistency.py
+```
+
+Post-commit output and status:
 
 ```text
-git diff --stat -- docs/specs/frontend-v2/01-module-kernel-architecture.md docs/specs/frontend-v2/11-explorer-view.md docs/specs/frontend-v2/13-inspector-and-property-editing.md docs/specs/frontend-v2/17-performance-memory-profiler.md docs/specs/frontend-v2/23-per-object-visualization-control.md docs/specs/frontend-v2/25-viewport-3d-field-data-architecture.md
+FAIL: .github is missing skill mirrors for: backend-golden-masterplan, brainstorming, dispatching-parallel-agents, executing-plans, fem-native-backend-architecture, finishing-a-development-branch, frontend-apple-style, frontend-v2-api-hygiene, frontend-v2-cutover-governance, frontend-v2-module-architecture, frontend-v2-performance-gates, frontend-v2-state-hygiene, frontend-v2-viewport-lifecycle, full-output-enforcement, google-eng-review-practices, gpt-taste, high-end-visual-design, react-doctor, receiving-code-review, requesting-code-review, subagent-driven-development, systematic-debugging, test-driven-development, using-git-worktrees, using-superpowers, verification-before-completion, writing-plans, writing-skills
+exit 1
 ```
 
-Output at verification time:
+Baseline attribution command:
+
+```bash
+git diff --exit-code HEAD^ -- .agents .github scripts/check_repo_consistency.py
+```
+
+Result:
 
 ```text
- .../frontend-v2/01-module-kernel-architecture.md   | 23 +++++++++++++
- docs/specs/frontend-v2/11-explorer-view.md         | 39 ++++++++++++++++++++++
- .../13-inspector-and-property-editing.md           | 23 +++++++++++++
- .../frontend-v2/17-performance-memory-profiler.md  | 24 +++++++++++++
- .../23-per-object-visualization-control.md         | 23 +++++++++++++
- .../25-viewport-3d-field-data-architecture.md      | 23 +++++++++++++
- 6 files changed, 155 insertions(+)
+no output
+exit 0
 ```
 
-The `23` count includes prerequisite identity text already present in the dirty
-worktree before this task.
+The commit changes neither skill mirror tree nor the consistency script, so the
+reported mirror inventory gap is pre-existing and outside this slice.
+
+## Additional verification
+
+```bash
+python3 -m py_compile packages/fullmag-py/tests/test_mixed_element_meshing.py
+git diff --check
+git diff --cached --check
+git show --check --stat --oneline HEAD
+git diff-tree --no-commit-id --name-only -r HEAD
+```
+
+All commands above exited `0`. The final commit contains exactly the 11 paths
+listed under Changed files. `packages/fullmag-py/uv.lock`, SP4 scenarios,
+production meshing code, and `.superpowers/sdd/progress.md` are absent from the
+commit.
 
 ## Self-review
 
-- Every added rule traces to Task 1 or the governing debug plan.
-- The specs preserve resource-first ownership: no endpoint, status payload, or
-  WebSocket snapshot transport was introduced.
-- The controller is explicitly non-authoritative and zero-work without demand.
-- Airbox target and carrier identities are not conflated.
-- Existing stable command-facing ids remain unchanged.
-- Markdown whitespace validation passes.
+- Read the complete staged diff and traced every change to the Slice 1 brief.
+- Confirmed the physics note precedes implementation and covers equations,
+  units, assumptions, backend interpretations, public/API/IR/planner/runtime/UI
+  impact, validation, completion state, and deferred work.
+- Confirmed the ADR states the decision, rejected alternatives, ownership,
+  versioned transport migration, rollback, and validation consequences.
+- Confirmed capability vocabulary is target-only and does not overclaim runtime
+  support.
+- Confirmed the fixture uses shared topology in one closed domain and freezes
+  invariants rather than incidental element counts.
+- Confirmed the test makes no production Fullmag meshing call and cannot pass by
+  exercising the legacy prism-to-tet splitter.
+- Confirmed no unrelated dirty file was staged or committed.
 
 ## Concerns
 
-- The prerequisite identity/stability implementation remains uncommitted in a
-  shared dirty worktree. Task 1 correctly makes Debug conditional on it, but a
-  later worker must ensure those prerequisite edits and focused tests survive
-  integration.
-- This was a documentation-only task. No Rust or frontend tests were run; the
-  brief's specified verification was the exact `rg` contract search, supplemented
-  by `git diff --check` and code/test diff inspection.
+The required repository-consistency command is not green because the baseline
+`.github` skill mirror inventory is incomplete. This slice neither caused nor
+repairs that repository-wide governance issue. There are no known concerns with
+the committed mixed-P1 contract or focused Gmsh feasibility gate. Production
+mixed-P1 execution remains intentionally unimplemented and unvalidated.
 
-## Fix Review
+## Review-fix follow-up
 
-Addressed all Task 1 review findings:
+- Status: `DONE_WITH_CONCERNS`
+- Fix commit: `cf2d0b3c806885aadf17b9906a802020dfb3b568`
+- Commit subject: `Harden mixed-P1 feasibility guards`
+- Committed paths:
+  - `packages/fullmag-py/tests/fixtures/gmsh/mixed_prism_pyramid_airbox.geo`
+  - `packages/fullmag-py/tests/test_mixed_element_meshing.py`
 
-- added the canonical typed KernelApi property
-  `readonly visualizationDebug: VisualizationDebugController` and its type-only
-  import context;
-- defined the 64 KiB limit as serialized JSON UTF-8 byte length using
-  `TextEncoder`, not JavaScript string length;
-- made separate reporting of the Airbox `part:__air__` carrier mandatory.
+### Finding 1 RED: collection-order dependence
 
-Command:
+Command on the pre-fix test:
 
-```text
-rg -n "airbox\.visualization\.debug|VisualizationDebugController|64 KiB" docs/specs/frontend-v2
+```bash
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py packages/fullmag-py/tests/test_mixed_element_meshing.py -k gmsh_feasibility -vv
 ```
 
-Result (exit code 0):
+Output and status:
 
 ```text
-docs/specs/frontend-v2/01-module-kernel-architecture.md:100:import type { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
-docs/specs/frontend-v2/01-module-kernel-architecture.md:109:  readonly visualizationDebug: VisualizationDebugController;
-docs/specs/frontend-v2/01-module-kernel-architecture.md:117:`VisualizationDebugController` is a kernel-owned, opt-in diagnostic observation
-docs/specs/frontend-v2/01-module-kernel-architecture.md:127:bodies. It enforces bounded lists and a 64 KiB serialized snapshot limit.
-docs/specs/frontend-v2/23-per-object-visualization-control.md:70:The separate `VisualizationDebugController` is likewise not a visualization
-docs/specs/frontend-v2/13-inspector-and-property-editing.md:52:| `airbox.visualization.debug` | `VisualizationDebugPanel` |
-docs/specs/frontend-v2/17-performance-memory-profiler.md:31:`VisualizationDebugController` snapshot is capped at **64 KiB** measured as the
+collecting ... collected 252 items / 251 deselected / 1 selected
+packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology FAILED [100%]
+>       assert splitter_module not in sys.modules
+E       AssertionError: assert 'fullmag.meshing._gmsh_swept' not in {...}
+====================== 1 failed, 251 deselected in 0.63s =======================
+exit 1
 ```
 
-Command:
+Root cause: `test_meshing.py` imports functions from `_gmsh_swept` during
+collection, so module presence measured test ordering rather than splitter use.
+The replacement imports the owner module deterministically, monkeypatches
+`_split_prism_to_tets` with a call-failing mock, and asserts that the mock was
+not called. This guard is independent of whether another test collected the
+module first and fails immediately if the feasibility path invokes the
+production splitter.
+
+First GREEN after only the order-independent guard change used the same command:
 
 ```text
-git diff --check -- docs/specs/frontend-v2/01-module-kernel-architecture.md docs/specs/frontend-v2/11-explorer-view.md docs/specs/frontend-v2/13-inspector-and-property-editing.md docs/specs/frontend-v2/17-performance-memory-profiler.md docs/specs/frontend-v2/23-per-object-visualization-control.md docs/specs/frontend-v2/25-viewport-3d-field-data-architecture.md
+collecting ... collected 252 items / 251 deselected / 1 selected
+packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology PASSED [100%]
+====================== 1 passed, 251 deselected in 0.62s =======================
+exit 0
 ```
 
-Result: no output; exit code 0.
+### Finding 2 RED: unnamed one-owner boundaries
+
+After adding the exact outer-boundary assertion but before changing the GEO,
+the focused command was:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_mixed_element_meshing.py -k gmsh_feasibility -vv
+```
+
+Output and status:
+
+```text
+packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology FAILED [100%]
+E       AssertionError: missing physical group 'airbox_outer'
+FAILED packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology - AssertionError: missing physical group 'airbox_outer'
+============================== 1 failed in 0.34s ===============================
+exit 1
+```
+
+Root cause: the old test accepted every one-owner volume face if Gmsh exposed
+it as any explicit surface, so a named internal cavity or crack could pass. The
+GEO now names surfaces `211` through `216` as `airbox_outer`, and the test
+requires exact set equality between that physical surface mesh and all
+one-owner volume faces. The film-interface assertion remains exactly two
+owners with one `film` and one `air` owner.
+
+### Final GREEN
+
+Focused command:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_mixed_element_meshing.py -k gmsh_feasibility -vv
+```
+
+Output and status:
+
+```text
+packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology PASSED [100%]
+============================== 1 passed in 0.39s ===============================
+exit 0
+```
+
+Co-collection command:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py packages/fullmag-py/tests/test_mixed_element_meshing.py -k gmsh_feasibility -vv
+```
+
+Output and status:
+
+```text
+collecting ... collected 252 items / 251 deselected / 1 selected
+packages/fullmag-py/tests/test_mixed_element_meshing.py::test_gmsh_feasibility_freezes_mixed_p1_topology PASSED [100%]
+====================== 1 passed, 251 deselected in 0.83s =======================
+exit 0
+```
+
+Additional commands:
+
+```bash
+python3 -m py_compile packages/fullmag-py/tests/test_mixed_element_meshing.py
+git diff --check
+```
+
+Both exited `0` with no output. The separately inspected staged path list
+contained exactly the two committed fixture/test paths above. The report and
+the pre-existing `.superpowers/sdd/progress.md` change were not staged.
+
+Post-commit repetition of the two required pytest commands also exited `0`:
+
+```text
+focused: 1 passed in 0.41s
+co-collection: 1 passed, 251 deselected in 0.80s
+```

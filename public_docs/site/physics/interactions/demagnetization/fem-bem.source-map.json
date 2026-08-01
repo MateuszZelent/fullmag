@@ -1,0 +1,69 @@
+{
+  "document": {"path": "public_docs/site/physics/interactions/demagnetization/fem-bem.md", "title": "FEM Bem", "interaction": "demagnetization"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FEM/BEM is a body-only FEM realization, not an FDM operator."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FEM/BEM is a body-only FEM realization, not an FDM CUDA operator."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "The dense Fredkin–Koehler CPU reference path is source-visible and requires runtime qualification for production claims."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No production GPU FEM/BEM implementation or executed-device qualification is claimed."}
+  ],
+  "sources": [
+    {"id": "api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "BEM model validation and IR normalization."},
+    {"id": "fem", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FEM", "responsibility": "Body-only FEM mesh and solver-policy hint."},
+    {"id": "policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "Sparse solve policy."},
+    {"id": "rhs", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp", "symbol": "prepare_demag_fem_bem_neumann_rhs", "responsibility": "Neumann RHS copy and gauge pin."},
+    {"id": "operator", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp", "symbol": "DenseDemagBemOperator::build", "responsibility": "Dense boundary operator, solid-angle diagonal and triangle weights."},
+    {"id": "linear", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp", "symbol": "solve_demag_fem_bem_sparse_system", "responsibility": "Policy-controlled sparse solves."},
+    {"id": "boundary-values", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp", "symbol": "prepare_demag_fem_bem_dirichlet_rhs", "responsibility": "Boundary-value injection for the harmonic correction."},
+    {"id": "solve", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp", "symbol": "context_compute_demag_fem_bem", "responsibility": "Fredkin–Koehler orchestration and telemetry handoff."},
+    {"id": "potential", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp", "symbol": "combine_demag_fem_bem_total_potential", "responsibility": "Potential combination."},
+    {"id": "recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Common potential-gradient recovery and energy handoff."},
+    {"id": "energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Common demagnetization energy reduction."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "u", "latex": "$u$", "meaning": "total scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "u1", "latex": "$u_1$", "meaning": "interior Poisson potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "u2", "latex": "$u_2$", "meaning": "harmonic boundary correction", "si_unit": "$\\mathrm{A}$"},
+    {"id": "v", "latex": "$v$", "meaning": "FEM test function", "si_unit": "$1$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Gamma", "latex": "$\\Gamma_m$", "meaning": "closed magnetic surface", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "gamma", "latex": "$\\gamma$", "meaning": "FEM trace operator on $\\Gamma_m$", "si_unit": "$1$"},
+    {"id": "Bop", "latex": "$\\mathcal B$", "meaning": "dense boundary-integral map", "si_unit": "$1$"},
+    {"id": "g2", "latex": "$g_2$", "meaning": "boundary values for $u_2$", "si_unit": "$\\mathrm{A}$"},
+    {"id": "omega", "latex": "$\\omega_T$", "meaning": "oriented solid angle of surface triangle $T$", "si_unit": "$1$"},
+    {"id": "T", "latex": "$T$", "meaning": "oriented boundary triangle", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "xi", "latex": "$x_i$", "meaning": "boundary node location", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "b1", "latex": "$b_1$", "meaning": "Neumann right-hand-side vector for $u_1$", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "C", "latex": "$C$", "meaning": "additive potential gauge constant", "si_unit": "$\\mathrm{A}$"},
+    {"id": "i", "latex": "$i$", "meaning": "boundary-node index", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-fem-bem-field", "symbols": ["Hd", "u", "M", "Omega"], "sources": ["recovery", "rhs"]},
+    {"id": "eq-fem-bem-decomposition", "symbols": ["u", "u1", "u2", "Omega", "v", "M"], "sources": ["rhs", "solve"]},
+    {"id": "eq-fem-bem-gauge", "symbols": ["b1", "u1", "C"], "sources": ["rhs"]},
+    {"id": "eq-fem-bem-boundary-map", "symbols": ["g2", "Bop", "gamma", "u1", "u2", "Omega", "Gamma"], "sources": ["operator", "boundary-values"]},
+    {"id": "eq-fem-bem-solid-angle", "symbols": ["Bop", "i", "omega", "T"], "sources": ["operator"]},
+    {"id": "eq-fem-bem-total-field-energy", "symbols": ["Hd", "u", "u1", "u2", "Ed", "mu0", "M", "Omega"], "sources": ["potential", "recovery", "energy"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Demag", "fullmag.FEM", "fullmag.FemLinearSolverPolicy"],
+    "parameters": [
+      {"python": "Demag.model", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "`fredkin_koehler` selects the executable body-only FEM/BEM path; `bem` and `fmm` remain separate planner requests.", "meaning": "Selects the FEM/BEM realization family.", "backend_support": "FEM CPU reference path; GPU is unsupported.", "problem_ir": "`energy[].realization`"},
+      {"python": "Demag.variant", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Must be omitted for non-airbox models; otherwise constructor validation fails.", "meaning": "Airbox-only boundary selector, not a BEM parameter.", "backend_support": "Not applicable to Fredkin–Koehler.", "problem_ir": "`energy[].realization`"},
+      {"python": "FEM.order", "type": "int", "default": "required", "si_unit": "$1$", "validation": "Integer greater than or equal to $1$.", "meaning": "Polynomial order of the interior FEM space.", "backend_support": "FEM CPU body-only path subject to mesh support.", "problem_ir": "`backend_policy.discretization_hints.fem.order`"},
+      {"python": "FEM.maximum_element_size", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "Finite positive value; `hmax` is an alias.", "meaning": "Target maximum element size for the magnetic body.", "backend_support": "FEM CPU.", "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"},
+      {"python": "FEM.demag_solver_policy", "type": "FemLinearSolverPolicy | None", "default": "None", "si_unit": "$1$", "validation": "Policy fields are validated individually.", "meaning": "Linear-solver policy for the $u_1$ and $u_2$ sparse solves.", "backend_support": "FEM CPU; no GPU BEM lane.", "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"},
+      {"python": "FemLinearSolverPolicy.solver", "type": "Literal[\"CG\", \"GMRES\"]", "default": "\"CG\"", "si_unit": "$1$", "validation": "Must be `CG` or `GMRES`.", "meaning": "Krylov solver used for each sparse FEM solve.", "backend_support": "FEM CPU; both solves use the selected policy.", "problem_ir": "`demag_solver_policy.solver`"},
+      {"python": "FemLinearSolverPolicy.preconditioner", "type": "Literal[\"AMG\", \"JACOBI\", \"NONE\"]", "default": "\"AMG\"", "si_unit": "$1$", "validation": "Must be `AMG`, `JACOBI`, or `NONE`.", "meaning": "Preconditioner for each sparse solve.", "backend_support": "FEM CPU; Hypre path depends on runtime.", "problem_ir": "`demag_solver_policy.preconditioner`"},
+      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "Finite and strictly positive.", "meaning": "Relative tolerance applied to both $u_1$ and $u_2$ solves; it is algebraic, not a physical discretization tolerance.", "backend_support": "FEM CPU.", "problem_ir": "`demag_solver_policy.rtol`"},
+      {"python": "FemLinearSolverPolicy.atol", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "When supplied, finite and strictly positive.", "meaning": "Optional absolute stopping tolerance for each sparse solve.", "backend_support": "FEM CPU.", "problem_ir": "`demag_solver_policy.atol`"},
+      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "Integer greater than or equal to $1$.", "meaning": "Maximum iterations for each sparse solve; telemetry reports $u_1$ and $u_2$ separately.", "backend_support": "FEM CPU.", "problem_ir": "`demag_solver_policy.max_iterations`"},
+      {"python": "FemLinearSolverPolicy.print_level", "type": "int", "default": "0", "si_unit": "$1$", "validation": "Integer greater than or equal to $0$.", "meaning": "Solver diagnostic verbosity.", "backend_support": "FEM CPU.", "problem_ir": "`demag_solver_policy.print_level`"}
+    ]
+  }
+}

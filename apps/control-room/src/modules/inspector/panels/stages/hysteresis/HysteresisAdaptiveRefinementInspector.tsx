@@ -6,7 +6,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisAdaptiveRefinementInspector({
@@ -17,8 +17,7 @@ export function HysteresisAdaptiveRefinementInspector({
   const settleTraceCount = adaptiveRefinement?.settle_trace?.length ?? 0;
 
   return (
-    <InspectorSection
-      value="hysteresis-adaptive-refinement"
+    <InspectorGroup
       title="Adaptive Refinement"
       badge={adaptiveRefinement?.status ?? "not available"}
     >
@@ -62,7 +61,7 @@ export function HysteresisAdaptiveRefinementInspector({
           hysteresis stage yet.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

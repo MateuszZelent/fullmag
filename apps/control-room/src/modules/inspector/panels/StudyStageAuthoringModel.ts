@@ -17,6 +17,13 @@ import {
   DEFAULT_HYSTERESIS_SETTLE_STEP,
   DEFAULT_HYSTERESIS_STORAGE,
 } from "@/shared/domain/study/hysteresisDefaults";
+import {
+  DEFAULT_STAGE_AUTOSAVE_DRAFT,
+  stageAutosaveDraftFromValue,
+  stageAutosaveDraftToValue,
+  validateStageAutosaveDraft,
+  type StageAutosaveDraft,
+} from "./StageAutosaveDraft";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -117,38 +124,52 @@ const MAX_HYSTERESIS_AUTHORING_FIELD_POINTS = 10_000;
 
 export type StudyStageDraftKind =
   | "add_field_drive"
+  | "autosave"
   | "change_device"
   | "eigenmodes"
+  | "fft_response"
   | "frequency_response"
   | "hysteresis"
   | "relax"
   | "run"
-  | "save_state";
+  | "save_state"
+  | "table_autosave"
+  | "unsupported";
 
-export interface StudyRunOutputDraft {
+export interface StudyAutosaveStageDraft {
+  clearAll: boolean;
   enabled: boolean;
   everySeconds: string;
-  kind: "field" | "scalar";
-  name: string;
-  raw?: JsonObject;
+  outputKind: "field" | "scalar";
+  quantity: string;
+  samplingMode: "explicit" | "auto_sinc_cutoff";
+  rawOutput?: JsonObject;
   readOnly?: boolean;
 }
 
-export interface StudyRunSamplingDraft {
-  gammaDetrend: "none" | "mean" | "linear";
-  gammaResponseComponent: "my" | "mz";
-  gammaResponseEnabled: boolean;
-  gammaWindow: "hann";
-  outputs: StudyRunOutputDraft[];
-  samplePeriodS: string;
+export interface StudyFftResponseStageDraft {
+  detrend: "none" | "mean" | "linear";
+  enabled: boolean;
+  responseComponent: "my" | "mz";
   susceptibilityFloorFraction: string;
-  tableAutosaveEnabled: boolean;
+  window: "hann";
+  rawRequest?: JsonObject;
+  readOnly?: boolean;
+}
+
+export interface StudyTableAutosaveStageDraft {
+  enabled: boolean;
+  readOnly: boolean;
+  samplePeriodS: string;
+  samplingMode: "explicit" | "auto_sinc_cutoff";
   tableQuantities: string;
+  raw?: JsonObject;
 }
 
 export interface StudyStageDraft {
   algorithm: string;
   artifactName: string;
+  autosave: StudyAutosaveStageDraft;
   bc: string;
   calculationMode: string;
   count: string;
@@ -157,6 +178,7 @@ export interface StudyStageDraft {
   demagInterval: string;
   deviceTarget: string;
   dt: string;
+  dtMax: string;
   dtMin: string;
   energyTolerance: string;
   equilibriumArtifact: string;
@@ -169,6 +191,7 @@ export interface StudyStageDraft {
   fieldStepMt: string;
   fieldSteps: string;
   fieldDrive: RegionalFieldDriveResource;
+  fftResponse: StudyFftResponseStageDraft;
   format: string;
   frequenciesHz: string;
   includeDemag: boolean;
@@ -176,8 +199,17 @@ export interface StudyStageDraft {
   kPath: string;
   kSampling: string;
   kVector: string;
+  legacyRunFixedTimestep: string;
   magnetostaticBc: string;
   maxError: string;
+  atol: string;
+  rtol: string;
+  safety: string;
+  growthLimit: string;
+  shrinkLimit: string;
+  maxSpinRotation: string;
+  normTolerance: string;
+  toleranceMode: "advanced" | "max_error";
   maxPhysicalTime: string;
   maxPseudotime: string;
   maxRelaxationTime: string;
@@ -186,14 +218,15 @@ export interface StudyStageDraft {
   observable: string;
   operator: string;
   relaxAlpha: string;
-  runSampling: StudyRunSamplingDraft;
   solver: string;
   solverMethod: string;
   stageId: string;
+  stageAutosave: StageAutosaveDraft;
   startField: string;
   stopField: string;
   target: string;
   targetFrequency: string;
+  tableAutosave: StudyTableAutosaveStageDraft;
   timestepConflict: boolean;
   timestepMode: "adaptive" | "auto" | "fixed";
   frequencyMin: string;
@@ -202,6 +235,7 @@ export interface StudyStageDraft {
   untilSeconds: string;
   // Hysteresis expansion fields
   protocolKind: string;
+  rawStage?: JsonObject;
   initialStatePolicy: string;
   initialStateRef: string;
   orientationMode: string;
@@ -256,41 +290,28 @@ const DEFAULT_FIELD_DRIVE: RegionalFieldDriveResource = {
   },
 };
 
-const DEFAULT_RUN_SAMPLING: StudyRunSamplingDraft = {
-  gammaDetrend: "linear",
-  gammaResponseComponent: "my",
-  gammaResponseEnabled: true,
-  gammaWindow: "hann",
-  outputs: [
-    { enabled: true, everySeconds: "2e-12", kind: "field", name: "m" },
-    {
-      enabled: true,
-      everySeconds: "5e-13",
-      kind: "field",
-      name: "H_drive",
-    },
-    {
-      enabled: false,
-      everySeconds: "2e-12",
-      kind: "field",
-      name: "H_demag",
-    },
-    {
-      enabled: false,
-      everySeconds: "2e-12",
-      kind: "field",
-      name: "H_eff",
-    },
-    {
-      enabled: false,
-      everySeconds: "1e-11",
-      kind: "field",
-      name: "demag_phi",
-    },
-  ],
-  samplePeriodS: "5e-13",
+const DEFAULT_AUTOSAVE: StudyAutosaveStageDraft = {
+  clearAll: false,
+  enabled: true,
+  everySeconds: "2e-12",
+  outputKind: "field",
+  quantity: "m",
+  samplingMode: "explicit",
+};
+
+const DEFAULT_FFT_RESPONSE: StudyFftResponseStageDraft = {
+  detrend: "linear",
+  enabled: true,
+  responseComponent: "my",
   susceptibilityFloorFraction: "1e-6",
-  tableAutosaveEnabled: true,
+  window: "hann",
+};
+
+const DEFAULT_TABLE_AUTOSAVE: StudyTableAutosaveStageDraft = {
+  enabled: true,
+  readOnly: false,
+  samplePeriodS: "5e-13",
+  samplingMode: "explicit",
   tableQuantities: "t, step, mx, my, mz, e_drive",
 };
 
@@ -337,6 +358,7 @@ export function relaxationAlgorithmAvailability(
 const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
+  autosave: DEFAULT_AUTOSAVE,
   bc: "free",
   calculationMode: "",
   count: "10",
@@ -345,6 +367,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   demagInterval: "",
   deviceTarget: "cpu",
   dt: "auto",
+  dtMax: "",
   dtMin: "",
   energyTolerance: "",
   equilibriumArtifact: "",
@@ -357,6 +380,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   fieldStepMt: "",
   fieldSteps: "",
   fieldDrive: DEFAULT_FIELD_DRIVE,
+  fftResponse: DEFAULT_FFT_RESPONSE,
   format: "",
   frequenciesHz: "1e9",
   includeDemag: true,
@@ -364,8 +388,17 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   kPath: "",
   kSampling: "",
   kVector: "",
+  legacyRunFixedTimestep: "",
   magnetostaticBc: "open",
   maxError: "",
+  atol: "",
+  rtol: "",
+  safety: "0.9",
+  growthLimit: "2",
+  shrinkLimit: "0.2",
+  maxSpinRotation: "",
+  normTolerance: "",
+  toleranceMode: "max_error",
   maxPhysicalTime: "",
   maxPseudotime: "",
   maxRelaxationTime: "",
@@ -374,14 +407,15 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   observable: "susceptibility_tensor",
   operator: "linearized_llg",
   relaxAlpha: "1",
-  runSampling: DEFAULT_RUN_SAMPLING,
   solver: "rk23",
   solverMethod: "auto",
   stageId: "",
+  stageAutosave: DEFAULT_STAGE_AUTOSAVE_DRAFT,
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
+  tableAutosave: DEFAULT_TABLE_AUTOSAVE,
   timestepConflict: false,
   timestepMode: "auto",
   frequencyMin: "",
@@ -414,6 +448,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
 const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
+  autosave: DEFAULT_AUTOSAVE,
   bc: "free",
   calculationMode: "",
   count: "10",
@@ -422,6 +457,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   demagInterval: "",
   deviceTarget: "cpu",
   dt: "auto",
+  dtMax: "",
   dtMin: "",
   energyTolerance: "",
   equilibriumArtifact: "",
@@ -434,6 +470,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   fieldStepMt: "",
   fieldSteps: "",
   fieldDrive: DEFAULT_FIELD_DRIVE,
+  fftResponse: DEFAULT_FFT_RESPONSE,
   format: "",
   frequenciesHz: "1e9",
   includeDemag: true,
@@ -441,8 +478,17 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   kPath: "",
   kSampling: "",
   kVector: "",
+  legacyRunFixedTimestep: "",
   magnetostaticBc: "open",
   maxError: "",
+  atol: "",
+  rtol: "",
+  safety: "0.9",
+  growthLimit: "2",
+  shrinkLimit: "0.2",
+  maxSpinRotation: "",
+  normTolerance: "",
+  toleranceMode: "max_error",
   maxPhysicalTime: "",
   maxPseudotime: "",
   maxRelaxationTime: "",
@@ -451,14 +497,15 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   observable: "susceptibility_tensor",
   operator: "linearized_llg",
   relaxAlpha: "",
-  runSampling: DEFAULT_RUN_SAMPLING,
   solver: "",
   solverMethod: "auto",
   stageId: "",
+  stageAutosave: DEFAULT_STAGE_AUTOSAVE_DRAFT,
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
+  tableAutosave: DEFAULT_TABLE_AUTOSAVE,
   timestepConflict: false,
   timestepMode: "auto",
   frequencyMin: "",
@@ -491,6 +538,24 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
 const DEFAULT_ADD_FIELD_DRIVE_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RUN_STAGE_DRAFT,
   kind: "add_field_drive",
+  untilSeconds: "",
+};
+
+const DEFAULT_TABLE_AUTOSAVE_STAGE_DRAFT: StudyStageDraft = {
+  ...DEFAULT_RUN_STAGE_DRAFT,
+  kind: "table_autosave",
+  untilSeconds: "",
+};
+
+const DEFAULT_AUTOSAVE_STAGE_DRAFT: StudyStageDraft = {
+  ...DEFAULT_RUN_STAGE_DRAFT,
+  kind: "autosave",
+  untilSeconds: "",
+};
+
+const DEFAULT_FFT_RESPONSE_STAGE_DRAFT: StudyStageDraft = {
+  ...DEFAULT_RUN_STAGE_DRAFT,
+  kind: "fft_response",
   untilSeconds: "",
 };
 
@@ -563,15 +628,256 @@ const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
   storageEstimateAcknowledged: false,
 };
 
+export function createStudyStageDrafts(
+  stages: readonly unknown[],
+): StudyStageDraft[] {
+  const drafts: StudyStageDraft[] = [];
+  for (const [sourceIndex, stage] of stages.entries()) {
+    const record = asRecord(stage);
+    if (stageKind(record) !== "run") {
+      drafts.push(createStudyStageDraft(stage, drafts.length));
+      continue;
+    }
+    const sampling = asRecord(record?.sampling);
+    const response = asRecord(record?.spin_wave_response);
+    if (sampling || response) {
+      const runId = stringValue(
+        record?.stage_id ?? record?.id,
+        `run-${sourceIndex + 1}`,
+      );
+      if (sampling) {
+        drafts.push(
+          createStudyStageDraft(
+            {
+              enabled: false,
+              entrypoint_kind: "flat_autosave",
+              kind: "autosave",
+              output: null,
+              quantity: null,
+              stage_id: `${runId}-autosave-reset`,
+            },
+            drafts.length,
+          ),
+        );
+        const table = asRecord(
+          sampling.table_autosave ?? sampling.tableautosave,
+        );
+        drafts.push(
+          createStudyStageDraft(
+            {
+              enabled: table !== null,
+              entrypoint_kind: "flat_table_autosave",
+              kind: "table_autosave",
+              stage_id: `${runId}-table-autosave`,
+              table_autosave: table,
+            },
+            drafts.length,
+          ),
+        );
+        const outputs = Array.isArray(sampling.outputs) ? sampling.outputs : [];
+        for (const [outputIndex, outputValue] of outputs.entries()) {
+          const output = asRecord(outputValue);
+          const quantity = scalarText(
+            output?.name ?? output?.field ?? output?.scalar,
+            `output-${outputIndex + 1}`,
+          );
+          drafts.push(
+            createStudyStageDraft(
+              {
+                enabled: true,
+                entrypoint_kind: "flat_autosave",
+                kind: "autosave",
+                output,
+                quantity,
+                stage_id: `${runId}-autosave-${stageIdSegment(quantity, outputIndex)}`,
+              },
+              drafts.length,
+            ),
+          );
+        }
+      }
+      drafts.push(
+        createStudyStageDraft(
+          {
+            enabled: response !== null,
+            entrypoint_kind: "flat_fft_response",
+            kind: "fft_response",
+            request: response,
+            stage_id: `${runId}-fft-response`,
+          },
+          drafts.length,
+        ),
+      );
+    }
+    drafts.push(createStudyStageDraft(stage, drafts.length));
+  }
+  return drafts;
+}
+
 export function createStudyStageDraft(
   stage: unknown,
   index: number,
 ): StudyStageDraft {
   const record = asRecord(stage);
   const kind = stageKind(record);
+  const action = asRecord(record?.action);
+  const payload = asRecord(record?.payload);
+  if (kind === "unsupported") {
+    return cloneStudyStageDraft({
+      ...DEFAULT_RELAX_STAGE_DRAFT,
+      kind,
+      ...(record ? { rawStage: structuredClone(record) as JsonObject } : {}),
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+    });
+  }
+  if (kind === "table_autosave") {
+    const table = asRecord(
+      record?.table_autosave ??
+        action?.table_autosave ??
+        payload?.table_autosave,
+    );
+    const policy = asRecord(table?.sample_period_policy);
+    const knownAutoPolicy =
+      policy?.kind === "auto_sinc_cutoff" &&
+      (policy.nyquist_guard_factor === undefined ||
+        policy.nyquist_guard_factor === 1.3) &&
+      Object.keys(policy).every((key) =>
+        ["kind", "nyquist_guard_factor"].includes(key),
+      );
+    const unsupportedPolicy = policy !== null && !knownAutoPolicy;
+    return cloneStudyStageDraft({
+      ...DEFAULT_TABLE_AUTOSAVE_STAGE_DRAFT,
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+      tableAutosave: {
+        enabled: booleanValue(
+          record?.enabled ?? action?.enabled ?? payload?.enabled,
+          true,
+        ),
+        readOnly: unsupportedPolicy,
+        samplePeriodS: scalarText(
+          table?.sample_period_s ??
+            table?.resolved_sample_period_s ??
+            table?.every_seconds,
+          DEFAULT_TABLE_AUTOSAVE.samplePeriodS,
+        ),
+        samplingMode: knownAutoPolicy ? "auto_sinc_cutoff" : "explicit",
+        tableQuantities: Array.isArray(table?.quantities)
+          ? table.quantities.map(String).join(", ")
+          : DEFAULT_TABLE_AUTOSAVE.tableQuantities,
+        ...(table ? { raw: structuredClone(table) as JsonObject } : {}),
+      },
+    });
+  }
+  if (kind === "autosave") {
+    const output = asRecord(record?.output ?? action?.output ?? payload?.output);
+    const outputKind = output?.kind;
+    const policy = asRecord(output?.sample_period_policy);
+    const knownAutoPolicy =
+      policy?.kind === "auto_sinc_cutoff" &&
+      (policy.nyquist_guard_factor === undefined ||
+        policy.nyquist_guard_factor === 1.3) &&
+      Object.keys(policy).every((key) =>
+        ["kind", "nyquist_guard_factor"].includes(key),
+      );
+    const explicitOutput = outputKind === "field" || outputKind === "scalar";
+    const automaticOutput =
+      (outputKind === "field_auto" || outputKind === "scalar_auto") &&
+      knownAutoPolicy;
+    const supportedOutput = explicitOutput || automaticOutput;
+    const quantity = scalarText(
+      record?.quantity ?? action?.quantity ?? payload?.quantity ?? output?.name,
+      "",
+    );
+    const enabled = booleanValue(
+      record?.enabled ?? action?.enabled ?? payload?.enabled,
+      true,
+    );
+    return cloneStudyStageDraft({
+      ...DEFAULT_AUTOSAVE_STAGE_DRAFT,
+      autosave: {
+        clearAll: !enabled && !quantity.trim(),
+        enabled,
+        everySeconds: scalarText(
+          output?.every_seconds,
+          DEFAULT_AUTOSAVE.everySeconds,
+        ),
+        outputKind:
+          outputKind === "scalar" || outputKind === "scalar_auto"
+            ? "scalar"
+            : "field",
+        quantity:
+          !enabled && !quantity.trim()
+            ? ""
+            : quantity || DEFAULT_AUTOSAVE.quantity,
+        samplingMode: automaticOutput ? "auto_sinc_cutoff" : "explicit",
+        readOnly: Boolean(output && !supportedOutput),
+        ...(output && !supportedOutput
+          ? {
+              rawOutput: structuredClone(output) as JsonObject,
+            }
+          : {}),
+      },
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+    });
+  }
+  if (kind === "fft_response") {
+    const request = asRecord(record?.request ?? action?.request ?? payload?.request);
+    const supportedRequest =
+      request === null ||
+      (request.analysis === "gamma" &&
+        (request.response_component === undefined ||
+          request.response_component === "my" ||
+          request.response_component === "mz") &&
+        (request.detrend === undefined ||
+          request.detrend === "none" ||
+          request.detrend === "mean" ||
+          request.detrend === "linear") &&
+        (request.window === undefined || request.window === "hann") &&
+        (request.weighting === undefined ||
+          request.weighting === "Ms_times_lumped_volume") &&
+        (request.schema_version === undefined ||
+          request.schema_version === "spin_wave_response.request.v1") &&
+        Object.keys(request).every((key) =>
+          [
+            "analysis",
+            "detrend",
+            "response_component",
+            "schema_version",
+            "susceptibility_floor_fraction",
+            "weighting",
+            "window",
+          ].includes(key),
+        ));
+    return cloneStudyStageDraft({
+      ...DEFAULT_FFT_RESPONSE_STAGE_DRAFT,
+      fftResponse: {
+        detrend:
+          request?.detrend === "none" ||
+          request?.detrend === "mean" ||
+          request?.detrend === "linear"
+            ? request.detrend
+            : DEFAULT_FFT_RESPONSE.detrend,
+        enabled: booleanValue(
+          record?.enabled ?? action?.enabled ?? payload?.enabled,
+          true,
+        ),
+        responseComponent: request?.response_component === "mz" ? "mz" : "my",
+        susceptibilityFloorFraction: scalarText(
+          request?.susceptibility_floor_fraction,
+          DEFAULT_FFT_RESPONSE.susceptibilityFloorFraction,
+        ),
+        window: "hann",
+        ...(request && !supportedRequest
+          ? {
+              rawRequest: structuredClone(request) as JsonObject,
+              readOnly: true,
+            }
+          : {}),
+      },
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+    });
+  }
   if (kind === "add_field_drive") {
-    const action = asRecord(record?.action);
-    const payload = asRecord(record?.payload);
     return cloneStudyStageDraft({
       ...DEFAULT_ADD_FIELD_DRIVE_STAGE_DRAFT,
       fieldDrive: regionalFieldDriveValue(
@@ -582,13 +888,11 @@ export function createStudyStageDraft(
     });
   }
   if (kind === "run") {
-    const fixedTimestep = scalarText(record?.fixed_timestep, "");
     return {
       ...DEFAULT_RUN_STAGE_DRAFT,
-      dt: fixedTimestep || DEFAULT_RUN_STAGE_DRAFT.dt,
-      runSampling: runSamplingDraft(record),
+      legacyRunFixedTimestep: scalarText(record?.fixed_timestep, ""),
+      stageAutosave: stageAutosaveDraftFromValue(record?.autosave, "run"),
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
-      timestepMode: fixedTimestep ? "fixed" : "auto",
       untilSeconds: scalarText(
         record?.until_seconds ??
           record?.until ??
@@ -792,6 +1096,9 @@ export function createStudyStageDraft(
     record?.fixed_timestep !== null &&
     record?.fixed_timestep !== "";
   const hasAdaptiveTimestep = record?.adaptive_timestep != null;
+  const adaptiveTimestep = asRecord(record?.adaptive_timestep);
+  const toleranceMode =
+    adaptiveTimestep?.tolerance_mode === "max_error" ? "max_error" : "advanced";
   return {
     ...DEFAULT_RELAX_STAGE_DRAFT,
     algorithm: scalarText(
@@ -802,16 +1109,17 @@ export function createStudyStageDraft(
       record?.demag_interval_s ?? asRecord(record?.field_refresh)?.demag_interval_s,
       "",
     ),
-    dt: scalarText(
-      record?.fixed_timestep ??
-        asRecord(record?.adaptive_timestep)?.dt_initial ??
-        record?.dt,
-      DEFAULT_RELAX_STAGE_DRAFT.dt,
-    ),
+    dt: hasAdaptiveTimestep
+      ? scalarText(asRecord(record?.adaptive_timestep)?.dt_initial, "")
+      : scalarText(
+          record?.fixed_timestep ?? record?.dt,
+          DEFAULT_RELAX_STAGE_DRAFT.dt,
+        ),
     dtMin: scalarText(
-      asRecord(record?.adaptive_timestep)?.dt_min ?? record?.dt_min,
+      adaptiveTimestep?.dt_min ?? record?.dt_min,
       "",
     ),
+    dtMax: scalarText(adaptiveTimestep?.dt_max ?? record?.dt_max, ""),
     energyTolerance: scalarText(record?.energy_tolerance_j ?? record?.energy_tolerance, ""),
     fieldEvery: scalarText(
       asRecord(record?.field_refresh)?.every_n ??
@@ -819,10 +1127,21 @@ export function createStudyStageDraft(
       "",
     ),
     kind: "relax",
+    stageAutosave: stageAutosaveDraftFromValue(record?.autosave, "relax"),
     maxError: scalarText(
-      asRecord(record?.adaptive_timestep)?.atol ?? record?.max_error,
+      toleranceMode === "max_error"
+        ? adaptiveTimestep?.atol ?? record?.max_error
+        : record?.max_error,
       "",
     ),
+    atol: scalarText(adaptiveTimestep?.atol, ""),
+    rtol: scalarText(adaptiveTimestep?.rtol, ""),
+    safety: scalarText(adaptiveTimestep?.safety, "0.9"),
+    growthLimit: scalarText(adaptiveTimestep?.growth_limit, "2"),
+    shrinkLimit: scalarText(adaptiveTimestep?.shrink_limit, "0.2"),
+    maxSpinRotation: scalarText(adaptiveTimestep?.max_spin_rotation, ""),
+    normTolerance: scalarText(adaptiveTimestep?.norm_tolerance, ""),
+    toleranceMode,
     maxPhysicalTime: scalarText(record?.max_physical_time_s, ""),
     maxPseudotime: scalarText(record?.max_pseudotime_s, ""),
     maxRelaxationTime: scalarText(
@@ -864,6 +1183,12 @@ export function createDefaultStudyStageDraft(
   const base =
     kind === "add_field_drive"
       ? DEFAULT_ADD_FIELD_DRIVE_STAGE_DRAFT
+      : kind === "table_autosave"
+        ? DEFAULT_TABLE_AUTOSAVE_STAGE_DRAFT
+        : kind === "autosave"
+          ? DEFAULT_AUTOSAVE_STAGE_DRAFT
+          : kind === "fft_response"
+            ? DEFAULT_FFT_RESPONSE_STAGE_DRAFT
       : kind === "run"
       ? DEFAULT_RUN_STAGE_DRAFT
       : kind === "eigenmodes"
@@ -887,12 +1212,114 @@ export function createDefaultStudyStageDraft(
 export function studyStageDraftToSceneStage(
   draft: StudyStageDraft,
 ): JsonObject {
+  if (draft.kind === "unsupported") {
+    if (!draft.rawStage) {
+      throw new Error("unsupported study stage requires its preserved raw payload");
+    }
+    return structuredClone(draft.rawStage);
+  }
   if (draft.kind === "add_field_drive") {
     return {
       drive: structuredClone(draft.fieldDrive) as unknown as JsonObject,
       entrypoint_kind: "flat_add_field_drive",
       kind: "add_field_drive",
       stage_id: requiredText(draft.stageId, "add-field-drive"),
+    };
+  }
+  if (draft.kind === "table_autosave") {
+    const rawTable = draft.tableAutosave.raw ?? {};
+    const preservedTable = { ...rawTable };
+    delete preservedTable.resolved_sample_period_s;
+    delete preservedTable.sample_period_policy;
+    delete preservedTable.sample_period_s;
+    return {
+      enabled: draft.tableAutosave.enabled,
+      entrypoint_kind: "flat_table_autosave",
+      kind: "table_autosave",
+      stage_id: requiredText(draft.stageId, "table-autosave"),
+      table_autosave:
+        draft.tableAutosave.readOnly && draft.tableAutosave.raw
+          ? structuredClone(draft.tableAutosave.raw)
+          : draft.tableAutosave.enabled
+            ? {
+            ...preservedTable,
+            kind: "table_autosave",
+            quantities: commaSeparatedValues(draft.tableAutosave.tableQuantities),
+            ...(draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
+              ? {
+                  sample_period_policy: {
+                    kind: "auto_sinc_cutoff",
+                    nyquist_guard_factor: 1.3,
+                  },
+                }
+              : {
+                  sample_period_s: requiredNumber(
+                    draft.tableAutosave.samplePeriodS,
+                    "sample_period_s",
+                  ),
+                }),
+            table_id: "default",
+          }
+            : null,
+    };
+  }
+  if (draft.kind === "autosave") {
+    const quantity = draft.autosave.clearAll
+      ? null
+      : requiredText(draft.autosave.quantity, "autosave quantity");
+    const output = draft.autosave.enabled
+      ? draft.autosave.readOnly && draft.autosave.rawOutput
+        ? structuredClone(draft.autosave.rawOutput)
+        : draft.autosave.samplingMode === "auto_sinc_cutoff"
+          ? {
+            kind: `${draft.autosave.outputKind}_auto`,
+            name: requiredText(draft.autosave.quantity, "autosave quantity"),
+            sample_period_policy: {
+              kind: "auto_sinc_cutoff",
+              nyquist_guard_factor: 1.3,
+            },
+          }
+          : {
+            every_seconds: requiredNumber(
+              draft.autosave.everySeconds,
+              "autosave cadence",
+            ),
+            kind: draft.autosave.outputKind,
+            name: requiredText(draft.autosave.quantity, "autosave quantity"),
+          }
+      : null;
+    return {
+      enabled: draft.autosave.enabled,
+      entrypoint_kind: "flat_autosave",
+      kind: "autosave",
+      output,
+      quantity,
+      stage_id: requiredText(draft.stageId, "autosave"),
+    };
+  }
+  if (draft.kind === "fft_response") {
+    const request = draft.fftResponse.enabled
+      ? draft.fftResponse.readOnly && draft.fftResponse.rawRequest
+        ? structuredClone(draft.fftResponse.rawRequest)
+        : {
+            analysis: "gamma",
+            detrend: draft.fftResponse.detrend,
+            response_component: draft.fftResponse.responseComponent,
+            schema_version: "spin_wave_response.request.v1",
+            susceptibility_floor_fraction: requiredFraction(
+              draft.fftResponse.susceptibilityFloorFraction,
+              "susceptibility_floor_fraction",
+            ),
+            weighting: "Ms_times_lumped_volume",
+            window: draft.fftResponse.window,
+          }
+      : null;
+    return {
+      enabled: draft.fftResponse.enabled,
+      entrypoint_kind: "flat_fft_response",
+      kind: "fft_response",
+      request,
+      stage_id: requiredText(draft.stageId, "fft-response"),
     };
   }
   if (draft.kind === "run") {
@@ -902,49 +1329,8 @@ export function studyStageDraftToSceneStage(
       stage_id: requiredText(draft.stageId, "run"),
       until_seconds: requiredNumber(draft.untilSeconds, "until_seconds"),
     };
-    if (draft.timestepMode === "fixed" && draft.dt.trim() && draft.dt.trim() !== "auto") {
-      stage.fixed_timestep = requiredNumber(draft.dt, "fixed_timestep");
-    }
-    const outputs = draft.runSampling.outputs
-      .filter((output) => output.enabled)
-      .map((output) => {
-        if (output.readOnly && output.raw) return structuredClone(output.raw);
-        return {
-          every_seconds: requiredNumber(
-            output.everySeconds,
-            `${output.name || "output"}_every_seconds`,
-          ),
-          kind: output.kind,
-          name: requiredText(output.name, "output"),
-        } satisfies JsonObject;
-      });
-    const sampling: JsonObject = { outputs };
-    if (draft.runSampling.tableAutosaveEnabled) {
-      sampling.table_autosave = {
-        kind: "table_autosave",
-        quantities: commaSeparatedValues(draft.runSampling.tableQuantities),
-        sample_period_s: requiredNumber(
-          draft.runSampling.samplePeriodS,
-          "sample_period_s",
-        ),
-        table_id: "default",
-      };
-    }
-    stage.sampling = sampling;
-    if (draft.runSampling.gammaResponseEnabled) {
-      stage.spin_wave_response = {
-        analysis: "gamma",
-        detrend: draft.runSampling.gammaDetrend,
-        response_component: draft.runSampling.gammaResponseComponent,
-        schema_version: "spin_wave_response.request.v1",
-        susceptibility_floor_fraction: requiredFraction(
-          draft.runSampling.susceptibilityFloorFraction,
-          "susceptibility_floor_fraction",
-        ),
-        weighting: "Ms_times_lumped_volume",
-        window: draft.runSampling.gammaWindow,
-      };
-    }
+    const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "run");
+    if (autosave) stage.autosave = autosave;
     return stage;
   }
   if (draft.kind === "eigenmodes") {
@@ -1152,12 +1538,36 @@ export function studyStageDraftToSceneStage(
     if (draft.timestepMode === "fixed" && draft.dt.trim()) {
       stage.fixed_timestep = requiredNumber(draft.dt, "fixed_timestep");
     } else if (draft.timestepMode === "adaptive") {
-      const adaptive: JsonObject = {};
-      setOptionalNumber(adaptive, "atol", draft.maxError);
+      const adaptive: JsonObject = { tolerance_mode: draft.toleranceMode };
+      if (draft.toleranceMode === "advanced") {
+        setOptionalNumber(adaptive, "atol", draft.atol);
+        setOptionalNumber(adaptive, "rtol", draft.rtol);
+      } else {
+        setOptionalNumber(adaptive, "atol", draft.maxError);
+        adaptive.rtol = 0;
+      }
       if (draft.dt.trim() !== "auto") {
         setOptionalNumber(adaptive, "dt_initial", draft.dt);
       }
       setOptionalNumber(adaptive, "dt_min", draft.dtMin);
+      setOptionalNumber(adaptive, "dt_max", draft.dtMax);
+      if (draft.toleranceMode === "advanced") {
+        adaptive.safety = requiredNumber(draft.safety, "safety");
+        adaptive.growth_limit = requiredNumber(
+          draft.growthLimit,
+          "growth_limit",
+        );
+        adaptive.shrink_limit = requiredNumber(
+          draft.shrinkLimit,
+          "shrink_limit",
+        );
+        setOptionalNumber(
+          adaptive,
+          "max_spin_rotation",
+          draft.maxSpinRotation,
+        );
+        setOptionalNumber(adaptive, "norm_tolerance", draft.normTolerance);
+      }
       stage.adaptive_timestep = adaptive;
     }
     const fieldRefresh: JsonObject = {};
@@ -1166,6 +1576,9 @@ export function studyStageDraftToSceneStage(
     if (Object.keys(fieldRefresh).length > 0) stage.field_refresh = fieldRefresh;
     setOptionalNumber(stage, "demag_interval_s", draft.demagInterval);
   }
+
+  const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "relax");
+  if (autosave) stage.autosave = autosave;
 
   return stage;
 }
@@ -1178,11 +1591,19 @@ export function validateStudyStageDraft(
     demagEnabled?: boolean;
     device: string;
     mode: string;
+    precision?: string;
   },
 ): StudyStageDraftValidation[] {
   const issues: StudyStageDraftValidation[] = [];
   if (!draft.stageId.trim()) {
     issues.push({ message: "Stage ID is required.", severity: "error" });
+  }
+  if (draft.kind === "unsupported") {
+    issues.push({
+      message: "Unsupported study stage is preserved losslessly and remains read-only.",
+      severity: "warning",
+    });
+    return issues;
   }
   if (draft.kind === "add_field_drive") {
     for (const message of validateFieldDriveDraft(draft.fieldDrive)) {
@@ -1190,59 +1611,90 @@ export function validateStudyStageDraft(
     }
     return issues;
   }
-  if (draft.kind === "run") {
-    validatePositiveNumber(issues, draft.untilSeconds, "Until seconds", true);
-    if (draft.timestepMode === "fixed") {
-      validatePositiveNumber(issues, draft.dt, "Fixed timestep", true);
-    }
-    if (draft.runSampling.tableAutosaveEnabled) {
-      validatePositiveNumber(
-        issues,
-        draft.runSampling.samplePeriodS,
-        "Response t_sampling",
-        true,
-      );
-      if (commaSeparatedValues(draft.runSampling.tableQuantities).length === 0) {
+  if (draft.kind === "table_autosave") {
+    if (draft.tableAutosave.enabled) {
+      if (
+        !draft.tableAutosave.readOnly &&
+        draft.tableAutosave.samplingMode === "explicit"
+      ) {
+        validatePositiveNumber(
+          issues,
+          draft.tableAutosave.samplePeriodS,
+          "Table autosave t_sampling",
+          true,
+        );
+      }
+      if (commaSeparatedValues(draft.tableAutosave.tableQuantities).length === 0) {
         issues.push({
           message: "Table autosave requires at least one quantity.",
           severity: "error",
         });
       }
     }
-    const enabledOutputs = draft.runSampling.outputs.filter(
-      (output) => output.enabled,
-    );
-    if (enabledOutputs.length === 0) {
+    if (draft.tableAutosave.readOnly) {
       issues.push({
-        message: "Run sampling requires at least one enabled output.",
+        message: "Unsupported table sampling policy is preserved read-only.",
+        severity: "warning",
+      });
+    }
+    return issues;
+  }
+  if (draft.kind === "autosave") {
+    if (!draft.autosave.clearAll && !draft.autosave.quantity.trim()) {
+      issues.push({
+        message: "Autosave quantity is required unless all outputs are cleared.",
         severity: "error",
       });
     }
-    for (const output of enabledOutputs) {
-      if (!output.name.trim()) {
-        issues.push({ message: "Output name is required.", severity: "error" });
-      }
+    if (
+      draft.autosave.enabled &&
+      !draft.autosave.readOnly &&
+      draft.autosave.samplingMode === "explicit"
+    ) {
       validatePositiveNumber(
         issues,
-        output.everySeconds,
-        `Output ${output.name || "unnamed"} cadence`,
+        draft.autosave.everySeconds,
+        "Autosave cadence",
         true,
       );
     }
-    if (draft.runSampling.gammaResponseEnabled) {
-      if (!draft.runSampling.tableAutosaveEnabled) {
-        issues.push({
-          message: "Gamma response FFT requires stage-local table autosave.",
-          severity: "error",
-        });
-      }
-      const floor = Number(draft.runSampling.susceptibilityFloorFraction);
+    if (draft.autosave.readOnly) {
+      issues.push({
+        message: "Unsupported autosave output is preserved read-only.",
+        severity: "warning",
+      });
+    }
+    return issues;
+  }
+  if (draft.kind === "fft_response") {
+    if (draft.fftResponse.enabled && !draft.fftResponse.readOnly) {
+      const floor = Number(draft.fftResponse.susceptibilityFloorFraction);
       if (!Number.isFinite(floor) || floor < 0 || floor >= 1) {
         issues.push({
           message: "Susceptibility floor fraction must be in [0, 1).",
           severity: "error",
         });
       }
+    }
+    if (draft.fftResponse.readOnly) {
+      issues.push({
+        message: "Unsupported FFT response request is preserved read-only.",
+        severity: "warning",
+      });
+    }
+    return issues;
+  }
+  if (draft.kind === "run") {
+    validatePositiveNumber(issues, draft.untilSeconds, "Until seconds", true);
+    if (draft.legacyRunFixedTimestep.trim()) {
+      issues.push({
+        message:
+          "Legacy Run-local fixed_timestep must be moved to the global Solver definition before this workflow can be saved.",
+        severity: "error",
+      });
+    }
+    for (const message of validateStageAutosaveDraft(draft.stageAutosave, "run")) {
+      issues.push({ message, severity: "error" });
     }
     return issues;
   }
@@ -1397,15 +1849,120 @@ export function validateStudyStageDraft(
     }
     validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false);
     validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
-    validatePositiveNumber(issues, draft.maxError, "Max error", false);
-    validatePositiveNumber(issues, draft.dtMin, "dt_min", false);
+    if (draft.timestepMode === "auto") {
+      issues.push({
+        message: "LLG relaxation requires an explicit fixed or adaptive timestep policy.",
+        severity: "error",
+      });
+    } else if (draft.timestepMode === "adaptive") {
+      validatePositiveNumber(issues, draft.dtMin, "dt_min", true);
+      if (!draft.dtMax.trim()) {
+        issues.push({
+          message: "dt_max is required and must be finite and positive.",
+          severity: "error",
+        });
+      } else {
+        validatePositiveNumber(issues, draft.dtMax, "dt_max", true);
+      }
+      if (draft.solver !== "rk23" && draft.solver !== "rk45") {
+        issues.push({ message: "Adaptive policy requires RK23 or RK45.", severity: "error" });
+      }
+      if (execution && execution.backend !== "fem" && execution.device !== "cpu") {
+        issues.push({
+          message: "Adaptive FDM execution requires an explicit CPU device.",
+          severity: "error",
+        });
+      }
+      if (execution?.precision && execution.precision !== "double") {
+        issues.push({
+          message: "Adaptive execution is qualified only for double precision.",
+          severity: "error",
+        });
+      }
+      validateStageAdaptiveBounds(issues, draft);
+      if (draft.toleranceMode === "max_error") {
+        validatePositiveNumber(issues, draft.maxError, "Maximum embedded vector error", true);
+      } else {
+        validateNonnegativeNumber(issues, draft.atol, "Absolute tolerance");
+        validateNonnegativeNumber(issues, draft.rtol, "Relative tolerance");
+        if (Number(draft.atol) === 0 && Number(draft.rtol) === 0) {
+          issues.push({
+            message: "At least one advanced tolerance must be positive.",
+            severity: "error",
+          });
+        }
+        validateStageAdaptiveController(issues, draft);
+      }
+    }
     validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false);
     validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
     if (draft.timestepMode !== "auto" && draft.dt.trim()) {
       validatePositiveNumber(issues, draft.dt, "dt", true);
     }
   }
+  for (const message of validateStageAutosaveDraft(draft.stageAutosave, "relax")) {
+    issues.push({ message, severity: "error" });
+  }
   return issues;
+}
+
+function validateStageAdaptiveController(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const safety = Number(draft.safety);
+  if (!draft.safety.trim() || !Number.isFinite(safety) || safety <= 0 || safety > 1) {
+    issues.push({ message: "Safety must be finite and in (0, 1].", severity: "error" });
+  }
+  const growth = Number(draft.growthLimit);
+  if (!draft.growthLimit.trim() || !Number.isFinite(growth) || growth <= 1) {
+    issues.push({ message: "Growth limit must be finite and greater than one.", severity: "error" });
+  }
+  const shrink = Number(draft.shrinkLimit);
+  if (!draft.shrinkLimit.trim() || !Number.isFinite(shrink) || shrink <= 0 || shrink >= 1) {
+    issues.push({ message: "Shrink limit must be finite and in (0, 1).", severity: "error" });
+  }
+  validatePositiveNumber(issues, draft.maxSpinRotation, "Max spin rotation", false);
+  validatePositiveNumber(issues, draft.normTolerance, "Norm tolerance", false);
+}
+
+function validateStageAdaptiveBounds(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const minimum = Number(draft.dtMin);
+  const maximum = Number(draft.dtMax);
+  if (
+    draft.dtMin.trim() &&
+    draft.dtMax.trim() &&
+    Number.isFinite(minimum) &&
+    Number.isFinite(maximum) &&
+    maximum < minimum
+  ) {
+    issues.push({ message: "dt_max must be greater than or equal to dt_min.", severity: "error" });
+  }
+  if (draft.dt.trim()) {
+    const initial = Number(draft.dt);
+    if (
+      Number.isFinite(initial) &&
+      Number.isFinite(minimum) &&
+      Number.isFinite(maximum) &&
+      (initial < minimum || initial > maximum)
+    ) {
+      issues.push({ message: "dt_initial must lie within adaptive bounds.", severity: "error" });
+    }
+  }
+}
+
+function validateNonnegativeNumber(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  label: string,
+): void {
+  const parsed = Number(value);
+  if (!value.trim() || !Number.isFinite(parsed) || parsed < 0) {
+    issues.push({ message: `${label} must be finite and nonnegative.`, severity: "error" });
+  }
 }
 
 function validateSpectralOptions(
@@ -2723,28 +3280,68 @@ function validatePositiveInteger(
 }
 
 function stageKind(record: JsonRecord | null): StudyStageDraftKind {
-  const kind = String(record?.kind ?? record?.entrypoint_kind ?? "relax");
+  const authoredKind = record?.kind ?? record?.entrypoint_kind;
+  if (authoredKind === undefined || authoredKind === null) {
+    return record && (
+      "algorithm" in record ||
+      "relax_algorithm" in record ||
+      "torque_tolerance" in record
+    )
+      ? "relax"
+      : "unsupported";
+  }
+  const kind = String(authoredKind);
   const normalized = kind.toLowerCase();
   if (normalized.includes("add_field_drive")) return "add_field_drive";
+  if (normalized.includes("table_autosave")) return "table_autosave";
+  if (normalized.includes("fft_response")) return "fft_response";
+  if (normalized.includes("autosave")) return "autosave";
   if (normalized.includes("change_device")) return "change_device";
   if (normalized.includes("frequency")) return "frequency_response";
   if (normalized.includes("eigen")) return "eigenmodes";
   if (normalized.includes("hysteresis")) return "hysteresis";
   if (normalized.includes("save")) return "save_state";
   if (normalized.includes("run")) return "run";
-  return "relax";
+  if (normalized.includes("relax") || normalized.includes("minimize")) {
+    return "relax";
+  }
+  return "unsupported";
+}
+
+function stageIdSegment(value: string, fallbackIndex: number): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || `output-${fallbackIndex + 1}`;
 }
 
 function cloneStudyStageDraft(draft: StudyStageDraft): StudyStageDraft {
   return {
     ...draft,
+    ...(draft.rawStage
+      ? { rawStage: structuredClone(draft.rawStage) }
+      : {}),
+    autosave: {
+      ...draft.autosave,
+      ...(draft.autosave.rawOutput
+        ? { rawOutput: structuredClone(draft.autosave.rawOutput) }
+        : {}),
+    },
     fieldDrive: structuredClone(draft.fieldDrive),
-    runSampling: {
-      ...draft.runSampling,
-      outputs: draft.runSampling.outputs.map((output) => ({
-        ...output,
-        raw: output.raw ? structuredClone(output.raw) : undefined,
-      })),
+    stageAutosave: structuredClone(draft.stageAutosave),
+    fftResponse: {
+      ...draft.fftResponse,
+      ...(draft.fftResponse.rawRequest
+        ? { rawRequest: structuredClone(draft.fftResponse.rawRequest) }
+        : {}),
+    },
+    tableAutosave: {
+      ...draft.tableAutosave,
+      ...(draft.tableAutosave.raw
+        ? { raw: structuredClone(draft.tableAutosave.raw) }
+        : {}),
     },
   };
 }
@@ -2782,60 +3379,6 @@ function regionalFieldDriveValue(
       record.time_origin === "absolute" ? "absolute" : "stage_local",
     waveform: (waveform ?? fallback.waveform) as RegionalFieldDriveResource["waveform"],
   } as RegionalFieldDriveResource;
-}
-
-function runSamplingDraft(record: JsonRecord | null): StudyRunSamplingDraft {
-  const sampling = asRecord(record?.sampling);
-  const tableAutosave = asRecord(
-    sampling?.table_autosave ?? sampling?.tableautosave,
-  );
-  const response = asRecord(record?.spin_wave_response);
-  if (!sampling && !response) {
-    return cloneStudyStageDraft(DEFAULT_RUN_STAGE_DRAFT).runSampling;
-  }
-  const outputValues = Array.isArray(sampling?.outputs) ? sampling.outputs : [];
-  return {
-    gammaDetrend:
-      response?.detrend === "none" ||
-      response?.detrend === "mean" ||
-      response?.detrend === "linear"
-        ? response.detrend
-        : DEFAULT_RUN_SAMPLING.gammaDetrend,
-    gammaResponseComponent:
-      response?.response_component === "mz" ? "mz" : "my",
-    gammaResponseEnabled: response !== null,
-    gammaWindow: "hann",
-    outputs: outputValues.map(runOutputDraft),
-    samplePeriodS: scalarText(
-      tableAutosave?.sample_period_s ?? tableAutosave?.every_seconds,
-      DEFAULT_RUN_SAMPLING.samplePeriodS,
-    ),
-    susceptibilityFloorFraction: scalarText(
-      response?.susceptibility_floor_fraction,
-      DEFAULT_RUN_SAMPLING.susceptibilityFloorFraction,
-    ),
-    tableAutosaveEnabled: tableAutosave !== null,
-    tableQuantities: Array.isArray(tableAutosave?.quantities)
-      ? tableAutosave.quantities.map(String).join(", ")
-      : DEFAULT_RUN_SAMPLING.tableQuantities,
-  };
-}
-
-function runOutputDraft(value: unknown): StudyRunOutputDraft {
-  const record = asRecord(value);
-  const kind = record?.kind;
-  const supported = kind === "field" || kind === "scalar";
-  return {
-    enabled: record?.enabled !== false,
-    everySeconds: scalarText(record?.every_seconds, ""),
-    kind: kind === "scalar" ? "scalar" : "field",
-    name: scalarText(record?.name ?? record?.field ?? record?.scalar, ""),
-    raw:
-      record && !supported
-        ? (structuredClone(record) as JsonObject)
-        : undefined,
-    readOnly: !supported,
-  };
 }
 
 function spectralDraft(

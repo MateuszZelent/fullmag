@@ -2,7 +2,6 @@
 
 import {
   Clock3,
-  FileText,
   Gauge,
   Hash,
   Magnet,
@@ -39,7 +38,6 @@ import {
 } from "@/kernel/runtime/runtimeStateDisplay";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
-import { FullmagMark } from "@/shared/brand/FullmagLogo";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 
 const INTEGER_FORMAT = new Intl.NumberFormat("en-US", {
@@ -89,53 +87,31 @@ export function FooterTelemetry({
 
   return (
     <div className="fm-footer-telemetry" role="status" aria-label="Live telemetry">
-      <div className="fm-footer-telemetry__brand">
-        <FullmagMark size={24} className="fm-footer-telemetry__mark-wrapper" />
-        <div className="fm-footer-telemetry__brand-copy">
-          <span className="fm-footer-telemetry__brand-title">Fullmag</span>
-          <span className="fm-footer-telemetry__brand-subtitle">
-            Micromagnetics
-          </span>
-        </div>
-      </div>
-
-      <div className="fm-footer-telemetry__system">
-        <StatusBadge
-          detail={telemetry.statusDetail}
-          state={telemetry.statusState}
-          title={telemetry.statusTitle}
+      <div className="fm-footer-telemetry__strip">
+        <span
+          className="fm-footer-telemetry__strip-dot"
+          data-state={telemetry.statusState}
+          aria-hidden="true"
         />
-        <div className="fm-footer-telemetry__online">
-          <span className="fm-footer-telemetry__online-title">
-            {telemetry.onlineTitle}
-          </span>
-          <span className="fm-footer-telemetry__online-detail">
-            {telemetry.onlineDetail}
-          </span>
-        </div>
+        <span className="text-fm-xs font-medium text-fm-primary whitespace-nowrap truncate">
+          {telemetry.statusTitle}
+        </span>
+        <span className="text-fm-muted text-fm-2xs select-none flex-shrink-0" aria-hidden="true">·</span>
+        <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate">
+          {telemetry.onlineTitle}
+        </span>
         {telemetry.frequencyDomainProgress ? (
-          <FrequencyDomainProgress progress={telemetry.frequencyDomainProgress} />
+          <>
+            <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
+            <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
+          </>
         ) : null}
       </div>
 
       <div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
         {telemetry.metrics.map((metric) => (
-          <TelemetryMetric key={metric.id} {...metric} />
+          <TelemetryMetric key={metric.id} group={metricGroup(metric.id)} {...metric} />
         ))}
-      </div>
-
-      <div className="fm-footer-telemetry__links" aria-label="Footer links">
-        <div className="fm-footer-telemetry__link-row">
-          <span>Data Logs</span>
-          <span>Reports</span>
-          <span>API Docs</span>
-          <span>Support</span>
-        </div>
-        <div className="fm-footer-telemetry__copyright">
-          <FileText size={12} aria-hidden="true" />
-          <span>© 2026 Fullmag.</span>
-          <span>Designed by Mateusz Zelent.</span>
-        </div>
       </div>
     </div>
   );
@@ -175,7 +151,14 @@ type FooterTelemetryStatus = {
   >;
   run: Pick<
     NonNullable<LiveStatusResource["run"]>,
-    "run_id" | "solver_steps" | "solver_time"
+    | "calibration_id"
+    | "requested_device"
+    | "resolved_device"
+    | "run_id"
+    | "selection_confidence"
+    | "selection_reason"
+    | "solver_steps"
+    | "solver_time"
   > | null;
   sessionId: string;
   solver: Pick<
@@ -207,7 +190,12 @@ export function selectFooterTelemetryStatus(
     },
     run: data.run
       ? {
+          calibration_id: data.run.calibration_id ?? null,
+          requested_device: data.run.requested_device,
+          resolved_device: data.run.resolved_device,
           run_id: data.run.run_id,
+          selection_confidence: data.run.selection_confidence ?? null,
+          selection_reason: data.run.selection_reason,
           solver_steps: data.run.solver_steps,
           solver_time: data.run.solver_time,
         }
@@ -234,6 +222,26 @@ export function footerTelemetryStatusEquals(
     Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
     Object.is(previous.sessionId, next.sessionId) &&
     Object.is(previous.run?.run_id ?? null, next.run?.run_id ?? null) &&
+    Object.is(
+      previous.run?.requested_device ?? null,
+      next.run?.requested_device ?? null,
+    ) &&
+    Object.is(
+      previous.run?.resolved_device ?? null,
+      next.run?.resolved_device ?? null,
+    ) &&
+    Object.is(
+      previous.run?.selection_reason ?? null,
+      next.run?.selection_reason ?? null,
+    ) &&
+    Object.is(
+      previous.run?.calibration_id ?? null,
+      next.run?.calibration_id ?? null,
+    ) &&
+    Object.is(
+      previous.run?.selection_confidence ?? null,
+      next.run?.selection_confidence ?? null,
+    ) &&
     Object.is(
       previous.run?.solver_steps ?? null,
       next.run?.solver_steps ?? null,
@@ -318,6 +326,13 @@ export function buildFooterTelemetryModel(
     scalarSampleNumber(liveRow, "dt") ??
     solverStatus?.dt_seconds ??
     status?.solver?.dt;
+  const errorEstimate =
+    scalarSampleNumber(liveRow, "error_estimate") ?? solverStatus?.error_estimate ?? null;
+  const maxError = scalarSampleNumber(liveRow, "max_error") ?? solverStatus?.max_error ?? null;
+  const dtSuggested =
+    scalarSampleNumber(liveRow, "dt_suggested") ?? solverStatus?.dt_suggested_seconds ?? null;
+  const rejectedAttempts =
+    scalarSampleNumber(liveRow, "rejected_attempts") ?? solverStatus?.rejected_attempts ?? 0;
   const converged = solverStatus?.converged ?? status?.solver?.converged;
   const scalarEnergy = {
     anisotropy: scalarSampleNumber(liveRow, "e_ani"),
@@ -397,13 +412,27 @@ export function buildFooterTelemetryModel(
           ]
         : []),
       {
-        detail: "Throughput",
+        detail: "Closed profiler span",
         icon: <Radio size={13} aria-hidden="true" />,
-        id: "steps-per-second",
-        label: "Steps/s",
+        id: "rate",
+        label: "End-to-end rate",
         subdetail: `${formatInteger(totalSteps)} steps`,
         value: formatFixed(stepsPerSecond, 1, "0.0"),
       },
+      ...(status?.run
+        ? [
+            {
+              detail: status.run.selection_reason,
+              icon: <Gauge size={13} aria-hidden="true" />,
+              id: "fem-device-selection",
+              label: "Device",
+              subdetail: status.run.calibration_id
+                ? `${status.run.calibration_id} · confidence ${formatFixed(status.run.selection_confidence, 2, "n/a")}`
+                : "Availability-first / uncalibrated",
+              value: `${status.run.requested_device} → ${status.run.resolved_device}`,
+            },
+          ]
+        : []),
       {
         detail: "Latest step",
         icon: <Hash size={13} aria-hidden="true" />,
@@ -428,6 +457,28 @@ export function buildFooterTelemetryModel(
         unit: "s",
         value: formatScientific(dt, "0.000000e+0"),
       },
+      ...(!usesPseudoTime && (errorEstimate !== null || maxError !== null)
+        ? [
+            {
+              detail: "Latest embedded vector error",
+              icon: <Gauge size={13} aria-hidden="true" />,
+              id: "solver-error",
+              label: "Error",
+              subdetail: `${formatInteger(rejectedAttempts)} rejected; next dt ${formatScientific(dtSuggested, "0.000000e+0")} s`,
+              value: formatScientific(errorEstimate, "0.000000e+0"),
+            },
+            {
+              detail: "Adaptive acceptance threshold",
+              icon: <Gauge size={13} aria-hidden="true" />,
+              id: "solver-max-error",
+              label: "MaxError",
+              subdetail: errorEstimate !== null && maxError !== null
+                ? errorEstimate <= maxError ? "Within tolerance" : "Above tolerance"
+                : "Tolerance status unavailable",
+              value: formatScientific(maxError, "0.000000e+0"),
+            },
+          ]
+        : []),
       {
         detail: "Peak Load",
         icon: <Gauge size={13} aria-hidden="true" />,
@@ -973,53 +1024,43 @@ function collectFrequenciesHz(value: unknown): number[] {
   return [...fromDirect, ...fromArrays, ...nested];
 }
 
-function FrequencyDomainProgress({
+function FrequencyDomainProgressStrip({
   progress,
 }: {
   progress: FooterFrequencyDomainProgress;
 }) {
-  const width = progress.percent ?? 100;
+  const barWidth = progress.percent ?? 100;
+  const chips = [
+    progress.solutionLabel ?? progress.pointLabel,
+    progress.frequencyLabel,
+    progress.modeLabel,
+    progress.rangeLabel,
+  ].filter((l): l is string => Boolean(l));
+
   return (
-    <div className="fm-footer-telemetry__frequency-progress">
-      <div className="fm-footer-telemetry__frequency-progress-header">
-        <span>{progress.title}</span>
-        <span>{progress.percentLabel}</span>
-      </div>
-      <div className="fm-footer-telemetry__frequency-progress-chips">
-        {[
-          progress.solutionLabel ?? progress.pointLabel,
-          progress.frequencyLabel,
-          progress.solveLabel,
-          progress.modeLabel,
-          progress.solverLabel,
-          progress.residualLabel,
-          progress.rangeLabel,
-        ]
-          .filter((label): label is string => Boolean(label))
-          .map((label) => (
-            <span key={label}>{label}</span>
-          ))}
-      </div>
+    <div className="fm-footer-telemetry__freq-strip">
+      <span className="fm-footer-telemetry__freq-strip-title">{progress.title}</span>
+      {chips.length > 0 ? (
+        <span className="fm-footer-telemetry__freq-strip-chip">{chips[0]}</span>
+      ) : null}
       <div
         aria-label={progress.title}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={progress.percent ?? undefined}
+        role="progressbar"
         className={
           progress.percent === null
-            ? "fm-footer-telemetry__frequency-progress-track fm-footer-telemetry__frequency-progress-track--indeterminate"
-            : "fm-footer-telemetry__frequency-progress-track"
+            ? "fm-footer-telemetry__freq-strip-track fm-footer-telemetry__freq-strip-track--indeterminate"
+            : "fm-footer-telemetry__freq-strip-track"
         }
-        role="progressbar"
       >
         <span
-          className="fm-footer-telemetry__frequency-progress-bar"
-          style={{ width: `${width}%` }}
+          className="fm-footer-telemetry__freq-strip-bar"
+          style={{ width: `${barWidth}%` }}
         />
       </div>
-      <span className="fm-footer-telemetry__frequency-progress-detail">
-        {progress.detail}
-      </span>
+      <span className="fm-footer-telemetry__freq-strip-percent">{progress.percentLabel}</span>
     </div>
   );
 }
@@ -1059,28 +1100,16 @@ export function resolvePrimaryTelemetryObjectId(
   return null;
 }
 
-function StatusBadge({
-  detail,
-  state,
-  title,
-}: {
-  detail: string;
-  state: string;
-  title: string;
-}) {
-  return (
-    <div className="fm-footer-telemetry__badge" data-state={state}>
-      <span className="fm-footer-telemetry__badge-dot" aria-hidden="true" />
-      <span className="fm-footer-telemetry__badge-copy">
-        <span className="fm-footer-telemetry__badge-label">{title}</span>
-        <span className="fm-footer-telemetry__badge-detail">{detail}</span>
-      </span>
-    </div>
-  );
+function metricGroup(id: string): "runtime" | "solver" | "magnetization" | "energy" {
+  if (id.startsWith("energy-")) return "energy";
+  if (id === "avg-mx" || id === "avg-my" || id === "avg-mz" || id === "avg-m") return "magnetization";
+  if (id === "step" || id === "dt" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
+  return "runtime";
 }
 
 function TelemetryMetric({
   detail,
+  group,
   icon,
   label,
   subdetail,
@@ -1088,6 +1117,7 @@ function TelemetryMetric({
   value,
 }: {
   detail: string;
+  group: "runtime" | "solver" | "magnetization" | "energy";
   icon: ReactNode;
   label: string;
   subdetail: string;
@@ -1095,7 +1125,7 @@ function TelemetryMetric({
   value: string;
 }) {
   return (
-    <div className="fm-footer-telemetry__metric">
+    <div className="fm-footer-telemetry__metric" data-group={group}>
       <div className="fm-footer-telemetry__metric-label">
         {icon}
         <span>{label}</span>

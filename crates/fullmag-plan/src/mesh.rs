@@ -1,8 +1,8 @@
 use fullmag_ir::{
-    validate_mesh_for_execution, AirBoxConfigIR, FemDomainMeshAssetIR,
-    FemDomainMeshModeIR,
-    FemDomainRegionMarkerIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
-    FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
+    validate_mesh_for_execution, AirBoxConfigIR, FemCellTypeIR, FemConnectivityIR,
+    FemDomainMeshAssetIR, FemDomainMeshModeIR, FemDomainRegionMarkerIR, FemFacetConnectivityIR,
+    FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemObjectSegmentIR,
+    InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -143,7 +143,7 @@ pub(crate) fn build_mesh_parts_from_segments(
                 },
                 boundary_face_indices: Vec::new(),
                 node_indices,
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: bounds.map(|(min, _)| min),
                 bounds_max: bounds.map(|(_, max)| max),
                 parent_id: None,
@@ -177,17 +177,16 @@ fn collect_element_node_indices(mesh: &MeshIR, element_start: u32, element_count
     let start = element_start as usize;
     let end = start
         .saturating_add(element_count as usize)
-        .min(mesh.elements.len());
+        .min(mesh.cell_count());
     if start >= end {
         return Vec::new();
     }
 
     let mut unique = BTreeSet::new();
-    for element in &mesh.elements[start..end] {
-        unique.insert(element[0]);
-        unique.insert(element[1]);
-        unique.insert(element[2]);
-        unique.insert(element[3]);
+    for ordinal in start..end {
+        if let Some(element) = mesh.cells.item_nodes(ordinal) {
+            unique.extend(element.iter().copied());
+        }
     }
     unique.into_iter().collect()
 }
@@ -334,19 +333,42 @@ pub(crate) fn initial_vectors_for_magnet(
     })
 }
 
-fn tet_faces(element: &[u32; 4]) -> [[u32; 3]; 4] {
-    [
-        [element[0], element[1], element[3]],
-        [element[1], element[2], element[3]],
-        [element[2], element[0], element[3]],
-        [element[0], element[2], element[1]],
-    ]
+fn cell_facets(cell_type: FemCellTypeIR, element: &[u32]) -> Vec<Vec<u32>> {
+    let local_faces: &[&[usize]] = match cell_type {
+        FemCellTypeIR::Tet4 => &[&[0, 1, 3], &[1, 2, 3], &[2, 0, 3], &[0, 2, 1]],
+        FemCellTypeIR::Prism6 => &[
+            &[0, 2, 1],
+            &[3, 4, 5],
+            &[0, 1, 4, 3],
+            &[1, 2, 5, 4],
+            &[2, 0, 3, 5],
+        ],
+        FemCellTypeIR::Pyramid5 => &[
+            &[0, 3, 2, 1],
+            &[0, 1, 4],
+            &[1, 2, 4],
+            &[2, 3, 4],
+            &[3, 0, 4],
+        ],
+        FemCellTypeIR::Hex8 => &[
+            &[0, 3, 2, 1],
+            &[4, 5, 6, 7],
+            &[0, 1, 5, 4],
+            &[1, 2, 6, 5],
+            &[2, 3, 7, 6],
+            &[3, 0, 4, 7],
+        ],
+    };
+    local_faces
+        .iter()
+        .map(|face| face.iter().map(|index| element[*index]).collect())
+        .collect()
 }
 
-fn sorted_face_key(face: [u32; 3]) -> (u32, u32, u32) {
-    let mut nodes = [face[0], face[1], face[2]];
+fn sorted_face_key(face: &[u32]) -> Vec<u32> {
+    let mut nodes = face.to_vec();
     nodes.sort_unstable();
-    (nodes[0], nodes[1], nodes[2])
+    nodes
 }
 
 fn canonical_coordinate_bits(value: f64) -> u64 {
@@ -387,7 +409,7 @@ pub(crate) fn load_fem_domain_mesh_asset(asset: &FemDomainMeshAssetIR) -> Result
 #[derive(Debug, Clone)]
 pub(crate) struct SharedDomainAnalysis {
     pub node_owner: Vec<u32>,
-    pub face_owner: BTreeMap<(u32, u32, u32), u32>,
+    pub face_owner: BTreeMap<Vec<u32>, u32>,
     pub ordered_regions: Vec<SharedDomainRegionEntry>,
     pub shared_interface_nodes: Vec<(u32, Vec<u32>)>,
     pub interface_faces: Vec<SharedInterfaceFace>,
@@ -402,7 +424,8 @@ pub(crate) struct SharedDomainRegionEntry {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SharedInterfaceFace {
-    pub face: [u32; 3],
+    pub facet_global_ordinal: u64,
+    pub facet_type: fullmag_ir::FemFacetTypeIR,
     pub markers: Vec<u32>,
 }
 
@@ -448,12 +471,12 @@ fn analyze_shared_domain_mesh_with_entries(
     }
 
     let mut node_marker_sets = vec![BTreeSet::<u32>::new(); mesh.nodes.len()];
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        let marker = mesh.element_markers[element_index];
+    for cell in mesh.cells.iter() {
+        let marker = mesh.element_markers[cell.ordinal];
         if marker == AIR_REGION_MARKER {
             continue;
         }
-        for &node in element {
+        for &node in cell.nodes {
             if let Some(slot) = node_marker_sets.get_mut(node as usize) {
                 slot.insert(marker);
             }
@@ -472,15 +495,16 @@ fn analyze_shared_domain_mesh_with_entries(
         }
     }
 
-    let mut face_markers = BTreeMap::<(u32, u32, u32), BTreeSet<u32>>::new();
-    let mut all_face_markers = BTreeMap::<(u32, u32, u32), BTreeSet<u32>>::new();
-    let mut representative_faces = BTreeMap::<(u32, u32, u32), [u32; 3]>::new();
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        let marker = mesh.element_markers[element_index];
-        for face in tet_faces(element) {
-            let key = sorted_face_key(face);
-            all_face_markers.entry(key).or_default().insert(marker);
-            representative_faces.entry(key).or_insert(face);
+    let mut face_markers = BTreeMap::<Vec<u32>, BTreeSet<u32>>::new();
+    let mut all_face_markers = BTreeMap::<Vec<u32>, BTreeSet<u32>>::new();
+    for cell in mesh.cells.iter() {
+        let marker = mesh.element_markers[cell.ordinal];
+        for face in cell_facets(cell.cell_type, cell.nodes) {
+            let key = sorted_face_key(&face);
+            all_face_markers
+                .entry(key.clone())
+                .or_default()
+                .insert(marker);
             if marker == AIR_REGION_MARKER {
                 continue;
             }
@@ -488,30 +512,44 @@ fn analyze_shared_domain_mesh_with_entries(
         }
     }
 
-    let mut face_owner = BTreeMap::<(u32, u32, u32), u32>::new();
+    let mut face_owner = BTreeMap::<Vec<u32>, u32>::new();
     for (face_key, markers) in &face_markers {
         if markers.len() <= 1 {
-            face_owner.insert(*face_key, markers.iter().copied().next().unwrap_or(0));
+            face_owner.insert(
+                face_key.clone(),
+                markers.iter().copied().next().unwrap_or(0),
+            );
             continue;
         }
-        face_owner.insert(*face_key, u32::MAX);
+        face_owner.insert(
+            face_key.clone(),
+            markers
+                .iter()
+                .copied()
+                .find(|marker| *marker != AIR_REGION_MARKER)
+                .unwrap_or(AIR_REGION_MARKER),
+        );
     }
 
-    let interface_faces = all_face_markers
+    let interface_faces = mesh
+        .facets
         .iter()
-        .filter_map(|(face_key, markers)| {
+        .filter_map(|facet| {
+            if facet.role != fullmag_ir::FemFacetRoleIR::MaterialInterface {
+                return None;
+            }
+            let face_key = sorted_face_key(facet.nodes);
+            let markers = all_face_markers.get(&face_key)?;
             if markers.len() <= 1 {
                 return None;
             }
             let mut ordered = markers.iter().copied().collect::<Vec<_>>();
             ordered.sort_unstable();
-            representative_faces
-                .get(face_key)
-                .copied()
-                .map(|face| SharedInterfaceFace {
-                    face,
-                    markers: ordered,
-                })
+            Some(SharedInterfaceFace {
+                facet_global_ordinal: facet.global_ordinal,
+                facet_type: facet.facet_type,
+                markers: ordered,
+            })
         })
         .collect::<Vec<_>>();
 
@@ -553,12 +591,10 @@ fn mesh_bounds_from_node_indices(
 fn collect_boundary_face_node_indices(mesh: &MeshIR, boundary_face_indices: &[u32]) -> Vec<u32> {
     let mut unique = BTreeSet::new();
     for face_index in boundary_face_indices {
-        let Some(face) = mesh.boundary_faces.get(*face_index as usize) else {
+        let Some(face) = mesh.facets.item_nodes(*face_index as usize) else {
             continue;
         };
-        unique.insert(face[0]);
-        unique.insert(face[1]);
-        unique.insert(face[2]);
+        unique.extend(face.iter().copied());
     }
     unique.into_iter().collect()
 }
@@ -667,86 +703,104 @@ pub(crate) fn pack_mesh_by_analysis(
             })
     };
 
-    let mut reordered_elements = Vec::with_capacity(mesh.elements.len());
+    let mut reordered_cell_types = Vec::with_capacity(mesh.cell_count());
+    let mut reordered_cell_global_ordinals = Vec::with_capacity(mesh.cell_count());
+    let mut reordered_cell_mesh_parts = Vec::with_capacity(mesh.cells.mesh_parts.len());
+    let mut reordered_cell_offsets = vec![0u32];
+    let mut reordered_cell_nodes = Vec::with_capacity(mesh.cells.nodes.len());
     let mut reordered_markers = Vec::with_capacity(mesh.element_markers.len());
     let mut element_start_by_marker = BTreeMap::new();
     let mut element_count_by_marker = BTreeMap::new();
     for entry in ordered_regions {
         let marker = entry.marker;
-        element_start_by_marker.insert(marker, reordered_elements.len() as u32);
-        for (element_index, element) in mesh.elements.iter().enumerate() {
-            if mesh.element_markers[element_index] != marker {
+        element_start_by_marker.insert(marker, reordered_cell_types.len() as u32);
+        for cell in mesh.cells.iter() {
+            if mesh.element_markers[cell.ordinal] != marker {
                 continue;
             }
-            reordered_elements.push([
-                remap_node(element[0], marker)?,
-                remap_node(element[1], marker)?,
-                remap_node(element[2], marker)?,
-                remap_node(element[3], marker)?,
-            ]);
+            reordered_cell_types.push(cell.cell_type);
+            reordered_cell_global_ordinals.push(cell.global_ordinal);
+            if let Some(mesh_part) = mesh.cells.mesh_parts.get(cell.ordinal) {
+                reordered_cell_mesh_parts.push(*mesh_part);
+            }
+            for node in cell.nodes {
+                reordered_cell_nodes.push(remap_node(*node, marker)?);
+            }
+            reordered_cell_offsets.push(reordered_cell_nodes.len() as u32);
             reordered_markers.push(marker);
         }
         let start = *element_start_by_marker
             .get(&marker)
             .expect("element_start inserted above");
-        element_count_by_marker.insert(marker, reordered_elements.len() as u32 - start);
+        element_count_by_marker.insert(marker, reordered_cell_types.len() as u32 - start);
     }
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        if mesh.element_markers[element_index] != 0 {
+    for cell in mesh.cells.iter() {
+        if mesh.element_markers[cell.ordinal] != 0 {
             continue;
         }
-        reordered_elements.push([
-            remap_node(element[0], 0)?,
-            remap_node(element[1], 0)?,
-            remap_node(element[2], 0)?,
-            remap_node(element[3], 0)?,
-        ]);
+        reordered_cell_types.push(cell.cell_type);
+        reordered_cell_global_ordinals.push(cell.global_ordinal);
+        if let Some(mesh_part) = mesh.cells.mesh_parts.get(cell.ordinal) {
+            reordered_cell_mesh_parts.push(*mesh_part);
+        }
+        for node in cell.nodes {
+            reordered_cell_nodes.push(remap_node(*node, 0)?);
+        }
+        reordered_cell_offsets.push(reordered_cell_nodes.len() as u32);
         reordered_markers.push(0);
     }
 
-    let mut reordered_boundary_faces = Vec::with_capacity(mesh.boundary_faces.len());
+    let mut reordered_facet_types = Vec::with_capacity(mesh.facet_count());
+    let mut reordered_facet_global_ordinals = Vec::with_capacity(mesh.facet_count());
+    let mut reordered_facet_roles = Vec::with_capacity(mesh.facet_count());
+    let mut reordered_facet_offsets = vec![0u32];
+    let mut reordered_facet_nodes = Vec::with_capacity(mesh.facets.nodes.len());
     let mut reordered_boundary_markers = Vec::with_capacity(mesh.boundary_markers.len());
     let mut boundary_start_by_marker = BTreeMap::new();
     let mut boundary_count_by_marker = BTreeMap::new();
     for entry in ordered_regions {
         let marker = entry.marker;
-        boundary_start_by_marker.insert(marker, reordered_boundary_faces.len() as u32);
-        for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
+        boundary_start_by_marker.insert(marker, reordered_facet_types.len() as u32);
+        for facet in mesh.facets.iter() {
             let owner = analysis
                 .face_owner
-                .get(&sorted_face_key(*face))
+                .get(&sorted_face_key(facet.nodes))
                 .copied()
                 .unwrap_or(0);
             if owner != marker {
                 continue;
             }
-            reordered_boundary_faces.push([
-                remap_node(face[0], marker)?,
-                remap_node(face[1], marker)?,
-                remap_node(face[2], marker)?,
-            ]);
-            reordered_boundary_markers.push(mesh.boundary_markers[face_index]);
+            reordered_facet_types.push(facet.facet_type);
+            reordered_facet_global_ordinals.push(facet.global_ordinal);
+            reordered_facet_roles.push(facet.role);
+            for node in facet.nodes {
+                reordered_facet_nodes.push(remap_node(*node, marker)?);
+            }
+            reordered_facet_offsets.push(reordered_facet_nodes.len() as u32);
+            reordered_boundary_markers.push(mesh.boundary_markers[facet.ordinal]);
         }
         let start = *boundary_start_by_marker
             .get(&marker)
             .expect("boundary_start inserted above");
-        boundary_count_by_marker.insert(marker, reordered_boundary_faces.len() as u32 - start);
+        boundary_count_by_marker.insert(marker, reordered_facet_types.len() as u32 - start);
     }
-    for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
+    for facet in mesh.facets.iter() {
         let owner = analysis
             .face_owner
-            .get(&sorted_face_key(*face))
+            .get(&sorted_face_key(facet.nodes))
             .copied()
             .unwrap_or(0);
         if owner != AIR_REGION_MARKER {
             continue;
         }
-        reordered_boundary_faces.push([
-            remap_node(face[0], 0)?,
-            remap_node(face[1], 0)?,
-            remap_node(face[2], 0)?,
-        ]);
-        reordered_boundary_markers.push(mesh.boundary_markers[face_index]);
+        reordered_facet_types.push(facet.facet_type);
+        reordered_facet_global_ordinals.push(facet.global_ordinal);
+        reordered_facet_roles.push(facet.role);
+        for node in facet.nodes {
+            reordered_facet_nodes.push(remap_node(*node, 0)?);
+        }
+        reordered_facet_offsets.push(reordered_facet_nodes.len() as u32);
+        reordered_boundary_markers.push(mesh.boundary_markers[facet.ordinal]);
     }
 
     let mut reordered_periodic_node_pairs = Vec::with_capacity(mesh.periodic_node_pairs.len());
@@ -817,8 +871,8 @@ pub(crate) fn pack_mesh_by_analysis(
         })
         .unwrap_or(0);
     let air_node_count = reordered_nodes.len() as u32 - air_node_start;
-    let air_element_count = reordered_elements.len() as u32 - air_element_start;
-    let air_boundary_face_count = reordered_boundary_faces.len() as u32 - air_boundary_face_start;
+    let air_element_count = reordered_cell_types.len() as u32 - air_element_start;
+    let air_boundary_face_count = reordered_facet_types.len() as u32 - air_boundary_face_start;
     if air_node_count > 0 || air_element_count > 0 || air_boundary_face_count > 0 {
         object_segments.push(FemObjectSegmentIR {
             object_id: AIR_OBJECT_SEGMENT_ID.to_string(),
@@ -835,9 +889,21 @@ pub(crate) fn pack_mesh_by_analysis(
     let reordered_mesh = MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: reordered_nodes,
-        elements: reordered_elements,
+        cells: FemConnectivityIR {
+            types: reordered_cell_types,
+            offsets: reordered_cell_offsets,
+            nodes: reordered_cell_nodes,
+            global_ordinals: reordered_cell_global_ordinals,
+            mesh_parts: reordered_cell_mesh_parts,
+        },
         element_markers: reordered_markers,
-        boundary_faces: reordered_boundary_faces,
+        facets: FemFacetConnectivityIR {
+            types: reordered_facet_types,
+            roles: reordered_facet_roles,
+            offsets: reordered_facet_offsets,
+            nodes: reordered_facet_nodes,
+            global_ordinals: reordered_facet_global_ordinals,
+        },
         boundary_markers: reordered_boundary_markers,
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: reordered_periodic_node_pairs,
@@ -913,7 +979,7 @@ pub(crate) fn pack_mesh_by_analysis(
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
             boundary_face_indices: outer_boundary_face_indices,
             node_indices,
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: bounds.map(|(min, _)| min),
             bounds_max: bounds.map(|(_, max)| max),
             parent_id: Some(format!("part:{}", AIR_OBJECT_SEGMENT_ID)),
@@ -930,8 +996,13 @@ pub(crate) fn pack_mesh_by_analysis(
         .iter()
         .map(|entry| (entry.marker, entry.object_id.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut interface_surface_faces = BTreeMap::<(u32, u32), Vec<[u32; 3]>>::new();
+    let mut interface_facet_global_ordinals = BTreeMap::<(u32, u32), Vec<u64>>::new();
     let mut interface_node_sets = BTreeMap::<(u32, u32), BTreeSet<u32>>::new();
+    let packed_facet_by_global_ordinal = reordered_mesh
+        .facets
+        .iter()
+        .map(|facet| (facet.global_ordinal, facet.ordinal))
+        .collect::<BTreeMap<_, _>>();
     for interface_face in &analysis.interface_faces {
         if interface_face.markers.len() < 2 {
             continue;
@@ -939,28 +1010,34 @@ pub(crate) fn pack_mesh_by_analysis(
         let mut pair = [interface_face.markers[0], interface_face.markers[1]];
         pair.sort_unstable();
         let pair_key = (pair[0], pair[1]);
-        let preferred_marker = pair
-            .iter()
-            .copied()
-            .find(|marker| *marker != AIR_REGION_MARKER)
-            .unwrap_or(pair[0]);
-        let remapped_face = [
-            remap_node(interface_face.face[0], preferred_marker)?,
-            remap_node(interface_face.face[1], preferred_marker)?,
-            remap_node(interface_face.face[2], preferred_marker)?,
-        ];
-        interface_surface_faces
+        let Some(&packed_ordinal) =
+            packed_facet_by_global_ordinal.get(&interface_face.facet_global_ordinal)
+        else {
+            return Err(format!(
+                "shared-domain FEM mesh '{}' lost canonical interface facet {} during packing",
+                mesh.mesh_name, interface_face.facet_global_ordinal
+            ));
+        };
+        if reordered_mesh.facets.types.get(packed_ordinal).copied()
+            != Some(interface_face.facet_type)
+        {
+            return Err(format!(
+                "shared-domain FEM mesh '{}' changed canonical interface facet {} type during packing",
+                mesh.mesh_name, interface_face.facet_global_ordinal
+            ));
+        }
+        interface_facet_global_ordinals
             .entry(pair_key)
             .or_default()
-            .push(remapped_face);
+            .push(interface_face.facet_global_ordinal);
         let node_set = interface_node_sets.entry(pair_key).or_default();
-        node_set.insert(remapped_face[0]);
-        node_set.insert(remapped_face[1]);
-        node_set.insert(remapped_face[2]);
+        if let Some(nodes) = reordered_mesh.facets.item_nodes(packed_ordinal) {
+            node_set.extend(nodes.iter().copied());
+        }
     }
 
-    for ((left_marker, right_marker), surface_faces) in interface_surface_faces {
-        if surface_faces.is_empty() {
+    for ((left_marker, right_marker), facet_global_ordinals) in interface_facet_global_ordinals {
+        if facet_global_ordinals.is_empty() {
             continue;
         }
         let left_label = if left_marker == AIR_REGION_MARKER {
@@ -996,9 +1073,16 @@ pub(crate) fn pack_mesh_by_analysis(
             element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
             boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 0 },
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
-            boundary_face_indices: Vec::new(),
+            boundary_face_indices: facet_global_ordinals
+                .iter()
+                .filter_map(|global_ordinal| {
+                    packed_facet_by_global_ordinal
+                        .get(global_ordinal)
+                        .map(|ordinal| *ordinal as u32)
+                })
+                .collect(),
             node_indices,
-            surface_faces,
+            facet_global_ordinals,
             bounds_min: bounds.map(|(min, _)| min),
             bounds_max: bounds.map(|(_, max)| max),
             parent_id: owning_object_id.map(|object_id| format!("part:{object_id}")),
@@ -1165,6 +1249,278 @@ fn validate_domain_object_region_identity(
     Ok(())
 }
 
+fn cell_family_name(cell_type: FemCellTypeIR) -> &'static str {
+    match cell_type {
+        FemCellTypeIR::Tet4 => "tet4",
+        FemCellTypeIR::Prism6 => "prism6",
+        FemCellTypeIR::Pyramid5 => "pyramid5",
+        FemCellTypeIR::Hex8 => "hex8",
+    }
+}
+
+fn facet_family_name(facet_type: fullmag_ir::FemFacetTypeIR) -> &'static str {
+    match facet_type {
+        fullmag_ir::FemFacetTypeIR::Tri3 => "tri3",
+        fullmag_ir::FemFacetTypeIR::Quad4 => "quad4",
+    }
+}
+
+fn mixed_topology_families(mesh: &MeshIR) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    let cell_families = mesh
+        .cells
+        .types
+        .iter()
+        .copied()
+        .map(cell_family_name)
+        .collect::<BTreeSet<_>>();
+    let facet_families = mesh
+        .facets
+        .types
+        .iter()
+        .copied()
+        .map(facet_family_name)
+        .collect::<BTreeSet<_>>();
+    let is_tetrahedral = cell_families.iter().all(|family| *family == "tet4")
+        && facet_families.iter().all(|family| *family == "tri3");
+    (!is_tetrahedral).then(|| {
+        (
+            cell_families.into_iter().collect(),
+            facet_families.into_iter().collect(),
+        )
+    })
+}
+
+fn authored_runtime_device(problem: &ProblemIR) -> &str {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(|value| value.get("device"))
+        .and_then(Value::as_str)
+        .unwrap_or("auto")
+}
+
+fn effective_runtime_device(problem: &ProblemIR) -> &str {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(|value| value.get("device"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| authored_runtime_device(problem))
+}
+
+fn validate_mixed_p1_build_report(
+    report: &fullmag_ir::FemSharedDomainBuildReportIR,
+    phase: &str,
+) -> Result<(), String> {
+    let explicit_no_fallback = report
+        .fallbacks_triggered
+        .as_ref()
+        .is_some_and(Vec::is_empty);
+    if explicit_no_fallback && !report.degraded {
+        Ok(())
+    } else {
+        Err(format!(
+            "fem_mixed_p1_build_report_rejected: phase={phase}; fallbacks_triggered={:?}; degraded={}; required=fallbacks_triggered[]+degraded_false; fallback=none",
+            report.fallbacks_triggered, report.degraded
+        ))
+    }
+}
+
+fn validate_mixed_p1_execution_scope(
+    problem: &ProblemIR,
+    certificate: &fullmag_ir::MixedLayerTopologyCertificateV1IR,
+) -> Result<(), String> {
+    let fem_order = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fem.as_ref())
+        .map(|hints| hints.order);
+    let relaxation_supported = matches!(
+        problem.study,
+        fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            ..
+        }
+    );
+    let mut exchange_count = 0usize;
+    let mut demag_count = 0usize;
+    let mut energy_supported = true;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
+            fullmag_ir::EnergyTermIR::Demag { realization }
+                if matches!(
+                    realization,
+                    fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                        | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
+                ) =>
+            {
+                demag_count += 1
+            }
+            fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
+            _ => energy_supported = false,
+        }
+    }
+    let material_supported = problem.materials.len() == 1
+        && problem.materials.iter().all(|material| {
+            material.uniaxial_anisotropy.is_none()
+                && material.uniaxial_anisotropy_k2.is_none()
+                && material.anisotropy_axis.is_none()
+                && material.cubic_anisotropy_kc1.is_none()
+                && material.cubic_anisotropy_kc2.is_none()
+                && material.cubic_anisotropy_kc3.is_none()
+                && material.cubic_anisotropy_axis1.is_none()
+                && material.cubic_anisotropy_axis2.is_none()
+                && material.ms_field.is_none()
+                && material.a_field.is_none()
+                && material.alpha_field.is_none()
+                && material.ku_field.is_none()
+                && material.ku2_field.is_none()
+                && material.kc1_field.is_none()
+                && material.kc2_field.is_none()
+                && material.kc3_field.is_none()
+                && material.interfacial_dmi.is_none()
+                && material.bulk_dmi.is_none()
+                && material.dind_field.is_none()
+                && material.dbulk_field.is_none()
+        });
+    let exact_single_box = problem.geometry.entries.len() == 1
+        && matches!(
+            problem.geometry.entries[0],
+            fullmag_ir::GeometryEntryIR::Box { .. }
+        );
+    let no_extended_modules = problem.object_regions.is_empty()
+        && problem.material_parameter_fields.is_empty()
+        && problem.couplings.is_empty()
+        && problem.current_modules.is_empty()
+        && problem.field_drives.is_empty()
+        && problem.spin_torque_modules.is_empty()
+        && problem.current_density.is_none()
+        && problem.stt_degree.is_none()
+        && problem.stt_beta.is_none()
+        && problem.stt_spin_polarization.is_none()
+        && problem.stt_lambda.is_none()
+        && problem.stt_epsilon_prime.is_none()
+        && problem.stt_thickness.is_none()
+        && problem.stt_fixed_layer_position.is_none()
+        && problem.temperature.is_none()
+        && problem.elastic_materials.is_empty()
+        && problem.elastic_bodies.is_empty()
+        && problem.magnetostriction_laws.is_empty()
+        && problem.mechanical_bcs.is_empty()
+        && problem.mechanical_loads.is_empty()
+        && problem.pbc.is_none();
+    let qualified = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
+        && matches!(effective_runtime_device(problem), "cpu" | "gpu")
+        && fem_order == Some(1)
+        && exact_single_box
+        && problem.regions.len() == 1
+        && problem.magnets.len() == 1
+        && material_supported
+        && no_extended_modules
+        && relaxation_supported
+        && exchange_count == 1
+        && demag_count == 1
+        && energy_supported
+        && (1..=3).contains(&certificate.requested_layer_count)
+        && certificate.realized_layer_count == certificate.requested_layer_count
+        && certificate.magnetic_plane_coordinates_m.len()
+            == certificate.requested_layer_count as usize + 1
+        && certificate.fallbacks_triggered.is_empty();
+    if qualified {
+        Ok(())
+    } else {
+        Err(format!(
+            "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
+            problem.backend_policy.requested_backend,
+            effective_runtime_device(problem),
+            problem.backend_policy.execution_precision,
+            problem.validation_profile.execution_mode,
+            problem.study,
+            problem.energy_terms,
+        ))
+    }
+}
+
+pub(crate) fn reject_unsupported_mixed_topology(
+    problem: &ProblemIR,
+    mesh: &MeshIR,
+    build_report: Option<&fullmag_ir::FemSharedDomainBuildReportIR>,
+) -> Result<(), String> {
+    let Some((cell_families, facet_families)) = mixed_topology_families(mesh) else {
+        return Ok(());
+    };
+    let topology = format!(
+        "cells=[{}],facets=[{}]",
+        cell_families.join(","),
+        facet_families.join(",")
+    );
+    let qualified_mixed_p1 = cell_families == ["prism6", "pyramid5", "tet4"]
+        && facet_families
+            .iter()
+            .all(|family| matches!(*family, "tri3" | "quad4"))
+        && facet_families.contains(&"quad4");
+    if !qualified_mixed_p1 {
+        return Err(format!(
+            "fem_typed_topology_unsupported_before_backend: actual_topology={topology}; \
+             supported_topology=tet4/tri3; fallback=none"
+        ));
+    }
+    let Some(report) = build_report else {
+        return Err(format!(
+            "fem_mixed_p1_certificate_required: actual_topology={topology}; \
+             required_capabilities=[mesh.topology.mixed_p1,mesh.swept.prism,\
+             mesh.transition.pyramid_tet,mesh.exact_layer_count]; fallback=none; \
+             select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane"
+        ));
+    };
+    validate_mixed_p1_build_report(report, "source")?;
+    let Some(certificate) = report.mixed_layer_topology_certificate.as_ref() else {
+        return Err(format!(
+            "fem_mixed_p1_certificate_required: actual_topology={topology}; \
+             accepted topology certificate is missing; fallback=none"
+        ));
+    };
+    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
+        |reasons| {
+            format!(
+                "fem_mixed_p1_certificate_rejected: {}; fallback=none",
+                reasons.join("; ")
+            )
+        },
+    )?;
+    validate_mixed_p1_execution_scope(problem, certificate)
+}
+
+pub(crate) fn reject_auto_backend_mixed_fem_topology(problem: &ProblemIR) -> Result<(), String> {
+    let Some(assets) = problem.geometry_assets.as_ref() else {
+        return Ok(());
+    };
+
+    if let Some(asset) = assets.fem_domain_mesh_asset.as_ref() {
+        let mesh = load_fem_domain_mesh_asset(asset)?;
+        reject_unsupported_mixed_topology(problem, &mesh, asset.build_report.as_ref())?;
+    }
+
+    for asset in &assets.fem_mesh_assets {
+        let mesh = match (&asset.mesh, &asset.mesh_source) {
+            (Some(mesh), _) => mesh.clone(),
+            (None, Some(source)) => load_mesh_from_source(source)?,
+            (None, None) => continue,
+        };
+        reject_unsupported_mixed_topology(problem, &mesh, None)?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn resolve_fem_domain_mesh_asset(
     problem: &ProblemIR,
     solver_supports_conformal: bool,
@@ -1178,16 +1534,62 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     };
     let mesh = load_fem_domain_mesh_asset(asset)?;
     validate_domain_object_region_identity(&mesh, problem, asset)?;
+    reject_unsupported_mixed_topology(problem, &mesh, asset.build_report.as_ref())?;
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
+    let source_certificate = asset
+        .build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
     let (mesh, object_segments, mesh_parts) = pack_mesh_by_analysis(&mesh, &analysis)?;
+    let mut build_report = asset.build_report.clone();
+    if source_certificate.is_some() {
+        let report = build_report.as_mut().ok_or_else(|| {
+            "fem_mixed_p1_certificate_required: shared-domain build report is missing; fallback=none"
+                .to_string()
+        })?;
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .as_mut()
+            .ok_or_else(|| {
+                "fem_mixed_p1_certificate_required: accepted topology certificate is missing; fallback=none"
+                    .to_string()
+            })?;
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .map_err(|error| {
+                format!("fem_mixed_p1_packed_certificate_rejected: {error}; fallback=none")
+            })?;
+        certificate.topology_fingerprint = fingerprint.clone();
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &mesh)
+            .map_err(|reasons| {
+                format!(
+                    "fem_mixed_p1_packed_certificate_rejected: {}; fallback=none",
+                    reasons.join("; ")
+                )
+            })?;
+        validate_mixed_p1_build_report(report, "packed")?;
+        let requested_device = match effective_runtime_device(problem) {
+            "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+            "gpu" => fullmag_ir::ExecutionDevice::Gpu,
+            _ => fullmag_ir::ExecutionDevice::Auto,
+        };
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
+        });
+    }
     Ok(Some(ResolvedFemDomainMeshAsset {
         mesh,
         mesh_source: asset.mesh_source.clone(),
         object_segments,
         mesh_parts,
-        build_report: asset.build_report.clone(),
+        build_report,
     }))
 }
 
@@ -1216,17 +1618,17 @@ pub(crate) fn magnetic_bounds(mesh: &MeshIR) -> Option<([f64; 3], [f64; 3])> {
     if mesh.nodes.is_empty() {
         return None;
     }
-    if mesh.elements.is_empty() {
+    if mesh.cells.is_empty() {
         return mesh_bounds(mesh);
     }
 
-    let use_markers = mesh.element_markers.len() == mesh.elements.len();
+    let use_markers = mesh.element_markers.len() == mesh.cell_count();
     let mut used_nodes = vec![false; mesh.nodes.len()];
     let mut has_magnetic_elements = false;
 
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    for cell in mesh.cells.iter() {
         let is_magnetic = if use_markers {
-            mesh.element_markers[element_index] != 0
+            mesh.element_markers[cell.ordinal] != 0
         } else {
             true
         };
@@ -1234,7 +1636,7 @@ pub(crate) fn magnetic_bounds(mesh: &MeshIR) -> Option<([f64; 3], [f64; 3])> {
             continue;
         }
         has_magnetic_elements = true;
-        for &node_index in element {
+        for &node_index in cell.nodes {
             if let Some(slot) = used_nodes.get_mut(node_index as usize) {
                 *slot = true;
             }
@@ -1263,7 +1665,26 @@ fn extent_from_bounds(bounds: ([f64; 3], [f64; 3])) -> [f64; 3] {
     ]
 }
 
-fn certified_airbox_boundary_marker(mesh: &MeshIR) -> Result<(u32, &'static str), String> {
+fn certified_airbox_boundary_marker(
+    problem: &ProblemIR,
+    mesh: &MeshIR,
+) -> Result<(u32, &'static str), String> {
+    if mixed_topology_families(mesh).is_some() {
+        let certificate = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.build_report.as_ref())
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+            .ok_or_else(|| {
+                "fem_mixed_p1_certificate_required: outer airbox marker is not certified; fallback=none"
+                    .to_string()
+            })?;
+        return Ok((
+            certificate.outer_boundary_marker,
+            "mixed_topology_certificate",
+        ));
+    }
     let roles = mesh
         .certify_airbox_boundary_roles()
         .map_err(|errors| errors.join("; "))?;
@@ -1361,20 +1782,21 @@ pub(crate) fn build_air_box_config(
         "mesh_auto"
     };
 
-    let (certified_marker, _certified_source) = certified_airbox_boundary_marker(mesh)?;
+    let (certified_marker, _certified_source) = certified_airbox_boundary_marker(problem, mesh)?;
     let explicit_policy_marker = policy.and_then(|p| p.boundary_marker);
-    let (boundary_marker, boundary_marker_source): (u32, &'static str) =
-        if let Some(marker) = explicit_policy_marker {
-            if marker != certified_marker {
-                return Err(format!(
+    let (boundary_marker, boundary_marker_source): (u32, &'static str) = if let Some(marker) =
+        explicit_policy_marker
+    {
+        if marker != certified_marker {
+            return Err(format!(
                     "air_box_policy.boundary_marker={} does not match certified Gamma_out marker {} in mesh '{}'",
                     marker, certified_marker, mesh.mesh_name
                 ));
-            }
-            (marker, "user_policy")
-        } else {
-            (certified_marker, "certified_gamma_out")
-        };
+        }
+        (marker, "user_policy")
+    } else {
+        (certified_marker, "certified_gamma_out")
+    };
 
     let grading = policy
         .and_then(|p| p.grading)
@@ -1534,9 +1956,9 @@ pub(crate) fn merge_fem_meshes(
             node_start: 0,
             node_count: mesh.nodes.len() as u32,
             element_start: 0,
-            element_count: mesh.elements.len() as u32,
+            element_count: mesh.cell_count() as u32,
             boundary_face_start: 0,
-            boundary_face_count: mesh.boundary_faces.len() as u32,
+            boundary_face_count: mesh.facet_count() as u32,
         };
         return Ok((mesh, vec![segment]));
     }
@@ -1548,35 +1970,55 @@ pub(crate) fn merge_fem_meshes(
         .join("__");
 
     let mut nodes = Vec::new();
-    let mut elements = Vec::new();
+    let mut cell_types = Vec::new();
+    let mut cell_global_ordinals = Vec::new();
+    let has_mesh_parts = meshes
+        .first()
+        .is_some_and(|(_, mesh)| !mesh.cells.mesh_parts.is_empty());
+    if meshes
+        .iter()
+        .any(|(_, mesh)| !mesh.cells.mesh_parts.is_empty() != has_mesh_parts)
+    {
+        return Err(
+            "cannot merge FEM meshes with mixed legacy-empty and classified mesh_parts".to_string(),
+        );
+    }
+    let mut cell_mesh_parts = Vec::new();
+    let mut cell_offsets = vec![0u32];
+    let mut cell_nodes = Vec::new();
     let mut element_markers = Vec::new();
-    let mut boundary_faces = Vec::new();
+    let mut facet_types = Vec::new();
+    let mut facet_global_ordinals = Vec::new();
+    let mut facet_roles = Vec::new();
+    let mut facet_offsets = vec![0u32];
+    let mut facet_nodes = Vec::new();
     let mut boundary_markers = Vec::new();
     let mut object_segments = Vec::with_capacity(meshes.len());
 
     let mut node_offset = 0u32;
     for (object_id, mesh) in meshes {
         let node_start = node_offset;
-        let element_start = elements.len() as u32;
-        let boundary_face_start = boundary_faces.len() as u32;
+        let element_start = cell_types.len() as u32;
+        let boundary_face_start = facet_types.len() as u32;
         let remapped_markers = merged_fem_element_markers(mesh)?;
         nodes.extend(mesh.nodes.iter().copied());
-        elements.extend(mesh.elements.iter().map(|element| {
-            [
-                element[0] + node_offset,
-                element[1] + node_offset,
-                element[2] + node_offset,
-                element[3] + node_offset,
-            ]
-        }));
+        for cell in mesh.cells.iter() {
+            cell_types.push(cell.cell_type);
+            cell_global_ordinals.push(cell_types.len() as u64 - 1);
+            cell_nodes.extend(cell.nodes.iter().map(|node| node + node_offset));
+            cell_offsets.push(cell_nodes.len() as u32);
+            if let Some(mesh_part) = mesh.cells.mesh_parts.get(cell.ordinal) {
+                cell_mesh_parts.push(*mesh_part);
+            }
+        }
         element_markers.extend(remapped_markers);
-        boundary_faces.extend(mesh.boundary_faces.iter().map(|face| {
-            [
-                face[0] + node_offset,
-                face[1] + node_offset,
-                face[2] + node_offset,
-            ]
-        }));
+        for facet in mesh.facets.iter() {
+            facet_types.push(facet.facet_type);
+            facet_global_ordinals.push(facet_types.len() as u64 - 1);
+            facet_roles.push(facet.role);
+            facet_nodes.extend(facet.nodes.iter().map(|node| node + node_offset));
+            facet_offsets.push(facet_nodes.len() as u32);
+        }
         boundary_markers.extend(mesh.boundary_markers.iter().copied());
         object_segments.push(FemObjectSegmentIR {
             object_id: object_id.clone(),
@@ -1584,9 +2026,9 @@ pub(crate) fn merge_fem_meshes(
             node_start,
             node_count: mesh.nodes.len() as u32,
             element_start,
-            element_count: mesh.elements.len() as u32,
+            element_count: mesh.cell_count() as u32,
             boundary_face_start,
-            boundary_face_count: mesh.boundary_faces.len() as u32,
+            boundary_face_count: mesh.facet_count() as u32,
         });
         node_offset += mesh.nodes.len() as u32;
     }
@@ -1610,9 +2052,21 @@ pub(crate) fn merge_fem_meshes(
     let merged = MeshIR {
         mesh_name: format!("multibody_{merged_name}"),
         nodes,
-        elements,
+        cells: FemConnectivityIR {
+            types: cell_types,
+            offsets: cell_offsets,
+            nodes: cell_nodes,
+            global_ordinals: cell_global_ordinals,
+            mesh_parts: cell_mesh_parts,
+        },
         element_markers,
-        boundary_faces,
+        facets: FemFacetConnectivityIR {
+            types: facet_types,
+            roles: facet_roles,
+            offsets: facet_offsets,
+            nodes: facet_nodes,
+            global_ordinals: facet_global_ordinals,
+        },
         boundary_markers,
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -1706,9 +2160,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![2],
-            boundary_faces: Vec::new(),
+            facets: FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),

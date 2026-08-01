@@ -12,6 +12,10 @@ import {
   DialogTrigger,
 } from "@/shared/ui/Dialog";
 import { Button } from "@/shared/ui/Button";
+import { controlVariants } from "@/shared/ui/controlVariants";
+import { cn } from "@/shared/utils/className";
+
+import { InspectorPropertyRow } from "./InspectorPropertyRow";
 
 export interface FormFieldHelp {
   description: string;
@@ -98,7 +102,9 @@ function FormFieldLabel({
 }) {
   return (
     <div className="fm-inspector-form-field__label-row">
-      <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
+      <label className="fm-inspector-form-field__label" htmlFor={fieldId}>
+        {label}
+      </label>
       <FormFieldHelpButton help={help} label={label} />
     </div>
   );
@@ -155,12 +161,13 @@ function FormFieldHelpButton({
 }
 
 /**
- * Unified form field primitive for the inspector panels.
- * Renders label + control + optional unit/hint with consistent Catppuccin styling.
- * All input/textarea/select/checkbox controls use fm-inspector-* CSS classes.
+ * Compatibility form API for Inspector panels.
+ * New label/control geometry is owned by InspectorPropertyRow. The fm-inspector-*
+ * classes remain temporarily for unmigrated domain selectors during the gated rollout.
  */
 export function FormField(props: FormFieldProps) {
-  const { label, unit, hint, error, help, inline = true, disabled, invalid } = props;
+  const { label, unit, hint, error, help, inline = true, disabled, invalid } =
+    props;
   const fieldId = useId();
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
@@ -169,27 +176,32 @@ export function FormField(props: FormFieldProps) {
   const hintClass = error
     ? "fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
     : "fm-inspector-form-field__hint";
+  const labelNode = (
+    <FormFieldLabel fieldId={fieldId} help={help} label={label} />
+  );
+  const layout = inline ? "inline" : "stacked";
 
   if (props.type === "checkbox") {
     const { checked, onChange } = props;
     return (
-      <div className={wrapClass}>
-        <FormFieldLabel fieldId={fieldId} help={help} label={label} />
-        <div className="fm-inspector-form-field__control">
-          <label className="fm-inspector-checkbox-wrap">
-            <input
-              id={fieldId}
-              aria-label={label}
-              aria-invalid={invalid || undefined}
-              checked={checked}
-              className="fm-inspector-checkbox"
-              disabled={disabled}
-              type="checkbox"
-              onChange={onChange}
-            />
-          </label>
+      <InspectorPropertyRow
+        className={wrapClass}
+        label={labelNode}
+        layout={layout}
+      >
+        <div className="fm-inspector-form-field__control w-full">
+          <input
+            id={fieldId}
+            aria-label={label}
+            aria-invalid={invalid || undefined}
+            checked={checked}
+            className="fm-inspector-checkbox size-4 shrink-0 accent-fm-accent disabled:cursor-not-allowed disabled:opacity-100"
+            disabled={disabled}
+            type="checkbox"
+            onChange={onChange}
+          />
         </div>
-      </div>
+      </InspectorPropertyRow>
     );
   }
 
@@ -205,24 +217,30 @@ export function FormField(props: FormFieldProps) {
       "value",
     ]);
     return (
-      <div className={wrapClass}>
-        <FormFieldLabel fieldId={fieldId} help={help} label={label} />
-        <div className="fm-inspector-form-field__control">
+      <InspectorPropertyRow
+        className={wrapClass}
+        label={labelNode}
+        layout={layout}
+      >
+        <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
           <select
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
             aria-invalid={invalid || undefined}
-            className="fm-inspector-select"
+            className={cn(
+              "fm-inspector-select w-full appearance-none",
+              controlVariants({ invalid: Boolean(invalid) }),
+            )}
             disabled={disabled}
             value={value}
             onChange={onChange}
           >
             {children}
           </select>
+          {hintText ? <span className={hintClass}>{hintText}</span> : null}
         </div>
-        {hintText && <span className={hintClass}>{hintText}</span>}
-      </div>
+      </InspectorPropertyRow>
     );
   }
 
@@ -241,24 +259,30 @@ export function FormField(props: FormFieldProps) {
       "value",
     ]);
     return (
-      <div className="fm-inspector-form-field">
-        <FormFieldLabel fieldId={fieldId} help={help} label={label} />
-        <div className="fm-inspector-form-field__control">
+      <InspectorPropertyRow
+        className="fm-inspector-form-field"
+        label={labelNode}
+        layout="stacked"
+      >
+        <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
           <textarea
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
             aria-invalid={invalid || undefined}
-            className="fm-inspector-textarea"
+            className={cn(
+              "fm-inspector-textarea h-auto min-h-24 w-full resize-y py-2",
+              controlVariants({ invalid: Boolean(invalid) }),
+            )}
             disabled={disabled}
             readOnly={readOnly}
             rows={rows ?? 5}
             value={value}
             onChange={onChange}
           />
+          {hintText ? <span className={hintClass}>{hintText}</span> : null}
         </div>
-        {hintText && <span className={hintClass}>{hintText}</span>}
-      </div>
+      </InspectorPropertyRow>
     );
   }
 
@@ -275,19 +299,26 @@ export function FormField(props: FormFieldProps) {
     "type",
     "value",
   ]);
-  const inputClass = [
-    "fm-inspector-input",
-    mono === false ? "fm-inspector-input--text" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const inputClass = cn(
+    "fm-inspector-input w-full",
+    mono === true ? "fm-inspector-input--mono font-fm-mono" : "font-fm-ui",
+    controlVariants({ invalid: Boolean(invalid) }),
+  );
   const inputType = type === "number" && unit ? "text" : type ?? "text";
   const resolvedInputMode =
     inputMode ?? (type === "number" || unit ? "decimal" : undefined);
   return (
-    <div className={wrapClass}>
-      <FormFieldLabel fieldId={fieldId} help={help} label={label} />
-      <div className="fm-inspector-form-field__control">
+    <InspectorPropertyRow
+      className={wrapClass}
+      label={labelNode}
+      layout={layout}
+      unit={
+        unit ? (
+          <span className="fm-inspector-form-field__unit">{unit}</span>
+        ) : undefined
+      }
+    >
+      <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
         <input
           {...(rest as object)}
           id={fieldId}
@@ -300,9 +331,8 @@ export function FormField(props: FormFieldProps) {
           value={value}
           onChange={onChange}
         />
-        {unit && <span className="fm-inspector-form-field__unit">{unit}</span>}
+        {hintText ? <span className={hintClass}>{hintText}</span> : null}
       </div>
-      {hintText && <span className={hintClass}>{hintText}</span>}
-    </div>
+    </InspectorPropertyRow>
   );
 }

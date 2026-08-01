@@ -92,6 +92,7 @@ pub(crate) fn build_live_status(
 
     let run = snapshot.run.as_ref().map(|r| {
         let stage_exec = snapshot.stage_execution.as_ref();
+        let crossover = snapshot.session.fem_crossover_decision.as_ref();
         RunSummary {
             run_id: r.run_id.clone(),
             stage_index: stage_exec.and_then(|se| se.active_stage_index).unwrap_or(0) as u32,
@@ -105,6 +106,24 @@ pub(crate) fn build_live_status(
                 .final_time
                 .or_else(|| snapshot.live_state.as_ref().map(|ls| ls.latest_step.time))
                 .unwrap_or(0.0),
+            requested_device: snapshot.session.requested_device.clone(),
+            resolved_device: snapshot
+                .session
+                .resolved_device
+                .clone()
+                .unwrap_or_else(|| snapshot.session.requested_device.clone()),
+            selection_reason: crossover
+                .map(|decision| decision.reason.clone())
+                .or_else(|| {
+                    snapshot
+                        .session
+                        .resolved_fallback
+                        .as_ref()
+                        .map(|fallback| fallback.reason.clone())
+                })
+                .unwrap_or_else(|| "explicit_device_request".to_string()),
+            calibration_id: crossover.and_then(|decision| decision.calibration_id.clone()),
+            selection_confidence: crossover.and_then(|decision| decision.confidence),
         }
     });
 
@@ -151,7 +170,7 @@ pub(crate) fn build_live_status(
         snapshot
             .fem_mesh
             .as_ref()
-            .map(|m| m.elements.len() as u64)
+            .map(|m| m.cell_count() as u64)
             .unwrap_or(0)
     } else {
         fdm_grid_shape
@@ -192,6 +211,7 @@ pub(crate) fn build_live_status(
         mesh_build_revision: snapshot.mesh_build_revision,
         commands_revision,
         stages_revision: snapshot.stage_execution_revision,
+        simulation_preparation_revision: snapshot.simulation_preparation_revision,
         scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         region_topology_revision: snapshot.region_realization_revisions.topology,
         region_membership_revision: snapshot.region_realization_revisions.membership,
@@ -229,14 +249,7 @@ pub(crate) fn build_live_status(
         .saturating_sub(snapshot.session.started_at_unix_ms as u64 / 1000);
     let total_steps = latest.map(|s| s.step).unwrap_or(0);
 
-    // Compute instantaneous steps/s from the solver profiler's per-step wall
-    // time when available, falling back to the lifetime average.
-    let steps_per_second = instantaneous_steps_per_second(&snapshot.solver_profile).or_else(|| {
-        latest
-            .and_then(|step| (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9))
-            .filter(|elapsed| *elapsed > 0.0)
-            .map(|elapsed| total_steps as f64 / elapsed)
-    });
+    let steps_per_second = compat_end_to_end_steps_per_second(&snapshot.solver_profile);
     let metrics = MetricsSummary {
         uptime_seconds: uptime,
         total_steps,
@@ -538,25 +551,19 @@ pub(crate) fn artifact_revision(snapshot: &SessionStateResponse) -> u64 {
 /// Compute instantaneous steps/s from the solver profiler's recent per-step
 /// wall time samples.  Returns `None` when the profiler is inactive or has
 /// no samples, allowing the caller to fall back to the lifetime average.
-fn instantaneous_steps_per_second(
+fn compat_end_to_end_steps_per_second(
     profile: &crate::schemas::diagnostics::SolverProfileResource,
 ) -> Option<f64> {
-    if profile.latest_samples.is_empty() {
-        return None;
-    }
-    // Average the per-step wall time from the most recent samples (up to 5).
-    let window = &profile.latest_samples[profile.latest_samples.len().saturating_sub(5)..];
-    let total_ns: u64 = window.iter().map(|s| s.total_ns).sum();
-    if total_ns == 0 || window.is_empty() {
-        return None;
-    }
-    let avg_ns = total_ns as f64 / window.len() as f64;
-    Some(1.0e9 / avg_ns)
+    profile
+        .rates
+        .end_to_end_steps_per_second
+        .as_ref()
+        .map(|metric| metric.value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::relaxation_algorithms_available;
+    use super::{compat_end_to_end_steps_per_second, relaxation_algorithms_available};
 
     #[test]
     fn session_status_advertises_production_relaxation_algorithms() {
@@ -569,5 +576,20 @@ mod tests {
                 "tangent_plane_implicit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn compatibility_rate_alias_is_only_the_closed_end_to_end_rate() {
+        let mut profile = crate::schemas::diagnostics::SolverProfileResource::default();
+        profile.rates.end_to_end_steps_per_second =
+            Some(crate::schemas::diagnostics::RateMetricResource {
+                value: 2.0,
+                window_step_count: 10,
+                window_wall_time_ns: 5_000_000_000,
+                source_revision: 7,
+            });
+        assert_eq!(compat_end_to_end_steps_per_second(&profile), Some(2.0));
+        profile.rates.end_to_end_steps_per_second = None;
+        assert_eq!(compat_end_to_end_steps_per_second(&profile), None);
     }
 }

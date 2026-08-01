@@ -22,9 +22,11 @@
 //! the total cached byte count exceeds `max_bytes` or entry count exceeds `max_entries`.
 
 use crate::fem_spatial_index::FemNormalAxisIndex;
+use crate::planar_sampling::PlanarSampleResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
 
 /// Maximum number of cached projection entries (configurable at construction time).
@@ -33,6 +35,9 @@ const DEFAULT_MAX_PROJECTION_ENTRIES: usize = 64;
 const DEFAULT_MAX_SLICE_ENTRIES: usize = 128;
 /// Maximum number of cached analysis resource entries.
 const DEFAULT_MAX_ANALYSIS_RESOURCE_ENTRIES: usize = 128;
+const DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES: usize = 8;
+const DEFAULT_MAX_TOPOLOGY_ENTRIES: usize = 2;
+const DEFAULT_MAX_TOPOLOGY_BYTES: usize = 512 * 1024 * 1024;
 /// Default memory budget for each sub-cache in bytes (128 MiB).
 const DEFAULT_MAX_BYTES: usize = 128 * 1024 * 1024;
 
@@ -59,6 +64,89 @@ pub(crate) struct BinaryCache {
     max_bytes: usize,
 }
 
+pub(crate) struct SharedBinaryCache {
+    entries: HashMap<String, CachedSharedBinary>,
+    total_bytes: usize,
+    generation: u64,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+struct CachedSharedBinary {
+    bytes: Arc<[u8]>,
+    generation: u64,
+}
+
+impl SharedBinaryCache {
+    pub fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries.min(16)),
+            total_bytes: 0,
+            generation: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    pub fn get(&mut self, key: &str) -> Option<Arc<[u8]>> {
+        let entry = self.entries.get_mut(key)?;
+        self.generation += 1;
+        entry.generation = self.generation;
+        Some(Arc::clone(&entry.bytes))
+    }
+
+    pub fn insert(&mut self, key: String, bytes: Vec<u8>) -> Arc<[u8]> {
+        let bytes: Arc<[u8]> = bytes.into();
+        if bytes.len() > self.max_bytes || self.max_entries == 0 {
+            return bytes;
+        }
+        if let Some(previous) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.bytes.len());
+        }
+        while self.entries.len() >= self.max_entries
+            || self.total_bytes + bytes.len() > self.max_bytes
+        {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&oldest_key) {
+                self.total_bytes = self.total_bytes.saturating_sub(previous.bytes.len());
+            }
+        }
+        self.generation += 1;
+        self.total_bytes += bytes.len();
+        self.entries.insert(
+            key,
+            CachedSharedBinary {
+                bytes: Arc::clone(&bytes),
+                generation: self.generation,
+            },
+        );
+        bytes
+    }
+
+    pub fn get_or_try_insert_with<E>(
+        &mut self,
+        key: &str,
+        build: impl FnOnce() -> Result<Vec<u8>, E>,
+    ) -> Result<Arc<[u8]>, E> {
+        if let Some(bytes) = self.get(key) {
+            return Ok(bytes);
+        }
+        Ok(self.insert(key.to_string(), build()?))
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct CachedJsonResource {
     pub value: Value,
@@ -69,6 +157,99 @@ pub(crate) struct JsonResourceCache {
     entries: HashMap<String, CachedJsonResource>,
     generation: u64,
     max_entries: usize,
+}
+
+#[derive(Clone)]
+struct CachedPlanarSample {
+    result: Arc<PlanarSampleResult>,
+    estimated_bytes: usize,
+    generation: u64,
+}
+
+pub(crate) struct PlanarSampleCache {
+    entries: HashMap<String, CachedPlanarSample>,
+    total_bytes: usize,
+    generation: u64,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+impl PlanarSampleCache {
+    pub fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries),
+            total_bytes: 0,
+            generation: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    pub fn get(&mut self, key: &str) -> Option<Arc<PlanarSampleResult>> {
+        let entry = self.entries.get_mut(key)?;
+        self.generation += 1;
+        entry.generation = self.generation;
+        Some(Arc::clone(&entry.result))
+    }
+
+    pub fn insert(&mut self, key: String, result: Arc<PlanarSampleResult>) {
+        let estimated_bytes = estimate_planar_sample_bytes(&result);
+        if estimated_bytes > self.max_bytes || self.max_entries == 0 {
+            return;
+        }
+        if let Some(previous) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
+        }
+        while self.entries.len() >= self.max_entries
+            || self.total_bytes + estimated_bytes > self.max_bytes
+        {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&oldest_key) {
+                self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
+            }
+        }
+        self.generation += 1;
+        self.entries.insert(
+            key,
+            CachedPlanarSample {
+                result,
+                estimated_bytes,
+                generation: self.generation,
+            },
+        );
+        self.total_bytes += estimated_bytes;
+    }
+}
+
+fn estimate_planar_sample_bytes(result: &PlanarSampleResult) -> usize {
+    let scalar = result.scalar_values.len() * std::mem::size_of::<f64>();
+    let vectors = result
+        .vector_values
+        .as_ref()
+        .map_or(0, |values| values.len() * std::mem::size_of::<[f64; 3]>());
+    let occupancy =
+        result.occupancy.len() * std::mem::size_of::<crate::planar_sampling::Occupancy>();
+    let source_ids = result.source_entity_ids.len() * std::mem::size_of::<Option<u32>>();
+    let overlay = result.overlay.as_ref().map_or(0, |overlay| {
+        overlay
+            .polygons
+            .iter()
+            .map(|polygon| {
+                std::mem::size_of_val(polygon)
+                    + polygon.vertices_uv_m.len() * std::mem::size_of::<[f64; 2]>()
+            })
+            .sum::<usize>()
+            + overlay.segments.len()
+                * std::mem::size_of::<crate::planar_sampling::PlanarOverlaySegment>()
+    });
+    scalar + vectors + occupancy + source_ids + overlay
 }
 
 impl JsonResourceCache {
@@ -228,19 +409,23 @@ impl BinaryCache {
 
 /// Projection cache key.
 ///
-/// Format: `fmvp-proj:{quantity_id}:{field_revision}:{domain_generation_id}:{component}:v2`
+/// Format: `fmvp-proj:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{component}:v3`
 pub(crate) fn projection_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     component: &str,
 ) -> String {
-    format!("fmvp-proj:{quantity_id}:{field_revision}:{domain_generation_id}:{component}:v2")
+    format!(
+        "fmvp-proj:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{component}:v3"
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn scalar_projection_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
@@ -255,7 +440,7 @@ pub(crate) fn scalar_projection_cache_key(
     tile_size: Option<u32>,
 ) -> String {
     format!(
-        "fmvp-proj-scalar:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v1",
+        "fmvp-proj-scalar:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v2",
         air = u8::from(include_air_as_zero),
         tx = tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
         ty = tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
@@ -266,6 +451,7 @@ pub(crate) fn scalar_projection_cache_key(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn projection_empty_mask_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
@@ -280,7 +466,7 @@ pub(crate) fn projection_empty_mask_cache_key(
     tile_size: Option<u32>,
 ) -> String {
     format!(
-        "fmvp-proj-empty-mask:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v1",
+        "fmvp-proj-empty-mask:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v2",
         air = u8::from(include_air_as_zero),
         tx = tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
         ty = tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
@@ -290,10 +476,11 @@ pub(crate) fn projection_empty_mask_cache_key(
 
 /// Slice cache key.
 ///
-/// Format: `fmvp-slice:{quantity_id}:{field_revision}:{domain_gen}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2`
+/// Format: `fmvp-slice:{quantity_id}:{session_id}:{field_revision}:{domain_gen}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v3`
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn slice_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
@@ -306,7 +493,7 @@ pub(crate) fn slice_cache_key(
     max_arrows: u32,
 ) -> String {
     format!(
-        "fmvp-slice:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2",
+        "fmvp-slice:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v3",
         arrows = u8::from(include_arrows),
     )
 }
@@ -331,9 +518,11 @@ pub(crate) fn topological_charge_cache_key(
 
 /// Data-plane store holding the binary projection cache and the binary slice cache.
 ///
-/// Held in `AppState` as `Arc<QuantityDataPlaneStore>`.  Both sub-caches are protected by their
-/// own `Mutex` so projection and slice requests never block each other.
+/// Held in `AppState` as `Arc<QuantityDataPlaneStore>`. Independent locks keep unrelated
+/// topology, projection, slice, and analysis resources from blocking one another.
 pub(crate) struct QuantityDataPlaneStore {
+    /// Bounded shared FMMT buffers keyed by exact route-specific topology ETag.
+    pub topology_cache: StdMutex<SharedBinaryCache>,
     /// Cache for projected (component-selected or magnitude) field vector binaries.
     pub projection_cache: Mutex<BinaryCache>,
     /// Cache for 2-D scalar slice binaries.
@@ -344,6 +533,8 @@ pub(crate) struct QuantityDataPlaneStore {
     pub fem_spatial_index_cache: Mutex<HashMap<String, Arc<FemNormalAxisIndex>>>,
     /// Cache for small JSON analysis resources keyed by source revisions.
     pub topological_charge_cache: Mutex<JsonResourceCache>,
+    /// Bounded revision-keyed results shared by planar meta/binary resources.
+    pub planar_sample_cache: Mutex<PlanarSampleCache>,
 }
 
 impl std::fmt::Debug for QuantityDataPlaneStore {
@@ -373,11 +564,19 @@ impl QuantityDataPlaneStore {
         max_bytes_each: usize,
     ) -> Self {
         Self {
+            topology_cache: StdMutex::new(SharedBinaryCache::new(
+                DEFAULT_MAX_TOPOLOGY_ENTRIES,
+                DEFAULT_MAX_TOPOLOGY_BYTES,
+            )),
             projection_cache: Mutex::new(BinaryCache::new(max_projection, max_bytes_each)),
             scalar_slice_cache: Mutex::new(BinaryCache::new(max_scalar_slices, max_bytes_each)),
             arrow_slice_cache: Mutex::new(BinaryCache::new(max_arrow_slices, max_bytes_each)),
             fem_spatial_index_cache: Mutex::new(HashMap::new()),
             topological_charge_cache: Mutex::new(JsonResourceCache::new(max_analysis_resources)),
+            planar_sample_cache: Mutex::new(PlanarSampleCache::new(
+                DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES,
+                DEFAULT_MAX_BYTES,
+            )),
         }
     }
 }
@@ -391,6 +590,34 @@ impl Default for QuantityDataPlaneStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planar_sampling::{Occupancy, PlanarSampleMeta};
+
+    fn planar_sample(value_count: usize) -> Arc<PlanarSampleResult> {
+        Arc::new(PlanarSampleResult {
+            meta: PlanarSampleMeta {
+                sampler_version: "test",
+                sampling_method: "test",
+                monitor_id: "monitor".to_string(),
+                monitor_hash: "hash".to_string(),
+                bounds_uv_m: [0.0, 1.0, 0.0, 1.0],
+                resolution: [value_count as u32, 1],
+                occupied_count: value_count as u32,
+                partial_count: 0,
+                empty_count: 0,
+                occupied_measure: value_count as f64,
+                overlap_count: 0,
+                fold_count: 0,
+                non_injective: false,
+                basis_order: 0,
+                integration_order: 0,
+            },
+            scalar_values: vec![1.0; value_count],
+            vector_values: None,
+            occupancy: vec![Occupancy::Occupied; value_count],
+            source_entity_ids: vec![Some(0); value_count],
+            overlay: None,
+        })
+    }
 
     #[test]
     fn cache_insert_and_hit() {
@@ -401,6 +628,49 @@ mod tests {
         assert_eq!(hit.unwrap().bytes.len(), 100);
         assert_eq!(cache.total_bytes(), 100);
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn shared_binary_cache_builds_each_exact_identity_once() {
+        let mut cache = SharedBinaryCache::new(2, 1024);
+        let mut build_count = 0;
+
+        let first = cache
+            .get_or_try_insert_with("topology-etag", || {
+                build_count += 1;
+                Ok::<_, ()>(vec![1u8; 64])
+            })
+            .expect("first topology build");
+        let second = cache
+            .get_or_try_insert_with("topology-etag", || {
+                build_count += 1;
+                Ok::<_, ()>(vec![2u8; 64])
+            })
+            .expect("cached topology build");
+
+        assert_eq!(build_count, 1);
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn planar_sample_cache_reuses_results_and_evicts_to_its_byte_budget() {
+        let small = planar_sample(4);
+        let estimated = estimate_planar_sample_bytes(&small);
+        let mut cache = PlanarSampleCache::new(2, estimated * 2);
+        cache.insert("first".to_string(), Arc::clone(&small));
+
+        let hit = cache.get("first").expect("cached planar sample");
+        assert!(Arc::ptr_eq(&hit, &small));
+
+        cache.insert("second".to_string(), planar_sample(4));
+        let _ = cache.get("second");
+        cache.insert("third".to_string(), planar_sample(4));
+        assert!(
+            cache.get("first").is_none(),
+            "least-recent sample is evicted"
+        );
+        assert!(cache.get("second").is_some());
+        assert!(cache.get("third").is_some());
     }
 
     #[test]
@@ -458,14 +728,15 @@ mod tests {
 
     #[test]
     fn projection_cache_key_format() {
-        let key = projection_cache_key("m", 7, 42, "x");
-        assert_eq!(key, "fmvp-proj:m:7:42:x:v2");
+        let key = projection_cache_key("m", "session-17", 7, 42, "x");
+        assert_eq!(key, "fmvp-proj:m:session-17:7:42:x:v3");
     }
 
     #[test]
     fn slice_cache_key_format() {
         let key = slice_cache_key(
             "m",
+            "session-17",
             7,
             42,
             "xy",
@@ -477,7 +748,65 @@ mod tests {
             4,
             20_000,
         );
-        assert!(key.starts_with("fmvp-slice:m:7:42:xy:norm:"));
+        assert!(key.starts_with("fmvp-slice:m:session-17:7:42:xy:norm:"));
+    }
+
+    #[test]
+    fn every_session_scoped_projection_and_slice_key_binds_session_identity() {
+        let scalar = scalar_projection_cache_key(
+            "m",
+            "session-17",
+            7,
+            42,
+            "xy",
+            16,
+            16,
+            "magnitude",
+            "mean",
+            false,
+            4,
+            None,
+            None,
+            None,
+        );
+        let empty = projection_empty_mask_cache_key(
+            "m",
+            "session-17",
+            7,
+            42,
+            "xy",
+            16,
+            16,
+            "magnitude",
+            "mean",
+            false,
+            4,
+            None,
+            None,
+            None,
+        );
+        let slice = slice_cache_key(
+            "m",
+            "session-17",
+            7,
+            42,
+            "xy",
+            "norm:0",
+            16,
+            16,
+            "magnitude",
+            true,
+            4,
+            100,
+        );
+
+        for key in [scalar, empty, slice] {
+            assert!(
+                key.contains("session-17"),
+                "session-scoped cache key is missing session identity: {key}"
+            );
+            assert!(!key.ends_with("v1") && !key.ends_with("v2") || key.contains("proj-"));
+        }
     }
 
     #[test]
@@ -497,7 +826,9 @@ mod tests {
         };
         assert_ne!(
             common("resolution=auto:support=midplane:profile=None:snapshot=None:stage=None"),
-            common("resolution=auto:support=layer_profile:profile=Some(33):snapshot=None:stage=None"),
+            common(
+                "resolution=auto:support=layer_profile:profile=Some(33):snapshot=None:stage=None"
+            ),
         );
     }
 }

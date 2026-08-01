@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisMetricsInspector({
@@ -9,8 +9,7 @@ export function HysteresisMetricsInspector({
   reversalFields,
 }: Pick<HysteresisInspectorCommonProps, "metrics" | "reversalFields">) {
   return (
-    <InspectorSection
-      value="hysteresis-metrics"
+    <InspectorGroup
       title="Loop Metrics"
       badge={metrics ? "ready" : "no data"}
     >
@@ -119,7 +118,7 @@ export function HysteresisMetricsInspector({
           No metrics available. Run the simulation to calculate loop parameters.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

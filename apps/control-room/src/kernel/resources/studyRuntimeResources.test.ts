@@ -43,6 +43,7 @@ import {
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
   frequencyDomainTextArtifactRevision,
+  fieldMetaFreshnessRevision,
   resolveHysteresisExecutionTreeResourceKey,
   resolveFieldMetaResourceKey,
   runtimeCommandControlSessionStatusEquals,
@@ -172,6 +173,7 @@ const baseResources: LiveStatusResource["resources"] = {
   region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: 1,
+  simulation_preparation_revision: 0,
   slice_revision: 0,
   solver_profile_revision: 0,
   stages_revision: 0,
@@ -268,6 +270,47 @@ describe("study runtime command resource bundles", () => {
     );
   });
 
+  it("tracks field freshness independently of the payload revision", () => {
+    const base = {
+      components: 3,
+      domain_generation_id: "8",
+      field_revision: 12,
+      kind: "vector_field",
+      label: "Demagnetizing field",
+      location: "magnetic_only",
+      materialization_wall_time_ns: 80_000_000,
+      materialized_at_unix_ms: 1_700_000_000_000,
+      quantity_id: "H_demag",
+      source_revision: 7,
+      source_step: 40,
+      stale_by_steps: 10,
+      state: "stale_complete",
+      stats: null,
+      unit: "A/m",
+    } as const;
+
+    expect(fieldMetaFreshnessRevision(base as never)).toBe(
+      "12:stale_complete:7:40:10:1700000000000:80000000:",
+    );
+    expect(
+      fieldMetaFreshnessRevision({
+        ...base,
+        source_step: 50,
+        stale_by_steps: 0,
+        state: "complete",
+      } as never),
+    ).not.toBe(fieldMetaFreshnessRevision(base as never));
+    expect(
+      fieldMetaFreshnessRevision({
+        ...base,
+        materialization_error: "native preview snapshot failed",
+        state: "error",
+      } as never),
+    ).toBe(
+      "12:error:7:40:10:1700000000000:80000000:native preview snapshot failed",
+    );
+  });
+
   it("builds hysteresis execution tree resource keys with include flags", () => {
     const expectedPath = SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
       "{stage_id}",
@@ -305,7 +348,10 @@ describe("study runtime command resource bundles", () => {
     const previous = statusWith({
       resources: { commands_revision: 2, scene_revision: 8 },
       run: {
+        requested_device: "auto",
+        resolved_device: "gpu",
         run_id: "run-old",
+        selection_reason: "availability_first_gpu_no_qualified_profile",
         solver_steps: 0,
         solver_time: 0,
         stage_count: 1,
@@ -317,7 +363,10 @@ describe("study runtime command resource bundles", () => {
     const next = statusWith({
       resources: { commands_revision: 2, scene_revision: 8 },
       run: {
+        requested_device: "auto",
+        resolved_device: "gpu",
         run_id: "run-new",
+        selection_reason: "availability_first_gpu_no_qualified_profile",
         solver_steps: 0,
         solver_time: 0,
         stage_count: 1,
@@ -1061,7 +1110,10 @@ describe("study runtime command resource bundles", () => {
         true,
         statusWith({
           run: {
+            requested_device: "auto",
+            resolved_device: "gpu",
             run_id: "run-1",
+            selection_reason: "availability_first_gpu_no_qualified_profile",
             solver_steps: 0,
             solver_time: 0,
             stage_count: 1,
@@ -1108,6 +1160,8 @@ describe("study runtime command resource bundles", () => {
     expect(rowsHook).toContain(".rows(");
     expect(binaryRowsHook).toContain(".rowsBinary(");
     expect(binaryRowsHook).toContain("}#binary`");
+    expect(binaryRowsHook).toContain("pauseLoad = false");
+    expect(binaryRowsHook).toContain("pauseLoad,");
     expect(rowsHook).toContain("tableRowsResourceKey");
     expect(binaryRowsHook).toContain("tableRowsResourceKey");
     expect(rowsHook).toContain("minRefetchIntervalMs");

@@ -20,7 +20,7 @@ Current `apps/control-room` implementation:
 
 - `pnpm --dir apps/control-room generate:api` prints backend OpenAPI v2 from `fullmag-api`, generates TypeScript with `openapi-typescript`, and regenerates the `openapi-fetch` transport/path wrapper;
 - generated coverage comes from the backend v2 resource tree, including platform, session, model, meshing, simulation, data, visualization, workspace, analysis, persistence, and diagnostics paths;
-- runtime API target resolution is centralized: local development defaults to `http://localhost:8081`, while `NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL`, `NEXT_PUBLIC_RUNTIME_HTTP_BASE`, `NEXT_PUBLIC_API_URL`, or `window.__FULLMAG_CONFIG__` may override it;
+- runtime API target resolution is centralized: launcher-managed and standalone local frontends use their same-origin `/v2` proxy, while `NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL`, `NEXT_PUBLIC_RUNTIME_HTTP_BASE`, `NEXT_PUBLIC_API_URL`, or `window.__FULLMAG_CONFIG__` may explicitly override it;
 - `ControlRoomApi` sends `x-request-id`, validates backend `x-api-contract-version: 1.0.0`, retries idempotent GET failures, and records request diagnostics;
 - `ControlRoomApi.sessions.current.status()` is the first facade method on top of the generated transport;
 - `ControlRoomApi.commands.list()`, `.submit()`, and `.detail()` cover the v2 simulation command queue, accepted/rejected submission response, and per-command completion detail;
@@ -49,7 +49,7 @@ flowchart TD
 
 HTTP resources are the source of truth. WebSocket events notify lifecycle and invalidation; they do not carry full state, fields, topology, mesh payloads, scalar histories, or artifacts. The frontend consumes `resource.batch_changed.payload.changes[]`, invalidates the status resource, and invalidates each `recommended_fetch` resource key for future data hooks. When the backend sends `resync.required`, the frontend invalidates status so HTTP v2 can recover the canonical snapshot.
 
-The HTTP base URL and websocket URL are resolved from the same API target. A browser served from one port must not silently assume the backend lives on that same origin when a local control-room API is configured or when development mode is using the default `localhost:8081` backend.
+The HTTP base URL and websocket URL are resolved from the same API target. Launcher-managed and standalone local frontends use the frontend origin so the server-side proxy owns the selected backend port for both HTTP and websocket upgrades. Explicit browser runtime configuration may still select a different API origin.
 
 ## 3. Porting Policy From Legacy
 

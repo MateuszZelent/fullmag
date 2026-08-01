@@ -4,8 +4,8 @@ use fullmag_ir::{
     FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
-    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
-    SeedPolicy, ThermalSeedConfig,
+    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
+    TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,8 +17,8 @@ use crate::error::PlanError;
 use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
     initial_vectors_for_magnet, load_mesh_from_source, merge_fem_meshes, mesh_bounds,
-    resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
-    MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
+    reject_unsupported_mixed_topology, resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode,
+    study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
@@ -76,40 +76,44 @@ fn fem_plan_has_zhang_li_stt(plan: &FemPlanIR) -> bool {
         && !fem_plan_has_slonczewski_stt(plan)
 }
 
-fn first_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> &'static str {
+fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'static str> {
     // This is intentionally the same precedence as the native Context
-    // diagnostic. It follows the ABI enable predicates, not merely authored
-    // energy terms, so planner rejection names the runtime owner that would
-    // first require the unavailable element/quadrature material accessor.
-    if plan.external_field.is_some() {
-        return "Zeeman interaction";
+    // diagnostic. Consistent-mass exchange is the required CPU owner;
+    // Poisson demag and Zeeman may be additional consumers. The remaining
+    // owners must continue to fail closed until they migrate to the common
+    // element/quadrature adapter.
+    if !plan.enable_exchange {
+        return Some("exchange-disabled plan");
     }
-    if plan.enable_demag {
-        return "demag interaction";
+    if plan.use_consistent_mass != Some(true) {
+        return Some("lumped-mass exchange projection");
+    }
+    if plan.relaxation.is_some() {
+        return Some("native FEM relaxation algorithms");
     }
     if fem_plan_has_uniaxial_anisotropy(plan) {
-        return "uniaxial anisotropy";
+        return Some("uniaxial anisotropy");
     }
     if fem_plan_has_cubic_anisotropy(plan) {
-        return "cubic anisotropy";
+        return Some("cubic anisotropy");
     }
     if plan.interfacial_dmi.is_some() || plan.dind_field.is_some() {
-        return "interfacial DMI";
+        return Some("interfacial DMI");
     }
     if plan.bulk_dmi.is_some() || plan.dbulk_field.is_some() {
-        return "bulk DMI";
+        return Some("bulk DMI");
     }
     if plan
         .temperature
         .is_some_and(|temperature| temperature > 0.0)
     {
-        return "thermal Brown interaction";
+        return Some("thermal Brown interaction");
     }
     if fem_plan_has_zhang_li_stt(plan) {
-        return "Zhang-Li STT";
+        return Some("Zhang-Li STT");
     }
     if fem_plan_has_slonczewski_stt(plan) {
-        return "Slonczewski STT";
+        return Some("Slonczewski STT");
     }
     if plan.has_oersted_cylinder
         || plan
@@ -117,12 +121,12 @@ fn first_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> &'static str {
             .as_ref()
             .is_some_and(|field| !field.is_empty())
     {
-        return "Oersted interaction";
+        return Some("Oersted interaction");
     }
     if plan.magnetoelastic.is_some() {
-        return "magnetoelastic interaction";
+        return Some("magnetoelastic interaction");
     }
-    "native FEM handle lifecycle fallback"
+    None
 }
 
 pub(crate) fn elementwise_material_legality_error(
@@ -133,13 +137,15 @@ pub(crate) fn elementwise_material_legality_error(
 
     if fem_plan.ms_element_field.is_some() {
         let owner = if gpu {
-            "GPU material-state upload"
+            Some("GPU material-state upload")
         } else {
-            first_elementwise_ms_cpu_owner(fem_plan)
+            first_unsupported_elementwise_ms_cpu_owner(fem_plan)
         };
-        return Some(format!(
-            "Ms_element_field is unsupported for {owner} on resolved device '{device}': this runtime has no common element/quadrature material accessor"
-        ));
+        if let Some(owner) = owner {
+            return Some(format!(
+                "Ms_element_field is unsupported for {owner} on resolved device '{device}': this owner does not consume the common element/quadrature material accessor"
+            ));
+        }
     }
 
     if gpu {
@@ -893,20 +899,20 @@ fn segment_element_node_indices(
 ) -> Result<Vec<usize>, PlanError> {
     let element_start = segment.element_start as usize;
     let element_end = element_start.saturating_add(segment.element_count as usize);
-    if element_end > mesh.elements.len() {
+    if element_end > mesh.cell_count() {
         return Err(PlanError {
             reasons: vec![format!(
                 "FEM object segment '{}' element range {}..{} exceeds mesh element count {}",
                 segment.object_id,
                 element_start,
                 element_end,
-                mesh.elements.len()
+                mesh.cell_count()
             )],
         });
     }
 
-    let mut indices = mesh.elements[element_start..element_end]
-        .iter()
+    let mut indices = (element_start..element_end)
+        .filter_map(|index| mesh.cells.item_nodes(index))
         .flat_map(|element| element.iter().copied())
         .map(|index| index as usize)
         .collect::<Vec<_>>();
@@ -1290,10 +1296,10 @@ fn build_region_material_fields(
     let mut dind_values = vec![base_material.interfacial_dmi.unwrap_or(0.0); node_count];
     let mut dbulk_values = vec![base_material.bulk_dmi.unwrap_or(0.0); node_count];
 
-    let sharp_conformal_aex_regions = sharp_conformal_parameter_regions(
-        problem,
-        fullmag_ir::MaterialParameterNameIR::Aex,
-    )?;
+    let sharp_conformal_aex_regions =
+        sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Aex)?;
+    let sharp_conformal_ms_regions =
+        sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Ms)?;
 
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
@@ -1317,13 +1323,14 @@ fn build_region_material_fields(
         let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
         let object_translation = crate::material::object_translation(problem, &segment.object_id);
 
-        let ms_resolved = crate::material::resolve_spatial_parameter(
+        let ms_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
             &segment.object_id,
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
             object_translation,
+            &sharp_conformal_ms_regions,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
 
@@ -1405,7 +1412,11 @@ fn sharp_conformal_parameter_regions(
     parameter: fullmag_ir::MaterialParameterNameIR,
 ) -> Result<BTreeSet<String>, PlanError> {
     let mut region_ids = BTreeSet::new();
-    for region in problem.object_regions.iter().filter(|region| region.enabled) {
+    for region in problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+    {
         if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project
             && crate::validate::region_is_conformal(problem, region)
             && sharp_constant_region_parameter(problem, region, parameter)?.is_some()
@@ -1499,7 +1510,7 @@ fn build_conformal_region_element_fields(
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
 ) -> Result<(Option<Vec<f64>>, Option<Vec<f64>>), PlanError> {
-    let element_count = mesh.elements.len();
+    let element_count = mesh.cell_count();
     if element_count == 0 || mesh.element_markers.len() != element_count {
         return Ok((None, None));
     }
@@ -1946,7 +1957,10 @@ pub(crate) fn plan_fem(
                 }
                 if let Some(problem_temperature) = thermal_temperature {
                     if (problem_temperature - *temperature).abs() > 1.0e-6 {
-                        errors.push("ThermalNoise temperature disagrees with Problem temperature".to_string());
+                        errors.push(
+                            "ThermalNoise temperature disagrees with Problem temperature"
+                                .to_string(),
+                        );
                     }
                 }
                 thermal_temperature = Some(*temperature);
@@ -1954,7 +1968,11 @@ pub(crate) fn plan_fem(
                     errors.push("ThermalNoise seed must be positive; use system entropy for an unspecified seed".to_string());
                 }
                 thermal_seed_config = Some(ThermalSeedConfig {
-                    policy: if seed.is_some() { SeedPolicy::Fixed } else { SeedPolicy::SystemEntropy },
+                    policy: if seed.is_some() {
+                        SeedPolicy::Fixed
+                    } else {
+                        SeedPolicy::SystemEntropy
+                    },
                     seed: *seed,
                 });
             }
@@ -2052,7 +2070,10 @@ pub(crate) fn plan_fem(
         bulk_dmi.is_some() || has_material_bulk_dmi,
         true,
         has_magnetoelastic,
-        problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
+        problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         !problem.field_drives.is_empty(),
         &mut errors,
@@ -2065,6 +2086,7 @@ pub(crate) fn plan_fem(
     }
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let requested_integrator = controls.requested_integrator;
     let integrator = controls.integrator;
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
@@ -2187,8 +2209,13 @@ pub(crate) fn plan_fem(
     let mesh_build_report = resolved_domain_mesh_asset
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
+    reject_unsupported_mixed_topology(problem, &mesh, mesh_build_report.as_ref()).map_err(
+        |reason| PlanError {
+            reasons: vec![reason],
+        },
+    )?;
     let n_nodes = mesh.nodes.len();
-    let n_elements = mesh.elements.len();
+    let n_elements = mesh.cell_count();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
     let mut periodic_mesh_certificate_v6 = None;
@@ -2274,11 +2301,13 @@ pub(crate) fn plan_fem(
             });
         }
         periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
-            |certificate_errors| PlanError {
-                reasons: certificate_errors
-                    .into_iter()
-                    .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
-                    .collect(),
+            |certificate_errors| {
+                PlanError {
+                    reasons: certificate_errors
+                        .into_iter()
+                        .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
+                        .collect(),
+                }
             },
         )?);
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
@@ -2342,11 +2371,9 @@ pub(crate) fn plan_fem(
         &object_segments,
         &magnet_materials,
     )?;
-    if let Some(reason) = exclusive_coefficient_realization_error(
-        &material,
-        &ms_element_field,
-        &a_element_field,
-    ) {
+    if let Some(reason) =
+        exclusive_coefficient_realization_error(&material, &ms_element_field, &a_element_field)
+    {
         return Err(PlanError {
             reasons: vec![reason],
         });
@@ -2472,15 +2499,28 @@ pub(crate) fn plan_fem(
     let dind_field = material.dind_field.clone();
     let dbulk_field = material.dbulk_field.clone();
     let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
-    let active_field_drives: Vec<_> = problem.field_drives.iter()
+    let active_field_drives: Vec<_> = problem
+        .field_drives
+        .iter()
         .filter(|drive| crate::util::field_drive_is_active(drive, problem))
-        .cloned().collect();
-    let field_drive_geometry_masks = active_field_drives.iter().filter_map(|drive| {
-        let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile else {
-            return None;
-        };
-        problem.geometry.entries.iter().find(|entry| entry.name() == object_id).cloned()
-    }).collect();
+        .cloned()
+        .collect();
+    let field_drive_geometry_masks = active_field_drives
+        .iter()
+        .filter_map(|drive| {
+            let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } =
+                &drive.spatial_profile
+            else {
+                return None;
+            };
+            problem
+                .geometry
+                .entries
+                .iter()
+                .find(|entry| entry.name() == object_id)
+                .cloned()
+        })
+        .collect();
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -2729,10 +2769,16 @@ pub(crate) fn plan_fem(
         },
         backend_plan: BackendPlanIR::Fem(fem_plan),
         output_plan: OutputPlanIR {
-            outputs: problem.study.sampling().outputs.clone(),
+            outputs: crate::sampling::runtime_outputs(problem),
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
+            integrator_resolution: requested_integrator.map(|requested_integrator| {
+                fullmag_ir::IntegratorResolutionProvenanceIR {
+                    requested_integrator: Some(requested_integrator),
+                    resolved_integrator: integrator,
+                }
+            }),
         },
     })
 }
@@ -3220,9 +3266,14 @@ pub(crate) fn plan_fem_eigen(
     let mesh_build_report = resolved_domain_mesh_asset
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
+    reject_unsupported_mixed_topology(problem, &mesh, mesh_build_report.as_ref()).map_err(
+        |reason| PlanError {
+            reasons: vec![reason],
+        },
+    )?;
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
-    let n_elements = mesh.elements.len();
+    let n_elements = mesh.cell_count();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
     if shared_domain_mesh_requested(problem, demag_realization)
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
@@ -3392,6 +3443,7 @@ pub(crate) fn plan_fem_eigen(
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
+            integrator_resolution: None,
         },
     })
 }
@@ -3522,6 +3574,7 @@ pub(crate) fn plan_fem_frequency_response(
         magnetostatic_bc: *magnetostatic_bc,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -3619,6 +3672,7 @@ pub(crate) fn plan_fem_frequency_response(
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
+            integrator_resolution: None,
         },
     })
 }

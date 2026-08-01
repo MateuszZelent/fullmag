@@ -155,6 +155,30 @@ CPU thread selection remains a runtime selection concern:
 - Logs and UI must not pretend that live thread-pool changes apply to an already
   running solve
 
+### 5.1 Fail-closed linear-solve publication
+
+Every production FEM demagnetization realization (non-periodic Poisson,
+periodic reduced Poisson, strict CUDA Poisson, and Fredkin--Koehler FEM/BEM)
+must treat the linear solve as an attempted result until convergence has been
+validated. A candidate scalar potential may be published, cached, lifted,
+recovered into `H_demag`, used in `H_eff`/energy, or exposed as an observable
+only when all of the following hold:
+
+- the concrete solver reports convergence rather than only termination,
+- the reported residual is finite and non-negative,
+- the reported residual satisfies the configured relative tolerance, or the
+  solver explicitly reports convergence through the configured positive
+  absolute tolerance,
+- the iteration count is non-negative and does not exceed `max_iterations`.
+
+Exhausting `max_iterations` without a solver convergence report is not
+convergence. On failure, the runtime must
+invalidate any warm-start/current marker for the attempted candidate and
+return a typed diagnostic containing the demag solver realization, linear
+solver kind, iteration count, residual, relative/absolute tolerance, and
+maximum iterations. Last-attempt iteration/residual telemetry remains
+available for diagnosis, but the failed field is never current solver state.
+
 ## 6. Validation strategy
 
 ### 6.1 Analytical checks
@@ -270,9 +294,14 @@ The three nonlinear-CG phases are the batched current energy/gradient/direction
 metrics, the first Armijo trial energy, and the accepted final-stats/PR+ batch.
 Every further Armijo trial adds exactly one energy-scalar synchronization. The
 benchmark therefore publishes `total_rhs_evals`, the sum over all returned step
-records, without changing the existing last-step `rhs_evals`. Native direct
-minimizers define each step's `rhs_evals` as `2 + backtracks`, so their exact
-gate is
+records, without changing the existing last-step `rhs_evals` field name. For
+direct minimizers these are logical evaluation records rather than a claim that
+cached endpoint fields were physically recomputed: every executed step records
+one current state and its first trial, then one record for every additional
+normal or forced-recovery Armijo trial and every refinement RHS evaluation. An
+ordinary step without forced recovery therefore reports `2 + backtracks`; a
+forced-recovery trial is counted even when it does not increment the rejected
+backtrack counter. Their exact gate is
 
 `base + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
 
@@ -284,6 +313,74 @@ writes the exact restart `p = -g`. The host therefore reuses the already
 validated `p dot g = -||g||_E^2` and `||p||_V^2 = ||g||_V^2` scalars instead of
 re-reducing and synchronizing them. This keeps each additional recovery trial
 represented by its energy evaluation in `total_rhs_evals`.
+
+Update 2026-07-23 canonical nonlinear-CG three-sync accounting: each accepted
+step has three control-scalar host synchronizations: the current
+energy/gradient/direction batch, the first direct Armijo energy batch, and the
+accepted final-stats/PR+ batch. Trial effective-field and final energy-term
+computation remains device-side; nonlinear-CG takes the trial total energy from
+`GpuDirectArmijoResult::trial_snapshot` instead of performing a separate total
+energy readback before the Armijo batch. Each Armijo trial after the first adds
+exactly one synchronization, including forced-restart recovery trials. The
+matching `rhs_evals` telemetry publishes two nominal logical records per
+executed step even when the accepted current endpoint is reused, plus exactly
+one record for every additional normal or recovery trial. The exact cumulative
+limit is therefore
+
+`initial_syncs + 3 * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
+
+No separate direction-recovery allowance is part of this budget. This changes
+only control-readback accounting and diagnostic reuse; fresh-zero demag,
+direct-energy refinement, finite checks, rollback, PR+, energy definitions,
+and accepted trajectories retain their existing contracts.
+
+Update 2026-07-23 canonical PG-BB four-sync accounting: each accepted PG-BB
+step has four baseline control-scalar host synchronizations. The first is one
+packed `GpuPgbbCurrentMetrics` readback containing the current energy-term
+snapshot, volume-metric tangent-gradient norm, energy-metric projected-gradient
+norm, and device-produced finite/nonnegative flags. The second is the direct
+Armijo difference batch, which also owns the trial energy snapshot; PG-BB does
+not read a standalone trial total before this batch. Accepted BB curvature is
+the third synchronization and final observable statistics are the fourth.
+Every Armijo trial after the first adds exactly one direct-difference batch.
+The benchmark script owns this formula once for both direct minimizers:
+
+`initial_syncs + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`,
+
+with `per_step = 4` for PG-BB and `per_step = 3` for nonlinear-CG. PG-BB
+`rhs_evals` uses the same logical-record semantics: one current record, every
+normal Armijo trial exactly once, and any direct-energy refinement evaluations
+additively. The packed readback and trial-snapshot reuse do not change Armijo,
+BB1/BB2 reset policy, fresh-zero demag, rollback, energy monotonicity, ABI, or
+opt-in profiler ownership.
+
+The required five-repeat production preset on 2026-07-23 produced 110 rows:
+95 completed and 15 failed before a benchmark result. Every one of the 50
+completed GPU PG-BB rows satisfied the canonical bound with a margin of three
+syncs; representative cumulative records were 32 steps / 71 RHS / 135 syncs
+(bound 138), 32 / 91 / 155 (bound 158), and 32 / 64 / 128 (bound 131).
+The preset did not provide complete CPU/GPU-consistency evidence because CPU
+exchange-only and CPU exchange-plus-uniaxial, and GPU exchange-plus-Zeeman,
+each exhausted their unchanged PG-BB Armijo search in all five repeats. A
+one-repeat comparison against the immutable pre-Task-8 managed runtime
+reproduced the same three failure classes. In particular, GPU Zeeman failed
+both before and after Task 8 with finite current metrics and a positive direct
+energy increment after 20 backtracks, not through the new finite-flag check.
+Consequently the four-sync implementation is production-executed for the 50
+completed GPU rows, but the full preset remains unvalidated until those
+pre-existing Armijo cases are qualified separately. The Task 8 constraint to
+preserve Armijo, BB, and restart semantics forbids treating a tolerance or
+fixture change as part of this synchronization remediation.
+
+Update 2026-07-23 direct-increment remediation decision: the failed cases were
+traced to cancellation-prone endpoint-energy composition, not to a need for a
+looser line search. CPU exchange receives a polarized direct discrete
+increment, while CUDA classifies each final energy slot exactly once as direct
+or explicit endpoint residual. Residual uncertainty is derived from endpoint
+operand magnitudes. The strict Armijo inequality and four-sync PG-BB contract
+remain unchanged. The full preset must be rerun against an identity-pinned
+final native library; the earlier 95/110 artifact is diagnostic evidence only,
+not final qualification.
 
 Update 2026-06-05 direct-minimizer effective-field path: GPU
 `projected_gradient_bb` and `nonlinear_cg` now call the device-resident
@@ -297,16 +394,23 @@ down event pools when disabled, so ordinary disabled runs do not retain timing
 events and direct-minimizer runs can enable/disable profiling without rebuilding
 the runtime.
 
-Update 2026-06-05 GPU demag stream boundary: strict FEM GPU demag keeps RHS
-assembly, recovery, and energy reductions on the Fullmag CUDA compute stream,
-while the MFEM/Hypre Poisson `Mult` call remains bridged through explicit CUDA
-events to the MFEM/Hypre stream/default-stream execution path. The current
-bundled Hypre headers expose public memory-location and execution-policy
-controls, but not a public CUDA stream-binding setter. Until that contract is
-available, the production invariant is: no `cudaStreamSynchronize`,
-`cudaEventSynchronize`, or `cudaDeviceSynchronize` in the strict GPU demag
-stage; the only stream ordering around Hypre is the explicit event bridge.
-The `fem_cuda_demag_timing_contract` source test now enforces that boundary.
+Update 2026-07-20 GPU demag stream boundary: the managed HYPRE 3.1.0 runtime
+exposes the exact compute stream as
+`hypre_HandleComputeStream(hypre_handle())`. Strict FEM GPU demag records a
+Fullmag-ready event on the Fullmag compute stream, makes that exact HYPRE
+stream wait, records HYPRE-done on the HYPRE stream after `Mult`, and makes the
+Fullmag stream wait before recovery and energy reduction. Ordering through the
+legacy/default stream or a device-wide synchronization is not proof of this
+contract and is forbidden in strict GPU mode.
+
+The compatible Poisson matrix, Krylov object, and AMG hierarchy are set up once
+per demag workspace. A fresh magnetization RHS resets the solution vector to
+zero but does not recreate the solver or preconditioner. Matrix topology,
+boundary realization, solver/preconditioner policy, tolerance, AMG settings,
+device, or workspace changes invalidate the setup and rebuild it explicitly.
+Profiler setup time therefore reports real rebuild work rather than a
+hard-coded zero.
+
 Strict GPU demag solver setup also best-effort enables Hypre's public vendor
 sparse-kernel switches for device builds: SpTrans, SpMV, and SpGEMM. This keeps
 CUDA Hypre AMG setup and solver application on the optimized vendor sparse path

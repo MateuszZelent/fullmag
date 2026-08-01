@@ -50,10 +50,8 @@ pub async fn get_mesh_region_membership(
         snapshot.region_realization_revisions.membership,
         &region_id,
     )
-        .map(Json)
-        .ok_or_else(|| {
-            ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
-        })
+    .map(Json)
+    .ok_or_else(|| ApiError::not_found(format!("mesh region membership '{region_id}' not found")))
 }
 
 #[utoipa::path(
@@ -84,15 +82,13 @@ pub async fn get_mesh_region_memberships(
     let mut memberships = Vec::new();
     let mut unresolved_region_ids = Vec::new();
     for region_id in enabled_authored_region_ids(scene) {
-        if let Some(membership) =
-            build_mesh_region_membership(
-                scene,
-                mesh,
-                snapshot.mesh_revision,
-                snapshot.region_realization_revisions.membership,
-                &region_id,
-            )
-        {
+        if let Some(membership) = build_mesh_region_membership(
+            scene,
+            mesh,
+            snapshot.mesh_revision,
+            snapshot.region_realization_revisions.membership,
+            &region_id,
+        ) {
             memberships.push(membership);
         } else {
             unresolved_region_ids.push(region_id);
@@ -345,13 +341,15 @@ fn mesh_region_membership_geometry_projection(
         node_indices: Vec::new(),
         boundary_face_indices: Vec::new(),
     };
+    let elements = mesh.require_tet4_elements().ok()?;
+    let boundary_faces = mesh.require_tri3_boundary_faces().ok()?;
 
     for (index, node) in mesh.nodes.iter().enumerate() {
         if point_in_region_shape(region_sample_point(*node, object, region), &region.shape) {
             push_unique(&mut membership.node_indices, index as u32);
         }
     }
-    for (index, element) in mesh.elements.iter().enumerate() {
+    for (index, element) in elements.iter().enumerate() {
         let Some(centroid) = tetra_centroid(mesh, element) else {
             continue;
         };
@@ -359,7 +357,7 @@ fn mesh_region_membership_geometry_projection(
             push_unique(&mut membership.element_indices, index as u32);
         }
     }
-    for (index, face) in mesh.boundary_faces.iter().enumerate() {
+    for (index, face) in boundary_faces.iter().enumerate() {
         let Some(centroid) = triangle_centroid(mesh, face) else {
             continue;
         };

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import re
 from typing import Mapping, Sequence
 
 from fullmag.model.dynamics import LLG
@@ -16,7 +17,13 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
-from fullmag._validation import require_non_empty, require_positive
+from fullmag._validation import (
+    SamplingPeriod,
+    auto_sinc_sampling_policy_ir,
+    normalize_sampling_period,
+    require_non_empty,
+    require_positive,
+)
 
 _UNSET = object()
 
@@ -30,7 +37,10 @@ SUPPORTED_RELAXATION_ALGORITHMS = {
     "nonlinear_cg",
     "tangent_plane_implicit",
 }
-DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM = 1e-4
+DEFAULT_RELAXATION_TORQUE_TOLERANCE_T = 1e-6
+DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM = (
+    DEFAULT_RELAXATION_TORQUE_TOLERANCE_T / (4.0e-7 * math.pi)
+)
 DEFAULT_RELAXATION_MAX_STEPS = 50_000
 DIRECT_MINIMIZER_RELAXATION_ALGORITHMS = {
     "projected_gradient_bb",
@@ -255,16 +265,34 @@ TABLE_AUTOSAVE_QUANTITY_ALIASES = {
     "max_torque_Apm": "max_torque",
 }
 
+SUPPORTED_AUTOSAVE_LAYOUTS = {"continuous", "separate"}
+SUPPORTED_AUTOSAVE_FORMATS = {"zarr", "hdf5", "txt"}
+_AUTOSAVE_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
 
 @dataclass(frozen=True, slots=True)
 class TableAutosave:
-    t_sampl: float
+    t_sampl: SamplingPeriod | None = None
+    every_steps: int | None = None
     quantities: Sequence[str] | None = None
     extra_quantities: Sequence[str] = ()
     table_id: str = "default"
 
     def __post_init__(self) -> None:
-        require_positive(self.t_sampl, "t_sampl")
+        has_time_cadence = self.t_sampl is not None
+        has_step_cadence = self.every_steps is not None
+        if has_time_cadence == has_step_cadence:
+            raise ValueError("exactly one of t_sampl or every_steps must be specified")
+        if has_time_cadence:
+            object.__setattr__(
+                self,
+                "t_sampl",
+                normalize_sampling_period(self.t_sampl, "t_sampl"),
+            )
+        else:
+            every_steps = self.every_steps
+            if isinstance(every_steps, bool) or not isinstance(every_steps, int) or every_steps <= 0:
+                raise ValueError("every_steps must be a positive integer")
         table_id = require_non_empty(self.table_id, "table_id")
         base_quantities = (
             DEFAULT_TABLE_AUTOSAVE_QUANTITIES
@@ -282,11 +310,111 @@ class TableAutosave:
         object.__setattr__(self, "extra_quantities", normalized_extra)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "kind": "table_autosave",
             "table_id": self.table_id,
-            "sample_period_s": self.t_sampl,
             "quantities": list(self.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES),
+        }
+        if self.every_steps is not None:
+            payload["every_steps"] = self.every_steps
+        elif self.t_sampl == "auto":
+            payload["sample_period_policy"] = auto_sinc_sampling_policy_ir()
+        else:
+            payload["sample_period_s"] = self.t_sampl
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class FieldAutosave:
+    quantity: str
+    every: SamplingPeriod | None = None
+    every_steps: int | None = None
+
+    def __post_init__(self) -> None:
+        quantity = require_non_empty(self.quantity, "quantity")
+        SaveField(quantity, every=1.0)
+        has_time_cadence = self.every is not None
+        has_step_cadence = self.every_steps is not None
+        if has_time_cadence == has_step_cadence:
+            raise ValueError("exactly one of every or every_steps must be specified")
+        if has_time_cadence:
+            object.__setattr__(
+                self,
+                "every",
+                normalize_sampling_period(self.every, "every"),
+            )
+        else:
+            every_steps = self.every_steps
+            if (
+                isinstance(every_steps, bool)
+                or not isinstance(every_steps, int)
+                or every_steps <= 0
+            ):
+                raise ValueError("every_steps must be a positive integer")
+        object.__setattr__(self, "quantity", quantity)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": "field_autosave",
+            "quantity": self.quantity,
+        }
+        if self.every_steps is not None:
+            payload["every_steps"] = self.every_steps
+        elif self.every == "auto":
+            payload["sample_period_policy"] = auto_sinc_sampling_policy_ir()
+        else:
+            payload["every_seconds"] = self.every
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class StageAutosave:
+    target: str = "main"
+    layout: str = "continuous"
+    format: str = "zarr"
+    table: TableAutosave | None = None
+    fields: Sequence[FieldAutosave] = ()
+
+    def __post_init__(self) -> None:
+        target = require_non_empty(self.target, "target")
+        if _AUTOSAVE_TARGET_PATTERN.fullmatch(target) is None:
+            raise ValueError(
+                "target must start with an alphanumeric character and contain only "
+                "letters, digits, '.', '_', or '-'"
+            )
+        if self.layout not in SUPPORTED_AUTOSAVE_LAYOUTS:
+            supported = ", ".join(sorted(SUPPORTED_AUTOSAVE_LAYOUTS))
+            raise ValueError(f"layout must be one of: {supported}")
+        if self.format not in SUPPORTED_AUTOSAVE_FORMATS:
+            supported = ", ".join(sorted(SUPPORTED_AUTOSAVE_FORMATS))
+            raise ValueError(f"format must be one of: {supported}")
+        if self.table is not None and not isinstance(self.table, TableAutosave):
+            raise TypeError("table must be TableAutosave or None")
+        fields = tuple(self.fields)
+        if any(not isinstance(field, FieldAutosave) for field in fields):
+            raise TypeError("fields must contain only FieldAutosave values")
+        seen: set[str] = set()
+        for field_policy in fields:
+            if field_policy.quantity in seen:
+                raise ValueError(
+                    f"duplicate field autosave quantity {field_policy.quantity!r}"
+                )
+            seen.add(field_policy.quantity)
+        if self.table is None and not fields:
+            raise ValueError("stage autosave requires at least one table or field policy")
+        if self.format == "txt" and fields:
+            raise ValueError("txt supports scalar tables only")
+        object.__setattr__(self, "target", target)
+        object.__setattr__(self, "fields", fields)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "stage_autosave",
+            "target": self.target,
+            "layout": self.layout,
+            "format": self.format,
+            "table": self.table.to_ir() if self.table is not None else None,
+            "fields": [field_policy.to_ir() for field_policy in self.fields],
         }
 
 
@@ -466,8 +594,9 @@ class TimeEvolution:
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        if not self.outputs:
-            raise ValueError("TimeEvolution requires at least one output")
+        # An empty output list is a valid unsampled integration interval. The
+        # final solver state remains available for continuation/checkpointing.
+        pass
 
     def to_ir(self) -> dict[str, object]:
         sampling: dict[str, object] = {
@@ -484,7 +613,7 @@ class TimeEvolution:
     def table_autosave(
         self,
         *,
-        t_sampl: float,
+        t_sampl: SamplingPeriod,
         quantities: Sequence[str] | None = None,
         extra_quantities: Sequence[str] = (),
         table_id: str = "default",
@@ -599,8 +728,8 @@ class Relaxation:
     Parameters
     ----------
     outputs : Sequence[OutputSpec]
-        Output specifications (fields and/or scalars) to record.
-        At least one output is required.
+        Optional output specifications (fields and/or scalars) to record.
+        An empty sequence performs relaxation without periodic output.
     algorithm : str, default ``"llg_overdamped"``
         Relaxation algorithm identifier.  Must be one of the strings listed
         above.
@@ -620,6 +749,7 @@ class Relaxation:
     dynamics: LLG | None = None
     _table_autosave: TableAutosave | None = field(default=None, repr=False)
     torque_tolerance: float | None = field(init=False)
+    torque_tolerance_unit: str = field(init=False)
     energy_tolerance: float | None = field(init=False)
     max_steps: int | None = field(init=False)
 
@@ -636,6 +766,7 @@ class Relaxation:
         max_physical_time_s: object = _UNSET,
         dynamics: LLG | None = None,
         table_autosave: TableAutosave | None = None,
+        torque_tolerance_unit: str = "T",
     ) -> None:
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "algorithm", algorithm)
@@ -655,13 +786,14 @@ class Relaxation:
         object.__setattr__(self, "dynamics", dynamics)
         object.__setattr__(self, "_table_autosave", table_autosave)
         object.__setattr__(self, "torque_tolerance", self.stop.torque_tolerance_apm)
+        if torque_tolerance_unit not in {"T", "A/m"}:
+            raise ValueError("torque_tolerance_unit must be 'T' or 'A/m'")
+        object.__setattr__(self, "torque_tolerance_unit", torque_tolerance_unit)
         object.__setattr__(self, "energy_tolerance", self.stop.energy_tolerance_j)
         object.__setattr__(self, "max_steps", self.stop.max_steps)
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        if not self.outputs:
-            raise ValueError("Relaxation requires at least one output")
         if self.algorithm not in SUPPORTED_RELAXATION_ALGORITHMS:
             supported = ", ".join(sorted(SUPPORTED_RELAXATION_ALGORITHMS))
             raise ValueError(f"algorithm must be one of: {supported}")
@@ -701,6 +833,28 @@ class Relaxation:
         if self.dynamics is not None:
             payload["dynamics"] = self.dynamics.to_ir()
         return payload
+
+    def table_autosave(
+        self,
+        *,
+        every_steps: int,
+        quantities: Sequence[str] | None = None,
+        extra_quantities: Sequence[str] = (),
+        table_id: str = "default",
+    ) -> "Relaxation":
+        return Relaxation(
+            algorithm=self.algorithm,
+            dynamics=self.dynamics,
+            outputs=self.outputs,
+            stop=self.stop,
+            torque_tolerance_unit=self.torque_tolerance_unit,
+            table_autosave=TableAutosave(
+                every_steps=every_steps,
+                quantities=quantities,
+                extra_quantities=extra_quantities,
+                table_id=table_id,
+            ),
+        )
 
 
 def _resolve_relax_stop(

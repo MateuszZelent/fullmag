@@ -12,9 +12,10 @@ use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 
 use fullmag_fdm_demag::{
-    self, pull_h_with_boundary_policy, pull_h_f32_with_boundary_policy,
-    push_m_with_boundary_policy, push_m_f32_with_boundary_policy, TransferBoundaryPolicy,
+    self, pull_h_f32_with_boundary_policy, pull_h_with_boundary_policy,
+    push_m_f32_with_boundary_policy, push_m_with_boundary_policy,
     types::{TensorDemagKernel, TensorDemagKernelF32, VectorFieldFft, VectorFieldFftF32},
+    TransferBoundaryPolicy,
 };
 
 // ---------------------------------------------------------------------------

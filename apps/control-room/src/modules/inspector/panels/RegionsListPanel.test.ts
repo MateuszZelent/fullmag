@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("RegionsListPanel region creation wiring", () => {
+  it("uses compact Inspector groups without the legacy accordion shell", () => {
+    const source = readFileSync(
+      new URL("./RegionsListPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("InspectorGroup");
+    expect(source).not.toContain("InspectorSection");
+    expect(source).not.toContain("<Accordion");
+  });
+
   it("selects a newly created region from the committed scene response", () => {
     const source = readFileSync(
       new URL("./RegionsListPanel.tsx", import.meta.url),

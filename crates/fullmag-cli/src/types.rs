@@ -1,8 +1,10 @@
-use fullmag_ir::{GeometryAssetsIR, ProblemIR, RegionalFieldDriveIR};
+use fullmag_ir::{GeometryAssetsIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+use crate::simulation_preparation::SimulationPreparationState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -87,6 +89,9 @@ pub(crate) struct ScriptRunSummary {
     pub final_e_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub wall_time_ns: Option<u64>,
+    pub backend_create_wall_time_ns: Option<u64>,
+    /// First non-zero accepted-step aggregate, not a literal single solve.
+    pub first_accepted_step_demag_solver_apply_wall_time_ns: Option<u64>,
     pub exchange_wall_time_ns: Option<u64>,
     pub demag_wall_time_ns: Option<u64>,
     pub demag_assemble_wall_time_ns: Option<u64>,
@@ -137,6 +142,7 @@ pub(crate) struct SessionManifest {
     pub resolved_worker: Option<String>,
     pub resolved_cpu_threads: Option<u32>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
     pub artifact_dir: String,
     pub started_at_unix_ms: u128,
     pub finished_at_unix_ms: u128,
@@ -160,6 +166,7 @@ pub(crate) struct SessionRuntimeSelection {
     pub resolved_worker: Option<String>,
     pub resolved_cpu_threads: Option<u32>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -217,11 +224,14 @@ pub(crate) struct LiveStepView {
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
-    pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
     /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<fullmag_runner::LiveFieldMaterializationStatus>,
     /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
     /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
@@ -232,14 +242,14 @@ fn default_study_pipeline_enabled() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StudyPipelineDocument {
     pub version: String,
     #[serde(default)]
     pub nodes: Vec<StudyPipelineNode>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 #[serde(tag = "node_kind", rename_all = "snake_case")]
 pub(crate) enum StudyPipelineNode {
@@ -334,10 +344,37 @@ pub(crate) enum ScriptExecutionStageAction {
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
     },
+    RemoveFieldDrive {
+        drive_id: String,
+    },
+    TableAutosave {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        table_autosave: Option<TableAutosaveIR>,
+    },
+    Autosave {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        quantity: Option<String>,
+        #[serde(default)]
+        output: Option<OutputIR>,
+    },
+    FftResponse {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        request: Option<Value>,
+    },
 }
 
 fn default_stage_action_artifact_name() -> String {
     "state_snapshot".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -366,6 +403,7 @@ pub(crate) struct RuntimeResolutionSummary {
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
     pub local_engine_id: Option<String>,
     pub local_engine_label: Option<String>,
     pub requires_managed_runtime: bool,
@@ -397,6 +435,22 @@ pub(crate) enum ResolvedScriptStageAction {
     },
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
+    },
+    RemoveFieldDrive {
+        drive_id: String,
+    },
+    TableAutosave {
+        enabled: bool,
+        table_autosave: Option<TableAutosaveIR>,
+    },
+    Autosave {
+        enabled: bool,
+        quantity: Option<String>,
+        output: Option<OutputIR>,
+    },
+    FftResponse {
+        enabled: bool,
+        request: Option<Value>,
     },
 }
 
@@ -547,6 +601,80 @@ impl ResolvedScriptStage {
 pub(crate) type CurrentDisplaySelection = fullmag_runner::DisplaySelectionState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FixedSolverIntegratorRequest {
+    Auto,
+    Heun,
+    Rk4,
+    Rk23,
+    Rk45,
+    Abm3,
+}
+
+impl FixedSolverIntegratorRequest {
+    pub(crate) const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Heun => "heun",
+            Self::Rk4 => "rk4",
+            Self::Rk23 => "rk23",
+            Self::Rk45 => "rk45",
+            Self::Abm3 => "abm3",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AdaptiveSolverIntegratorRequest {
+    Rk23,
+    Rk45,
+}
+
+impl AdaptiveSolverIntegratorRequest {
+    pub(crate) const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rk23 => "rk23",
+            Self::Rk45 => "rk45",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum SolverPolicyRequest {
+    Fixed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        integrator: Option<FixedSolverIntegratorRequest>,
+        fix_dt: f64,
+    },
+    AdaptiveMaxError {
+        integrator: AdaptiveSolverIntegratorRequest,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dt_initial: Option<f64>,
+        dt_min: f64,
+        dt_max: f64,
+        max_err: f64,
+    },
+    AdaptiveAdvanced {
+        integrator: AdaptiveSolverIntegratorRequest,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dt_initial: Option<f64>,
+        dt_min: f64,
+        dt_max: f64,
+        atol: f64,
+        rtol: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_spin_rotation: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        norm_tolerance: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SessionCommand {
     #[serde(default)]
     pub seq: u64,
@@ -578,6 +706,8 @@ pub(crate) struct SessionCommand {
     #[serde(default)]
     pub max_error: Option<f64>,
     #[serde(default)]
+    pub solver_policy: Option<SolverPolicyRequest>,
+    #[serde(default)]
     pub relax_algorithm: Option<String>,
     #[serde(default)]
     pub relax_alpha: Option<f64>,
@@ -606,12 +736,39 @@ pub(crate) struct SessionCommand {
     pub profile: Option<serde_json::Value>,
 }
 
+#[cfg(test)]
+mod solver_policy_compatibility_tests {
+    use super::SolverPolicyRequest;
+
+    #[test]
+    fn solver_policy_matches_shared_api_cli_serde_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/solver-policy-transport.json"
+        ))
+        .expect("shared solver policy fixture must be valid JSON");
+        let policies: Vec<SolverPolicyRequest> =
+            serde_json::from_value(fixture.clone()).expect("CLI policy must decode fixture");
+        assert_eq!(
+            serde_json::to_value(policies).expect("CLI policy must encode fixture"),
+            fixture
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[allow(non_snake_case)]
 pub(crate) struct CurrentLiveScalarRow {
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_estimate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_suggested: Option<f64>,
+    #[serde(default)]
+    pub rejected_attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pseudo_time_s: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -729,6 +886,8 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub mesh_workspace: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<CurrentLiveStageExecutionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_preparation: Option<SimulationPreparationState>,
     /// Typed runtime status for the frontend typed protocol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_status: Option<fullmag_runner::RuntimeStatus>,
@@ -768,6 +927,13 @@ impl CurrentLivePreviewFieldCache {
         self.0.insert(field.quantity.clone(), field);
     }
 
+    pub fn insert_replacing(
+        &mut self,
+        field: fullmag_runner::LivePreviewField,
+    ) -> Option<fullmag_runner::LivePreviewField> {
+        self.0.insert(field.quantity.clone(), field)
+    }
+
     pub fn replace_all(
         &mut self,
         fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
@@ -784,6 +950,13 @@ impl CurrentLivePreviewFieldCache {
 
     pub fn take_vec(&mut self) -> Vec<fullmag_runner::LivePreviewField> {
         std::mem::take(&mut self.0).into_values().collect()
+    }
+
+    #[cfg(test)]
+    pub fn vector_values_ptr(&self, quantity: &str) -> Option<*const f64> {
+        self.0
+            .get(quantity)
+            .map(|field| field.vector_field_values.as_ptr())
     }
 }
 
@@ -816,6 +989,8 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_preparation: Option<&'a SimulationPreparationState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<&'a fullmag_runner::FemMeshPayload>,
 }
 
@@ -832,6 +1007,8 @@ pub(crate) struct CurrentLiveSessionFrameRequest<'a> {
     pub mesh_workspace: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_preparation: Option<&'a SimulationPreparationState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<&'a RunManifest>,
 }

@@ -13,7 +13,7 @@ import type {
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 
 interface CrossSectionSettingsValue {
   colorScale: CrossSectionDraft["colorScale"];
@@ -42,7 +42,7 @@ export function CrossSectionSettingsEditor({
 }: CrossSectionSettingsEditorProps) {
   return (
     <>
-      <InspectorSection title="Cut Frame">
+      <InspectorGroup title="Cut Frame">
         <FormField
           label="Name"
           mono={false}
@@ -153,9 +153,9 @@ export function CrossSectionSettingsEditor({
             }
           />
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Plot Parameters">
+      <InspectorGroup title="Plot Parameters">
         <FormField
           label="Quality metric"
           type="select"
@@ -231,7 +231,7 @@ export function CrossSectionSettingsEditor({
           }
         />
         <div className="fm-inspector-toolbar">{action}</div>
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

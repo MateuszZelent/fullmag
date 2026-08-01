@@ -3,6 +3,8 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   collectFieldVectorIdentityIssues,
   ControlRoomApi,
+  ControlRoomApiError,
+  MAX_TOPOLOGY_BYTES,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
   transformFieldVectorForDisplay,
@@ -13,7 +15,9 @@ import type {
   BinaryResourceResult,
   FieldVectorResponseMetadata,
   LiveStatusResource,
+  SimulationPreparationResource,
 } from "./apiTypes";
+import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
@@ -24,7 +28,7 @@ describe("derived B_drive display quantity", () => {
     const catalog = withDerivedDriveFluxDensity({
       domain_generation_id: "domain-1",
       revision: 7,
-      quantities: [{ available: true, components: 3, domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", quantity_id: "H_drive", unit: "A/m" }],
+      quantities: [{ available: true, components: 3, domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", materialization_wall_time_ns: 0, materialized_at_unix_ms: 0, quantity_id: "H_drive", source_revision: 4, source_step: 0, stale_by_steps: 0, state: "complete", unit: "A/m" }],
     });
     expect(catalog.quantities.at(-1)).toMatchObject({
       label: "Drive flux density",
@@ -41,7 +45,13 @@ describe("derived B_drive display quantity", () => {
       kind: "vector",
       label: "Drive field",
       location: "node",
+      materialization_wall_time_ns: 0,
+      materialized_at_unix_ms: 0,
       quantity_id: "H_drive",
+      source_revision: 4,
+      source_step: 0,
+      stale_by_steps: 0,
+      state: "complete",
       stats: { min: -2, mean: 0, max: 3 },
       unit: "A/m",
     });
@@ -238,6 +248,7 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
+  simulation_preparation_revision: 0,
   slice_revision: 0,
   solver_profile_revision: 0,
   stages_revision: 0,
@@ -495,6 +506,89 @@ function makeLargeTopologyBuffer(): ArrayBuffer {
   return buffer;
 }
 
+function makeLargeMixedTopologyBuffer(): ArrayBuffer {
+  const align = (value: number) => Math.ceil(value / 8) * 8;
+  const nodeCount = 700_000;
+  const cellTypes = [1, 2, 3];
+  const cellOffsets = [0, 4, 10, 15];
+  const cellNodes = [0, 1, 2, 3, 0, 1, 2, 4, 5, 6, 0, 1, 2, 3, 7];
+  const facetTypes = [1, 2];
+  const facetRoles = [1, 2];
+  const facetOffsets = [0, 3, 7];
+  const facetNodes = [0, 1, 2, 0, 1, 4, 3];
+  const cellMarkers = [10, 11, 12];
+  const facetMarkers = [20, 21];
+  const cellGlobalOrdinals = [
+    BigInt(10),
+    BigInt("9007199254740993"),
+    BigInt("18446744073709551615"),
+  ];
+  const facetGlobalOrdinals = [BigInt(20), BigInt("9007199254740995")];
+
+  let offset = 64;
+  offset = align(offset + nodeCount * 3 * 8);
+  const cellTypesOffset = offset;
+  offset = align(offset + cellTypes.length * 4);
+  const cellOffsetsOffset = offset;
+  offset = align(offset + cellOffsets.length * 4);
+  const cellNodesOffset = offset;
+  offset = align(offset + cellNodes.length * 4);
+  const facetTypesOffset = offset;
+  offset = align(offset + facetTypes.length * 4);
+  const facetRolesOffset = offset;
+  offset = align(offset + facetRoles.length * 4);
+  const facetOffsetsOffset = offset;
+  offset = align(offset + facetOffsets.length * 4);
+  const facetNodesOffset = offset;
+  offset = align(offset + facetNodes.length * 4);
+  const cellMarkersOffset = offset;
+  offset = align(offset + cellMarkers.length * 4);
+  const facetMarkersOffset = offset;
+  offset = align(offset + facetMarkers.length * 4);
+  const cellGlobalOrdinalsOffset = offset;
+  offset = align(offset + cellGlobalOrdinals.length * 8);
+  const facetGlobalOrdinalsOffset = offset;
+  const buffer = new ArrayBuffer(
+    facetGlobalOrdinalsOffset + facetGlobalOrdinals.length * 8,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, cellTypes.length, true);
+  view.setUint32(16, facetTypes.length, true);
+  view.setUint32(20, cellNodes.length, true);
+  view.setUint32(24, facetNodes.length, true);
+  view.setUint32(28, cellMarkers.length, true);
+  view.setUint32(32, facetMarkers.length, true);
+  view.setUint32(36, 64, true);
+  view.setUint32(40, cellGlobalOrdinals.length, true);
+  view.setUint32(44, facetGlobalOrdinals.length, true);
+  new Uint32Array(buffer, cellTypesOffset, cellTypes.length).set(cellTypes);
+  new Uint32Array(buffer, cellOffsetsOffset, cellOffsets.length).set(cellOffsets);
+  new Uint32Array(buffer, cellNodesOffset, cellNodes.length).set(cellNodes);
+  new Uint32Array(buffer, facetTypesOffset, facetTypes.length).set(facetTypes);
+  new Uint32Array(buffer, facetRolesOffset, facetRoles.length).set(facetRoles);
+  new Uint32Array(buffer, facetOffsetsOffset, facetOffsets.length).set(facetOffsets);
+  new Uint32Array(buffer, facetNodesOffset, facetNodes.length).set(facetNodes);
+  new Uint32Array(buffer, cellMarkersOffset, cellMarkers.length).set(cellMarkers);
+  new Uint32Array(buffer, facetMarkersOffset, facetMarkers.length).set(facetMarkers);
+  new BigUint64Array(
+    buffer,
+    cellGlobalOrdinalsOffset,
+    cellGlobalOrdinals.length,
+  ).set(cellGlobalOrdinals);
+  new BigUint64Array(
+    buffer,
+    facetGlobalOrdinalsOffset,
+    facetGlobalOrdinals.length,
+  ).set(facetGlobalOrdinals);
+  return buffer;
+}
+
 function makeFieldVectorBuffer(): ArrayBuffer {
   const buffer = new ArrayBuffer(48 + 3 * Float64Array.BYTES_PER_ELEMENT);
   const view = new DataView(buffer);
@@ -610,6 +704,54 @@ function parseRequestBody(body: BodyInit | null | undefined): unknown {
 }
 
 describe("ControlRoomApi", () => {
+  it("loads preparation through the simulation facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const preparation = {
+      active_stage_id: "planning",
+      completed_at_unix_ms: null,
+      failure: null,
+      log_tail: [],
+      preparation_id: "prep-1",
+      requested_execution: {
+        backend: "fdm",
+        device: "gpu",
+        engine_id: null,
+        mode: "strict",
+        precision: "double",
+        runtime_family: null,
+        worker: null,
+      },
+      resolved_execution: null,
+      revision: 7,
+      stages: [],
+      started_at_unix_ms: 1_000,
+      status: "running",
+    } satisfies SimulationPreparationResource;
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrl = String(url);
+      observedInit = init;
+      return jsonResponse(preparation);
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-preparation",
+    });
+    const controller = new AbortController();
+
+    await expect(
+      api.simulation.preparation({ signal: controller.signal }),
+    ).resolves.toMatchObject({ revision: 7 });
+
+    expect(observedUrl).toBe(
+      `http://127.0.0.1:8765${SIMULATION_PREPARATION_PATH}`,
+    );
+    expect(observedInit?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(observedInit?.signal?.aborted).toBe(true);
+  });
+
   it("loads current session status through the v2 resource path", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
@@ -1601,6 +1743,15 @@ describe("ControlRoomApi", () => {
             headers: { etag: '"field-1"', ...contractHeaders },
           });
         }
+        if (requestUrl.includes("/v2/sessions/current/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: false, runtime_state: "waiting_for_compute" });
+        }
         throw new Error(`Unexpected request ${requestUrl}`);
       },
     });
@@ -1622,6 +1773,94 @@ describe("ControlRoomApi", () => {
       reason: "field_on_demand",
       target: { kind: "study" },
     });
+  });
+
+  it.each(["pending", "stale_complete", "error", "complete"] as const)(
+    "returns a %s live-publisher miss for resource invalidation without enqueueing compute_fields",
+    async (state) => {
+      const calls: Array<{ method: string | undefined; url: string }> = [];
+      let vectorRequests = 0;
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (url, init) => {
+          calls.push({ method: init?.method, url: String(url) });
+          const requestUrl = String(url);
+          if (
+            requestUrl.includes(
+              "/v2/sessions/current/data/fields/H_demag/samples/vector",
+            )
+          ) {
+            vectorRequests += 1;
+            if (vectorRequests === 1) {
+              return new Response(null, {
+                headers: contractHeaders,
+                status: 204,
+              });
+            }
+            return binaryResponse(makeFieldVectorBuffer(), {
+              headers: { etag: '"field-live"', ...contractHeaders },
+            });
+          }
+          if (requestUrl.includes("/v2/sessions/current/data/fields/H_demag/meta")) {
+            return jsonResponse({ state });
+          }
+          throw new Error(`Unexpected request ${requestUrl}`);
+        },
+      });
+
+      const result = await api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      });
+
+      expect(result.status).toBe("not-applicable");
+      expect(vectorRequests).toBe(1);
+      expect(
+        calls.filter((call) =>
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("leaves a not-yet-published field to an active solver without enqueueing compute_fields", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Response(null, { headers: contractHeaders, status: 204 });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: true, runtime_state: "running" });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    await expect(
+      api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      }),
+    ).resolves.toMatchObject({ status: "not-applicable" });
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("loads scalar windows through the v2 data facade", async () => {
@@ -2452,8 +2691,214 @@ describe("ControlRoomApi", () => {
     expect(result.data.nodeCount).toBe(700_000);
     expect(result.data.indices.length).toBe(4);
     expect(result.data.boundaryFaces.length).toBe(3);
-    expect(observedRanges[0]).toBe("bytes=0-31");
+    expect(observedRanges[0]).toBe("bytes=0-63");
     expect(observedRanges.length).toBeGreaterThan(2);
+  });
+
+  it("loads every FMMT v2 CSR section through chunked byte ranges", async () => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    const observedRanges: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        observedRanges.push(range);
+        const [start, end] = parseByteRange(range);
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers: {
+            "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+            etag: '"topology-mixed"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-mixed-chunked",
+    });
+
+    const result = await api.data.domain.topologyChunked();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") throw new Error("Expected ready mixed topology");
+    expect(result.data.formatVersion).toBe(2);
+    expect(Array.from(result.data.cellTypes ?? [])).toEqual([1, 2, 3]);
+    expect(Array.from(result.data.cellOffsets ?? [])).toEqual([0, 4, 10, 15]);
+    expect(Array.from(result.data.cellNodes ?? [])).toEqual([
+      0, 1, 2, 3, 0, 1, 2, 4, 5, 6, 0, 1, 2, 3, 7,
+    ]);
+    expect(Array.from(result.data.facetTypes ?? [])).toEqual([1, 2]);
+    expect(Array.from(result.data.facetRoles ?? [])).toEqual([1, 2]);
+    expect(Array.from(result.data.facetOffsets ?? [])).toEqual([0, 3, 7]);
+    expect(Array.from(result.data.facetNodes ?? [])).toEqual([0, 1, 2, 0, 1, 4, 3]);
+    expect(Array.from(result.data.cellMarkers ?? [])).toEqual([10, 11, 12]);
+    expect(Array.from(result.data.facetMarkers ?? [])).toEqual([20, 21]);
+    expect(result.data.cellGlobalOrdinals).toEqual(new BigUint64Array([
+      BigInt(10),
+      BigInt("9007199254740993"),
+      BigInt("18446744073709551615"),
+    ]));
+    expect(result.data.facetGlobalOrdinals).toEqual(new BigUint64Array([
+      BigInt(20),
+      BigInt("9007199254740995"),
+    ]));
+    expect(result.data.elementCount).toBe(3);
+    expect(result.data.indices).toHaveLength(0);
+    expect(result.data.elementMarkers).toBe(result.data.cellMarkers);
+    expect(result.data.boundaryFaceCount).toBe(2);
+    expect(result.data.boundaryFaces).toHaveLength(0);
+    expect(result.data.boundaryMarkers).toBe(result.data.facetMarkers);
+    expect(observedRanges[0]).toBe("bytes=0-63");
+    expect(observedRanges).toHaveLength(15);
+  });
+
+  it.each([
+    ["missing", null],
+    ["changed", '"topology-changed"'],
+  ])("rejects a %s ETag on a topology section range", async (_label, sectionEtag) => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    let requestCount = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        const [start, end] = parseByteRange(range);
+        const headers = new Headers({
+          "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+          ...contractHeaders,
+        });
+        headers.set("etag", requestCount++ === 0 ? '"topology-stable"' : sectionEtag ?? "");
+        if (sectionEtag === null && requestCount > 1) headers.delete("etag");
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers,
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-etag-mutation",
+    });
+
+    await expect(api.data.domain.topologyChunked()).rejects.toThrow(/ETag mismatch.*(missing|changed)/);
+  });
+
+  it.each([
+    ["missing", null],
+    ["weak", 'W/"topology-weak"'],
+  ])("rejects a %s header ETag before loading topology sections", async (_label, etag) => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    let requestCount = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        const [start, end] = parseByteRange(range);
+        const headers = new Headers({
+          "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+          ...contractHeaders,
+        });
+        if (etag !== null) headers.set("etag", etag);
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers,
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-header-etag",
+    });
+
+    await expect(api.data.domain.topologyChunked()).rejects.toThrow(/strong ETag/);
+    expect(requestCount).toBe(1);
+  });
+
+  it("loads topology section ranges with bounded sequential concurrency", async () => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        activeRequests += 1;
+        maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        const [start, end] = parseByteRange(range);
+        activeRequests -= 1;
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers: {
+            "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+            etag: '"topology-sequential"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-sequential",
+    });
+
+    const result = await api.data.domain.topologyChunked();
+
+    expect(result.status).toBe("ready");
+    expect(maximumActiveRequests).toBe(1);
+  });
+
+  it.each([
+    ["missing", () => null],
+    ["wrong start", (start: number, end: number, total: number) => `bytes ${start + 1}-${end}/${total}`],
+    ["wrong end", (start: number, end: number, total: number) => `bytes ${start}-${end - 1}/${total}`],
+    ["wrong total", (start: number, end: number, total: number) => `bytes ${start}-${end}/${total + 1}`],
+  ])(
+    "rejects %s Content-Range metadata on a topology section",
+    async (_label, mutateContentRange) => {
+      const topologyBuffer = makeLargeMixedTopologyBuffer();
+      let requestCount = 0;
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (_url, init) => {
+          const range = new Headers(init?.headers).get("range");
+          if (!range) throw new Error("Expected chunked topology request to use Range");
+          const [start, end] = parseByteRange(range);
+          const headers = new Headers({ etag: '"topology-stable"', ...contractHeaders });
+          const contentRange =
+            requestCount++ === 0
+              ? `bytes ${start}-${end}/${topologyBuffer.byteLength}`
+              : mutateContentRange(start, end, topologyBuffer.byteLength);
+          if (contentRange !== null) headers.set("content-range", contentRange);
+          return binaryResponse(topologyBuffer.slice(start, end + 1), {
+            headers,
+            status: 206,
+          });
+        },
+        requestIdFactory: () => "req-topology-content-range-mutation",
+      });
+
+      await expect(api.data.domain.topologyChunked()).rejects.toThrow(/Content-Range/);
+    },
+  );
+
+  it("rejects topology above the explicit byte limit before section allocation", async () => {
+    const header = makeLargeMixedTopologyBuffer().slice(0, 64);
+    new DataView(header).setUint32(8, Math.floor(MAX_TOPOLOGY_BYTES / 24) + 1, true);
+    let requestCount = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => {
+        requestCount += 1;
+        return binaryResponse(header, {
+          headers: {
+            "content-range": "bytes 0-63/999999999",
+            etag: '"topology-oversized"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-oversized",
+    });
+
+    await expect(api.data.domain.topologyChunked()).rejects.toThrow(/exceeds.*byte limit/);
+    expect(requestCount).toBe(1);
   });
 
   it("schedules binary decoders through the configured binary decode scheduler", async () => {
@@ -2884,6 +3329,56 @@ describe("ControlRoomApi", () => {
     expect(result.data.range).toEqual({ min: 0.25, max: 0.25 });
   });
 
+  it("preserves the stable unsupported code from every mixed cross-section resource", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            code: "mixed_topology_not_supported",
+            error:
+              "mixed_topology_not_supported: cross-section slicing is tet4-only",
+            message:
+              "mixed_topology_not_supported: cross-section slicing is tet4-only",
+          }),
+          {
+            headers: {
+              "content-type": "application/json",
+              ...contractHeaders,
+            },
+            status: 409,
+          },
+        ),
+    });
+
+    const requests = [
+      () =>
+        api.meshing.sharedDomain.crossSection({
+          plane: "xy",
+          positionPercent: 50,
+        }),
+      () =>
+        api.meshing.sharedDomain.crossSectionImage({
+          metric: "gamma",
+          plane: "xy",
+          positionPercent: 50,
+        }),
+      () =>
+        api.meshing.sharedDomain.crossSectionQuality({
+          metric: "gamma",
+          plane: "xy",
+          positionPercent: 50,
+        }),
+    ];
+
+    for (const request of requests) {
+      await expect(request()).rejects.toMatchObject({
+        code: "mixed_topology_not_supported",
+        status: 409,
+      } satisfies Partial<ControlRoomApiError>);
+    }
+  });
+
   it("returns not-modified for fresh binary topology resources", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>
@@ -2956,6 +3451,48 @@ describe("ControlRoomApi", () => {
     });
 
     await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
+  });
+
+  it("loads stage autosave metadata through the artifact resource facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return new Response(JSON.stringify([{
+          kind: "stage_autosave",
+          path: "main.autosave.json",
+          stage_autosave: {
+            download_path: null,
+            format: "zarr",
+            layout: "continuous",
+            resource_path: "main.zarr",
+            schema_version: "fullmag.stage_autosave.artifact.v1",
+            stages: [{
+              complete: false,
+              download_path: null,
+              field_quantities: ["m"],
+              field_sample_count: 1,
+              stage_id: "relax",
+              stage_index: 0,
+              resource_path: "main.zarr",
+              status: "running",
+              table_quantities: ["step", "mx"],
+              table_sample_count: 2,
+            }],
+            target: "main",
+          },
+        }]), { headers: contractHeaders });
+      },
+    });
+
+    const artifacts = await api.data.artifacts.list();
+    expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/data/artifacts");
+    expect(artifacts[0].stage_autosave?.stages[0]).toMatchObject({
+      stage_id: "relax",
+      status: "running",
+      table_sample_count: 2,
+    });
   });
 
   it("propagates aborted binary resource requests", async () => {
@@ -3724,6 +4261,8 @@ describe("ControlRoomApi", () => {
     const descriptor = await api.data.fdmRegionMemberships();
     const membership = await api.data.fdmRegionMembershipRegionBytes("body:core");
 
+    expect(descriptor).not.toBeNull();
+    if (!descriptor) throw new Error("expected FDM membership descriptor");
     expect(descriptor.region_legend[0]?.numeric_id).toBe(1);
     expect(membership.status).toBe("ready");
     expect(membership.status === "ready" ? membership.data.byteLength : 0).toBe(68);
@@ -3731,6 +4270,19 @@ describe("ControlRoomApi", () => {
       "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-memberships",
       "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore",
     ]);
+  });
+
+  it("treats an unpublished FDM membership descriptor as not applicable", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        new Response(null, {
+          headers: { "x-api-contract-version": "1.0.0" },
+          status: 204,
+        }),
+    });
+
+    await expect(api.data.fdmRegionMemberships()).resolves.toBeNull();
   });
 
   it("commits object region and coupling writes through model transactions", async () => {
@@ -4281,5 +4833,169 @@ describe("ControlRoomApi", () => {
     });
 
     await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
+  });
+
+  it("uses the generated planar monitor and field resource routes", async () => {
+    const requests: Array<{
+      body: unknown;
+      method: string | undefined;
+      signal: AbortSignal | null | undefined;
+      url: string;
+    }> = [];
+    const controller = new AbortController();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          signal: init?.signal,
+          url: String(url),
+        });
+        if (String(url).endsWith("/scalar")) {
+          return binaryResponse(new Uint8Array([1, 2]).buffer, {
+            headers: { etag: '"planar-field-1"', ...contractHeaders },
+          });
+        }
+        return jsonResponse(
+          String(url).includes("/data/fields/")
+            ? {
+                basis_order: 0,
+                canonical_unit: "1",
+                component: "z",
+                etag: '"planar-field-1"',
+                field_revision: 4,
+                field_source: "current",
+                fold_count: 0,
+                frame: {
+                  bounds_uv_m: [0, 1, 0, 1],
+                  normal: [0, 0, 1],
+                  origin_m: [0, 0, 0],
+                  u_axis: [1, 0, 0],
+                  v_axis: [0, 1, 0],
+                },
+                generation_id: 1,
+                integration_order: 1,
+                links: {
+                  empty_mask: "",
+                  mesh_overlay: "",
+                  probe: "",
+                  render_png: "",
+                  scalar: "",
+                  vectors: "",
+                },
+                mesh_revision: 2,
+                monitor_hash: "hash",
+                monitor_id: "plane/a",
+                monitor_revision: 3,
+                non_injective: false,
+                occupancy: {
+                  empty: 0,
+                  occupied: 1,
+                  occupied_measure: 1,
+                  partial: 0,
+                },
+                overlap_count: 0,
+                pixel_size_m: [1, 1],
+                quantity_id: "m",
+                resolution: [1, 1],
+                sample_support: "cell",
+                sampler_version: "1",
+                sampling_execution: "cpu",
+                sampling_method: "exact",
+                schema_version: "1",
+                scope_kind: "full",
+              }
+            : {
+                monitor: {
+                  frame: {
+                    extent: { kind: "universe", padding_m: 0 },
+                    normal: [0, 0, 1],
+                    normalization_version: "planar_frame_v1",
+                    origin_m: [0, 0, 0],
+                    preset: "xy",
+                    u_axis: [1, 0, 0],
+                    v_axis: [0, 1, 0],
+                  },
+                  id: "plane/a",
+                  name: "Plane A",
+                  operator: { kind: "plane_sample" },
+                  target: { kind: "domain" },
+                },
+                scene_revision: 8,
+              },
+        );
+      },
+    });
+
+    await api.model.planarMonitors.get("plane/a", {
+      signal: controller.signal,
+    });
+    await api.model.planarMonitors.patch(
+      "plane/a",
+      {
+        expected_scene_revision: 7,
+        monitor: {
+          frame: {
+            extent: { kind: "universe", padding_m: 0 },
+            normal: [0, 0, 1],
+            normalization_version: "planar_frame_v1",
+            origin_m: [0, 0, 0],
+            preset: "xy",
+            u_axis: [1, 0, 0],
+            v_axis: [0, 1, 0],
+          },
+          id: "plane/a",
+          name: "Plane A",
+          operator: { kind: "plane_sample" },
+          target: { kind: "domain" },
+        },
+      },
+      { signal: controller.signal },
+    );
+    await api.data.fields.planar.meta(
+      "m",
+      "plane/a",
+      { component: "z", resolution_x: 64 },
+      { signal: controller.signal },
+    );
+    const scalar = await api.data.fields.planar.scalar(
+      "m",
+      "plane/a",
+      { component: "z", resolution_x: 64 },
+      { etag: '"old"', signal: controller.signal },
+    );
+
+    expect(scalar.status).toBe("ready");
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/planar-monitors/plane%2Fa",
+      },
+      {
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/planar-monitors/plane%2Fa",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/planar-monitors/plane%2Fa/meta?component=z&resolution_x=64",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/planar-monitors/plane%2Fa/scalar?component=z&resolution_x=64",
+      },
+    ]);
+    expect(requests[1]?.body).toEqual({
+      expected_scene_revision: 7,
+      monitor: expect.objectContaining({
+        id: "plane/a",
+        name: "Plane A",
+        operator: { kind: "plane_sample" },
+        target: { kind: "domain" },
+      }),
+    });
+    expect(requests.every((request) => request.signal != null)).toBe(true);
+    controller.abort();
+    expect(requests.every((request) => request.signal?.aborted)).toBe(true);
   });
 });

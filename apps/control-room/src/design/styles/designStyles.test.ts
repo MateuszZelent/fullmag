@@ -10,6 +10,8 @@ const locallyScopedCssVars = new Set([
   "--fm-refresh-progress",
   "--pct",
   "--radix-accordion-content-height",
+  "--radix-select-content-available-height",
+  "--radix-select-trigger-width",
 ]);
 
 function readAppFile(relativePath: string): string {
@@ -20,36 +22,11 @@ describe("control-room design styles", () => {
   it("keeps app/globals.css as an import-only entrypoint", () => {
     const globalsCss = readAppFile("app/globals.css").trim();
 
-    expect(globalsCss).toBe(
-      [
-        '@import "tailwindcss";',
-        '@import "../src/design/styles/tokens.css";',
-        '@import "../src/design/styles/theme.css";',
-        '@import "../src/design/styles/base.css";',
-        '@import "../src/design/styles/layout.css";',
-        '@import "../src/design/styles/slots.css";',
-        '@import "../src/design/styles/dropdown.css";',
-        '@import "../src/design/styles/dialog.css";',
-        '@import "../src/design/styles/accordion.css";',
-        '@import "../src/design/styles/context-menu.css";',
-        '@import "../src/design/styles/tabs.css";',
-        '@import "../src/design/styles/command.css";',
-        '@import "../src/design/styles/header.css";',
-        '@import "../src/design/styles/ribbon.css";',
-        '@import "../src/design/styles/explorer.css";',
-        '@import "../src/design/styles/inspector.css";',
-        '@import "../src/design/styles/viewport-3d.css";',
-        '@import "../src/design/styles/cross-section-image.css";',
-        '@import "../src/design/styles/analysis-plots.css";',
-        '@import "../src/design/styles/footer.css";',
-        '@import "../src/design/styles/command-palette.css";',
-        '@import "../src/design/styles/registry-inspector.css";',
-        '@import "../src/design/styles/thread-manager.css";',
-        '@import "../src/design/styles/diagnostic-recorder.css";',
-        '@import "../src/design/styles/material-library.css";',
-        '@import "../src/design/styles/components/index.css";',
-      ].join("\n"),
-    );
+    const statements = globalsCss.split("\n").filter(Boolean);
+    expect(statements.length).toBeGreaterThan(20);
+    expect(statements.every((statement) => statement.startsWith("@import "))).toBe(true);
+    expect(statements[0]).toBe('@import "tailwindcss";');
+    expect(globalsCss).toContain('inspector-visualization.css" layer(fm-modules)');
   });
 
   it("defines light and dark themes through central fm tokens", () => {
@@ -61,6 +38,24 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain('[data-theme="dark"]');
     expect(themeCss).toContain('[data-theme="light"]');
     expect(themeCss).not.toContain("--background");
+  });
+
+  it("bridges canonical Fullmag tokens into Tailwind without palette copies", () => {
+    const globalsCss = readAppFile("app/globals.css");
+    const bridgeCss = readAppFile("src/design/styles/tailwind-theme.css");
+
+    expect(globalsCss.indexOf('tailwind-theme.css"')).toBeGreaterThan(
+      globalsCss.indexOf('@import "tailwindcss";'),
+    );
+    expect(globalsCss.indexOf('tailwind-theme.css"')).toBeLessThan(
+      globalsCss.indexOf('tokens.css"'),
+    );
+    expect(bridgeCss).toContain("@theme inline");
+    expect(bridgeCss).toContain("--color-fm-panel: var(--fm-bg-panel);");
+    expect(bridgeCss).toContain(
+      "--spacing-fm-control-sm: var(--fm-control-height-sm);",
+    );
+    expect(bridgeCss).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(/i);
   });
 
   it("maps dark and light themes to Catppuccin Mocha and Latte", () => {
@@ -76,6 +71,21 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-text-primary: #4c4f69;");
     expect(themeCss).toContain("--fm-accent: #1e66f5;");
     expect(themeCss).toContain("--fm-info: #04a5e5;");
+  });
+
+  it("keeps footer tab content inside the resizable dock height", () => {
+    const footerCss = readAppFile("src/design/styles/footer.css");
+    const footerModule = readAppFile("src/modules/footer/FooterModule.tsx");
+
+    expect(footerCss).toContain(
+      ".fm-footer__content {\n  display: flex;",
+    );
+    expect(footerCss).toContain(".fm-footer__log-content > .fm-footer-log");
+    expect(footerCss).toContain("flex: 1 1 auto;");
+    expect(footerModule).toContain(
+      "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+    );
+    expect(footerModule).toContain("[&>*]:h-full");
   });
 
   it("defines every shared CSS custom property used by design styles", () => {

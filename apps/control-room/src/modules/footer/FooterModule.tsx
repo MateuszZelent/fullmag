@@ -22,6 +22,7 @@ import {
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnosticsController";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import type { ModuleProps } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -39,9 +40,12 @@ import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { MeshJobsPanel } from "./MeshJobsPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
-type FooterTabId = "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
-
 const EMPTY_DIAGNOSTIC_ENTRIES: RequestDiagnosticEntry[] = [];
+
+const FOOTER_PANEL_CLASS_NAME =
+  "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0 [&>*]:flex-1";
+const FOOTER_CONTENT_CLASS_NAME =
+  "fm-footer__content flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden";
 
 interface FooterDiagnosticsSnapshot {
   entries: RequestDiagnosticEntry[];
@@ -57,18 +61,22 @@ export default function FooterModule(props: ModuleProps) {
 }
 
 function FooterModuleContent({ kernel }: ModuleProps) {
-  const [activeTab, setActiveTab] = useState<FooterTabId>("telemetry");
+  const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
 
   useEffect(() => {
     return kernel.bus.on("footer:tab-requested", ({ tab }) => {
-      setActiveTab(tab);
+      kernel.layout.setBottomPanelTab(tab);
     });
-  }, [kernel.bus]);
+  }, [kernel.bus, kernel.layout]);
 
   return (
     <Tabs
       value={activeTab}
-      onValueChange={(value) => setActiveTab(value as FooterTabId)}
+      onValueChange={(value) =>
+        kernel.layout.setBottomPanelTab(
+          value as typeof activeTab,
+        )
+      }
       className="fm-footer"
     >
       <div className="fm-footer__bar">
@@ -112,28 +120,42 @@ function FooterModuleContent({ kernel }: ModuleProps) {
         </div>
       </div>
 
-      <TabsContent value="logs" className="fm-footer__content">
+      <TabsContent value="logs" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "logs" ? <FooterLogs kernel={kernel} /> : null}
       </TabsContent>
 
-      <TabsContent value="telemetry" className="fm-footer__content">
+      <TabsContent value="telemetry" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "telemetry" ? (
-          <FooterTelemetry bus={kernel.bus} />
+          <div className={FOOTER_PANEL_CLASS_NAME}>
+            <FooterTelemetry bus={kernel.bus} />
+          </div>
         ) : null}
       </TabsContent>
 
-      <TabsContent value="diagnostics" className="fm-footer__content">
+      <TabsContent value="diagnostics" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "diagnostics" ? (
-          <DiagnosticRecorderFooterPanel kernel={kernel} />
+          <div className={FOOTER_PANEL_CLASS_NAME}>
+            <DiagnosticRecorderFooterPanel kernel={kernel} />
+          </div>
         ) : null}
       </TabsContent>
 
-      <TabsContent value="engine" className="fm-footer__content">
-        {activeTab === "engine" ? <FooterDiagnostics /> : null}
+      <TabsContent value="engine" className={FOOTER_CONTENT_CLASS_NAME}>
+        {activeTab === "engine" ? (
+          <div className={FOOTER_PANEL_CLASS_NAME}>
+            <FooterDiagnostics />
+          </div>
+        ) : null}
       </TabsContent>
 
-      <TabsContent value="mesh" className="fm-footer__content">
-        {activeTab === "mesh" ? <MeshJobsPanel /> : null}
+      <TabsContent value="mesh" className={FOOTER_CONTENT_CLASS_NAME}>
+        {activeTab === "mesh" ? (
+          <div
+            className={`${FOOTER_PANEL_CLASS_NAME} [&>.fm-footer-mesh-jobs]:overflow-auto`}
+          >
+            <MeshJobsPanel />
+          </div>
+        ) : null}
       </TabsContent>
     </Tabs>
   );
@@ -159,7 +181,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
 
   return (
     <>
-      <div className="fm-footer__filters" aria-label="Log filters">
+      <div className="fm-footer__filters shrink-0" aria-label="Log filters">
         <FilterButton
           active={direction === "all"}
           onClick={() => setDirection("all")}
@@ -207,7 +229,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
           type="button"
           variant="ghost"
           size="icon"
-          style={{ marginLeft: "auto" }}
+          className="fm-ml-auto"
           aria-label="Copy log to clipboard"
           title={`Copy ${filteredEntries.length} log entries to clipboard`}
           onClick={handleCopyLog}
@@ -219,7 +241,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
           )}
         </Button>
       </div>
-      <div className="fm-footer__log-content">
+      <div className="fm-footer__log-content flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <CommandAuditTable entries={commandEntries} />
         <TransportLogTable entries={filteredEntries} />
       </div>

@@ -17,9 +17,15 @@
   justify-content: space-between;
   padding: var(--fm-space-2) var(--fm-space-3);
   font-weight: 500;
-  transition-property: all;
+  min-height: var(--fm-inspector-tab-height);
+  transition-property: background-color, color;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
+  transition-duration: var(--fm-duration-moderate);
+}
+
+.fm-accordion-trigger:focus-visible {
+  outline: none;
+  box-shadow: inset var(--fm-focus-ring);
 }
 
 .fm-accordion-trigger:hover {
@@ -31,11 +37,11 @@
 }
 
 .fm-accordion-trigger > svg {
-  height: 16px;
-  width: 16px;
+  height: var(--fm-space-4);
+  width: var(--fm-space-4);
   flex-shrink: 0;
   transition-property: transform;
-  transition-duration: 200ms;
+  transition-duration: var(--fm-duration-slow);
   color: var(--fm-text-muted);
 }
 
@@ -50,6 +56,17 @@
 
 .fm-accordion-content[data-state=open] {
   animation: accordion-down 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-accordion-content[data-state=closed],
+  .fm-accordion-content[data-state=open] {
+    animation: none;
+  }
+
+  .fm-accordion-trigger > svg {
+    transition: none;
+  }
 }
 
 .fm-accordion-content-inner {

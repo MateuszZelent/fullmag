@@ -12,6 +12,7 @@ import {
   DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
   DATA_TABLE_ROWS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
@@ -44,6 +45,8 @@ import {
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
@@ -66,6 +69,33 @@ function dependentRevision(resourceKey: string, revision: string | number): stri
 }
 
 describe("RealtimeInvalidationBridge", () => {
+  it("invalidates preparation from the exact backend revision-only change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const change = {
+      recommended_fetch: SIMULATION_PREPARATION_PATH,
+      resource: "simulation",
+      resource_id: "preparation",
+      revision: 8,
+    } as const;
+
+    expect(Object.keys(change).sort()).toEqual([
+      "recommended_fetch",
+      "resource",
+      "resource_id",
+      "revision",
+    ]);
+
+    const handled = bridge.handleEvent({
+      payload: { changes: [change] },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(SIMULATION_PREPARATION_PATH)).toBe(8);
+  });
+
   it("maps backend resource batch events to resource invalidation", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -95,6 +125,66 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
       dependentRevision(SIMULATION_COMMANDS_PATH, 5),
     );
+  });
+
+  it("invalidates subscribed planar resources without a heavy recommended fetch", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const mKey = DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "monitor-1");
+    const hKey = DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "H_eff")
+      .replace("{monitor_id}", "monitor-1");
+    resources.subscribe(mKey, () => {});
+    resources.subscribe(hKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            broad: true,
+            domain_generation_id: "17",
+            quantity_ids: ["m"],
+            resource: "planar_fields",
+            resource_id: "field",
+            revision: 23,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(mKey)).toBe("generation:17:revision:23");
+    expect(resources.getRevision(hKey)).toBeNull();
+    expect(resources.getRevision("session:status")).toBeNull();
+  });
+
+  it("keeps planar field buffers valid for visualization-only profile changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const planarKey = DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "monitor-1");
+    resources.subscribe(planarKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: VISUALIZATION_STATE_PATH,
+            resource: "visualization",
+            revision: 24,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe(24);
+    expect(resources.getRevision(planarKey)).toBeNull();
+    expect(resources.getRevision("session:status")).toBeNull();
   });
 
   it("refreshes runtime lifecycle resources when command queue changes", () => {
@@ -611,8 +701,14 @@ describe("RealtimeInvalidationBridge", () => {
     const bridge = new RealtimeInvalidationBridge(resources);
     const tableRowsPath = DATA_TABLE_ROWS_PATH.replace("{table_id}", "default");
     const tableWindowKey = `${tableRowsPath}?columns=time%2Ce_total&cursor=10&limit=100`;
+    const objectMetricsKey = SIMULATION_OBJECT_METRICS_PATH.replace(
+      "{object_id}",
+      "film",
+    );
 
     resources.subscribe(tableWindowKey, () => {});
+    resources.subscribe(objectMetricsKey, () => {});
+    resources.invalidate(objectMetricsKey, 99);
 
     const handled = bridge.handleEvent({
       payload: {
@@ -632,6 +728,9 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(tableRowsPath)).toBe(10);
     expect(resources.getRevision(tableWindowKey)).toBe(10);
+    expect(resources.getRevision(objectMetricsKey)).toBe(
+      dependentRevision(tableRowsPath, 10),
+    );
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBeNull();
@@ -1019,6 +1118,60 @@ describe("RealtimeInvalidationBridge", () => {
     expect(handled).toBe(true);
     expect(resources.getRevision(topologicalChargeKey)).toBe(17);
     expect(resources.getRevision(hEffMetaKey)).toBeNull();
+  });
+
+  it("refreshes object topological charge after a broad field sample change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey =
+      ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "body");
+
+    resources.subscribe(topologicalChargeKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            broad: true,
+            resource: "fields",
+            resource_id: "samples",
+            revision: 18,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(topologicalChargeKey)).toBe(18);
+  });
+
+  it("does not refresh topological charge for a broad non-m field change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey =
+      ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "body");
+
+    resources.subscribe(topologicalChargeKey, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            broad: true,
+            quantity_ids: ["H_eff"],
+            resource: "fields",
+            resource_id: "samples",
+            revision: 19,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(resources.getRevision(topologicalChargeKey)).toBeNull();
   });
 
   it("refreshes viewport 3D part scalar range collections when matching quantity samples change", () => {

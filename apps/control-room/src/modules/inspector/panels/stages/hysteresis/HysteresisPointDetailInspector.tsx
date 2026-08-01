@@ -12,7 +12,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import {
   hysteresisInitialStateActionPresentation,
   hysteresisReplayActionPresentation,
@@ -86,8 +86,7 @@ export function HysteresisPointDetailInspector({
   );
 
   return (
-    <InspectorSection
-      value="hysteresis-point-detail"
+    <InspectorGroup
       title="Field Point"
       badge={
         selectedPoint
@@ -123,7 +122,7 @@ export function HysteresisPointDetailInspector({
           convergence, and saved snapshot.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

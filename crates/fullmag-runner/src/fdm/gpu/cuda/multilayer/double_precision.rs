@@ -24,12 +24,14 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
+    })?;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let native_demag_enabled = native_demag.is_some();
     let provenance =
-        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
+        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled)?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -62,6 +64,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = crate::relaxation::RelaxationTorqueConfirmation::default();
     let mut cancelled = false;
     let mut paused = false;
     while current_time(&states) < until_seconds {
@@ -116,7 +119,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                fem_mesh: None,
+                    fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,
@@ -141,7 +144,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &latest_stats,
                     energy_plateau_range,
@@ -206,7 +209,8 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: Some(latest_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: step_count,
             relaxation_time_s: Some(latest_stats.time),

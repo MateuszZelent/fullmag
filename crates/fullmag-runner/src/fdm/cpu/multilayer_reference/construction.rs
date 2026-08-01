@@ -67,10 +67,15 @@ pub(super) fn build_contexts_and_states(
                         axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
                 }),
-                cubic_anisotropy: layer.material.cubic_anisotropy_kc1.map(|kc1| {
-                    CubicAnisotropyConfig {
-                        kc1,
+                cubic_anisotropy: layer
+                    .material
+                    .cubic_anisotropy_kc1
+                    .or(layer.material.cubic_anisotropy_kc2)
+                    .or(layer.material.cubic_anisotropy_kc3)
+                    .map(|_| CubicAnisotropyConfig {
+                        kc1: layer.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                         kc2: layer.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                        kc3: layer.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                         axis1: layer
                             .material
                             .cubic_anisotropy_axis1
@@ -79,8 +84,7 @@ pub(super) fn build_contexts_and_states(
                             .material
                             .cubic_anisotropy_axis2
                             .unwrap_or([0.0, 1.0, 0.0]),
-                    }
-                }),
+                    }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,

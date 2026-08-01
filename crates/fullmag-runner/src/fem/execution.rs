@@ -36,7 +36,6 @@ use crate::schedules::collect_field_schedules;
 use crate::solver_runtime::diagnostics::runtime_info_once;
 use crate::solver_runtime::diagnostics::runtime_log_once;
 use crate::solver_runtime::engine::FemEngine;
-use crate::solver_runtime::selection::should_fallback_to_cpu_for_small_fem_gpu;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{ExecutionProvenance, StepStats};
@@ -50,6 +49,8 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(plan);
+    let fem_mesh_generation_id = Some(stage_asset.identity.generation_id().to_string());
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     if let Err(reason) = validate_periodic_region_material_certificate(&normalized_plan) {
         return Err(RunError {
@@ -96,30 +97,11 @@ pub(crate) fn execute_fem<'a>(
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-            execute_native_fem(&cpu_plan, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(&cpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
         }
         FemEngine::NativeGpu => {
-            if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
-                eprintln!(
-                    "warning: FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — \
-                     falling back to MFEM/libCEED/hypre CPU FEM engine \
-                     (fallback_reason=fem_gpu_small_mesh_policy; \
-                     set FULLMAG_FEM_EXECUTION=gpu to force GPU or \
-                     FULLMAG_FEM_GPU_MIN_NODES=0 to disable this policy)",
-                    normalized_plan.mesh.nodes.len(),
-                    min_nodes
-                );
-                let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-                return execute_native_fem(
-                    &cpu_plan,
-                    until_seconds,
-                    outputs,
-                    live,
-                    artifact_writer,
-                );
-            }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
-            execute_native_fem(&gpu_plan, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(&gpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
         }
     }
 }
@@ -158,6 +140,7 @@ pub(crate) fn native_fem_requires_initial_snapshot(
 #[cfg(feature = "fem-gpu")]
 fn execute_native_fem(
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
@@ -217,8 +200,24 @@ fn execute_native_fem(
     }
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let dt = crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
+                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+            } else {
+                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+            },
+        )?)
+    };
     let dt_is_fixed = plan.fixed_timestep.is_some();
     let mut steps = Vec::new();
     let current_stats = if needs_initial_snapshot {
@@ -259,13 +258,8 @@ fn execute_native_fem(
         } else {
             None
         },
-        dt_policy: if plan.adaptive_timestep.is_some() {
-            Some("adaptive".to_string())
-        } else if plan.fixed_timestep.is_some() {
-            Some("user".to_string())
-        } else {
-            Some("fallback".to_string())
-        },
+        timestep_policy,
+        dt_policy: None,
         mfem_device: plan.mfem_device_string.clone(),
         demag_refresh_interval_s: plan
             .field_refresh
@@ -309,6 +303,7 @@ fn execute_native_fem(
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
             plan,
+            &fem_mesh_generation_id,
             node_count,
             direct_minimizer,
             current_stats,
@@ -323,9 +318,15 @@ fn execute_native_fem(
         cancelled = outcome.cancelled;
         paused = outcome.paused;
     } else {
+        let dt = provenance
+            .timestep_policy
+            .as_ref()
+            .expect("LLG execution requires a resolved timestep policy")
+            .initial_dt();
         let outcome = crate::fem::relax::llg_overdamped::execute_llg_overdamped(
             &mut backend,
             plan,
+            &fem_mesh_generation_id,
             plan.time_stage.start_time_s + until_seconds,
             &time_events.times_s,
             node_count,
@@ -347,6 +348,7 @@ fn execute_native_fem(
     crate::fem::relax::finalize::finalize_native_fem_relaxation(
         &mut backend,
         plan,
+        &fem_mesh_generation_id,
         node_count,
         initial_magnetization,
         field_schedules,
@@ -365,6 +367,7 @@ fn execute_native_fem(
 #[cfg(not(feature = "fem-gpu"))]
 fn execute_native_fem(
     _plan: &FemPlanIR,
+    _fem_mesh_generation_id: &Option<String>,
     _until_seconds: f64,
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,

@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StageInspectorFrame, type StageInspectorFrameProps } from "./StageInspectorFrame";
 
 export function SaveStateStageInspector(props: StageInspectorFrameProps) {
@@ -14,8 +14,7 @@ export function SaveStateStageInspector(props: StageInspectorFrameProps) {
         expectedKind="save_state"
         kindLabel="Save State"
       />
-      <InspectorSection
-        value="save-state-target"
+      <InspectorGroup
         title="Output Target"
         badge={draft?.artifactName || "artifact"}
       >
@@ -25,16 +24,16 @@ export function SaveStateStageInspector(props: StageInspectorFrameProps) {
         />
         <FieldRow label="Format" value={draft?.format || "default"} />
         <FieldRow label="Dataset" value={draft?.dataset || "default"} />
-      </InspectorSection>
-      <InspectorSection value="save-state-content" title="Captured State">
+      </InspectorGroup>
+      <InspectorGroup title="Captured State">
         <FieldRow label="Source" value="current runtime magnetization" />
         <FieldRow label="Checkpoint link" value={stage?.checkpointRef ?? "not linked"} />
         <FieldRow
           label="Artifact refs"
           value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
         />
-      </InspectorSection>
-      <InspectorSection value="save-state-results" title="Save Results">
+      </InspectorGroup>
+      <InspectorGroup title="Save Results">
         <FieldRow label="Status" value={stage?.status ?? "not started"} />
         <FieldRow
           label="Saved"
@@ -44,7 +43,7 @@ export function SaveStateStageInspector(props: StageInspectorFrameProps) {
           label="Completed"
           value={stage?.completedAtIso ?? "not completed"}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

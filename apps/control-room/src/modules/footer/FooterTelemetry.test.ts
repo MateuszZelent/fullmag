@@ -84,6 +84,7 @@ const status: LiveStatusResource = {
     region_topology_revision: 0,
     scalars_revision: 22,
     scene_revision: 2,
+    simulation_preparation_revision: 0,
     slice_revision: 0,
     solver_profile_revision: 0,
     stages_revision: 0,
@@ -92,7 +93,12 @@ const status: LiveStatusResource = {
     workspace_revision: 0,
   },
   run: {
+    calibration_id: "rtx4080-qualified-v1",
+    requested_device: "auto",
+    resolved_device: "gpu",
     run_id: "run-1",
+    selection_confidence: 0.94,
+    selection_reason: "calibrated_above_upper_bound",
     solver_steps: 12,
     solver_time: 3601,
     stage_count: 1,
@@ -163,6 +169,15 @@ describe("FooterTelemetry", () => {
     expect(byId["energy-total"]?.value).toBe("15");
     expect(byId["max-torque"]?.value).toBe("6.000000e-3 T");
     expect(byId.step?.value).toBe("99");
+    expect(byId.rate?.label).toBe("End-to-end rate");
+    expect(byId.rate?.detail).toBe("Closed profiler span");
+    expect(byId["fem-device-selection"]?.value).toBe("auto → gpu");
+    expect(byId["fem-device-selection"]?.detail).toBe(
+      "calibrated_above_upper_bound",
+    );
+    expect(byId["fem-device-selection"]?.subdetail).toContain(
+      "rtx4080-qualified-v1",
+    );
   });
 
   it("uses detailed runtime state for the visible compute status", () => {
@@ -264,6 +279,10 @@ describe("FooterTelemetry", () => {
         my: 0.2,
         mz: 0.3,
         solver_dt: 2e-12,
+        error_estimate: 2.5e-7,
+        max_error: 1e-6,
+        dt_suggested: 3e-12,
+        rejected_attempts: 2,
         step: 123,
         time: 2.5,
       },
@@ -283,6 +302,10 @@ describe("FooterTelemetry", () => {
     expect(byId["energy-total"]?.value).toBe("3.1");
     expect(byId["energy-total"]?.subdetail).toBe("Live scalar sample");
     expect(byId["max-torque"]?.value).toBe("4.000000e-3 T");
+    expect(byId["solver-error"]?.value).toBe("2.500000e-7");
+    expect(byId["solver-error"]?.subdetail).toContain("2 rejected");
+    expect(byId["solver-max-error"]?.value).toBe("1.000000e-6");
+    expect(byId["solver-max-error"]?.subdetail).toBe("Within tolerance");
   });
 
   it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {

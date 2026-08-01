@@ -49,6 +49,7 @@ export interface Viewport3DBuildRequest {
 
 export interface Viewport3DBuildRunnerContext {
   readonly recordMainAdopt: (durationMs: number) => void;
+  readonly recordOutputBytes: (byteLength: number) => void;
   readonly recordFallback: (reason: string) => void;
   readonly recordTransfer: (durationMs: number) => void;
   readonly signal: AbortSignal;

@@ -11,8 +11,10 @@ import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview"
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { FormField } from "../../primitives/FormField";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
+  regionalFieldDriveSamplingContext,
   regionalFieldDriveSelectorOptions,
 } from "../RegionalFieldDrivePanelModel";
 import { SincPulsePreview } from "../SincPulsePreview";
@@ -20,6 +22,11 @@ import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import { SamplingDiagnostics } from "./SamplingDiagnostics";
+import { formatEditableNumber } from "./samplingPresentation";
+import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
+
+const AXES = ["x", "y", "z"] as const;
 
 export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
   const draft = props.draft;
@@ -28,22 +35,34 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
     () => regionalFieldDriveSelectorOptions(props.scene ?? null),
     [props.scene],
   );
-  const subsequentRuns = (props.pipelineDrafts ?? [])
+  const solverDtS = useMemo(
+    () => regionalFieldDriveSamplingContext(
+      props.scene ?? null,
+      drive?.activation ?? null,
+    ).solverDtS,
+    [drive?.activation, props.scene],
+  );
+  const pipelineDrafts = props.pipelineDrafts ?? [];
+  const activeStageIds = useMemo(
+    () => new Set(drive?.activation.kind === "stage_ids" ? drive.activation.stage_ids : []),
+    [drive],
+  );
+  const subsequentRuns = pipelineDrafts
+    .map((candidate, index) => ({ candidate, index }))
     .slice(props.draftIndex + 1)
-    .filter((candidate) => candidate.kind === "run");
-  const samplingRun = drive?.activation.kind === "stage_ids"
-    ? subsequentRuns.find((candidate) =>
+    .filter(({ candidate }) => candidate.kind === "run");
+  const samplingRunEntry = drive?.activation.kind === "stage_ids"
+    ? subsequentRuns.find(({ candidate }) =>
         drive.activation.kind === "stage_ids" &&
-        drive.activation.stage_ids.includes(candidate.stageId),
+        activeStageIds.has(candidate.stageId),
       ) ?? null
     : subsequentRuns[0] ?? null;
-  const samplePeriodS = samplingRun?.runSampling.tableAutosaveEnabled
-    ? positiveNumber(samplingRun.runSampling.samplePeriodS)
+  const samplingRun = samplingRunEntry?.candidate ?? null;
+  const effectiveWorkflow = samplingRunEntry
+    ? resolveStudyWorkflowStateBefore(pipelineDrafts, samplingRunEntry.index)
     : null;
+  const samplePeriodS = effectiveWorkflow?.tableAutosave?.samplePeriodS ?? null;
   const durationS = positiveNumber(samplingRun?.untilSeconds);
-  const solverDtS = samplingRun?.timestepMode === "fixed"
-    ? positiveNumber(samplingRun.dt)
-    : null;
   const preview = drive?.waveform.kind === "sinc_pulse"
     ? buildSincPulsePreview({
         cutoffHz: drive.waveform.cutoff_hz,
@@ -72,8 +91,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         expectedKind="add_field_drive"
         kindLabel="Add Antenna"
       />
-      <InspectorSection
-        value="add-field-drive"
+      <InspectorGroup
         title="Regional Field Drive"
         badge="configuration instruction"
       >
@@ -118,28 +136,27 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             }
           />
         </label>
-        <label className="fm-inspector-field">
-          <span>Amplitude (mT)</span>
-          <input
-            className="fm-inspector-input"
-            disabled={!drive}
-            min="0"
-            step="0.001"
-            type="number"
-            value={drive ? teslaToMilliTesla(drive.amplitude_B_T) : ""}
-            onChange={(event) =>
-              updateDrive((current) => ({
-                ...current,
-                amplitude_B_T: milliTeslaToTesla(Number(event.target.value)),
-              }))
-            }
-          />
-        </label>
+        <FormField
+          disabled={!drive}
+          label="Amplitude"
+          min="0"
+          step="0.001"
+          type="number"
+          unit="mT"
+          value={drive ? teslaToMilliTesla(drive.amplitude_B_T) : ""}
+          onChange={(event) =>
+            updateDrive((current) => ({
+              ...current,
+              amplitude_B_T: milliTeslaToTesla(Number(event.target.value)),
+            }))
+          }
+        />
         <label className="fm-inspector-field">
           <span>Direction (x, y, z)</span>
           <div className="fm-inspector-vector-row">
-            {[0, 1, 2].map((index) => (
+            {AXES.map((axis, index) => (
               <input
+                aria-label={`Direction ${axis}`}
                 className="fm-inspector-input"
                 disabled={!drive}
                 key={index}
@@ -343,10 +360,9 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             ) : null}
           </>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="add-field-waveform"
+      <InspectorGroup
         title="Waveform & Source FFT"
         badge={drive?.waveform.kind ?? "not configured"}
       >
@@ -390,49 +406,45 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         {drive?.waveform.kind === "sinc_pulse" ? (
           <>
             <FieldRow label="Definition" value="a sinc(2 fc (t - t0))" />
-            <label className="fm-inspector-field">
-              <span>Cutoff fc (Hz)</span>
-              <input
-                className="fm-inspector-input"
-                min="0"
-                type="number"
-                value={drive.waveform.cutoff_hz}
-                onChange={(event) =>
-                  updateDrive((current) =>
-                    current.waveform.kind === "sinc_pulse"
-                      ? {
-                          ...current,
-                          waveform: {
-                            ...current.waveform,
-                            cutoff_hz: Number(event.target.value),
-                          },
-                        }
-                      : current,
-                  )
-                }
-              />
-            </label>
-            <label className="fm-inspector-field">
-              <span>Center t0 (s)</span>
-              <input
-                className="fm-inspector-input"
-                type="number"
-                value={drive.waveform.t0 ?? 0}
-                onChange={(event) =>
-                  updateDrive((current) =>
-                    current.waveform.kind === "sinc_pulse"
-                      ? {
-                          ...current,
-                          waveform: {
-                            ...current.waveform,
-                            t0: Number(event.target.value),
-                          },
-                        }
-                      : current,
-                  )
-                }
-              />
-            </label>
+            <FormField
+              label="Cutoff fc"
+              min="0"
+              type="number"
+              unit="Hz"
+              value={formatEditableNumber(drive.waveform.cutoff_hz)}
+              onChange={(event) =>
+                updateDrive((current) =>
+                  current.waveform.kind === "sinc_pulse"
+                    ? {
+                        ...current,
+                        waveform: {
+                          ...current.waveform,
+                          cutoff_hz: Number(event.target.value),
+                        },
+                      }
+                    : current,
+                )
+              }
+            />
+            <FormField
+              label="Center t0"
+              type="number"
+              unit="s"
+              value={formatEditableNumber(drive.waveform.t0 ?? 0)}
+              onChange={(event) =>
+                updateDrive((current) =>
+                  current.waveform.kind === "sinc_pulse"
+                    ? {
+                        ...current,
+                        waveform: {
+                          ...current.waveform,
+                          t0: Number(event.target.value),
+                        },
+                      }
+                    : current,
+                )
+              }
+            />
             <label className="fm-inspector-field">
               <span>Waveform amplitude a</span>
               <input
@@ -455,7 +467,20 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
               />
             </label>
             {preview ? (
-              <SincPulsePreview model={preview} solverDtS={solverDtS} />
+              <>
+                <FieldRow
+                  label="Effective t_sampling source"
+                  value={
+                    effectiveWorkflow?.tableAutosave?.sourceStageId ??
+                    "no Table autosave ON stage before the target Run"
+                  }
+                />
+                <SincPulsePreview model={preview} solverDtS={solverDtS} />
+                <SamplingDiagnostics
+                  durationS={durationS}
+                  sampling={effectiveWorkflow?.tableAutosave ?? null}
+                />
+              </>
             ) : null}
           </>
         ) : null}
@@ -552,10 +577,9 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             />
           </label>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="add-field-activation"
+      <InspectorGroup
         title="Activation & State Handoff"
         badge={samplingRun?.stageId ?? "no following run"}
       >
@@ -582,10 +606,10 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         {drive?.activation.kind === "stage_ids" ? (
           <fieldset className="fm-inspector-field">
             <legend>Following Run stages</legend>
-            {subsequentRuns.map((run) => (
+            {subsequentRuns.map(({ candidate: run }) => (
               <label key={run.stageId}>
                 <input
-                  checked={drive.activation.kind === "stage_ids" && drive.activation.stage_ids.includes(run.stageId)}
+                  checked={activeStageIds.has(run.stageId)}
                   type="checkbox"
                   onChange={(event) =>
                     updateDrive((current) => {
@@ -618,7 +642,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             message="Add a following Run instruction. The antenna changes configuration but time integration starts only in that next action."
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }
@@ -640,8 +664,9 @@ function SpatialSincFields({
       <label className="fm-inspector-field">
         <span>Spatial axis (x, y, z)</span>
         <div className="fm-inspector-vector-row">
-          {[0, 1, 2].map((index) => (
+          {AXES.map((axisName, index) => (
             <input
+              aria-label={`Spatial axis ${axisName}`}
               className="fm-inspector-input"
               key={index}
               step="0.01"

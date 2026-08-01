@@ -17,6 +17,11 @@ pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;
+#[cfg(feature = "stage-autosave-hdf5")]
+pub mod autosave_hdf5;
+pub mod autosave_storage;
+pub mod autosave_txt;
+pub mod autosave_zarr;
 pub mod capabilities;
 mod derived_fields;
 mod dispatch;
@@ -40,6 +45,7 @@ pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
 mod solver_profile;
+mod solver_runtime;
 pub mod spin_wave_response;
 pub mod spin_wave_sampling;
 pub mod table_autosave;
@@ -47,29 +53,210 @@ mod time_dependence;
 mod time_events;
 mod types;
 
-// ── Shared runner defaults (FEM-040) ─────────────────────────────────────
-/// Default maximum timestep for adaptive stepping when the user provides none.
-const DEFAULT_ADAPTIVE_DT_MAX: f64 = 1e-10;
-/// Default initial timestep seed when adaptive stepping is enabled but no
-/// meaningful `dt_initial` was provided.
-pub(crate) const DEFAULT_ADAPTIVE_DT_INITIAL: f64 = 1e-13;
+use types::TimestepExecutionLane;
 
-pub(crate) fn resolve_initial_timestep(
+// ── Shared runner defaults (FEM-040) ─────────────────────────────────────
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+pub(crate) const NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER: f64 = 1e-13;
+
+pub(crate) fn resolve_timestep_policy(
+    integrator: Option<fullmag_ir::IntegratorChoice>,
     fixed_timestep: Option<f64>,
     adaptive_timestep: Option<&fullmag_ir::AdaptiveTimeStepIR>,
-) -> Option<f64> {
-    fixed_timestep.or_else(|| {
-        adaptive_timestep.map(|adaptive| {
-            adaptive
-                .dt_initial
-                .filter(|dt_initial| (*dt_initial - adaptive.dt_min).abs() > f64::EPSILON)
-                .unwrap_or(DEFAULT_ADAPTIVE_DT_INITIAL)
-        })
+    execution_lane: TimestepExecutionLane,
+) -> Result<TimestepPolicyProvenance, RunError> {
+    use fullmag_ir::IntegratorChoice;
+
+    let integrator = integrator.ok_or_else(|| RunError {
+        message: "timestep policy requires an explicit integrator".to_string(),
+    })?;
+    match (fixed_timestep, adaptive_timestep) {
+        (Some(_), Some(_)) | (None, None) => Err(RunError {
+            message: "timestep policy requires exactly one of fixed_timestep or adaptive_timestep"
+                .to_string(),
+        }),
+        (Some(timestep_s), None) => {
+            if !timestep_s.is_finite() || timestep_s <= 0.0 {
+                return Err(RunError {
+                    message: "fixed_timestep must be finite and positive".to_string(),
+                });
+            }
+            Ok(TimestepPolicyProvenance {
+                requested: RequestedTimestepPolicy::Fixed {
+                    integrator,
+                    timestep_s,
+                },
+                resolved: ResolvedTimestepPolicy::Fixed {
+                    integrator,
+                    timestep_s,
+                },
+                execution_identity: resolve_timestep_execution_identity(execution_lane, false)?,
+                relaxation_controller: None,
+            })
+        }
+        (None, Some(adaptive)) => {
+            let estimator_order = match integrator {
+                IntegratorChoice::Rk23 => 2,
+                IntegratorChoice::Rk45 => 4,
+                _ => {
+                    return Err(RunError {
+                        message: format!(
+                            "adaptive timestep requires rk23 or rk45, got {integrator:?}"
+                        ),
+                    });
+                }
+            };
+            let dt_max_s = adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?;
+            if !adaptive.dt_min.is_finite()
+                || adaptive.dt_min <= 0.0
+                || !dt_max_s.is_finite()
+                || dt_max_s < adaptive.dt_min
+            {
+                return Err(RunError {
+                    message: "adaptive timestep requires 0 < dt_min <= dt_max".to_string(),
+                });
+            }
+            if !adaptive.atol.is_finite()
+                || adaptive.atol < 0.0
+                || !adaptive.rtol.is_finite()
+                || adaptive.rtol < 0.0
+                || (adaptive.atol == 0.0 && adaptive.rtol == 0.0)
+            {
+                return Err(RunError {
+                    message: "adaptive tolerances must be finite, non-negative, and not both zero"
+                        .to_string(),
+                });
+            }
+            if matches!(
+                adaptive.tolerance_mode,
+                fullmag_ir::AdaptiveToleranceModeIR::MaxError
+            ) && (adaptive.atol <= 0.0 || adaptive.rtol != 0.0)
+            {
+                return Err(RunError {
+                    message: "max_error tolerance mode requires atol > 0 and rtol == 0".to_string(),
+                });
+            }
+            if !adaptive.safety.is_finite()
+                || adaptive.safety <= 0.0
+                || adaptive.safety > 1.0
+                || !adaptive.growth_limit.is_finite()
+                || adaptive.growth_limit <= 1.0
+                || !adaptive.shrink_limit.is_finite()
+                || adaptive.shrink_limit <= 0.0
+                || adaptive.shrink_limit >= 1.0
+            {
+                return Err(RunError {
+                    message: "adaptive controller requires 0 < safety <= 1, growth_limit > 1, and 0 < shrink_limit < 1"
+                        .to_string(),
+                });
+            }
+            if adaptive
+                .max_spin_rotation
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || adaptive
+                    .norm_tolerance
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            {
+                return Err(RunError {
+                    message: "adaptive guards must be finite and positive".to_string(),
+                });
+            }
+            let (dt_initial_s, dt_initial_reason) = match adaptive.dt_initial {
+                Some(value) => (value, InitialTimestepReason::Explicit),
+                None => (adaptive.dt_min, InitialTimestepReason::DtMinDefault),
+            };
+            if !dt_initial_s.is_finite()
+                || dt_initial_s < adaptive.dt_min
+                || dt_initial_s > dt_max_s
+            {
+                return Err(RunError {
+                    message: "adaptive dt_initial must satisfy dt_min <= dt_initial <= dt_max"
+                        .to_string(),
+                });
+            }
+            Ok(TimestepPolicyProvenance {
+                requested: RequestedTimestepPolicy::Adaptive {
+                    integrator,
+                    tolerance_mode: adaptive.tolerance_mode,
+                    atol: adaptive.atol,
+                    rtol: adaptive.rtol,
+                    dt_initial_s: adaptive.dt_initial,
+                    dt_min_s: adaptive.dt_min,
+                    dt_max_s,
+                    safety: adaptive.safety,
+                    growth_limit: adaptive.growth_limit,
+                    shrink_limit: adaptive.shrink_limit,
+                    max_spin_rotation: adaptive.max_spin_rotation,
+                    norm_tolerance: adaptive.norm_tolerance,
+                },
+                resolved: ResolvedTimestepPolicy::Adaptive {
+                    integrator,
+                    estimator_order,
+                    tolerance_mode: adaptive.tolerance_mode,
+                    atol: adaptive.atol,
+                    rtol: adaptive.rtol,
+                    dt_initial_s,
+                    dt_initial_reason,
+                    dt_min_s: adaptive.dt_min,
+                    dt_max_s,
+                    safety: adaptive.safety,
+                    growth_limit: adaptive.growth_limit,
+                    shrink_limit: adaptive.shrink_limit,
+                    max_spin_rotation: adaptive.max_spin_rotation,
+                    norm_tolerance: adaptive.norm_tolerance,
+                },
+                execution_identity: resolve_timestep_execution_identity(execution_lane, true)?,
+                relaxation_controller: None,
+            })
+        }
+    }
+}
+
+fn resolve_timestep_execution_identity(
+    lane: TimestepExecutionLane,
+    adaptive: bool,
+) -> Result<TimestepExecutionIdentity, RunError> {
+    use fullmag_ir::ExecutionPrecision::{Double, Single};
+    use LlgTimestepQualificationId::*;
+    use TimestepBackend::{Fdm, Fem};
+    use TimestepDevice::{Cpu, Cuda, Gpu};
+
+    let qualification_id = match (adaptive, lane.backend, lane.device, lane.precision) {
+        (false, Fdm, Cpu, Double) => ExplicitFixedFdmCpuDouble,
+        (false, Fdm, Cuda, Double) => ExplicitFixedFdmCudaDouble,
+        (false, Fdm, Cuda, Single) => ExplicitFixedFdmCudaSingle,
+        (false, Fem, Cpu, Double) => ExplicitFixedFemCpuDouble,
+        (false, Fem, Gpu, Double) => ExplicitFixedFemGpuDouble,
+        (true, Fdm, Cpu, Double) => ExplicitAdaptiveFdmCpuDouble,
+        (true, Fem, Cpu, Double) => ExplicitAdaptiveFemCpuDouble,
+        (true, Fem, Gpu, Double) => ExplicitAdaptiveFemGpuDouble,
+        _ => {
+            return Err(RunError {
+                message: format!(
+                    "no executable LLG timestep capability row for adaptive={adaptive}, backend={:?}, device={:?}, precision={:?}",
+                    lane.backend, lane.device, lane.precision
+                ),
+            });
+        }
+    };
+
+    Ok(TimestepExecutionIdentity {
+        capability_id: LlgTimestepCapabilityId::LlgTdPolicyV1,
+        qualification_id,
+        backend: lane.backend,
+        device: lane.device,
+        precision: lane.precision,
+        validation_state: TimestepValidationState::Unvalidated,
     })
 }
 
-// Public re-exports (unchanged API surface).
-pub use capabilities::{BackendCapabilities, RuntimeEngineId};
+// Public re-exports.
+pub use capabilities::{
+    BackendCapabilities, FeatureCapability, FeatureCapabilityStatus, RuntimeEngineId,
+    MIXED_P1_FEATURE_CAPABILITY_IDS, MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
+};
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
 pub use interactive::commands::{
@@ -90,15 +277,22 @@ pub use runtime_registry::{
     RuntimeRegistry,
 };
 pub use solver_profile::{
-    LivePublisherDiagnostics, SolverProfileAggregates, SolverProfileConfig,
+    current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns, LivePublisherDiagnostics,
+    RateMetric, SolverProfileAggregates, SolverProfileConfig, SolverProfileOverheadDiagnostics,
     SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
-    SolverProfileThreading,
+    SolverProfileThreading, SolverRateDiagnostics,
 };
 pub use types::{
-    fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, LivePreviewField, LivePreviewRequest,
-    LiveVectorFieldSnapshot, ResolvedFallback, RunError, RunResult, RunStatus, RuntimeEngineInfo,
-    StepAction, StepStats, StepUpdate,
+    fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
+    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
+    ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
+    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
+    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
+    StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
+    TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -130,6 +324,7 @@ pub struct ResolvedSessionRuntime {
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
     pub resolved_fallback: Option<ResolvedFallback>,
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -748,78 +943,239 @@ fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
 #[cfg(test)]
 mod initial_timestep_tests {
     use super::{
-        is_native_fem_cpu_available, is_native_fem_time_domain_available, resolve_initial_timestep,
+        is_native_fem_cpu_available, is_native_fem_time_domain_available, resolve_timestep_policy,
+        InitialTimestepReason, LlgTimestepQualificationId, RequestedTimestepPolicy,
+        ResolvedTimestepPolicy, TimestepExecutionLane,
     };
 
-    #[test]
-    fn resolve_initial_timestep_prefers_fixed_value() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+    fn adaptive(dt_initial: Option<f64>) -> fullmag_ir::AdaptiveTimeStepIR {
+        fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1e-6,
             rtol: 1e-3,
-            dt_initial: Some(5e-14),
+            dt_initial,
             dt_min: 1e-15,
-            dt_max: None,
+            dt_max: Some(1e-12),
             safety: 0.9,
             growth_limit: 2.0,
             shrink_limit: 0.2,
             max_spin_rotation: None,
             norm_tolerance: None,
-        };
-        assert_eq!(
-            resolve_initial_timestep(Some(2e-13), Some(&adaptive)),
-            Some(2e-13)
-        );
+        }
     }
 
     #[test]
-    fn resolve_initial_timestep_uses_adaptive_seed_when_meaningful() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
-            atol: 1e-6,
-            rtol: 1e-3,
-            dt_initial: Some(5e-14),
-            dt_min: 1e-15,
-            dt_max: None,
-            safety: 0.9,
-            growth_limit: 2.0,
-            shrink_limit: 0.2,
-            max_spin_rotation: None,
-            norm_tolerance: None,
-        };
-        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(5e-14));
+    fn fixed_and_adaptive_together_fail_closed() {
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            Some(2e-13),
+            Some(&adaptive(Some(5e-14))),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .expect_err("exactly-one policy must reject both");
+        assert!(error.message.contains("exactly one"));
     }
 
     #[test]
-    fn resolve_initial_timestep_falls_back_when_seed_matches_dt_min() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
-            atol: 1e-6,
-            rtol: 1e-3,
-            dt_initial: Some(1e-15),
-            dt_min: 1e-15,
-            dt_max: None,
-            safety: 0.9,
-            growth_limit: 2.0,
-            shrink_limit: 0.2,
-            max_spin_rotation: None,
-            norm_tolerance: None,
-        };
-        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
+    fn explicit_initial_equal_to_min_remains_explicit() {
+        let policy = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&adaptive(Some(1e-15))),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap();
+        assert!(matches!(
+            policy.requested,
+            RequestedTimestepPolicy::Adaptive {
+                dt_initial_s: Some(1e-15),
+                ..
+            }
+        ));
+        assert!(matches!(
+            policy.resolved,
+            ResolvedTimestepPolicy::Adaptive {
+                dt_initial_s: 1e-15,
+                dt_initial_reason: InitialTimestepReason::Explicit,
+                estimator_order: 4,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn resolve_initial_timestep_falls_back_when_seed_missing() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
-            atol: 1e-6,
-            rtol: 1e-3,
-            dt_initial: None,
-            dt_min: 1e-15,
-            dt_max: None,
-            safety: 0.9,
-            growth_limit: 2.0,
-            shrink_limit: 0.2,
-            max_spin_rotation: None,
-            norm_tolerance: None,
-        };
-        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
+    fn missing_initial_resolves_exactly_to_dt_min() {
+        let policy = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk23),
+            None,
+            Some(&adaptive(None)),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap();
+        assert!(matches!(
+            policy.requested,
+            RequestedTimestepPolicy::Adaptive {
+                dt_initial_s: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            policy.resolved,
+            ResolvedTimestepPolicy::Adaptive {
+                dt_initial_s: 1e-15,
+                dt_initial_reason: InitialTimestepReason::DtMinDefault,
+                estimator_order: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn adaptive_missing_dt_max_fails_closed() {
+        let mut config = adaptive(None);
+        config.dt_max = None;
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&config),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("dt_max"));
+    }
+
+    #[test]
+    fn adaptive_policy_rejects_invalid_controller_values() {
+        let invalid_configs: Vec<(&str, Box<dyn Fn(&mut fullmag_ir::AdaptiveTimeStepIR)>)> = vec![
+            ("negative atol", Box::new(|config| config.atol = -1.0)),
+            ("non-finite rtol", Box::new(|config| config.rtol = f64::NAN)),
+            (
+                "both tolerances zero",
+                Box::new(|config| {
+                    config.atol = 0.0;
+                    config.rtol = 0.0;
+                }),
+            ),
+            ("safety above one", Box::new(|config| config.safety = 1.1)),
+            (
+                "growth not above one",
+                Box::new(|config| config.growth_limit = 1.0),
+            ),
+            (
+                "shrink not below one",
+                Box::new(|config| config.shrink_limit = 1.0),
+            ),
+            (
+                "invalid rotation guard",
+                Box::new(|config| config.max_spin_rotation = Some(0.0)),
+            ),
+            (
+                "invalid norm guard",
+                Box::new(|config| config.norm_tolerance = Some(f64::INFINITY)),
+            ),
+        ];
+
+        for (case, mutate) in invalid_configs {
+            let mut config = adaptive(None);
+            mutate(&mut config);
+            assert!(
+                resolve_timestep_policy(
+                    Some(fullmag_ir::IntegratorChoice::Rk45),
+                    None,
+                    Some(&config),
+                    TimestepExecutionLane::fdm_cpu(),
+                )
+                .is_err(),
+                "{case} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn max_error_policy_accepts_zero_rtol() {
+        let mut config = adaptive(None);
+        config.tolerance_mode = fullmag_ir::AdaptiveToleranceModeIR::MaxError;
+        config.atol = 1e-6;
+        config.rtol = 0.0;
+        resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&config),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .expect("max_error uses atol and permits rtol=0");
+    }
+
+    #[test]
+    fn max_error_policy_rejects_nonzero_rtol() {
+        let mut config = adaptive(None);
+        config.tolerance_mode = fullmag_ir::AdaptiveToleranceModeIR::MaxError;
+        config.atol = 1e-6;
+        config.rtol = 1e-3;
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&config),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("rtol == 0"));
+    }
+
+    #[test]
+    fn timestep_execution_identity_roundtrips_for_all_explicit_runtime_lanes() {
+        let cases = [
+            (
+                TimestepExecutionLane::fdm_cpu(),
+                LlgTimestepQualificationId::ExplicitFixedFdmCpuDouble,
+            ),
+            (
+                TimestepExecutionLane::fdm_cuda(fullmag_ir::ExecutionPrecision::Double),
+                LlgTimestepQualificationId::ExplicitFixedFdmCudaDouble,
+            ),
+            (
+                TimestepExecutionLane::fem_cpu(fullmag_ir::ExecutionPrecision::Double),
+                LlgTimestepQualificationId::ExplicitFixedFemCpuDouble,
+            ),
+            (
+                TimestepExecutionLane::fem_gpu(fullmag_ir::ExecutionPrecision::Double),
+                LlgTimestepQualificationId::ExplicitFixedFemGpuDouble,
+            ),
+        ];
+
+        for (lane, expected_qualification) in cases {
+            let policy = resolve_timestep_policy(
+                Some(fullmag_ir::IntegratorChoice::Rk45),
+                Some(1e-15),
+                None,
+                lane,
+            )
+            .expect("fixed timestep lane must resolve");
+            let roundtrip: super::TimestepPolicyProvenance =
+                serde_json::from_value(serde_json::to_value(&policy).unwrap()).unwrap();
+            assert_eq!(roundtrip, policy);
+            assert_eq!(
+                roundtrip.execution_identity.qualification_id,
+                expected_qualification
+            );
+            assert_eq!(roundtrip.execution_identity.backend, lane.backend);
+            assert_eq!(roundtrip.execution_identity.device, lane.device);
+            assert_eq!(roundtrip.execution_identity.precision, lane.precision);
+        }
+    }
+
+    #[test]
+    fn adaptive_fdm_cuda_identity_fails_closed_until_controller_abi_is_complete() {
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&adaptive(None)),
+            TimestepExecutionLane::fdm_cuda(fullmag_ir::ExecutionPrecision::Double),
+        )
+        .expect_err("adaptive CUDA must not acquire executable provenance");
+        assert!(error
+            .message
+            .contains("no executable LLG timestep capability row"));
     }
 
     #[test]
@@ -878,13 +1234,577 @@ fn fem_engine_kind(engine: dispatch::FemEngine) -> fem::engine::FemEngineKind {
     }
 }
 
-fn attach_resolved_fallback_to_executed_run(
+pub(crate) fn attach_resolved_fallback_to_executed_run(
     executed: &mut types::ExecutedRun,
     fallback: Option<ResolvedFallback>,
 ) {
     if executed.provenance.resolved_fallback.is_none() {
         executed.provenance.resolved_fallback = fallback;
     }
+}
+
+pub(crate) fn attach_fem_crossover_decision_to_executed_run(
+    executed: &mut crate::types::ExecutedRun,
+    decision: Option<FemCrossoverDecision>,
+) {
+    if executed.provenance.fem_crossover_decision.is_none() {
+        executed.provenance.fem_crossover_decision = decision;
+    }
+}
+
+/// Copy the canonical planner resolution into the execution artifact contract.
+/// The runner's concrete engine remains authoritative for device and fallback
+/// facts; the plan remains authoritative for what the author requested before
+/// `auto` was resolved.
+pub(crate) fn attach_plan_integrator_resolution(
+    executed: &mut types::ExecutedRun,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) {
+    attach_plan_integrator_resolution_to_provenance(&mut executed.provenance, plan);
+}
+
+pub(crate) fn attach_plan_integrator_resolution_to_provenance(
+    provenance: &mut ExecutionProvenance,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) {
+    let Some(resolution) = plan.provenance.integrator_resolution.as_ref() else {
+        return;
+    };
+    provenance.requested_integrator = resolution
+        .requested_integrator
+        .map(|integrator| integrator.as_str().to_string());
+    provenance.resolved_integrator = resolution
+        .resolved_integrator
+        .map(integrator_choice_name)
+        .map(str::to_string);
+}
+
+pub(crate) fn integrator_choice_name(integrator: fullmag_ir::IntegratorChoice) -> &'static str {
+    match integrator {
+        fullmag_ir::IntegratorChoice::Heun => "heun",
+        fullmag_ir::IntegratorChoice::Rk4 => "rk4",
+        fullmag_ir::IntegratorChoice::Rk23 => "rk23",
+        fullmag_ir::IntegratorChoice::Rk45 => "rk45",
+        fullmag_ir::IntegratorChoice::Abm3 => "abm3",
+    }
+}
+
+fn require_supported_fem_topology(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
+    let (mesh, build_report, precision, study_kind, relaxation_plan) = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => (
+            &fem.mesh,
+            fem.mesh_build_report.as_ref(),
+            fem.precision,
+            "fem",
+            Some(fem),
+        ),
+        BackendPlanIR::FemEigen(fem) => (
+            &fem.mesh,
+            fem.mesh_build_report.as_ref(),
+            fem.precision,
+            "fem_eigen",
+            None,
+        ),
+        BackendPlanIR::FemFrequencyResponse(fem) => (
+            &fem.mesh,
+            fem.mesh_build_report.as_ref(),
+            fem.precision,
+            "fem_frequency_response",
+            None,
+        ),
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => return Ok(()),
+    };
+    let mut cell_families = mesh.cells.types.clone();
+    cell_families.sort_unstable();
+    cell_families.dedup();
+    let mut facet_families = mesh.facets.types.clone();
+    facet_families.sort_unstable();
+    facet_families.dedup();
+    let tetrahedral = !cell_families.is_empty()
+        && cell_families
+            .iter()
+            .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
+        && facet_families
+            .iter()
+            .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
+    let has_mixed_metadata = build_report.is_some_and(|report| {
+        report.mixed_layer_topology_certificate.is_some()
+            || report.mixed_topology_provenance.is_some()
+    });
+    if tetrahedral {
+        return if has_mixed_metadata {
+            Err(RunError {
+                message: "fem_mixed_p1_runtime_metadata_without_mixed_topology: mixed certificate/provenance cannot be attached to a tetrahedral plan".to_string(),
+            })
+        } else {
+            Ok(())
+        };
+    }
+
+    let qualified_family = cell_families.len() == 3
+        && cell_families.contains(&fullmag_ir::FemCellTypeIR::Tet4)
+        && cell_families.contains(&fullmag_ir::FemCellTypeIR::Prism6)
+        && cell_families.contains(&fullmag_ir::FemCellTypeIR::Pyramid5)
+        && facet_families.iter().all(|family| {
+            matches!(
+                family,
+                fullmag_ir::FemFacetTypeIR::Tri3 | fullmag_ir::FemFacetTypeIR::Quad4
+            )
+        })
+        && facet_families.contains(&fullmag_ir::FemFacetTypeIR::Quad4);
+    if !qualified_family {
+        return Err(RunError {
+            message: format!(
+                "fem_typed_topology_unsupported_before_backend: cells={cell_families:?}; facets={facet_families:?}; study={study_kind}; fallback=none"
+            ),
+        });
+    }
+
+    let report = build_report.ok_or_else(|| RunError {
+        message: "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none".to_string(),
+    })?;
+    if !report
+        .fallbacks_triggered
+        .as_ref()
+        .is_some_and(Vec::is_empty)
+        || report.degraded
+    {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_build_report_rejected: fallbacks_triggered={:?}; degraded={}; required=fallbacks_triggered[]+degraded_false; fallback=none",
+                report.fallbacks_triggered, report.degraded
+            ),
+        });
+    }
+    let certificate = report
+        .mixed_layer_topology_certificate
+        .as_ref()
+        .ok_or_else(|| RunError {
+            message: "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none".to_string(),
+        })?;
+    let fingerprint = mesh
+        .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+        .map_err(|error| RunError {
+            message: format!("fem_mixed_p1_runtime_certificate_rejected: {error}; fallback=none"),
+        })?;
+    if certificate.topology_fingerprint != fingerprint {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
+                certificate.topology_fingerprint
+            ),
+        });
+    }
+    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
+        |reasons| RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_certificate_rejected: {}; fallback=none",
+                reasons.join("; ")
+            ),
+        },
+    )?;
+    let provenance = report
+        .mixed_topology_provenance
+        .as_ref()
+        .ok_or_else(|| RunError {
+            message: "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none".to_string(),
+        })?;
+    if provenance.accepted_certificate_fingerprint != fingerprint
+        || provenance.precision != precision
+        || precision != problem.backend_policy.execution_precision
+        || provenance.requested_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        || provenance.resolved_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+    {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
+        });
+    }
+    let requested_device = match provenance.requested_device {
+        fullmag_ir::ExecutionDevice::Cpu => "cpu".to_string(),
+        fullmag_ir::ExecutionDevice::Gpu => "gpu".to_string(),
+        fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
+    };
+    let metadata_device =
+        crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
+    let expected_device = match metadata_device.as_str() {
+        "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+        "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
+        _ => fullmag_ir::ExecutionDevice::Auto,
+    };
+    if provenance.requested_device != expected_device {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
+        });
+    }
+    if provenance.capability_status != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
+        });
+    }
+    let supported_relaxation = relaxation_plan.is_some_and(|fem| {
+        fem.fe_order == 1
+            && fem.precision == fullmag_ir::ExecutionPrecision::Double
+            && fem.enable_exchange
+            && fem.enable_demag
+            && matches!(
+                fem.demag_realization,
+                Some(
+                    fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+                        | fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
+                )
+            )
+            && fem.relaxation.as_ref().is_some_and(|relaxation| {
+                matches!(
+                    relaxation.algorithm,
+                    fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                        | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+                )
+            })
+            && fem.interfacial_dmi.is_none()
+            && fem.bulk_dmi.is_none()
+            && fem.current_modules.is_empty()
+            && fem.field_drives.is_empty()
+            && fem.temperature.is_none()
+            && fem.magnetoelastic.is_none()
+            && fem.mechanics.is_none()
+    });
+    let mut exchange_count = 0usize;
+    let mut demag_count = 0usize;
+    let mut energy_supported = true;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
+            fullmag_ir::EnergyTermIR::Demag { realization }
+                if matches!(
+                    realization,
+                    fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                        | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
+                ) =>
+            {
+                demag_count += 1
+            }
+            fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
+            _ => energy_supported = false,
+        }
+    }
+    let material_supported = problem.materials.len() == 1
+        && problem.materials.iter().all(|material| {
+            material.uniaxial_anisotropy.is_none()
+                && material.uniaxial_anisotropy_k2.is_none()
+                && material.anisotropy_axis.is_none()
+                && material.cubic_anisotropy_kc1.is_none()
+                && material.cubic_anisotropy_kc2.is_none()
+                && material.cubic_anisotropy_kc3.is_none()
+                && material.cubic_anisotropy_axis1.is_none()
+                && material.cubic_anisotropy_axis2.is_none()
+                && material.ms_field.is_none()
+                && material.a_field.is_none()
+                && material.alpha_field.is_none()
+                && material.ku_field.is_none()
+                && material.ku2_field.is_none()
+                && material.kc1_field.is_none()
+                && material.kc2_field.is_none()
+                && material.kc3_field.is_none()
+                && material.interfacial_dmi.is_none()
+                && material.bulk_dmi.is_none()
+                && material.dind_field.is_none()
+                && material.dbulk_field.is_none()
+        });
+    let problem_scope = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
+        && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && matches!(requested_device.as_str(), "cpu" | "gpu")
+        && problem.geometry.entries.len() == 1
+        && matches!(
+            problem.geometry.entries[0],
+            fullmag_ir::GeometryEntryIR::Box { .. }
+        )
+        && problem.regions.len() == 1
+        && material_supported
+        && problem.magnets.len() == 1
+        && problem.object_regions.is_empty()
+        && problem.material_parameter_fields.is_empty()
+        && problem.couplings.is_empty()
+        && problem.current_modules.is_empty()
+        && problem.field_drives.is_empty()
+        && problem.spin_torque_modules.is_empty()
+        && problem.current_density.is_none()
+        && problem.stt_degree.is_none()
+        && problem.stt_beta.is_none()
+        && problem.stt_spin_polarization.is_none()
+        && problem.stt_lambda.is_none()
+        && problem.stt_epsilon_prime.is_none()
+        && problem.stt_thickness.is_none()
+        && problem.stt_fixed_layer_position.is_none()
+        && problem.temperature.is_none()
+        && problem.elastic_materials.is_empty()
+        && problem.elastic_bodies.is_empty()
+        && problem.magnetostriction_laws.is_empty()
+        && problem.mechanical_bcs.is_empty()
+        && problem.mechanical_loads.is_empty()
+        && problem.pbc.is_none()
+        && exchange_count == 1
+        && demag_count == 1
+        && energy_supported
+        && (1..=3).contains(&certificate.requested_layer_count)
+        && certificate.realized_layer_count == certificate.requested_layer_count
+        && certificate.magnetic_plane_coordinates_m.len()
+            == certificate.requested_layer_count as usize + 1
+        && certificate.fallbacks_triggered.is_empty()
+        && matches!(
+            problem.study,
+            fullmag_ir::StudyIR::Relaxation {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                    | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                    | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+                ..
+            }
+        );
+    if !supported_relaxation || !problem_scope {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn require_tetrahedral_fem_plan_mesh(
+    mesh: &fullmag_ir::MeshIR,
+    build_report: Option<&fullmag_ir::FemSharedDomainBuildReportIR>,
+    study_kind: &str,
+) -> Result<(), RunError> {
+    let tetrahedral = !mesh.cells.types.is_empty()
+        && mesh
+            .cells
+            .types
+            .iter()
+            .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
+        && mesh
+            .facets
+            .types
+            .iter()
+            .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
+    let has_mixed_metadata = build_report.is_some_and(|report| {
+        report.mixed_layer_topology_certificate.is_some()
+            || report.mixed_topology_provenance.is_some()
+    });
+    if tetrahedral && !has_mixed_metadata {
+        return Ok(());
+    }
+    Err(RunError {
+        message: format!(
+            "fem_typed_topology_unsupported_before_backend: study={study_kind}; supported_topology=tet4/tri3; fallback=none"
+        ),
+    })
+}
+
+pub(crate) fn require_resolved_runtime_sampling(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
+    require_supported_fem_topology(problem, plan)?;
+    schedules::require_resolved_periodic_outputs(&plan.output_plan.outputs)
+        .map_err(|message| RunError { message })?;
+    if let Some(table) = problem.study.sampling().table_autosave.as_ref() {
+        table_autosave::TableAutosaveConfig::from_ir(table)
+            .map_err(|message| RunError { message })?;
+    }
+    validate_sampling_resolution_provenance(problem, plan)?;
+    Ok(())
+}
+
+fn validate_sampling_resolution_provenance(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
+    let table = problem.study.sampling().table_autosave.as_ref();
+    let automatic_table_period = table.and_then(|table| {
+        table
+            .requests_auto_sinc_cutoff()
+            .then_some(table.resolved_sample_period_s)
+            .flatten()
+    });
+    let automatic_outputs: Vec<(f64, &fullmag_ir::SamplingPeriodPolicyIR)> = problem
+        .study
+        .sampling()
+        .outputs
+        .iter()
+        .chain(plan.output_plan.outputs.iter())
+        .filter_map(|output| match output {
+            OutputIR::FieldResolvedAuto {
+                every_seconds,
+                requested_policy,
+                ..
+            }
+            | OutputIR::ScalarResolvedAuto {
+                every_seconds,
+                requested_policy,
+                ..
+            } => Some((*every_seconds, requested_policy)),
+            _ => None,
+        })
+        .collect();
+    let metadata = problem
+        .problem_meta
+        .runtime_metadata
+        .get("sampling_resolution");
+    if (automatic_table_period.is_some() || !automatic_outputs.is_empty()) && metadata.is_none() {
+        return Err(RunError {
+            message: "resolved automatic table or output sampling requires runtime_metadata.sampling_resolution provenance".into(),
+        });
+    }
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    let resolution: fullmag_plan::SamplingResolutionIR = serde_json::from_value(metadata.clone())
+        .map_err(|error| RunError {
+        message: format!("runtime_metadata.sampling_resolution is malformed: {error}"),
+    })?;
+    if resolution.schema_version != fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION {
+        return Err(RunError {
+            message: format!(
+                "sampling_resolution.schema_version must be '{}'",
+                fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION
+            ),
+        });
+    }
+    let finite_positive = [
+        ("sample_period_s", resolution.sample_period_s),
+        ("maximum_cutoff_hz", resolution.maximum_cutoff_hz),
+        ("nyquist_guard_factor", resolution.nyquist_guard_factor),
+        ("target_nyquist_hz", resolution.target_nyquist_hz),
+        ("sampling_frequency_hz", resolution.sampling_frequency_hz),
+    ];
+    for (field, value) in finite_positive {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(RunError {
+                message: format!("sampling_resolution.{field} must be finite and positive"),
+            });
+        }
+    }
+    let fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+        nyquist_guard_factor: requested_guard_factor,
+    } = resolution.requested_policy;
+    if requested_guard_factor != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR {
+        return Err(RunError {
+            message:
+                "sampling_resolution.requested_policy.nyquist_guard_factor must be exactly 1.3"
+                    .into(),
+        });
+    }
+    if resolution.nyquist_guard_factor != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR {
+        return Err(RunError {
+            message: "sampling_resolution.nyquist_guard_factor must be exactly 1.3".into(),
+        });
+    }
+    if resolution.target_nyquist_hz
+        != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR * resolution.maximum_cutoff_hz
+    {
+        return Err(RunError {
+            message: "sampling_resolution.target_nyquist_hz must equal 1.3 * maximum_cutoff_hz"
+                .into(),
+        });
+    }
+    if resolution.sampling_frequency_hz != 2.0 * resolution.target_nyquist_hz {
+        return Err(RunError {
+            message: "sampling_resolution.sampling_frequency_hz must equal 2 * target_nyquist_hz"
+                .into(),
+        });
+    }
+    if resolution.sample_period_s != 1.0 / resolution.sampling_frequency_hz {
+        return Err(RunError {
+            message: "sampling_resolution.sample_period_s must equal 1 / sampling_frequency_hz"
+                .into(),
+        });
+    }
+    if automatic_table_period.is_some_and(|period| period != resolution.sample_period_s) {
+        return Err(RunError {
+            message: "sampling_resolution.sample_period_s must match table_autosave.resolved_sample_period_s".into(),
+        });
+    }
+    if automatic_outputs
+        .iter()
+        .any(|(period, _)| *period != resolution.sample_period_s)
+    {
+        return Err(RunError {
+            message: "sampling_resolution.sample_period_s must match every resolved automatic output cadence".into(),
+        });
+    }
+    if automatic_outputs
+        .iter()
+        .any(|(_, policy)| *policy != &resolution.requested_policy)
+    {
+        return Err(RunError {
+            message: "resolved automatic output requested_policy must match sampling_resolution.requested_policy".into(),
+        });
+    }
+    let active_stage_id = problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|stage_id| !stage_id.trim().is_empty());
+    if active_stage_id != Some(resolution.target_stage_id.as_str()) {
+        return Err(RunError {
+            message:
+                "sampling_resolution.target_stage_id must match runtime_metadata.active_stage_id"
+                    .into(),
+        });
+    }
+    let mut expected_source_drive_ids = Vec::new();
+    let mut expected_maximum_cutoff_hz: Option<f64> = None;
+    for drive in problem.field_drives.iter().filter(|drive| {
+        drive.enabled
+            && match &drive.activation {
+                fullmag_ir::DriveActivationIR::AllTimeEvolution {} => {
+                    matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+                }
+                fullmag_ir::DriveActivationIR::StageIds { stage_ids } => stage_ids
+                    .iter()
+                    .any(|stage_id| stage_id == &resolution.target_stage_id),
+            }
+    }) {
+        let fullmag_ir::TimeDependenceIR::SincPulse { cutoff_hz, .. } = drive.waveform else {
+            continue;
+        };
+        if !cutoff_hz.is_finite() || cutoff_hz <= 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "active sinc drive '{}' requires a finite positive cutoff_hz",
+                    drive.id
+                ),
+            });
+        }
+        expected_source_drive_ids.push(drive.id.clone());
+        expected_maximum_cutoff_hz = Some(
+            expected_maximum_cutoff_hz
+                .map(|maximum| maximum.max(cutoff_hz))
+                .unwrap_or(cutoff_hz),
+        );
+    }
+    let Some(expected_maximum_cutoff_hz) = expected_maximum_cutoff_hz else {
+        return Err(RunError {
+            message: "sampling_resolution requires at least one enabled active sinc source drive"
+                .into(),
+        });
+    };
+    if resolution.source_drive_ids != expected_source_drive_ids {
+        return Err(RunError {
+            message: "sampling_resolution.source_drive_ids must exactly match the enabled active sinc drives for target_stage_id".into(),
+        });
+    }
+    if resolution.maximum_cutoff_hz != expected_maximum_cutoff_hz {
+        return Err(RunError {
+            message: "sampling_resolution.maximum_cutoff_hz must equal the maximum cutoff of its enabled active sinc source drives".into(),
+        });
+    }
+    Ok(())
 }
 
 /// Plan and run a problem, writing artifacts to `output_dir`.
@@ -911,10 +1831,12 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -924,49 +1846,57 @@ pub fn run_planned_problem(
     let cpu_threads = configured_cpu_threads(problem);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
                 None,
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm_multilayer(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm_multilayer(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
                 None,
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_in_mode(
                     resolution.engine,
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
@@ -974,8 +1904,15 @@ pub fn run_planned_problem(
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
-                response, output_dir, None, None,
+            let stage_context =
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+                    .expect("FEM stage context");
+            frequency_response::execute_fem_frequency_response_validation_with_context(
+                response,
+                &stage_context,
+                output_dir,
+                None,
+                None,
             )
         }
     });
@@ -995,10 +1932,13 @@ pub fn run_planned_problem(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, plan);
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
-    executed.auxiliary_artifacts.extend(
-        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
-    );
+    executed
+        .auxiliary_artifacts
+        .extend(spin_wave_sampling::requested_finite_k_artifacts(
+            problem, plan, output_dir,
+        )?);
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -1027,6 +1967,7 @@ pub fn run_planned_problem_with_hysteresis_stage_id(
     output_dir: &Path,
     hysteresis_stage_id: Option<&str>,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(
             problem,
@@ -1043,10 +1984,14 @@ pub fn fem_observables_for_magnetization(
     plan: &fullmag_ir::FemPlanIR,
     magnetization: &[[f64; 3]],
 ) -> Result<fullmag_engine::EffectiveFieldObservables, RunError> {
+    require_tetrahedral_fem_plan_mesh(&plan.mesh, plan.mesh_build_report.as_ref(), "fem")?;
     fem_baseline::fem_observables_for_magnetization(plan, magnetization)
 }
 
-fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdate {
+fn fem_eigen_progress_update(
+    progress: fem_eigen::FemEigenProgress,
+    fem_mesh_generation_id: Option<String>,
+) -> StepUpdate {
     let mut progress_scalars = std::collections::HashMap::new();
     progress_scalars.insert("phase_code".to_string(), f64::from(progress.phase_index));
     progress_scalars.insert("phase_count".to_string(), f64::from(progress.phase_count));
@@ -1118,7 +2063,7 @@ fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdat
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1163,8 +2108,30 @@ pub fn run_planned_problem_with_callback(
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_callback_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -1173,10 +2140,15 @@ pub fn run_planned_problem_with_callback(
             output_dir,
             field_every_n,
             None,
+            fem_mesh_identity,
             &mut on_step,
         );
     }
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let fem_stage_context = fem_mesh_identity
+        .cloned()
+        .map(types::FemStageExecutionContext::from_mesh_identity);
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -1187,9 +2159,9 @@ pub fn run_planned_problem_with_callback(
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -1202,12 +2174,14 @@ pub fn run_planned_problem_with_callback(
                     on_step: &mut on_step,
                 }),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm_multilayer(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm_multilayer(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -1216,10 +2190,17 @@ pub fn run_planned_problem_with_callback(
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+                problem,
+                fem,
+                field_every_n != u64::MAX,
+            )?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
                 field_every_n,
@@ -1229,30 +2210,42 @@ pub fn run_planned_problem_with_callback(
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            let mut progress_callback = |progress| {
+                on_step(fem_eigen_progress_update(
+                    progress,
+                    fem_stage_context
+                        .as_ref()
+                        .and_then(|context| context.generation_id()),
+                ))
+            };
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
@@ -1261,8 +2254,9 @@ pub fn run_planned_problem_with_callback(
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
+            frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
+                fem_stage_context.as_ref().expect("FEM stage context"),
                 output_dir,
                 None,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -1285,10 +2279,13 @@ pub fn run_planned_problem_with_callback(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, plan);
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
-    executed.auxiliary_artifacts.extend(
-        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
-    );
+    executed
+        .auxiliary_artifacts
+        .extend(spin_wave_sampling::requested_finite_k_artifacts(
+            problem, plan, output_dir,
+        )?);
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -1318,12 +2315,17 @@ pub fn run_planned_problem_with_callback(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    let final_m: Vec<f64> = executed
-        .result
-        .final_magnetization
-        .iter()
-        .flat_map(|v| v.iter().copied())
-        .collect();
+    let final_m = match &plan.backend_plan {
+        BackendPlanIR::Fem(_) => None,
+        _ => Some(
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|v| v.iter().copied())
+                .collect(),
+        ),
+    };
     let final_grid = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
         BackendPlanIR::FdmMultilayer(fdm) => [
@@ -1338,13 +2340,10 @@ pub fn run_planned_problem_with_callback(
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-        },
-        magnetization: Some(final_m),
+        fem_mesh_generation_id: fem_stage_context
+            .as_ref()
+            .and_then(|context| context.generation_id()),
+        magnetization: final_m,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,
@@ -1369,6 +2368,7 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
     hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -1377,6 +2377,7 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
             output_dir,
             field_every_n,
             hysteresis_stage_id,
+            None,
             &mut on_step,
         );
     }
@@ -1469,12 +2470,69 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
             plan,
+            fem_mesh_identity,
             until_seconds,
             output_dir,
             field_every_n,
@@ -1485,11 +2543,17 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
-        output_dir.to_path_buf(),
-        artifacts::build_field_context(problem, plan),
-        artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
-    )?;
+    let fem_stage_context = fem_mesh_identity
+        .cloned()
+        .map(types::FemStageExecutionContext::from_mesh_identity);
+    let mut artifact_pipeline =
+        artifact_pipeline::ArtifactPipeline::start_for_problem_with_autosave_root(
+            problem,
+            output_dir.to_path_buf(),
+            autosave_root.to_path_buf(),
+            artifacts::build_field_context(problem, plan),
+            artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
+        )?;
     let artifact_writer = Some(artifact_pipeline.sender());
 
     let cpu_threads = configured_cpu_threads(problem);
@@ -1497,9 +2561,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -1512,12 +2576,14 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     on_step: &mut on_step,
                 }),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm_multilayer(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm_multilayer(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -1526,10 +2592,17 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+                problem,
+                fem,
+                field_every_n != u64::MAX,
+            )?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             eprintln!(
                 "[fullmag-runner] live FEM engine: resolved_engine_id={} fallback={:?}",
                 dispatch::fem_engine_label(resolution.engine),
@@ -1544,30 +2617,42 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            let mut progress_callback = |progress| {
+                on_step(fem_eigen_progress_update(
+                    progress,
+                    fem_stage_context
+                        .as_ref()
+                        .and_then(|context| context.generation_id()),
+                ))
+            };
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
@@ -1576,8 +2661,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
+            frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
+                fem_stage_context.as_ref().expect("FEM stage context"),
                 output_dir,
                 interrupt_requested,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -1600,10 +2686,13 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, plan);
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
-    executed.auxiliary_artifacts.extend(
-        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
-    );
+    executed
+        .auxiliary_artifacts
+        .extend(spin_wave_sampling::requested_finite_k_artifacts(
+            problem, plan, output_dir,
+        )?);
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -1646,12 +2735,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-        },
+        fem_mesh_generation_id: fem_stage_context
+            .as_ref()
+            .and_then(|context| context.generation_id()),
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1678,12 +2764,73 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
     hysteresis_stage_id: Option<&str>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        hysteresis_stage_id,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        hysteresis_stage_id,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
             plan,
+            fem_mesh_identity,
             until_seconds,
             output_dir,
             field_every_n,
@@ -1694,11 +2841,13 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
-    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         problem,
         plan,
+        fem_mesh_identity,
         until_seconds,
         output_dir,
+        autosave_root,
         field_every_n,
         display_selection,
         interrupt_requested,
@@ -1749,7 +2898,8 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         });
     };
 
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, &plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -1768,7 +2918,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         &mut on_step,
     );
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -1783,6 +2933,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, &plan);
 
     if let Err(error) = artifacts::write_artifacts(
         output_dir,
@@ -1820,7 +2971,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     on_step(StepUpdate {
         stats: final_stats,
         grid: fdm.grid.cells,
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
@@ -1876,8 +3027,10 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
                 .to_string(),
         });
     };
+    let fem_mesh_generation_id = runtime.stage_context().generation_id();
 
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, &plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -1895,7 +3048,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         &mut on_step,
     );
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -1910,6 +3063,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, &plan);
 
     if let Err(error) = artifacts::write_artifacts(
         output_dir,
@@ -1941,7 +3095,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     on_step(StepUpdate {
         stats: final_stats,
         grid: [0, 0, 0],
-        fem_mesh: Some(FemMeshPayload::from(fem)),
+        fem_mesh_generation_id,
         magnetization: Some(
             executed
                 .result
@@ -1986,12 +3140,48 @@ pub fn create_planned_interactive_runtime(
     plan: &fullmag_ir::ExecutionPlanIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+        problem,
+        plan,
+        None,
+        continuation_magnetization,
+    )
+}
+
+/// Create a unified interactive runtime while reusing the stage-owned FEM mesh asset.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+        problem,
+        plan,
+        stage_fem_mesh_asset,
+        u64::MAX,
+        continuation_magnetization,
+    )
+}
+
+/// Create a persistent runtime with the actual live-preview cadence known by the caller.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    field_every_n: u64,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
+    require_supported_fem_topology(problem, plan)?;
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
         )?),
         BackendPlanIR::Fem(fem) => Box::new(InteractiveFemPreviewRuntime::create_from_plan(
-            problem, fem,
+            problem,
+            fem,
+            stage_fem_mesh_asset,
+            field_every_n != u64::MAX,
         )?),
         _ => {
             return Err(RunError {
@@ -2063,6 +3253,7 @@ pub fn run_planned_problem_with_interactive_runtime_live_preview_interruptible(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     runtime.execute_planned_streaming(
         problem,
         plan,
@@ -2147,6 +3338,7 @@ pub fn resolve_planned_runtime_engine(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<RuntimeEngineInfo, RunError> {
+    require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => {
             let engine = dispatch::resolve_fdm_engine(problem)?;
@@ -2178,8 +3370,9 @@ pub fn resolve_planned_runtime_engine(
                 accelerator: accelerator.to_string(),
             })
         }
-        BackendPlanIR::Fem(_) => {
-            let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
+        BackendPlanIR::Fem(fem) => {
+            let engine =
+                dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine;
             let (engine_id, engine_label, accelerator) = fem_runtime_engine_info(engine);
             Ok(RuntimeEngineInfo {
                 backend_family: "fem".to_string(),
@@ -2328,15 +3521,18 @@ pub fn resolve_planned_runtime_capabilities(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<BackendCapabilities, RunError> {
+    require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
+            capabilities::FdmCapabilityProfile::SingleGrid,
         )),
         BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(
-            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine,
+            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine,
         )),
         BackendPlanIR::FdmMultilayer(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
+            capabilities::FdmCapabilityProfile::Multilayer,
         )),
         BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
             dispatch::resolve_fem_engine_with_trail(problem)?.engine,
@@ -2350,12 +3546,27 @@ pub fn resolve_planned_runtime_capabilities(
 }
 
 pub fn resolve_session_runtime(problem: &ProblemIR) -> Result<ResolvedSessionRuntime, RunError> {
-    resolve_session_runtime_with_registry(problem, None)
+    resolve_session_runtime_with_registry_and_preview(problem, None, false)
+}
+
+pub fn resolve_session_runtime_for_preview(
+    problem: &ProblemIR,
+    field_every_n: u64,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_registry_and_preview(problem, None, field_every_n != u64::MAX)
 }
 
 pub fn resolve_session_runtime_with_registry(
     problem: &ProblemIR,
     registry: Option<&RuntimeRegistry>,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_registry_and_preview(problem, registry, false)
+}
+
+pub fn resolve_session_runtime_with_registry_and_preview(
+    problem: &ProblemIR,
+    registry: Option<&RuntimeRegistry>,
+    preview_enabled: bool,
 ) -> Result<ResolvedSessionRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
     let resolved_cpu_threads = configured_cpu_threads(problem);
@@ -2369,6 +3580,7 @@ pub fn resolve_session_runtime_with_registry(
         problem,
         registry,
         explicit_selection_from_problem(problem),
+        preview_enabled,
     )?;
 
     match (&plan.backend_plan, dispatch_resolution.engine) {
@@ -2402,6 +3614,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         (BackendPlanIR::FdmMultilayer(_), dispatch::DispatchEngine::Fdm(engine)) => {
@@ -2436,6 +3649,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine)) => {
@@ -2459,6 +3673,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: dispatch_resolution.fem_crossover_decision,
             })
         }
         (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
@@ -2483,6 +3698,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         (BackendPlanIR::FemFrequencyResponse(_), dispatch::DispatchEngine::Fem(engine)) => {
@@ -2507,6 +3723,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         _ => Err(RunError {
@@ -2603,6 +3820,7 @@ pub fn run_reference_multilayer_fdm(
     until_seconds: f64,
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
+    fdm::reject_adaptive_multilayer_plan(plan)?;
     Ok(multilayer_reference::execute_reference_fdm_multilayer(
         plan,
         until_seconds,
@@ -2623,6 +3841,11 @@ pub fn run_reference_fem_eigen(
     plan: &fullmag_ir::FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<types::FemEigenRunResult, RunError> {
+    require_tetrahedral_fem_plan_mesh(
+        &plan.mesh,
+        plan.mesh_build_report.as_ref(),
+        "fem_eigen_reference",
+    )?;
     let executed = dispatch::execute_fem_eigen(dispatch::FemEngine::CpuNative, plan, outputs)?;
     Ok(types::FemEigenRunResult {
         status: executed.result.status,
@@ -2652,6 +3875,250 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[test]
+    fn fdm_auto_integrator_provenance_round_trips_for_cpu_and_cuda_execution_records() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
+            panic!("bootstrap problem must be a time-evolution study");
+        };
+        let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+        *integrator = "auto".to_string();
+        let plan = fullmag_plan::plan(&problem).expect("auto integrator should plan");
+
+        for engine in ["cpu_reference", "cuda_fdm"] {
+            let mut provenance = ExecutionProvenance {
+                execution_engine: engine.to_string(),
+                precision: "double".to_string(),
+                ..Default::default()
+            };
+            attach_plan_integrator_resolution_to_provenance(&mut provenance, &plan);
+            let round_trip: ExecutionProvenance = serde_json::from_str(
+                &serde_json::to_string(&provenance).expect("provenance serializes"),
+            )
+            .expect("provenance deserializes");
+            assert_eq!(round_trip.requested_integrator.as_deref(), Some("auto"));
+            assert_eq!(round_trip.resolved_integrator.as_deref(), Some("rk45"));
+        }
+    }
+
+    fn resolved_auto_sampling_problem() -> (ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), json!("excite"));
+        problem.problem_meta.runtime_metadata.insert(
+            "study_pipeline".into(),
+            json!({
+                "version": "study_pipeline.v1",
+                "nodes": [{"id": "excite", "enabled": true}]
+            }),
+        );
+        let sample_period_s = 1.0 / 13.0e9;
+        problem.study.sampling_mut().table_autosave = Some(fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".into(),
+            table_id: "default".into(),
+            sample_period_s: None,
+            sample_period_policy: Some(fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            }),
+            resolved_sample_period_s: Some(sample_period_s),
+            every_steps: None,
+            quantities: vec!["t".into(), "my".into()],
+        });
+        problem.study.sampling_mut().outputs = vec![OutputIR::FieldResolvedAuto {
+            name: "m".into(),
+            every_seconds: sample_period_s,
+            requested_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        }];
+        problem.field_drives = vec![fullmag_ir::RegionalFieldDriveIR {
+            id: "k0-sinc-antenna".into(),
+            name: "K0 sinc antenna".into(),
+            kind: fullmag_ir::FieldDriveKindIR::Regional,
+            enabled: true,
+            target: fullmag_ir::FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: fullmag_ir::FieldSpatialProfileIR::Uniform {},
+            waveform: fullmag_ir::TimeDependenceIR::SincPulse {
+                cutoff_hz: 5.0e9,
+                t0: 50.0e-12,
+                amplitude: 1.0,
+            },
+            time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+            activation: fullmag_ir::DriveActivationIR::StageIds {
+                stage_ids: vec!["excite".into()],
+            },
+            migration: None,
+        }];
+        let resolution = fullmag_plan::SamplingResolutionIR {
+            schema_version: fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION.to_string(),
+            requested_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+            sample_period_s,
+            maximum_cutoff_hz: 5.0e9,
+            nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            target_nyquist_hz: 6.5e9,
+            sampling_frequency_hz: 13.0e9,
+            source_drive_ids: vec!["k0-sinc-antenna".into()],
+            target_stage_id: "excite".into(),
+        };
+        problem.problem_meta.runtime_metadata.insert(
+            "sampling_resolution".into(),
+            serde_json::to_value(resolution).expect("resolution should serialize"),
+        );
+        let plan = fullmag_plan::plan(&problem).expect("resolved automatic sampling should plan");
+        (problem, plan)
+    }
+
+    #[test]
+    fn runtime_sampling_accepts_canonical_resolution_and_explicit_legacy() {
+        let (problem, plan) = resolved_auto_sampling_problem();
+        require_resolved_runtime_sampling(&problem, &plan)
+            .expect("canonical automatic resolution should dispatch");
+
+        let explicit = ProblemIR::bootstrap_example();
+        let explicit_plan =
+            fullmag_plan::plan(&explicit).expect("explicit legacy problem should plan");
+        require_resolved_runtime_sampling(&explicit, &explicit_plan)
+            .expect("explicit legacy sampling should not require automatic provenance");
+    }
+
+    #[test]
+    fn runtime_sampling_rejects_missing_or_invalid_automatic_provenance() {
+        let (problem, plan) = resolved_auto_sampling_problem();
+
+        let mut missing = problem.clone();
+        missing
+            .problem_meta
+            .runtime_metadata
+            .remove("sampling_resolution");
+        assert!(require_resolved_runtime_sampling(&missing, &plan)
+            .expect_err("resolved automatic table without provenance must fail")
+            .message
+            .contains("sampling_resolution"));
+
+        let invalid_cases = [
+            ("schema_version", json!("sampling_resolution.v0")),
+            ("sample_period_s", json!(1.0e-12)),
+            ("maximum_cutoff_hz", json!(0.0)),
+            ("nyquist_guard_factor", json!(1.2)),
+            ("target_nyquist_hz", json!(6.4e9)),
+            ("sampling_frequency_hz", json!(12.0e9)),
+            ("source_drive_ids", json!([])),
+            ("target_stage_id", json!("other")),
+        ];
+        for (field, invalid_value) in invalid_cases {
+            let mut invalid = problem.clone();
+            invalid
+                .problem_meta
+                .runtime_metadata
+                .get_mut("sampling_resolution")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("resolution metadata should be an object")
+                .insert(field.to_string(), invalid_value);
+            let error = require_resolved_runtime_sampling(&invalid, &plan)
+                .expect_err("malformed automatic sampling provenance must fail");
+            assert!(
+                error.message.contains(field),
+                "expected {field} in validation error, got {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_sampling_rejects_output_only_auto_without_provenance_or_with_wrong_cadence() {
+        let (mut problem, plan) = resolved_auto_sampling_problem();
+        problem.study.sampling_mut().table_autosave = None;
+        problem
+            .problem_meta
+            .runtime_metadata
+            .remove("sampling_resolution");
+        let error = require_resolved_runtime_sampling(&problem, &plan)
+            .expect_err("output-only resolved auto must retain provenance");
+        assert!(error.message.contains("sampling_resolution"));
+
+        let (mut problem, mut plan_with_wrong_cadence) = resolved_auto_sampling_problem();
+        problem.study.sampling_mut().table_autosave = None;
+        let OutputIR::FieldResolvedAuto { every_seconds, .. } =
+            &mut plan_with_wrong_cadence.output_plan.outputs[0]
+        else {
+            panic!("planner must preserve the resolved-auto marker");
+        };
+        *every_seconds *= 2.0;
+        let error = require_resolved_runtime_sampling(&problem, &plan_with_wrong_cadence)
+            .expect_err("every resolved-auto output cadence must match provenance");
+        assert!(error.message.contains("output cadence"));
+    }
+
+    #[test]
+    fn runtime_sampling_rejects_forged_missing_extra_and_stale_sinc_sources() {
+        for source_ids in [
+            Vec::<String>::new(),
+            vec!["forged".into()],
+            vec!["k0-sinc-antenna".into(), "extra".into()],
+        ] {
+            let (mut problem, plan) = resolved_auto_sampling_problem();
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get_mut("sampling_resolution")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("sampling resolution metadata")
+                .insert("source_drive_ids".into(), json!(source_ids));
+            let error = require_resolved_runtime_sampling(&problem, &plan)
+                .expect_err("source IDs must exactly match active sinc drives");
+            assert!(error.message.contains("source_drive_ids"));
+        }
+
+        let (mut stale, plan) = resolved_auto_sampling_problem();
+        let fullmag_ir::TimeDependenceIR::SincPulse { cutoff_hz, .. } =
+            &mut stale.field_drives[0].waveform
+        else {
+            panic!("fixture drive must be sinc");
+        };
+        *cutoff_hz = 4.0e9;
+        let error = require_resolved_runtime_sampling(&stale, &plan)
+            .expect_err("stale cutoff provenance must be rejected");
+        assert!(error.message.contains("maximum_cutoff_hz"));
+
+        let (mut inactive, plan) = resolved_auto_sampling_problem();
+        inactive.field_drives[0].enabled = false;
+        let error = require_resolved_runtime_sampling(&inactive, &plan)
+            .expect_err("a disabled provenance source must be rejected");
+        assert!(error.message.contains("active sinc source"));
+    }
+
+    #[test]
+    fn every_public_planned_execution_path_calls_the_runtime_sampling_guard() {
+        let lib_source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read lib.rs");
+        assert_eq!(
+            lib_source
+                .split("#[cfg(test)]\nmod tests")
+                .next()
+                .expect("lib.rs should contain production code")
+                .matches("require_resolved_runtime_sampling(problem, plan)?;")
+                .count(),
+            7,
+            "all seven public planned runner entry points must fail closed before dispatch"
+        );
+        let interactive_source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interactive/runtime.rs"
+        ))
+        .expect("read interactive runtime");
+        assert!(
+            interactive_source
+                .contains("crate::require_resolved_runtime_sampling(problem, plan)?;"),
+            "direct InteractiveRuntime::execute_planned_streaming calls must fail closed"
+        );
+    }
+
     fn fem_frequency_response_validation_problem(
         frequencies_hz: Vec<f64>,
     ) -> fullmag_ir::ProblemIR {
@@ -2680,9 +4147,9 @@ mod tests {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -2716,12 +4183,724 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
             },
         };
         problem
+    }
+
+    fn topology_guard_frequency_plan_mut(
+        plan: &mut fullmag_ir::ExecutionPlanIR,
+    ) -> &mut fullmag_ir::FemFrequencyResponsePlanIR {
+        let BackendPlanIR::FemFrequencyResponse(fem) = &mut plan.backend_plan else {
+            panic!("topology guard fixture must produce a FEM frequency-response plan");
+        };
+        fem
+    }
+
+    fn certified_mixed_topology_guard_fixture(
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+        let mut plan = fullmag_plan::plan(&problem)
+            .expect("tetrahedral FEM frequency-response fixture should plan");
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed topology golden fixture should be valid JSON");
+        let mesh: fullmag_ir::MeshIR = serde_json::from_value(golden["mesh"].clone())
+            .expect("mixed topology golden mesh should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(golden["certificate"].clone())
+                .expect("mixed topology golden certificate should deserialize");
+        let fingerprint = mesh.topology_fingerprint_v6();
+        assert_eq!(certificate.topology_fingerprint, fingerprint);
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&certificate, &mesh)
+            .expect("mixed topology golden certificate should bind to its mesh");
+
+        let fem = topology_guard_frequency_plan_mut(&mut plan);
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "shared_domain",
+            "fallbacks_triggered": [],
+            "degraded": false,
+            "mixed_layer_topology_certificate": certificate,
+        }))
+        .expect("minimal shared-domain report should deserialize");
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            precision: fem.precision,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
+        });
+        fem.mesh = mesh;
+        fem.mesh_build_report = Some(report);
+        (problem, plan)
+    }
+
+    fn certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+        layer_count: u32,
+        requested_device: fullmag_ir::ExecutionDevice,
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let device = match requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => "cpu",
+            fullmag_ir::ExecutionDevice::Gpu => "gpu",
+            _ => panic!("mixed runtime fixture requires explicit CPU or GPU"),
+        };
+        let mut problem = fem_session_runtime_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": device, "precision": "double"}),
+        );
+        let mut plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM runtime fixture should plan");
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag {
+                realization: fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            },
+        ];
+        problem.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            dynamics: None,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(16),
+                max_relaxation_time_s: None,
+            },
+            sampling: problem.study.sampling().clone(),
+        };
+        let golden: serde_json::Value = serde_json::from_str(match layer_count {
+            1 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+            ),
+            2 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_2_python_golden.json"
+            ),
+            3 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_3_python_golden.json"
+            ),
+            4 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_4_python_golden.json"
+            ),
+            _ => panic!("mixed runtime fixture exists only for layer counts 1 through 4"),
+        })
+        .expect("mixed topology golden fixture should be valid JSON");
+        let mesh: fullmag_ir::MeshIR = serde_json::from_value(golden["mesh"].clone())
+            .expect("mixed topology golden mesh should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(golden["certificate"].clone())
+                .expect("mixed topology golden certificate should deserialize");
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .expect("mixed topology fingerprint version must be supported");
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("relaxation topology guard fixture must produce a FEM plan");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(16),
+                max_relaxation_time_s: None,
+            },
+        });
+        fem.mfem_device_string = Some(device.to_string());
+        fem.mesh = mesh;
+        fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "shared_domain",
+            "fallbacks_triggered": [],
+            "degraded": false,
+            "mixed_layer_topology_certificate": certificate,
+        }))
+        .expect("minimal shared-domain report should deserialize");
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device,
+            precision: fem.precision,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
+        });
+        fem.mesh_build_report = Some(report);
+        (problem, plan)
+    }
+
+    fn certified_mixed_cpu_relaxation_guard_fixture_for_layers(
+        layer_count: u32,
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+            layer_count,
+            fullmag_ir::ExecutionDevice::Cpu,
+        )
+    }
+
+    fn certified_mixed_cpu_relaxation_guard_fixture(
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        certified_mixed_cpu_relaxation_guard_fixture_for_layers(1)
+    }
+
+    fn topology_guard_error(
+        problem: &fullmag_ir::ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
+    ) -> String {
+        require_supported_fem_topology(problem, plan)
+            .expect_err("fixture must be rejected before FEM backend startup")
+            .message
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_mixed_metadata_on_tetrahedral_plan() {
+        let (problem, mixed_plan) = certified_mixed_topology_guard_fixture();
+        let mixed_report = match &mixed_plan.backend_plan {
+            BackendPlanIR::FemFrequencyResponse(fem) => fem
+                .mesh_build_report
+                .clone()
+                .expect("mixed fixture should carry a build report"),
+            _ => unreachable!(),
+        };
+        let mut tetrahedral_plan = fullmag_plan::plan(&problem)
+            .expect("tetrahedral FEM frequency-response fixture should plan");
+        topology_guard_frequency_plan_mut(&mut tetrahedral_plan).mesh_build_report =
+            Some(mixed_report);
+
+        assert_eq!(
+            topology_guard_error(&problem, &tetrahedral_plan),
+            "fem_mixed_p1_runtime_metadata_without_mixed_topology: mixed certificate/provenance cannot be attached to a tetrahedral plan"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_requires_report_certificate_and_provenance() {
+        let (problem, mut missing_report) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut missing_report).mesh_build_report = None;
+        assert_eq!(
+            topology_guard_error(&problem, &missing_report),
+            "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none"
+        );
+
+        let (_, mut missing_certificate) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut missing_certificate)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_layer_topology_certificate = None;
+        assert_eq!(
+            topology_guard_error(&problem, &missing_certificate),
+            "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none"
+        );
+
+        let (_, mut missing_provenance) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut missing_provenance)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance = None;
+        assert_eq!(
+            topology_guard_error(&problem, &missing_provenance),
+            "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_valid_certificate_when_build_report_is_degraded() {
+        for case in ["report_fallback", "degraded"] {
+            let (problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                unreachable!()
+            };
+            let report = fem
+                .mesh_build_report
+                .as_mut()
+                .expect("mixed fixture must carry a build report");
+            match case {
+                "report_fallback" => {
+                    report.fallbacks_triggered =
+                        Some(vec!["mesh_size_field_simplified".to_string()]);
+                }
+                "degraded" => report.degraded = true,
+                _ => unreachable!(),
+            }
+            let certificate = report
+                .mixed_layer_topology_certificate
+                .as_ref()
+                .expect("mixed fixture must retain a valid certificate");
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
+                certificate,
+                &fem.mesh,
+            )
+            .expect("the regression must isolate enclosing build-report state");
+
+            let error = require_supported_fem_topology(&problem, &plan)
+                .expect_err("runner must reject a degraded mixed build report");
+            assert!(
+                error
+                    .message
+                    .contains("fem_mixed_p1_runtime_build_report_rejected"),
+                "case={case}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_stale_certificate_and_provenance_bindings() {
+        let (problem, mut stale_certificate) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_certificate)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_layer_topology_certificate
+            .as_mut()
+            .expect("mixed fixture should carry a certificate")
+            .topology_fingerprint = "0".repeat(64);
+        let certificate_error = topology_guard_error(&problem, &stale_certificate);
+        assert!(
+            certificate_error.starts_with(
+                "fem_mixed_p1_runtime_certificate_stale: certificate=0000000000000000000000000000000000000000000000000000000000000000 mesh="
+            ),
+            "{certificate_error}"
+        );
+        assert!(certificate_error.ends_with("; fallback=none"));
+
+        let (_, mut stale_fingerprint) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_fingerprint)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture should carry provenance")
+            .accepted_certificate_fingerprint = "0".repeat(64);
+        assert_eq!(
+            topology_guard_error(&problem, &stale_fingerprint),
+            "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
+        );
+
+        let (_, mut stale_precision) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_precision)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture should carry provenance")
+            .precision = fullmag_ir::ExecutionPrecision::Single;
+        assert_eq!(
+            topology_guard_error(&problem, &stale_precision),
+            "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
+        );
+
+        let (_, mut stale_device) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_device)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture should carry provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+        assert_eq!(
+            topology_guard_error(&problem, &stale_device),
+            "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none"
+        );
+
+        for status in [
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::SourceVisible,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::Validated,
+        ] {
+            let (_, mut promoted) = certified_mixed_topology_guard_fixture();
+            topology_guard_frequency_plan_mut(&mut promoted)
+                .mesh_build_report
+                .as_mut()
+                .expect("mixed fixture should carry a build report")
+                .mixed_topology_provenance
+                .as_mut()
+                .expect("mixed fixture should carry provenance")
+                .capability_status = status;
+            assert_eq!(
+                topology_guard_error(&problem, &promoted),
+                "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none"
+            );
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_hex8_as_unsupported_typed_topology() {
+        let (problem, mut plan) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut plan)
+            .mesh
+            .cells
+            .types = vec![fullmag_ir::FemCellTypeIR::Hex8];
+
+        assert_eq!(
+            topology_guard_error(&problem, &plan),
+            "fem_typed_topology_unsupported_before_backend: cells=[Hex8]; facets=[Tri3, Quad4]; study=fem_frequency_response; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_empty_typed_topology() {
+        let (problem, mut plan) = certified_mixed_topology_guard_fixture();
+        let fem = topology_guard_frequency_plan_mut(&mut plan);
+        fem.mesh.cells.types.clear();
+        fem.mesh.facets.types.clear();
+
+        let error = topology_guard_error(&problem, &plan);
+        assert!(
+            error.starts_with("fem_typed_topology_unsupported_before_backend:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_fully_bound_mixed_frequency_plan_reaches_scope_rejection() {
+        let (problem, plan) = certified_mixed_topology_guard_fixture();
+
+        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none";
+        assert_eq!(topology_guard_error(&problem, &plan), expected);
+        assert_eq!(
+            resolve_planned_runtime_engine(&problem, &plan)
+                .expect_err("engine resolution must reject mixed topology")
+                .message,
+            expected
+        );
+        assert_eq!(
+            resolve_planned_runtime_capabilities(&problem, &plan)
+                .expect_err("capability resolution must reject mixed topology")
+                .message,
+            expected
+        );
+        assert_eq!(
+            create_planned_interactive_runtime(&problem, &plan, None)
+                .err()
+                .expect("interactive startup must reject mixed topology")
+                .message,
+            expected
+        );
+
+        let mut stale_problem = problem.clone();
+        stale_problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+        assert_eq!(
+            topology_guard_error(&stale_problem, &plan),
+            "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_bound_cpu_and_gpu_exact_layer_matrix() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            for layer_count in [1, 2, 3] {
+                let (problem, plan) =
+                    certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+                        layer_count,
+                        requested_device,
+                    );
+                let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+                    panic!("mixed relaxation fixture must produce a FEM plan");
+                };
+                let certificate = fem
+                    .mesh_build_report
+                    .as_ref()
+                    .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                    .expect("multi-layer runtime fixture must carry a certificate");
+                assert_eq!(certificate.requested_layer_count, layer_count);
+                assert_eq!(certificate.realized_layer_count, layer_count);
+                assert_eq!(
+                    fem.mesh
+                        .cells
+                        .types
+                        .iter()
+                        .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
+                        .count(),
+                    2 * layer_count as usize,
+                    "fixture must exercise genuinely stacked magnetic prisms",
+                );
+                require_supported_fem_topology(&problem, &plan).unwrap_or_else(|error| {
+                    panic!(
+                        "bound {requested_device:?} exact layer {layer_count} mixed P1 relaxation must cross the guard: {error:?}"
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_correctly_bound_exact_four_layer_cpu_and_gpu() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            let (problem, plan) =
+                certified_mixed_relaxation_guard_fixture_for_layers_and_device(4, requested_device);
+            let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+                panic!("mixed relaxation fixture must produce a FEM plan");
+            };
+            let certificate = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                .expect("L=4 rejection fixture must carry a certificate");
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
+                certificate,
+                &fem.mesh,
+            )
+            .expect("L=4 rejection fixture must be correctly certificate-bound");
+            let expected = topology_guard_error(&problem, &plan);
+            assert!(expected.contains("fem_mixed_p1_runtime_scope_rejected"));
+            assert!(expected.contains("fallback=none"));
+            assert_eq!(
+                resolve_planned_runtime_engine(&problem, &plan)
+                    .expect_err("L=4 must reject before backend engine resolution")
+                    .message,
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_only_bound_cpu_double_relaxation_scope() {
+        let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        require_supported_fem_topology(&problem, &plan)
+            .expect("bound CPU-double mixed P1 relaxation must cross the runner guard");
+
+        let mut v3_plan = plan.clone();
+        let BackendPlanIR::Fem(v3_fem) = &mut v3_plan.backend_plan else {
+            unreachable!()
+        };
+        let v3_fingerprint = v3_fem.mesh.mixed_topology_fingerprint_v3().unwrap();
+        let v3_report = v3_fem
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture must carry a build report");
+        let v3_certificate = v3_report
+            .mixed_layer_topology_certificate
+            .as_mut()
+            .expect("mixed fixture must carry a certificate");
+        v3_certificate.topology_fingerprint_version = "v3".to_string();
+        v3_certificate.topology_fingerprint = v3_fingerprint.clone();
+        v3_report
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture must carry provenance")
+            .accepted_certificate_fingerprint = v3_fingerprint;
+        require_supported_fem_topology(&problem, &v3_plan)
+            .expect("bound v3 CPU-double mixed P1 relaxation must cross the runner guard");
+
+        for case in [
+            "gpu",
+            "single",
+            "extended",
+            "time_evolution",
+            "unsupported_status",
+        ] {
+            let mut rejected_problem = problem.clone();
+            let mut rejected_plan = plan.clone();
+            match case {
+                "gpu" => {
+                    rejected_problem.problem_meta.runtime_metadata.insert(
+                        "runtime_selection".to_string(),
+                        json!({"device": "gpu", "precision": "double"}),
+                    );
+                }
+                "single" => {
+                    rejected_problem.backend_policy.execution_precision =
+                        fullmag_ir::ExecutionPrecision::Single;
+                }
+                "extended" => {
+                    rejected_problem.validation_profile.execution_mode =
+                        fullmag_ir::ExecutionMode::Extended;
+                }
+                "time_evolution" => {
+                    rejected_problem.study = fullmag_ir::ProblemIR::bootstrap_example().study;
+                }
+                "unsupported_status" => {
+                    let BackendPlanIR::Fem(fem) = &mut rejected_plan.backend_plan else {
+                        unreachable!()
+                    };
+                    fem.mesh_build_report
+                        .as_mut()
+                        .and_then(|report| report.mixed_topology_provenance.as_mut())
+                        .expect("fixture carries mixed provenance")
+                        .capability_status =
+                        fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported;
+                }
+                _ => unreachable!(),
+            }
+            let error = require_supported_fem_topology(&rejected_problem, &rejected_plan)
+                .expect_err("runner must fail closed outside the qualified mixed P1 tuple");
+            assert!(
+                error
+                    .message
+                    .contains("fem_mixed_p1_runtime_scope_rejected")
+                    || error
+                        .message
+                        .contains("fem_mixed_p1_runtime_provenance_stale"),
+                "case={case}: {}",
+                error.message
+            );
+            assert!(
+                error.message.contains("fallback=none"),
+                "case={case}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn certified_mixed_cpu_planned_runtime_resolves_native_engine() {
+        let _env_guard = ENV_LOCK.lock().expect("lock FEM execution environment");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+
+        let engine = resolve_planned_runtime_engine(&problem, &plan)
+            .expect("certified mixed-P1 CPU plan should resolve a runtime engine");
+
+        assert_eq!(engine.backend_family, "fem");
+        assert_eq!(engine.engine_id, "fem_cpu_native");
+        assert_eq!(engine.accelerator, "cpu");
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_bound_gpu_double_relaxation_scope() {
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "gpu", "precision": "double"}),
+        );
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.mesh_build_report
+            .as_mut()
+            .and_then(|report| report.mixed_topology_provenance.as_mut())
+            .expect("mixed fixture carries provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("bound GPU-double mixed P1 relaxation must cross the startup guard");
+    }
+
+    #[test]
+    fn fem_topology_guard_keeps_bound_gpu_when_environment_changes_to_cpu_after_planning() {
+        let _env_guard = ENV_LOCK.lock().expect("lock FEM execution environment");
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "gpu", "precision": "double"}),
+        );
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.mesh_build_report
+            .as_mut()
+            .and_then(|report| report.mixed_topology_provenance.as_mut())
+            .expect("mixed fixture carries provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+        let result = require_supported_fem_topology(&problem, &plan);
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+
+        result.expect(
+            "a live environment change must not redirect or invalidate a GPU-bound execution plan",
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_gpu_mixed_p1_with_unsupported_physics() {
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "gpu", "precision": "double"}),
+        );
+        problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 });
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.mesh_build_report
+            .as_mut()
+            .and_then(|report| report.mixed_topology_provenance.as_mut())
+            .expect("mixed fixture carries provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        let error = require_supported_fem_topology(&problem, &plan)
+            .expect_err("unsupported GPU physics must reject before backend allocation");
+        assert!(error
+            .message
+            .contains("fem_mixed_p1_runtime_scope_rejected"));
+        assert!(error.message.contains("requested_device=gpu"));
+        assert!(error.message.contains("fallback=none"));
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_managed_override_changed_after_planning() {
+        let (mut problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "auto", "precision": "double"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("effective managed CPU request must cross the mixed topology guard");
+
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            json!({"device": "gpu", "source": "managed_launcher"}),
+        );
+        let error = require_supported_fem_topology(&problem, &plan)
+            .expect_err("changing a managed override after planning must reject as stale");
+        assert_eq!(
+            error.message,
+            "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_allows_tetrahedral_plan_at_capability_boundary() {
+        let problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        let mut plan = fullmag_plan::plan(&problem)
+            .expect("tetrahedral FEM frequency-response fixture should plan");
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("tetrahedral plan must remain compatible");
+        resolve_planned_runtime_capabilities(&problem, &plan)
+            .expect("tetrahedral plan must cross the capability boundary");
+
+        let fem = topology_guard_frequency_plan_mut(&mut plan);
+        fem.mesh.facets = fullmag_ir::FemFacetConnectivityIR::empty();
+        require_supported_fem_topology(&problem, &plan)
+            .expect("legacy tetrahedral plan without explicit facets must remain compatible");
     }
 
     #[cfg(not(feature = "fem-gpu"))]
@@ -2764,7 +4943,10 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax(").count();
+        let route_count = source.matches("fem::relax::execute_fem_relax_in_mode(").count()
+            + source
+                .matches("fem::relax::execute_fem_relax_with_context_in_mode(")
+                .count();
         assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"
@@ -3400,10 +5582,6 @@ mod tests {
             "preview snapshots must use the native FEM wait ABI"
         );
         assert!(
-            source.contains("fullmag_fem_preview_snapshot_ready"),
-            "preview snapshots must expose a nonblocking readiness ABI for live handoff"
-        );
-        assert!(
             source.contains("fullmag_fem_preview_snapshot_destroy"),
             "preview snapshots must destroy native FEM snapshot handles"
         );
@@ -3418,17 +5596,15 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
-                source.contains("FemLivePreviewHandoff::default()"),
+                source.contains("FemPreviewHandoff::default()"),
                 "{path} must keep live preview snapshot state across solver steps"
             );
             assert!(
-                source.contains("live_preview_handoff.poll_completed()?"),
+                source.contains("preview_handoff.poll_active()?"),
                 "{path} must poll completed preview snapshots without blocking"
             );
             assert!(
-                source.contains(
-                    "live_preview_handoff.request_preview(backend, &request, node_count)?"
-                ),
+                source.contains("preview_handoff.request_preview("),
                 "{path} must request live preview through the handoff boundary"
             );
             assert!(
@@ -3443,16 +5619,57 @@ mod tests {
         ))
         .expect("read fem/relax/preview.rs");
         assert!(
-            preview.contains("struct FemLivePreviewHandoff"),
+            preview.contains("struct FemPreviewHandoff"),
             "fem/relax/preview.rs must own live preview handoff state"
         );
         assert!(
-            preview.contains("snapshot.is_ready()"),
-            "live preview handoff must use the nonblocking native readiness check"
+            preview.contains("try_take_completed"),
+            "live preview handoff must poll the bounded worker without blocking"
         );
         assert!(
             preview.contains("last_good"),
             "live preview handoff must retain the last completed preview"
+        );
+    }
+
+    #[test]
+    fn fem_preview_materialization_stays_outside_callback_deadline() {
+        let preview = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        let hot_path = preview
+            .split("/// Build the active FEM preview field.")
+            .next()
+            .expect("preview hot-path section");
+
+        assert!(
+            preview.contains("struct PendingFemPreviewState"),
+            "FEM live and cache previews must share one bounded materialization state"
+        );
+        assert!(
+            preview.contains("preview_superseded_count"),
+            "busy preview requests must be counted explicitly"
+        );
+        assert!(
+            !hot_path.contains("backend.copy_live_preview_field(request, node_count)?"),
+            "energy-density previews must not synchronously copy fields on the solver callback"
+        );
+        assert!(
+            !preview.contains("pending: Vec<(LivePreviewRequest, NativeFemPreviewSnapshot)>"),
+            "cached previews must not accumulate an unbounded set of native snapshots"
+        );
+        assert!(
+            preview.contains("PreviewDestination::Active => self.active_ready = Some(result.field)")
+                && preview.contains("PreviewDestination::Cache => self.cached_ready.push(result.field)"),
+            "completed preview payloads must be moved from the worker result into the bounded solver-side handoff"
+        );
+        let removed_callback_clone = ["let mut last_good_field = field.", "clone();"].concat();
+        let removed_reader = ["result.", "last_good_field"].concat();
+        assert!(
+            !preview.contains(&removed_callback_clone) && !preview.contains(&removed_reader),
+            "the callback contract must not regress to a duplicated last-good clone/reader handoff"
         );
     }
 
@@ -3490,17 +5707,13 @@ mod tests {
             "field snapshots must use the native FEM wait ABI"
         );
         assert!(
-            source.contains("fullmag_fem_field_snapshot_ready"),
-            "field snapshots must expose a nonblocking readiness ABI for live handoff"
-        );
-        assert!(
             source.contains("fullmag_fem_field_snapshot_destroy"),
             "field snapshots must destroy native FEM snapshot handles"
         );
     }
 
     #[test]
-    fn fem_live_magnetization_uses_nonblocking_snapshot_handoff() {
+    fn fem_live_magnetization_uses_bounded_deferred_snapshot_handoff() {
         for path in [
             "/src/fem/relax/direct_minimizer.rs",
             "/src/fem/relax/llg_overdamped.rs",
@@ -3508,16 +5721,20 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
-                source.contains("FemLiveMagnetizationHandoff::default()"),
-                "{path} must keep live magnetization snapshot state across solver steps"
+                source.contains("FemPreviewHandoff::default()"),
+                "{path} must keep the bounded snapshot frame state across solver steps"
             );
             assert!(
-                source.contains("live_magnetization_handoff.request_magnetization"),
-                "{path} must start magnetization snapshots through the handoff boundary"
+                source.contains("preview_handoff.request_magnetization"),
+                "{path} must stage magnetization capture through the shared handoff boundary"
             );
             assert!(
-                source.contains("live_magnetization_handoff.poll_completed"),
-                "{path} must poll completed magnetization snapshots without blocking"
+                source.contains("preview_handoff.poll_magnetization"),
+                "{path} must poll completed magnetization payloads without blocking"
+            );
+            assert!(
+                source.contains("preview_handoff.flush_schedule_fence()"),
+                "{path} must fence native enqueue before the next solver mutation"
             );
             assert!(
                 !source.contains(
@@ -3533,12 +5750,16 @@ mod tests {
         ))
         .expect("read fem/relax/preview.rs");
         assert!(
-            preview.contains("struct FemLiveMagnetizationHandoff"),
-            "fem/relax/preview.rs must own live magnetization handoff state"
+            preview.contains("struct DeferredFemSnapshotFrame"),
+            "fem/relax/preview.rs must own one bounded deferred snapshot frame"
         );
         assert!(
-            preview.contains("snapshot.is_ready()"),
-            "live magnetization handoff must use the nonblocking native readiness check"
+            preview.contains("schedule_tx.send(())"),
+            "snapshot worker must acknowledge native enqueue before materialization"
+        );
+        assert!(
+            preview.contains("fn flush_schedule(&mut self) -> u64"),
+            "solver must expose the exact-step pre-mutation schedule fence"
         );
     }
 
@@ -3549,9 +5770,14 @@ mod tests {
             "/../../backends/fem/src/api.cpp"
         ))
         .expect("read native FEM api.cpp");
+        let pool = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../backends/fem/gpu/cuda/transfer/snapshot_pool.cpp"
+        ))
+        .expect("read native FEM snapshot_pool.cpp");
         assert!(
-            source.contains("cudaHostAlloc(&snapshot.host_aos"),
-            "native FEM GPU snapshots must allocate pinned host storage"
+            pool.contains("cudaHostAlloc(&slot.host_aos"),
+            "native FEM GPU snapshot pool must preallocate pinned host storage"
         );
         assert!(
             source.contains("cudaMemcpyAsync(\n        snapshot.staging.x"),
@@ -3636,9 +5862,9 @@ mod tests {
             "fem/relax/preview.rs must own native FEM relaxation cached-preview helpers"
         );
         assert!(
-            module.contains("pub(crate) fn build_fem_final_cached_preview_fields")
+            module.contains("pub(crate) fn finalize_terminal_cache")
                 && module.contains("quantity_ids.push(display_selection.selection.quantity.as_str())"),
-            "fem/relax/preview.rs must own final cached-preview flushing that includes the active vector field"
+            "fem/relax/preview.rs must own bounded asynchronous terminal cache flushing that includes the active vector field"
         );
         assert!(
             module.contains("field_materialization_quantity_ids()"),
@@ -3658,9 +5884,9 @@ mod tests {
             "interactive FEM mesh preview cache must materialize spatial scalar fields such as eden_total"
         );
         assert!(
-            module.contains("struct FemCachedPreviewHandoff")
+            module.contains("struct FemPreviewHandoff")
                 && module.contains("request_cached_previews(")
-                && module.contains("snapshot.is_ready()"),
+                && module.contains("try_take_completed"),
             "fem/relax/preview.rs must own nonblocking cached-preview handoff state"
         );
         for path in [
@@ -3675,12 +5901,12 @@ mod tests {
                 "{path} must use the resolved FEM engine for cached-preview quantities, not hard-code CPU"
             );
             assert!(
-                source.contains("FemCachedPreviewHandoff::default()"),
-                "{path} must keep cached-preview snapshot state across solver steps"
+                source.contains("FemPreviewHandoff::default()"),
+                "{path} must keep one shared preview materializer across solver steps"
             );
             assert!(
-                source.contains("cached_preview_handoff.request_cached_previews(")
-                    && source.contains("cached_preview_handoff.poll_completed()?"),
+                source.contains("preview_handoff.request_cached_previews(")
+                    && source.contains("preview_handoff.poll_cached("),
                 "{path} must use cached-preview handoff readiness instead of synchronous waits"
             );
             assert!(
@@ -3698,9 +5924,27 @@ mod tests {
             "FEM relaxation finalization must use the resolved engine for cached-preview flushes"
         );
         assert!(
-            finalize.contains("build_fem_final_cached_preview_fields(")
+            finalize.contains("preview_handoff.finalize_pending_until(")
+                && finalize.contains("preview_handoff.finalize_terminal_cache(")
+                && !finalize.contains("build_fem_final_cached_preview_fields(")
                 && !finalize.contains("build_fem_cached_preview_fields("),
-            "FEM relaxation finalization must flush active and inactive cached preview fields"
+            "FEM relaxation finalization must drain and publish active/inactive fields through the bounded asynchronous handoff"
+        );
+        assert!(
+            finalize.contains("if pending_preview_completed {")
+                && finalize.contains("preview_handoff.take_terminal_publication("),
+            "an expired terminal drain must publish explicit errors without retrying backend scheduling"
+        );
+        assert!(
+            module.contains("self.finish_terminal_publication(fields, magnetization,")
+                && finalize.contains("*last_step = live_stats.clone();"),
+            "terminal FEM payloads, materialization states, and provenance must survive the later finished=true update"
+        );
+        let runner = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read runner lib.rs");
+        assert!(
+            runner.contains("BackendPlanIR::Fem(_) => None,"),
+            "the generic finished=true update must not mask asynchronous FEM terminal magnetization with a synchronous final-m copy"
         );
     }
 
@@ -4118,9 +6362,15 @@ mod tests {
                         [-2.0, 2.0, -2.0],
                         [-2.0, -2.0, 2.0],
                     ],
-                    elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                        [0, 1, 2, 3],
+                        [4, 5, 6, 7],
+                    ]),
                     element_markers: vec![1, 0],
-                    boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                        [0, 1, 2],
+                        [4, 5, 6],
+                    ]),
                     boundary_markers: vec![1, 99],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4469,6 +6719,88 @@ mod tests {
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }
 
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn auto_fdm_batch_run_persists_unavailable_cuda_fallback() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "auto"}));
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-auto-fdm-fallback-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_problem(&problem, 2e-13, &output_dir)
+            .expect("auto FDM should execute on the CPU when CUDA is unavailable");
+        assert_eq!(result.status, RunStatus::Completed);
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json"))
+                .expect("metadata.json should be readable"),
+        )
+        .expect("metadata should parse");
+        let fallback = &metadata["execution_provenance"]["resolved_fallback"];
+        assert_eq!(fallback["original_engine"], "fdm_cuda");
+        assert_eq!(fallback["fallback_engine"], "fdm_cpu_reference");
+        assert_eq!(fallback["reason"], "fdm_cuda_unavailable");
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn auto_fdm_live_run_persists_unavailable_cuda_fallback() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "auto"}));
+        let plan = fullmag_plan::plan(&problem).expect("auto FDM should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-auto-fdm-live-fallback-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result =
+            run_planned_problem_with_callback(&problem, &plan, 2e-13, &output_dir, 1, |_| {
+                StepAction::Continue
+            })
+            .expect("live auto FDM should execute on the CPU when CUDA is unavailable");
+        assert_eq!(result.status, RunStatus::Completed);
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json"))
+                .expect("metadata.json should be readable"),
+        )
+        .expect("metadata should parse");
+        let fallback = &metadata["execution_provenance"]["resolved_fallback"];
+        assert_eq!(fallback["original_engine"], "fdm_cuda");
+        assert_eq!(fallback["fallback_engine"], "fdm_cpu_reference");
+        assert_eq!(fallback["reason"], "fdm_cuda_unavailable");
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
     #[cfg(not(feature = "fem-gpu"))]
     #[test]
     fn fem_frequency_response_plan_runs_dense_validation_and_writes_response_bundle() {
@@ -4497,9 +6829,9 @@ mod tests {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4533,6 +6865,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
@@ -5179,9 +7512,9 @@ mod tests {
                 [2.0, 0.0, 1.0],
                 [3.0, 0.0, 0.0],
             ],
-            elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
             element_markers: vec![1, 0],
-            boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
             boundary_markers: vec![1, 99],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),

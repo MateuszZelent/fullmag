@@ -32,12 +32,20 @@ import {
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELDS_PATH,
   DATA_ARTIFACT_PATH,
+  DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELD_META_PATH,
+  DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+  DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
+  DATA_PLANAR_FIELD_PROBE_PATH,
+  DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+  DATA_PLANAR_FIELD_SCALAR_PATH,
+  DATA_PLANAR_FIELD_VECTORS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
@@ -102,11 +110,15 @@ import {
   MODEL_OBJECT_REGIONS_REORDER_PATH,
   MODEL_OBJECT_REGIONS_PATH,
   MODEL_OBJECTS_PATH,
+  MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
+  MODEL_PLANAR_MONITOR_PATH,
+  MODEL_PLANAR_MONITORS_PATH,
   MODEL_REGION_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_SCRIPT_PATH,
   MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
   MODEL_SYNCS_PATH,
@@ -126,6 +138,7 @@ import {
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_RUN_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
@@ -191,6 +204,16 @@ import type {
   FieldStateInspectRequest,
   FieldStateInspectResponse,
   FieldVectorQuery,
+  PlanarFieldMetaResource,
+  PlanarFieldProbeQuery,
+  PlanarFieldProbeResource,
+  PlanarFieldQuery,
+  PlanarMonitorCollectionResource,
+  PlanarMonitorCreateRequest,
+  PlanarMonitorDeleteRequest,
+  PlanarMonitorDuplicateRequest,
+  PlanarMonitorPatchRequest,
+  PlanarMonitorResource,
   GeometryCapabilitiesResource,
   GeometryDiagnosticsResource,
   GeometryRealizationRequest,
@@ -205,6 +228,7 @@ import type {
   FrequencyDomainManifestResource,
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainTextArtifactResource,
+  ArtifactResource,
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
   JsonValue,
@@ -289,6 +313,7 @@ import type {
   SceneResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
+  ScriptSourceResponse,
   TopologicalChargeQuery,
   TopologicalChargeResource,
   SessionAssetImportResponse,
@@ -301,6 +326,7 @@ import type {
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
   SolverProfileResource,
+  SimulationPreparationResource,
   SolverStatusResource,
   StageExecutionResource,
   StructuredCommandRequest,
@@ -449,28 +475,30 @@ export function transformFieldVectorForDisplay(
     },
   };
 }
+import { decodeCrossSection } from "./codecs/crossSectionCodec";
+import { decodeCrossSectionQuality } from "./codecs/crossSectionQualityCodec";
+import { decodeFieldVector } from "./codecs/fieldVectorCodec";
+import { decodeMeshQualityData } from "./codecs/meshQualityDataCodec";
+import { decodePeriodicPairs } from "./codecs/periodicPairsCodec";
+import { decodeTableRows } from "./codecs/tableRowsCodec";
 import {
-  decodeCrossSection,
-  decodeCrossSectionQuality,
-  decodeFieldVector,
-  decodeMeshQualityData,
-  decodePeriodicPairs,
-  decodeTableRows,
   decodeTopology,
   decodeTopologyHeader,
   decodeTopologySections,
   expectedTopologyByteLength,
   FMMT_HEADER_LEN,
   topologyByteLayout,
-  type DecodedCrossSection,
-  type DecodedCrossSectionQuality,
-  type DecodedFieldVector,
-  type DecodedMeshQualityData,
-  type DecodedTableRows,
-  type DecodedTopology,
   type TopologyHeader,
   type TopologySections,
-} from "./codecs";
+} from "./codecs/topologyCodec";
+import type {
+  DecodedCrossSection,
+  DecodedCrossSectionQuality,
+  DecodedFieldVector,
+  DecodedMeshQualityData,
+  DecodedTableRows,
+  DecodedTopology,
+} from "./codecs/types";
 import {
   createBinaryDecodeScheduler,
   type BinaryDecoderKind,
@@ -515,6 +543,7 @@ export interface HysteresisExecutionTreeQuery {
 
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
+export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
@@ -573,6 +602,7 @@ export class ControlRoomApiError extends Error {
     message: string,
     readonly status: number,
     readonly requestId: string | null = null,
+    readonly code: string | null = null,
   ) {
     super(message);
     this.name = "ControlRoomApiError";
@@ -881,6 +911,8 @@ export class ControlRoomApi {
 
   readonly data = {
     artifacts: {
+      list: (options?: RequestOptions) =>
+        this.requestJson<ArtifactResource[]>(DATA_ARTIFACTS_PATH, options),
       bytes: (artifactRef: string, options?: BinaryRequestOptions) =>
         this.requestBinaryBytes(
           DATA_ARTIFACT_PATH,
@@ -932,8 +964,99 @@ export class ControlRoomApi {
           DATA_FIELD_VECTOR_PATH,
           { quantity_id: storedQuantityId },
           fieldVectorQueryParams(query),
+          fieldMetaQueryParams(query),
           options,
         ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
+      },
+      planar: {
+        meta: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: RequestOptions,
+        ) =>
+          this.requestJson<PlanarFieldMetaResource>(
+            DATA_PLANAR_FIELD_META_PATH,
+            options,
+            {
+              path: { monitor_id: monitorId, quantity_id: quantityId },
+              query,
+            },
+          ),
+        scalar: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_SCALAR_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        vectors: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_VECTORS_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        emptyMask: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        meshOverlay: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        probe: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldProbeQuery,
+          options?: RequestOptions,
+        ) =>
+          this.requestJson<PlanarFieldProbeResource>(
+            DATA_PLANAR_FIELD_PROBE_PATH,
+            options,
+            {
+              path: { monitor_id: monitorId, quantity_id: quantityId },
+              query,
+            },
+          ),
+        renderPng: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
       },
     },
     meshRegionMembership: (regionId: string, options?: RequestOptions) =>
@@ -948,7 +1071,7 @@ export class ControlRoomApi {
         options,
       ),
     fdmRegionMemberships: (options?: RequestOptions) =>
-      this.requestJson<FdmRegionMembershipResource>(
+      this.requestOptionalJson<FdmRegionMembershipResource>(
         DATA_FDM_REGION_MEMBERSHIPS_PATH,
         options,
       ),
@@ -1258,6 +1381,61 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    planarMonitors: {
+      list: (options?: RequestOptions) =>
+        this.requestJson<PlanarMonitorCollectionResource>(
+          MODEL_PLANAR_MONITORS_PATH,
+          options,
+        ),
+      get: (monitorId: string, options?: RequestOptions) =>
+        this.requestJson<PlanarMonitorResource>(
+          MODEL_PLANAR_MONITOR_PATH,
+          options,
+          { path: { monitor_id: monitorId } },
+        ),
+      create: (
+        request: PlanarMonitorCreateRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<PlanarMonitorResource, PlanarMonitorCreateRequest>(
+          MODEL_PLANAR_MONITORS_PATH,
+          request,
+          options,
+        ),
+      patch: (
+        monitorId: string,
+        request: PlanarMonitorPatchRequest,
+        options?: RequestOptions,
+      ) =>
+        this.patchJson<PlanarMonitorResource, PlanarMonitorPatchRequest>(
+          MODEL_PLANAR_MONITOR_PATH,
+          request,
+          options,
+          { path: { monitor_id: monitorId } },
+        ),
+      remove: (
+        monitorId: string,
+        request: PlanarMonitorDeleteRequest,
+        options?: RequestOptions,
+      ) =>
+        this.deleteJsonWithBody<
+          PlanarMonitorCollectionResource,
+          PlanarMonitorDeleteRequest
+        >(MODEL_PLANAR_MONITOR_PATH, request, options, {
+          path: { monitor_id: monitorId },
+        }),
+      duplicate: (
+        monitorId: string,
+        request: PlanarMonitorDuplicateRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<PlanarMonitorResource, PlanarMonitorDuplicateRequest>(
+          MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
+          request,
+          options,
+          { path: { monitor_id: monitorId } },
+        ),
+    },
     commitTransaction: (
       transaction: AuthoringTransactionRequest,
       options?: RequestOptions,
@@ -1648,6 +1826,8 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    authoringScript: (options?: RequestOptions) =>
+      this.requestJson<ScriptSourceResponse>(MODEL_SCRIPT_PATH, options),
     syncAuthoringScript: (
       request: ScriptSyncRequest,
       options?: RequestOptions,
@@ -1779,6 +1959,11 @@ export class ControlRoomApi {
     currentRun: (options?: RequestOptions) =>
       this.requestJson<CurrentRunResource>(
         SIMULATION_RUN_CURRENT_PATH,
+        options,
+      ),
+    preparation: (options?: RequestOptions) =>
+      this.requestJson<SimulationPreparationResource>(
+        SIMULATION_PREPARATION_PATH,
         options,
       ),
     objects: {
@@ -2075,8 +2260,37 @@ export class ControlRoomApi {
       return headerResult;
     }
 
+    const headerContentRange = requireExactContentRange(
+      headerResult.contentRange,
+      0,
+      FMMT_HEADER_LEN - 1,
+    );
+    if (headerResult.byteLength !== headerContentRange.end + 1) {
+      throw new ControlRoomApiError(
+        `Expected topology header byte range 0-${headerContentRange.end} to contain ${headerContentRange.end + 1} bytes, got ${headerResult.byteLength}`,
+        0,
+      );
+    }
+    if (!isStrongEtag(headerResult.etag)) {
+      throw new ControlRoomApiError(
+        "Chunked FMMT topology requires a strong ETag",
+        0,
+      );
+    }
     const header = decodeTopologyHeader(headerResult.data);
     const expectedByteLength = expectedTopologyByteLength(header);
+    if (expectedByteLength > MAX_TOPOLOGY_BYTES) {
+      throw new ControlRoomApiError(
+        `FMMT topology exceeds ${MAX_TOPOLOGY_BYTES} byte limit: ${expectedByteLength}`,
+        0,
+      );
+    }
+    if (headerContentRange.total !== expectedByteLength) {
+      throw new ControlRoomApiError(
+        `FMMT content length mismatch: expected ${expectedByteLength}, got ${headerContentRange.total}`,
+        0,
+      );
+    }
     if (expectedByteLength <= CHUNKED_TOPOLOGY_THRESHOLD_BYTES) {
       return this.requestBinaryResource(
         path,
@@ -2087,18 +2301,11 @@ export class ControlRoomApi {
       );
     }
 
-    const contentLength =
-      parseContentRangeTotal(headerResult.contentRange) ?? expectedByteLength;
-    if (contentLength !== expectedByteLength) {
-      throw new ControlRoomApiError(
-        `FMMT content length mismatch: expected ${expectedByteLength}, got ${contentLength}`,
-        0,
-      );
-    }
-
     const data = await this.loadTopologySectionsByRange(
       path,
       header,
+      headerResult.etag,
+      expectedByteLength,
       options,
       pathParams,
     );
@@ -2113,55 +2320,59 @@ export class ControlRoomApi {
   private async loadTopologySectionsByRange(
     path: OpenApiV2Path,
     header: TopologyHeader,
+    expectedEtag: string | null,
+    expectedTotal: number,
     options: BinaryRequestOptions,
     pathParams?: PathParams,
   ): Promise<DecodedTopology> {
     const layout = topologyByteLayout(header);
     const sections: TopologySections = {
-      boundaryFaces: new Uint32Array(header.boundaryFaceCount * 3),
-      boundaryMarkers: new Uint32Array(header.boundaryMarkerCount),
-      elementMarkers: new Uint32Array(header.elementMarkerCount),
-      indices: new Uint32Array(header.elementCount * 4),
+      cellGlobalOrdinals: new BigUint64Array(header.cellGlobalOrdinalCount),
+      cellMarkers: new Uint32Array(header.cellMarkerCount),
+      cellNodes: new Uint32Array(header.cellConnectivityCount),
+      cellOffsets:
+        header.version === 1
+          ? sequentialTopologyOffsets(header.cellCount, 4)
+          : new Uint32Array(header.cellCount + 1),
+      cellTypes: new Uint32Array(header.cellCount).fill(1),
+      facetGlobalOrdinals: new BigUint64Array(header.facetGlobalOrdinalCount),
+      facetMarkers: new Uint32Array(header.facetMarkerCount),
+      facetNodes: new Uint32Array(header.facetConnectivityCount),
+      facetOffsets:
+        header.version === 1
+          ? sequentialTopologyOffsets(header.facetCount, 3)
+          : new Uint32Array(header.facetCount + 1),
+      facetRoles: new Uint32Array(header.facetCount).fill(1),
+      facetTypes: new Uint32Array(header.facetCount).fill(1),
       positions: new Float64Array(header.nodeCount * 3),
     };
 
-    await Promise.all([
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.positions,
-        new Uint8Array(sections.positions.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.indices,
-        new Uint8Array(sections.indices.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.boundaryFaces,
-        new Uint8Array(sections.boundaryFaces.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.elementMarkers,
-        new Uint8Array(sections.elementMarkers.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.boundaryMarkers,
-        new Uint8Array(sections.boundaryMarkers.buffer),
-      ),
-    ]);
+    for (const [range, target] of [
+      [layout.positions, sections.positions],
+      [layout.cellNodes, sections.cellNodes],
+      [layout.facetNodes, sections.facetNodes],
+      [layout.cellMarkers, sections.cellMarkers],
+      [layout.facetMarkers, sections.facetMarkers],
+      [layout.cellGlobalOrdinals, sections.cellGlobalOrdinals],
+      [layout.facetGlobalOrdinals, sections.facetGlobalOrdinals],
+      [layout.cellTypes, sections.cellTypes],
+      [layout.cellOffsets, sections.cellOffsets],
+      [layout.facetTypes, sections.facetTypes],
+      [layout.facetRoles, sections.facetRoles],
+      [layout.facetOffsets, sections.facetOffsets],
+    ] as const) {
+      if (range) {
+        await this.loadTopologySectionByRange(
+          path,
+          options,
+          pathParams,
+          range,
+          new Uint8Array(target.buffer),
+          expectedEtag,
+          expectedTotal,
+        );
+      }
+    }
 
     return decodeTopologySections(header, sections);
   }
@@ -2172,6 +2383,8 @@ export class ControlRoomApi {
     pathParams: PathParams | undefined,
     range: { end: number; start: number },
     target: Uint8Array,
+    expectedEtag: string | null,
+    expectedTotal: number,
   ): Promise<void> {
     if (target.byteLength === 0 || range.end < range.start) return;
 
@@ -2198,7 +2411,22 @@ export class ControlRoomApi {
         );
       }
 
+      if (expectedEtag !== null && result.etag !== expectedEtag) {
+        throw new ControlRoomApiError(
+          `FMMT topology ETag mismatch for byte range ${start}-${end}: expected ${expectedEtag}, got ${result.etag ?? "missing"}`,
+          0,
+        );
+      }
+      requireExactContentRange(result.contentRange, start, end, expectedTotal);
+
       const bytes = new Uint8Array(result.data);
+      const expectedChunkLength = end - start + 1;
+      if (bytes.byteLength !== expectedChunkLength) {
+        throw new ControlRoomApiError(
+          `Expected topology byte range ${start}-${end} to contain ${expectedChunkLength} bytes, got ${bytes.byteLength}`,
+          0,
+        );
+      }
       target.set(bytes, written);
       written += bytes.byteLength;
     }
@@ -2336,10 +2564,14 @@ export class ControlRoomApi {
     path: OpenApiV2Path,
     pathParams: PathParams,
     query: QueryParams,
+    metaQuery: QueryParams,
     options: BinaryRequestOptions = {},
   ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const result = await this.requestFieldVector(path, pathParams, query, options);
     if (result.status !== "not-applicable") {
+      return result;
+    }
+    if (await this.livePublisherOwnsFieldMaterialization(quantityId, metaQuery, options)) {
       return result;
     }
     await this.materializeFieldsForQuantity(quantityId, options);
@@ -2350,6 +2582,35 @@ export class ControlRoomApi {
       query,
       options,
     );
+  }
+
+  private async livePublisherOwnsFieldMaterialization(
+    quantityId: string,
+    query: QueryParams,
+    options: RequestOptions,
+  ): Promise<boolean> {
+    try {
+      const meta = await this.requestJson<FieldMetaResource>(
+        DATA_FIELD_META_PATH,
+        options,
+        {
+          path: { quantity_id: quantityId },
+          query,
+        },
+      );
+      return ["complete", "pending", "stale_complete", "error"].includes(
+        meta.state,
+      );
+    } catch (error) {
+      if (shouldMaterializeFieldAfterJsonError(error)) {
+        const solver = await this.requestOptionalJson<SolverStatusResource>(
+          SIMULATION_SOLVER_STATUS_PATH,
+          options,
+        );
+        return solver?.is_busy === true || solver?.runtime_state === "running";
+      }
+      throw error;
+    }
   }
 
   private async materializeFieldsForQuantity(
@@ -2516,9 +2777,14 @@ export class ControlRoomApi {
         }
 
         if (!response.ok || result.error) {
+          const apiError = parseOpenApiError(result.error);
           throw new ControlRoomApiError(
-            await formatResponseError(response),
+            apiError.message === "Request failed"
+              ? await formatResponseError(response)
+              : apiError.message,
             response.status,
+            response.headers.get("x-request-id"),
+            apiError.code,
           );
         }
 
@@ -2830,12 +3096,46 @@ function pathFromUrl(url: string): string {
   }
 }
 
-function parseContentRangeTotal(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const match = /^bytes\s+\d+-\d+\/(\d+)$/i.exec(value.trim());
-  if (!match) return null;
-  const total = Number(match[1]);
-  return Number.isFinite(total) ? total : null;
+function requireExactContentRange(
+  value: string | null | undefined,
+  expectedStart: number,
+  requestedEnd: number,
+  expectedTotal?: number,
+): { end: number; start: number; total: number } {
+  const match = value ? /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(value.trim()) : null;
+  if (!match) {
+    throw new ControlRoomApiError("Expected an exact topology Content-Range header", 0);
+  }
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    !Number.isSafeInteger(total) ||
+    total <= 0 ||
+    start !== expectedStart ||
+    end !== Math.min(requestedEnd, total - 1) ||
+    (expectedTotal !== undefined && total !== expectedTotal)
+  ) {
+    throw new ControlRoomApiError(
+      `Unexpected topology Content-Range: expected bytes ${expectedStart}-${Math.min(requestedEnd, (expectedTotal ?? total) - 1)}/${expectedTotal ?? total}, got ${value}`,
+      0,
+    );
+  }
+  return { end, start, total };
+}
+
+function isStrongEtag(value: string | null | undefined): value is string {
+  return Boolean(value && !value.startsWith("W/") && /^"[^"\r\n]*"$/.test(value));
+}
+
+function sequentialTopologyOffsets(count: number, arity: number): Uint32Array {
+  const offsets = new Uint32Array(count + 1);
+  for (let index = 0; index <= count; index += 1) {
+    offsets[index] = index * arity;
+  }
+  return offsets;
 }
 
 function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
@@ -3063,36 +3363,61 @@ function readOpenApiResult<T>(result: {
   }
 
   if (!response.ok) {
+    const apiError = parseOpenApiError(result.error);
     throw new ControlRoomApiError(
-      formatOpenApiError(result.error),
+      apiError.message,
       response.status,
       response.headers.get("x-request-id"),
+      apiError.code,
     );
   }
 
   return result.data as T;
 }
 
-function formatOpenApiError(error: unknown): string {
+interface ParsedOpenApiError {
+  code: string | null;
+  message: string;
+}
+
+function parseOpenApiError(error: unknown): ParsedOpenApiError {
   if (error == null) {
-    return "Request failed";
+    return { code: null, message: "Request failed" };
+  }
+
+  if (error instanceof ArrayBuffer) {
+    const text = new TextDecoder().decode(error);
+    if (!text) {
+      return { code: null, message: "Request failed" };
+    }
+    try {
+      return parseOpenApiError(JSON.parse(text));
+    } catch {
+      return { code: null, message: text };
+    }
   }
 
   if (typeof error === "string") {
-    return error;
+    return { code: null, message: error };
   }
 
   if (typeof error === "object") {
     const record = error as Record<string, unknown>;
+    const code = typeof record.code === "string" ? record.code : null;
     if (typeof record.message === "string") {
-      return record.message;
+      return { code, message: record.message };
     }
     if (typeof record.error === "string") {
-      return record.error;
+      return { code, message: record.error };
     }
+    return { code, message: "Request failed" };
   }
 
-  return "Request failed";
+  return { code: null, message: "Request failed" };
+}
+
+function formatOpenApiError(error: unknown): string {
+  return parseOpenApiError(error).message;
 }
 
 async function formatResponseError(response: Response): Promise<string> {

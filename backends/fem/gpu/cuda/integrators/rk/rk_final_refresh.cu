@@ -12,6 +12,7 @@
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
+#include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
@@ -67,6 +68,13 @@ bool gpu_rk_finalize_accepted_step(
             n,
             ctx.state.current_time + active_dt,
             "launch GPU RK final h_eff accumulation",
+            reason)) {
+        gpu.rk.fsal_valid = false;
+        return false;
+    }
+    if (rk_step_inject_failure(
+            ctx,
+            RkStepFailurePoint::DuringFinalFieldRefresh,
             reason)) {
         gpu.rk.fsal_valid = false;
         return false;

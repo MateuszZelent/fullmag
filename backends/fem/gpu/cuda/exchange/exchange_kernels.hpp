@@ -74,6 +74,7 @@ void fullmag_cuda_legacy_sparse_exchange_difference_blocks(
     const double *current_mx, const double *current_my, const double *current_mz,
     const double *trial_mx, const double *trial_my, const double *trial_mz,
     double *block_delta,
+    double *block_absolute_terms,
     int rows,
     cudaStream_t stream = nullptr);
 

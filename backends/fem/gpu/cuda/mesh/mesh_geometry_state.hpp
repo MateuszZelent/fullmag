@@ -3,8 +3,10 @@
 /*
  * GPU CUDA mesh geometry device-state module header.
  *
- * Owns uploaded device-side nodal coordinates, tetrahedral connectivity, and
- * element magnetic masks shared by DMI and spin-torque geometry kernels.
+ * Owns optional device-side nodal coordinates, tetrahedral connectivity, and
+ * element magnetic masks consumed by DMI and Zhang-Li spin-torque kernels.
+ * Assembled-operator paths such as exchange and Poisson demag do not require
+ * this flat tetrahedral representation.
  */
 
 #include <cstdint>

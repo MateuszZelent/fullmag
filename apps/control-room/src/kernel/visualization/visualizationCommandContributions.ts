@@ -251,7 +251,7 @@ function numberPatchCommand(
   title: string,
   patchKey: keyof Pick<
     VisualizationTargetPatch,
-    | "opacityPercent"
+    | "surfaceOpacityPercent"
     | "vectorAlphaPercent"
     | "vectorThickness"
     | "wireframeOpacityPercent"
@@ -344,12 +344,12 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
   ),
   numberPatchCommand(
     "visualization.target.set-opacity-percent",
-    "Set selected target opacity",
-    "opacityPercent",
+    "Set selected target surface opacity",
+    "surfaceOpacityPercent",
   ),
   numberPatchCommand(
     "visualization.target.set-vector-alpha-percent",
-    "Set selected target vector alpha",
+    "Set selected target vector opacity",
     "vectorAlphaPercent",
   ),
   numberPatchCommand(
@@ -453,7 +453,7 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
       return value
         ? patchSelectedTarget(
             context,
-            renderModePatch(value as VisualizationRenderMode),
+            renderModePatch(value as VisualizationRenderMode | "off"),
           )
         : invalidPayload("visualization.target.set-render-mode");
     },

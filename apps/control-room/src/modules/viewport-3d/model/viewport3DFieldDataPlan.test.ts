@@ -273,6 +273,7 @@ describe("viewport3DFieldDataPlan", () => {
       shaderVisible: false,
       surfaceColorSource: "solid",
       vectorBudget: 512,
+      vectorColorMode: "x",
       vectorsVisible: true,
       viewportColorbarVisible: true,
     });
@@ -320,6 +321,13 @@ describe("viewport3DFieldDataPlan", () => {
         targetId: "object:orientation",
       },
       {
+        component: "x",
+        completeness: "complete",
+        maxSamples: null,
+        passKind: "colorbar",
+        targetId: "object:vectors",
+      },
+      {
         component: "full",
         completeness: "sampled-ok",
         maxSamples: 128,
@@ -329,7 +337,7 @@ describe("viewport3DFieldDataPlan", () => {
     ]);
     expect(componentPlan.colorbar.viewportVisible).toBe(true);
     expect(orientationPlan.colorbar.viewportVisible).toBe(false);
-    expect(vectorOnlyPlan.colorbar.viewportVisible).toBe(false);
+    expect(vectorOnlyPlan.colorbar.viewportVisible).toBe(true);
     expect(
       requests
         .map((request) => ({
@@ -360,10 +368,12 @@ describe("viewport3DFieldDataPlan", () => {
         },
       },
       {
-        consumers: ["object:vectors:vector-glyph"],
+        consumers: [
+          "object:vectors:colorbar",
+          "object:vectors:vector-glyph",
+        ],
         query: {
           component: "full",
-          max_samples: 128,
           scope_id: "object:vectors",
           scope_kind: "object",
         },

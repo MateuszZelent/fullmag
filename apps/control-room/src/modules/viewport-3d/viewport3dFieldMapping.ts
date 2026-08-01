@@ -287,6 +287,7 @@ export function buildSurfaceFaceScalarColors(
   colorPalette = "viridis",
   scalarRange?: ScalarRange | null,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
+  targetNodeIndices?: ArrayLike<number> | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -298,7 +299,6 @@ export function buildSurfaceFaceScalarColors(
     surfaceIndices.length === 0 ||
     surfaceIndices.length % 3 !== 0 ||
     fieldVector.pointCount === 0 ||
-    fieldVector.indexing === "sampled_node_indices" ||
     !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(
@@ -309,13 +309,20 @@ export function buildSurfaceFaceScalarColors(
     return null;
   }
 
-  const nodeToFieldIndex = buildNodeToFieldIndexMap(fieldVector, vertexCount);
+  const nodeToFieldIndex = buildNodeToFieldIndexMap(
+    fieldVector,
+    vertexCount,
+    targetNodeIndices,
+  );
   if (!nodeToFieldIndex) return null;
 
   const faceCount = surfaceIndices.length / 3;
   const faceVectors = new Float64Array(faceCount * 3);
   const faceScalars = new Float64Array(faceCount);
   let lowNormFaceCount = 0;
+  let degradedFaceCount = 0;
+  let missingNodeCount = 0;
+  const degradedFaces = new Uint8Array(faceCount);
   for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
     const surfaceOffset = faceIndex * 3;
     const nodeA = surfaceIndices[surfaceOffset] ?? -1;
@@ -325,7 +332,12 @@ export function buildSurfaceFaceScalarColors(
     const fieldB = nodeToFieldIndex.get(nodeB);
     const fieldC = nodeToFieldIndex.get(nodeC);
     if (fieldA === undefined || fieldB === undefined || fieldC === undefined) {
-      return null;
+      degradedFaces[faceIndex] = 1;
+      degradedFaceCount += 1;
+      missingNodeCount += [fieldA, fieldB, fieldC].filter(
+        (fieldIndex) => fieldIndex === undefined,
+      ).length;
+      continue;
     }
     const [x, y, z] = averageFieldVectorComponents(
       fieldVector,
@@ -366,15 +378,17 @@ export function buildSurfaceFaceScalarColors(
     const y = faceVectors[vectorOffset + 1] ?? 0;
     const z = faceVectors[vectorOffset + 2] ?? 0;
     const scalar = faceScalars[faceIndex] ?? 0;
-    const rgb = colorProjectedVector(
-      resolvedColorMode,
-      x,
-      y,
-      z,
-      range,
-      scalar,
-      colorPalette,
-    );
+    const rgb = degradedFaces[faceIndex]
+      ? MISSING_PROJECTED_DATA_RGB
+      : colorProjectedVector(
+          resolvedColorMode,
+          x,
+          y,
+          z,
+          range,
+          scalar,
+          colorPalette,
+        );
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
       const colorOffset = targetIndex * 3;
@@ -396,11 +410,11 @@ export function buildSurfaceFaceScalarColors(
     colors,
     colorMode: resolvedColorMode,
     colorPalette,
-    degradedFaceCount: 0,
+    degradedFaceCount,
     faceCount,
     geometryRole: "face_expanded_surface",
     lowNormFaceCount,
-    missingNodeCount: 0,
+    missingNodeCount,
     projectionMode: "surface_faces",
     quantityId: fieldVector.quantityId,
     range,
@@ -420,6 +434,7 @@ export function buildThicknessAverageZScalarColors(
   colorPalette = "viridis",
   scalarRange?: ScalarRange | null,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
+  targetNodeIndices?: ArrayLike<number> | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -433,7 +448,6 @@ export function buildThicknessAverageZScalarColors(
     surfaceIndices.length === 0 ||
     surfaceIndices.length % 3 !== 0 ||
     fieldVector.pointCount === 0 ||
-    fieldVector.indexing === "sampled_node_indices" ||
     !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(
@@ -444,7 +458,11 @@ export function buildThicknessAverageZScalarColors(
     return null;
   }
 
-  const nodeToFieldIndex = buildNodeToFieldIndexMap(fieldVector, vertexCount);
+  const nodeToFieldIndex = buildNodeToFieldIndexMap(
+    fieldVector,
+    vertexCount,
+    targetNodeIndices,
+  );
   if (!nodeToFieldIndex) return null;
   const projection = buildWorldZProjectedVectors({
     fieldVector,
@@ -816,12 +834,13 @@ export function resolveScalarRangeDiagnostics(
 function buildNodeToFieldIndexMap(
   fieldVector: DecodedFieldVector,
   vertexCount: number,
+  targetNodeIndices?: ArrayLike<number> | null,
 ): Map<number, number> | null {
-  if (fieldVector.indexing === "sampled_node_indices") return null;
   const map = new Map<number, number>();
   if (fieldVector.nodeIndices) {
     if (
-      fieldVector.indexing === "explicit_node_indices" &&
+      (fieldVector.indexing === "explicit_node_indices" ||
+        fieldVector.indexing === "sampled_node_indices") &&
       fieldVector.nodeIndices.length !== fieldVector.pointCount
     ) {
       return null;
@@ -840,9 +859,52 @@ function buildNodeToFieldIndexMap(
     return map;
   }
 
-  if (fieldVector.indexing === "explicit_node_indices") return null;
+  if (
+    fieldVector.indexing === "explicit_node_indices" ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return targetNodeIndices &&
+      targetNodeIndices.length === fieldVector.pointCount
+      ? buildNodeToFieldIndexMapFromIndices(
+          targetNodeIndices,
+          fieldVector.pointCount,
+          vertexCount,
+        )
+      : null;
+  }
+  if (targetNodeIndices) {
+    return targetNodeIndices.length === fieldVector.pointCount
+      ? buildNodeToFieldIndexMapFromIndices(
+          targetNodeIndices,
+          fieldVector.pointCount,
+          vertexCount,
+        )
+      : null;
+  }
   for (let fieldIndex = 0; fieldIndex < fieldVector.pointCount; fieldIndex += 1) {
     map.set(fieldIndex, fieldIndex);
+  }
+  return map;
+}
+
+function buildNodeToFieldIndexMapFromIndices(
+  targetNodeIndices: ArrayLike<number>,
+  pointCount: number,
+  vertexCount: number,
+): Map<number, number> | null {
+  if (targetNodeIndices.length !== pointCount) return null;
+  const map = new Map<number, number>();
+  for (let fieldIndex = 0; fieldIndex < pointCount; fieldIndex += 1) {
+    const nodeIndex = targetNodeIndices[fieldIndex];
+    if (
+      nodeIndex === undefined ||
+      !Number.isInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= vertexCount
+    ) {
+      return null;
+    }
+    map.set(nodeIndex, fieldIndex);
   }
   return map;
 }

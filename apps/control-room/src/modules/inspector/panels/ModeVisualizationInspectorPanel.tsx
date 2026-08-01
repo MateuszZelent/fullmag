@@ -15,7 +15,12 @@ import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
+import {
+  VisualizationContextSwitch,
+  useVisualizationViewContext,
+} from "../visualization/VisualizationContextSwitch";
+import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
 import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
   DEFAULT_ANALYSIS_FIELD_VIEW,
@@ -214,6 +219,7 @@ function ModeFieldDiagnostics({
 export function ModeVisualizationInspectorPanel({
   selection,
 }: InspectorPanelProps) {
+  const visualizationViewContext = useVisualizationViewContext();
   const target = modeVisualizationRef(selection);
   const kernel = useKernel();
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -255,6 +261,7 @@ export function ModeVisualizationInspectorPanel({
   const lastActivationKey = useRef<string | null>(null);
 
   useEffect(() => {
+    if (visualizationViewContext === "planar") return;
     if (!target || !activationKey) return;
     const overlay = settings.activeAnalysisFieldOverlay;
     if (
@@ -285,19 +292,35 @@ export function ModeVisualizationInspectorPanel({
     selection.label,
     settings.activeAnalysisFieldOverlay,
     sourceDetail,
+    visualizationViewContext,
   ]);
 
   if (!target) {
     return (
-      <InspectorSection title="Mode Visualization">
+      <InspectorGroup title="Mode Visualization">
         <p className="fm-inspector-empty">No mode visualization target selected.</p>
-      </InspectorSection>
+      </InspectorGroup>
+    );
+  }
+
+  if (visualizationViewContext === "planar") {
+    return (
+      <div className="fm-inspector-panel">
+        <InspectorGroup title="View">
+          <VisualizationContextSwitch />
+        </InspectorGroup>
+        <PlanarVisualizationSection selection={selection} />
+      </div>
     );
   }
 
   return (
-    <InspectorSection title="Mode Visualization">
-      <FieldRow label="Object" value={target.objectId} />
+    <>
+      <InspectorGroup title="View">
+        <VisualizationContextSwitch />
+      </InspectorGroup>
+      <InspectorGroup title="Mode Visualization">
+        <FieldRow label="Object" value={target.objectId} />
       <FieldRow label="Source" value={modeVisualizationSourceLabel(target)} />
       <FieldRow label="Selection" value={modeVisualizationIndexLabel(target)} />
       <FieldRow label="Field" value={target.fieldId} />
@@ -327,13 +350,14 @@ export function ModeVisualizationInspectorPanel({
           target={target}
         />
       ) : null}
-      <FrequencyDomainModeDisplayControls
-        disabled={false}
-        labelPrefix="Mode visualization"
-        settings={settings}
-        viewDefaultValue={target.view ?? DEFAULT_ANALYSIS_FIELD_VIEW}
-        viewOptions={ANALYSIS_FIELD_VIEW_OPTIONS}
-      />
-    </InspectorSection>
+        <FrequencyDomainModeDisplayControls
+          disabled={false}
+          labelPrefix="Mode visualization"
+          settings={settings}
+          viewDefaultValue={target.view ?? DEFAULT_ANALYSIS_FIELD_VIEW}
+          viewOptions={ANALYSIS_FIELD_VIEW_OPTIONS}
+        />
+      </InspectorGroup>
+    </>
   );
 }

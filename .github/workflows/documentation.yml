@@ -1,0 +1,162 @@
+# Public-only Sphinx publication for GitHub Pages.
+name: Public documentation
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "public_docs/site/**"
+      - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
+      - "docs/physics/**"
+      - "packages/fullmag-py/**"
+      - "scripts/public_docs_information_architecture.py"
+      - "scripts/test_public_docs_information_architecture.py"
+      - "scripts/check_public_doc_examples.py"
+      - "scripts/test_check_public_doc_examples.py"
+      - ".agents/skills/scientific-documentation-contract/**"
+      - ".github/workflows/documentation.yml"
+  pull_request:
+    paths:
+      - "public_docs/site/**"
+      - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
+      - "docs/physics/**"
+      - "packages/fullmag-py/**"
+      - "scripts/public_docs_information_architecture.py"
+      - "scripts/test_public_docs_information_architecture.py"
+      - "scripts/check_public_doc_examples.py"
+      - "scripts/test_check_public_doc_examples.py"
+      - ".agents/skills/scientific-documentation-contract/**"
+      - ".github/workflows/documentation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-documentation
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Test scientific documentation validators
+        run: >-
+          python -m unittest discover
+          -s .agents/skills/scientific-documentation-contract/scripts
+          -p 'test_*.py' -v
+
+      - name: Validate public documentation information architecture
+        run: |
+          python -m unittest scripts/test_public_docs_information_architecture.py -v
+          python scripts/public_docs_information_architecture.py --check --root public_docs/site
+
+      - name: Enforce stage-first public Python examples
+        run: |
+          python -m unittest scripts/test_check_public_doc_examples.py -v
+          python scripts/check_public_doc_examples.py --root public_docs/site
+
+      - name: Resolve scientific documentation diff base
+        id: docs-diff
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [[ "${{ github.event.before }}" =~ ^[0-9a-f]{40}$ ]] && [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git rev-parse HEAD^)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Require source maps for changed scientific pages
+        run: >-
+          python .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
+          --base "${{ steps.docs-diff.outputs.base }}"
+          --head HEAD
+          --repo-root .
+
+      - name: Install public documentation dependencies
+        run: |
+          python -m pip install -r public_docs/site/requirements.txt
+          python -m pip install ./packages/fullmag-py
+
+      - name: Check public and internal documentation boundary
+        run: python scripts/check_public_docs_boundary.py
+
+      - name: Validate scientific documentation source contracts
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' manifest; do
+            python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+              "$manifest" --repo-root .
+          done < <(find public_docs/site/physics public_docs/site/python-api -name '*.source-map.json' -print0)
+
+      - name: Execute documented Python API contracts
+        env:
+          PYTHONPATH: packages/fullmag-py/src
+        run: |
+          python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
+          python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
+
+      - name: Build public documentation strictly
+        env:
+          FULLMAG_DOCS_VERSION: ${{ github.ref_name }}
+        run: >-
+          sphinx-build -b html -W -n --keep-going
+          public_docs/site public_docs/site/_build/html
+
+      - name: Validate rendered scientific documentation
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' manifest; do
+            relative="${manifest#public_docs/site/}"
+            rendered="public_docs/site/_build/html/${relative%.source-map.json}.html"
+            python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+              "$manifest" --repo-root . --rendered-html "$rendered"
+          done < <(find public_docs/site/physics public_docs/site/python-api -name '*.source-map.json' -print0)
+
+      - name: Upload pull request preview artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: fullmag-public-docs-${{ github.sha }}
+          path: public_docs/site/_build/html
+
+      - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v6
+
+      - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: public_docs/site/_build/html
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy public documentation
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -28,6 +28,15 @@ typedef enum {
     FULLMAG_FEM_INTEGRATOR_RK45_DP54 = 4,
 } fullmag_fem_integrator;
 
+typedef enum {
+    FULLMAG_FEM_HOST_THREAD_POLICY_NONE = 0,
+    FULLMAG_FEM_HOST_THREAD_POLICY_EXTERNAL_AUTO_RESOLVED = 1,
+    FULLMAG_FEM_HOST_THREAD_POLICY_SMALL_MESH = 2,
+    FULLMAG_FEM_HOST_THREAD_POLICY_MEDIUM_MESH = 3,
+    FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE = 4,
+    FULLMAG_FEM_HOST_THREAD_POLICY_AUTO_UNCAPPED = 5,
+} fullmag_fem_host_thread_policy_reason;
+
 typedef struct {
     double atol;
     double rtol;
@@ -39,6 +48,18 @@ typedef struct {
     double shrink_limit;
     uint32_t max_reject;
 } fullmag_fem_adaptive_config;
+
+#define FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION 2u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fem_adaptive_config base;
+    int has_max_spin_rotation;
+    double max_spin_rotation;
+    int has_norm_tolerance;
+    double norm_tolerance;
+} fullmag_fem_adaptive_config_v2;
 
 typedef enum {
     FULLMAG_FEM_OBSERVABLE_M = 1,
@@ -237,17 +258,53 @@ typedef enum {
 
 typedef int (*fullmag_fem_interrupt_poll_fn)(void *user_data);
 
+/* Canonical typed P1 mesh descriptor. Wire values are stable ABI, not Gmsh IDs. */
+#define FULLMAG_FEM_MESH_DESC_ABI_VERSION 2u
+#define FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT \
+    "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals"
+
+#define FULLMAG_FEM_CELL_TET4 1u
+#define FULLMAG_FEM_CELL_PRISM6 2u
+#define FULLMAG_FEM_CELL_PYRAMID5 3u
+#define FULLMAG_FEM_CELL_HEX8 4u
+
+#define FULLMAG_FEM_FACET_TRI3 1u
+#define FULLMAG_FEM_FACET_QUAD4 2u
+
+#define FULLMAG_FEM_FACET_ROLE_EXTERIOR 1u
+#define FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE 2u
+#define FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM 3u
+
 typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+
     const double *nodes_xyz;
-    uint32_t n_nodes;
+    uint64_t nodes_xyz_len;
 
-    const uint32_t *elements;
-    uint32_t n_elements;
-    const uint32_t *element_markers;
+    const uint32_t *cell_types;
+    uint64_t cell_types_len;
+    const uint32_t *cell_offsets;
+    uint64_t cell_offsets_len;
+    const uint32_t *cell_nodes;
+    uint64_t cell_nodes_len;
+    const uint64_t *cell_global_ordinals;
+    uint64_t cell_global_ordinals_len;
+    const uint32_t *cell_markers;
+    uint64_t cell_markers_len;
 
-    const uint32_t *boundary_faces;
-    uint32_t n_boundary_faces;
-    const uint32_t *boundary_markers;
+    const uint32_t *facet_types;
+    uint64_t facet_types_len;
+    const uint32_t *facet_roles;
+    uint64_t facet_roles_len;
+    const uint32_t *facet_offsets;
+    uint64_t facet_offsets_len;
+    const uint32_t *facet_nodes;
+    uint64_t facet_nodes_len;
+    const uint64_t *facet_global_ordinals;
+    uint64_t facet_global_ordinals_len;
+    const uint32_t *facet_markers;
+    uint64_t facet_markers_len;
 
     /* Static periodic node pairs as [node_a0,node_b0,node_a1,node_b1,...].
        Supported native CPU/MFEM static-reduction paths consume these to build
@@ -255,15 +312,45 @@ typedef struct {
        and static-periodic driven-response projection.  Unsupported lanes must
        reject them explicitly rather than silently treating seams as open. */
     const uint32_t *periodic_node_pairs;
-    uint32_t n_periodic_node_pairs;
+    uint64_t periodic_node_pairs_len;
 
     /* MFEM boundary attribute markers for periodic seam face pairs,
        stored as [marker_a0, marker_b0, marker_a1, marker_b1, ...].
        Used to exclude periodic seam faces from Robin boundary mass
        when demag PBC is enabled.  Pass NULL / 0 when not applicable. */
     const uint32_t *periodic_boundary_pair_markers;
-    uint32_t periodic_boundary_pair_count;
+    uint64_t periodic_boundary_pair_markers_len;
 } fullmag_fem_mesh_desc;
+
+#define FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION 1u
+#define FULLMAG_FEM_MESH_ABI_FIELD_COUNT 30u
+#define FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY 96u
+#define FULLMAG_FEM_MESH_ABI_RECORD_VERSION 1u
+#define FULLMAG_FEM_MESH_ABI_RECORD_MAGIC_CAPACITY 40u
+#define FULLMAG_FEM_MESH_ABI_RECORD_MAGIC "FULLMAG_FEM_MESH_ABI_RECORD_V1"
+#define FULLMAG_FEM_MESH_ABI_RECORD_ENDIAN_TAG 0x01020304u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t mesh_desc_abi_version;
+    uint32_t mesh_desc_struct_size;
+    uint32_t field_count;
+    uint32_t reserved;
+    uint64_t field_offsets[FULLMAG_FEM_MESH_ABI_FIELD_COUNT];
+    char layout_fingerprint[FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY];
+} fullmag_fem_mesh_abi_layout;
+
+typedef struct {
+    char magic[FULLMAG_FEM_MESH_ABI_RECORD_MAGIC_CAPACITY];
+    uint32_t record_version;
+    uint32_t record_size;
+    uint32_t endian_tag;
+    uint32_t reserved;
+    fullmag_fem_mesh_abi_layout layout;
+} fullmag_fem_mesh_abi_record;
+
+extern const fullmag_fem_mesh_abi_record fullmag_fem_mesh_abi_record_v1;
 
 typedef struct {
     double saturation_magnetisation;
@@ -307,6 +394,16 @@ typedef struct {
     char metric_name[64];
     double metric_value;
     double threshold;
+    uint32_t relaxation_controller_policy_version;
+    uint32_t torque_confirmation_samples_required;
+    uint32_t torque_confirmation_samples_current;
+    uint64_t energy_rejected_attempts;
+    uint64_t controller_tightening_count;
+    int controller_at_floor;
+    double energy_increase_relative_tolerance;
+    double energy_increase_absolute_tolerance_j;
+    double controller_tightening_factor;
+    double max_error_floor;
 } fullmag_fem_stage_completion;
 
 typedef struct {
@@ -364,7 +461,7 @@ typedef struct {
 
     /* Per-element material coefficients for discontinuous conformal domains.
        NULL + 0 = use per-node field/scalar fallback. When present, length must
-       equal mesh.n_elements. These fields preserve one shared H1 magnetization
+       equal mesh.cell_types_len. These fields preserve one shared H1 magnetization
        space while allowing discontinuous A/Ms coefficients across conformal
        internal domain boundaries. */
     const double *ms_element_field;    uint64_t ms_element_field_len;
@@ -485,8 +582,58 @@ typedef struct {
     /* Thread provenance (filled from context each step) */
     int32_t requested_omp_threads;
     int32_t effective_omp_threads;
+    /* fullmag_fem_host_thread_policy_reason; field name retained for ABI stability. */
     int32_t cpu_thread_cap_reason;
+    /* Effective native BoomerAMG policy, including optional override presence. */
+    int32_t demag_amg_relax_type;
+    int32_t demag_amg_coarsening;
+    int32_t demag_amg_interpolation;
+    int32_t demag_amg_aggressive_coarsening;
+    double demag_amg_strength_threshold;
+    int32_t demag_amg_strength_threshold_is_set;
+    int32_t demag_amg_max_levels;
+    int32_t demag_amg_max_levels_is_set;
 } fullmag_fem_step_stats;
+
+#define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    int32_t accepted_energy_proof_available;
+    double accepted_energy_delta_j;
+    double accepted_energy_roundoff_bound_j;
+    double accepted_energy_delta_upper_j;
+    double armijo_increment_rhs_j;
+} fullmag_fem_accepted_energy_proof_v1;
+
+#define FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION 1u
+
+typedef enum {
+    FULLMAG_FEM_SOLVER_ATTEMPT_ACCEPTED = 1,
+    FULLMAG_FEM_SOLVER_ATTEMPT_RETRY = 2,
+    FULLMAG_FEM_SOLVER_ATTEMPT_FAILED = 3,
+} fullmag_fem_solver_attempt_decision;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t attempt;
+    uint64_t target_step;
+    double time_seconds;
+    double dt_attempt_seconds;
+    double eta;
+    double max_norm_defect;
+    double max_spin_rotation;
+    uint32_t decision;
+    uint32_t reason;
+    double dt_next_seconds;
+    uint32_t demag_solve_count;
+    uint32_t demag_linear_iterations;
+    double demag_linear_residual;
+    uint32_t rhs_evaluations;
+    int32_t estimator_order;
+} fullmag_fem_solver_attempt_record_v1;
 
 typedef struct {
     char name[128];
@@ -498,6 +645,24 @@ typedef struct {
     uint64_t gpu_memory_free_bytes;
     uint64_t gpu_memory_total_bytes;
 } fullmag_fem_device_info;
+
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION 1u
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY 32u
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY 32u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    char mfem_version[FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY];
+} fullmag_fem_runtime_build_info;
+
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION 2u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    char mfem_version[FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY];
+    char hypre_version[FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY];
+} fullmag_fem_runtime_build_info_v2;
 
 typedef struct {
     int available;
@@ -1077,6 +1242,7 @@ int fullmag_fem_get_frequency_domain_dependency_info(
 int fullmag_fem_get_frequency_domain_abi_layout(
     fullmag_fem_frequency_domain_abi_layout *out_layout
 );
+int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
 int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,
     fullmag_fem_frequency_domain_sweep_progress *out_progress
@@ -1134,6 +1300,11 @@ void fullmag_fem_frequency_domain_result_destroy(
 
 fullmag_fem_backend *fullmag_fem_backend_create(
     const fullmag_fem_plan_desc *plan
+);
+
+fullmag_fem_backend *fullmag_fem_backend_create_v2(
+    const fullmag_fem_plan_desc *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
 int fullmag_fem_get_regional_field_drive_abi_layout(
@@ -1296,6 +1467,23 @@ int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_step_stats *out_stats
 );
 
+int fullmag_fem_backend_solver_attempt_count_v1(
+    fullmag_fem_backend *handle,
+    uint64_t *out_count
+);
+
+int fullmag_fem_backend_copy_solver_attempts_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_solver_attempt_record_v1 *out_records,
+    uint64_t capacity,
+    uint64_t *out_count
+);
+
+int fullmag_fem_backend_take_accepted_energy_proof_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_accepted_energy_proof_v1 *out_proof
+);
+
 int fullmag_fem_backend_stage_completion(
     fullmag_fem_backend *handle,
     fullmag_fem_stage_completion *out_completion
@@ -1304,6 +1492,13 @@ int fullmag_fem_backend_stage_completion(
 int fullmag_fem_backend_get_device_info(
     fullmag_fem_backend *handle,
     fullmag_fem_device_info *out_info
+);
+
+int fullmag_fem_get_runtime_build_info(
+    fullmag_fem_runtime_build_info *out_info
+);
+int fullmag_fem_get_runtime_build_info_v2(
+    fullmag_fem_runtime_build_info_v2 *out_info
 );
 
 int fullmag_fem_backend_get_transfer_audit(

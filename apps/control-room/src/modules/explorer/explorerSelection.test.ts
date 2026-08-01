@@ -18,11 +18,13 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { LayoutController } from "@/kernel/layout/LayoutController";
 import { ModuleRegistry } from "@/kernel/module/ModuleRegistry";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnectionController";
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
@@ -49,6 +51,7 @@ function makeKernel(): KernelApi {
   return {
     api,
     analysisFieldOverlay: new AnalysisFieldOverlayController(),
+  chartViewportHandoff: new ChartViewportHandoffController(),
     bus,
     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),
@@ -60,6 +63,7 @@ function makeKernel(): KernelApi {
     layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
     realtime: new RealtimeInvalidationBridge(resources),
+    realtimeConnection: new RealtimeConnectionController(),
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),
@@ -953,6 +957,55 @@ describe("selectExplorerNode", () => {
         plotId: "plot-1",
         type: "cross-section-plot",
         visualizationTargetId: "cross-section:plot:plot-1",
+      },
+    });
+  });
+
+  it("selects a canonical planar monitor with its monitor identity", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:definitions:planar-monitors:midplane",
+      kind: "model.planar.monitor",
+      label: "Midplane",
+      monitorId: "midplane",
+      parentId: "model:definitions:planar-monitors",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "model.planar.monitor",
+      label: "Midplane",
+      nodeId: "model:definitions:planar-monitors:midplane",
+      ref: {
+        kind: "model.planar.monitor",
+        monitorId: "midplane",
+        type: "planar-monitor",
+        visualizationTargetId: "planar-monitor:midplane",
+      },
+    });
+  });
+
+  it("selects an uncommitted planar monitor draft with its own identity", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:definitions:planar-monitors:draft",
+      kind: "model.planar.monitor.draft",
+      label: "Midplane",
+      parentId: "model:definitions:planar-monitors",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "model.planar.monitor.draft",
+      label: "Midplane",
+      nodeId: "model:definitions:planar-monitors:draft",
+      ref: {
+        draftId: "draft",
+        kind: "model.planar.monitor.draft",
+        type: "planar-monitor-draft",
+        visualizationTargetId: "planar-monitor:draft",
       },
     });
   });

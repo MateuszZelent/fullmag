@@ -53,6 +53,7 @@ import {
 
 import { selectExplorerNode } from "./explorerSelection";
 import { explorerStatusClassName } from "./explorerStatusClass";
+import { cn } from "@/shared/utils/className";
 import {
   setExplorerKeyboardRow,
   toggleExplorerNode,
@@ -365,11 +366,11 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
   const row = (
     <div
-      className={[
+      className={cn(
         "fm-explorer-tree-row",
-        node.activeAnalysisField ? "fm-explorer-tree-row--active-analysis-field" : null,
+        node.activeAnalysisField && "fm-explorer-tree-row--active-analysis-field",
         explorerStatusClassName(node.status),
-      ].filter(Boolean).join(" ")}
+      )}
       data-active={active}
       data-active-analysis-field={node.activeAnalysisField ? "true" : undefined}
       data-node-id={node.id}
@@ -384,6 +385,16 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       onKeyDown={handleKeyDown}
       style={{ "--fm-tree-depth": depth } as CSSProperties}
     >
+      {depth > 0
+        ? Array.from({ length: depth }, (_, i) => (
+            <span
+              key={i}
+              aria-hidden="true"
+              className="fm-explorer-tree-guide"
+              style={{ left: `calc(var(--fm-space-1) + ${i} * var(--fm-tree-indent) + var(--fm-tree-guide-offset))` } as CSSProperties}
+            />
+          ))
+        : null}
       <span className="fm-explorer-tree-row__branch" aria-hidden="true">
         {hasChildren ? (
           <ChevronRight
@@ -396,7 +407,11 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
           />
         ) : null}
       </span>
-      <span className="fm-explorer-tree-row__icon" aria-hidden="true">
+      <span
+        className="fm-explorer-tree-row__icon"
+        aria-hidden="true"
+        data-icon={node.icon ?? "file"}
+      >
         {node.icon ? ICONS[node.icon] : ICONS.file}
       </span>
       <span className="fm-explorer-tree-row__label">{node.label}</span>

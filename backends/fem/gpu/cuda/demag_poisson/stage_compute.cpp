@@ -12,8 +12,10 @@
 #include "context.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
@@ -132,8 +134,8 @@ bool compute_device_demag_for_device_stage_impl(
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
     }
-    if (gpu.mesh_metrics.lumped_mass == nullptr || gpu.materials.ms == nullptr) {
-        reason = "strict FEM GPU demag energy requires uploaded Ms and lumped mass buffers";
+    if (gpu.mesh_metrics.node_volumes == nullptr || gpu.materials.ms == nullptr) {
+        reason = "strict FEM GPU demag energy requires uploaded Ms and node-volume buffers";
         return false;
     }
 
@@ -150,47 +152,43 @@ bool compute_device_demag_for_device_stage_impl(
             reason)) {
         return false;
     }
-    fullmag_cuda_demag_rhs_csr(
-        workspace->rhs.d_row_offsets,
-        workspace->rhs.d_col_indices,
-        workspace->rhs.d_values_x,
-        workspace->rhs.d_values_y,
-        workspace->rhs.d_values_z,
-        m.x,
-        m.y,
-        m.z,
-        gpu.demag_poisson.poisson_rhs,
-        static_cast<int>(workspace->rhs.rows),
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag RHS CSR", reason)) {
-        return false;
-    }
-    fullmag_cuda_zero_indexed_values(
-        gpu.demag_poisson.poisson_rhs,
-        workspace->d_ess_tdofs,
-        static_cast<int>(workspace->ess_tdofs.size()),
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag essential RHS zero", reason)) {
-        return false;
-    }
-    if (!assemble_timer.finish(reason)) {
-        return false;
-    }
-
-    if (reset_initial_solution) {
-        if (!cuda_ok(cudaMemset(
-                gpu.demag_poisson.poisson_solution,
-                0,
-                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double)),
-                "cudaMemset GPU Poisson demag initial solution", reason)) {
+    {
+        FULLMAG_NVTX_RANGE("fem.demag.rhs");
+        fullmag_cuda_demag_rhs_csr(
+            workspace->rhs.d_row_offsets,
+            workspace->rhs.d_col_indices,
+            workspace->rhs.d_values_x,
+            workspace->rhs.d_values_y,
+            workspace->rhs.d_values_z,
+            m.x,
+            m.y,
+            m.z,
+            gpu.demag_poisson.poisson_rhs,
+            static_cast<int>(workspace->rhs.rows),
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag RHS CSR", reason)) {
+            return false;
+        }
+        fullmag_cuda_zero_indexed_values(
+            gpu.demag_poisson.poisson_rhs,
+            workspace->d_ess_tdofs,
+            static_cast<int>(workspace->ess_tdofs.size()),
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag essential RHS zero", reason)) {
+            return false;
+        }
+        if (!assemble_timer.finish(reason)) {
             return false;
         }
     }
-    if (workspace->compute_ready_event != nullptr) {
-        if (!cuda_ok(cudaEventRecord(workspace->compute_ready_event, stream),
-                "cudaEventRecord GPU demag solve inputs ready", reason) ||
-            !cuda_ok(cudaStreamWaitEvent(nullptr, workspace->compute_ready_event, 0),
-                "cudaStreamWaitEvent GPU demag default stream wait solve inputs", reason)) {
+
+    if (reset_initial_solution) {
+        if (!cuda_ok(cudaMemsetAsync(
+                gpu.demag_poisson.poisson_solution,
+                0,
+                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double),
+                stream),
+                "cudaMemsetAsync GPU Poisson demag initial solution", reason)) {
             return false;
         }
     }
@@ -203,48 +201,66 @@ bool compute_device_demag_for_device_stage_impl(
     } else {
         workspace->x_par->HypreReadWrite();
     }
-    if (reset_initial_solution &&
-        !reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
+    if (!prepare_demag_poisson_hypre_device_solver_apply(
             ctx,
             *workspace,
+            reset_initial_solution,
             reason)) {
         return false;
     }
-    if (!set_demag_poisson_hypre_solver_iterative_mode(
-            ctx,
-            *workspace,
-            !reset_initial_solution,
-            reason)) {
-        return false;
+    ctx.poisson_demag.fresh_zero_guess_count =
+        workspace->fresh_zero_guess_count;
+    if (reset_initial_solution) {
+        ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
     }
-    const auto solve_start = FemSteadyClock::now();
-    workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
-    if (!cuda_ok(
-            cudaDeviceSynchronize(),
-            "cudaDeviceSynchronize GPU demag Hypre solve",
-            reason)) {
-        return false;
+    uint64_t solver_apply_wall_time_ns = 0;
+    {
+        FULLMAG_NVTX_RANGE("fem.demag.hypre.apply");
+        if (!hypre_wait_for_fullmag(workspace->stream_interop, stream, reason)) {
+            return false;
+        }
+        ctx.poisson_demag.event_wait_count =
+            workspace->stream_interop.event_wait_count;
+        ctx.poisson_demag.event_wait_count_current_step += 1;
+        const auto solve_start = FemSteadyClock::now();
+        workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+        if (!fullmag_wait_for_hypre(workspace->stream_interop, stream, reason)) {
+            return false;
+        }
+        ctx.poisson_demag.event_wait_count =
+            workspace->stream_interop.event_wait_count;
+        ctx.poisson_demag.event_wait_count_current_step += 1;
+        ctx.poisson_demag.global_sync_count =
+            workspace->stream_interop.global_sync_count;
+        solver_apply_wall_time_ns = elapsed_ns(solve_start);
     }
-    const uint64_t solver_apply_wall_time_ns = elapsed_ns(solve_start);
     ctx.poisson_demag.last_solver_apply_wall_time_ns = solver_apply_wall_time_ns;
     ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns;
 
     int iterations = 0;
     double residual = 0.0;
-    read_demag_poisson_hypre_solver_stats(ctx, *workspace, iterations, residual);
+    const bool solve_converged = validate_demag_poisson_hypre_device_solve(
+        ctx, *workspace, iterations, residual, reason);
     ctx.poisson_demag.last_iterations = iterations;
     ctx.poisson_demag.last_residual = residual;
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
-    ctx.poisson_demag.last_solver_setup_reused = true;
-
-    if (workspace->hypre_done_event != nullptr) {
-        if (!cuda_ok(cudaEventRecord(workspace->hypre_done_event, nullptr),
-                "cudaEventRecord GPU demag hypre done", reason) ||
-            !cuda_ok(cudaStreamWaitEvent(stream, workspace->hypre_done_event, 0),
-                "cudaStreamWaitEvent GPU demag compute stream wait solve", reason)) {
+    ctx.poisson_demag.last_solver_setup_reused =
+        workspace->solver_setup_complete &&
+        workspace->solver_setup_count == 1u;
+    if (!solve_converged) {
+        if (!cuda_ok(cudaMemsetAsync(
+                gpu.demag_poisson.poisson_solution,
+                0,
+                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double),
+                stream),
+                "cudaMemsetAsync rejected GPU Poisson demag candidate",
+                reason)) {
             return false;
         }
+        workspace->x_par->HypreWrite();
+        return false;
     }
+
     GpuDemagPhaseTimer recover_timer;
     if (!recover_timer.start(
             timings.enabled,
@@ -256,56 +272,59 @@ bool compute_device_demag_for_device_stage_impl(
             reason)) {
         return false;
     }
-    fullmag_cuda_zero_indexed_values(
-        gpu.demag_poisson.poisson_solution,
-        workspace->d_ess_tdofs,
-        static_cast<int>(workspace->ess_tdofs.size()),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_x.d_row_offsets,
-        workspace->recovery_x.d_col_indices,
-        workspace->recovery_x.d_values,
-        gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_demag.x,
-        static_cast<int>(workspace->recovery_x.rows),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_y.d_row_offsets,
-        workspace->recovery_y.d_col_indices,
-        workspace->recovery_y.d_values,
-        gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_demag.y,
-        static_cast<int>(workspace->recovery_y.rows),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_z.d_row_offsets,
-        workspace->recovery_z.d_col_indices,
-        workspace->recovery_z.d_values,
-        gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_demag.z,
-        static_cast<int>(workspace->recovery_z.rows),
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
-        return false;
-    }
     const int n = static_cast<int>(gpu.lifecycle.node_count);
-    if (gpu.mesh_regions.has_periodic_reduced_nodes) {
-        fullmag_cuda_relax_project_static_periodic_field(
-            gpu.fields.h_demag.x,
-            gpu.fields.h_demag.y,
-            gpu.fields.h_demag.z,
-            gpu.mesh_regions.periodic_representative_nodes,
-            n,
+    {
+        FULLMAG_NVTX_RANGE("fem.demag.recovery");
+        fullmag_cuda_zero_indexed_values(
+            gpu.demag_poisson.poisson_solution,
+            workspace->d_ess_tdofs,
+            static_cast<int>(workspace->ess_tdofs.size()),
             stream);
-        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag periodic H_demag projection", reason)) {
+        fullmag_cuda_demag_recovery_csr(
+            workspace->recovery_x.d_row_offsets,
+            workspace->recovery_x.d_col_indices,
+            workspace->recovery_x.d_values,
+            gpu.demag_poisson.poisson_solution,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_demag.x,
+            static_cast<int>(workspace->recovery_x.rows),
+            stream);
+        fullmag_cuda_demag_recovery_csr(
+            workspace->recovery_y.d_row_offsets,
+            workspace->recovery_y.d_col_indices,
+            workspace->recovery_y.d_values,
+            gpu.demag_poisson.poisson_solution,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_demag.y,
+            static_cast<int>(workspace->recovery_y.rows),
+            stream);
+        fullmag_cuda_demag_recovery_csr(
+            workspace->recovery_z.d_row_offsets,
+            workspace->recovery_z.d_col_indices,
+            workspace->recovery_z.d_values,
+            gpu.demag_poisson.poisson_solution,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_demag.z,
+            static_cast<int>(workspace->recovery_z.rows),
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
             return false;
         }
-    }
-    if (!recover_timer.finish(reason)) {
-        return false;
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            fullmag_cuda_relax_project_static_periodic_field(
+                gpu.fields.h_demag.x,
+                gpu.fields.h_demag.y,
+                gpu.fields.h_demag.z,
+                gpu.mesh_regions.periodic_representative_nodes,
+                n,
+                stream);
+            if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag periodic H_demag projection", reason)) {
+                return false;
+            }
+        }
+        if (!recover_timer.finish(reason)) {
+            return false;
+        }
     }
 
     const int blocks = (n + 255) / 256;
@@ -328,7 +347,7 @@ bool compute_device_demag_for_device_stage_impl(
         gpu.fields.h_demag.y,
         gpu.fields.h_demag.z,
         gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_metrics.node_volumes,
         gpu.mesh_regions.magnetic_node_mask,
         gpu.reductions.scalar_workspace,
         n,
@@ -391,7 +410,7 @@ bool compute_device_demag_for_device_stage_fresh(
         reason);
 }
 
-bool recover_device_demag_visual_field(
+bool recover_device_demag_full_domain_field_device(
     Context &ctx,
     void *raw_stream,
     std::string &reason)
@@ -401,44 +420,44 @@ bool recover_device_demag_visual_field(
     auto &gpu = ctx.gpu_state.device;
     auto &visual = gpu.demag_poisson.poisson_gradient;
     if (workspace == nullptr || !workspace->ready) {
-        reason = "full-domain GPU demag visualization requires a ready device Poisson workspace";
+        reason = "full-domain GPU demag observable requires a ready device Poisson workspace";
         return false;
     }
     if (gpu.demag_poisson.poisson_solution == nullptr ||
         visual.x == nullptr || visual.y == nullptr || visual.z == nullptr) {
-        reason = "full-domain GPU demag visualization requires the Poisson solution and gradient buffers";
+        reason = "full-domain GPU demag observable requires the Poisson solution and gradient buffers";
         return false;
     }
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
     fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_x.d_row_offsets,
-        workspace->recovery_x.d_col_indices,
-        workspace->recovery_x.d_values,
+        workspace->visual_recovery_x.d_row_offsets,
+        workspace->visual_recovery_x.d_col_indices,
+        workspace->visual_recovery_x.d_values,
         gpu.demag_poisson.poisson_solution,
         nullptr,
         visual.x,
-        static_cast<int>(workspace->recovery_x.rows),
+        static_cast<int>(workspace->visual_recovery_x.rows),
         stream);
     fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_y.d_row_offsets,
-        workspace->recovery_y.d_col_indices,
-        workspace->recovery_y.d_values,
+        workspace->visual_recovery_y.d_row_offsets,
+        workspace->visual_recovery_y.d_col_indices,
+        workspace->visual_recovery_y.d_values,
         gpu.demag_poisson.poisson_solution,
         nullptr,
         visual.y,
-        static_cast<int>(workspace->recovery_y.rows),
+        static_cast<int>(workspace->visual_recovery_y.rows),
         stream);
     fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_z.d_row_offsets,
-        workspace->recovery_z.d_col_indices,
-        workspace->recovery_z.d_values,
+        workspace->visual_recovery_z.d_row_offsets,
+        workspace->visual_recovery_z.d_col_indices,
+        workspace->visual_recovery_z.d_values,
         gpu.demag_poisson.poisson_solution,
         nullptr,
         visual.z,
-        static_cast<int>(workspace->recovery_z.rows),
+        static_cast<int>(workspace->visual_recovery_z.rows),
         stream);
-    if (!cuda_ok(cudaGetLastError(), "launch full-domain GPU demag visual recovery", reason)) {
+    if (!cuda_ok(cudaGetLastError(), "launch full-domain GPU demag observable recovery", reason)) {
         return false;
     }
     const int n = static_cast<int>(gpu.lifecycle.node_count);
@@ -454,12 +473,31 @@ bool recover_device_demag_visual_field(
             return false;
         }
     }
+    return true;
+#else
+    (void)ctx;
+    (void)raw_stream;
+        reason = "full-domain GPU demag observable requires CUDA, MFEM, and MPI support";
+    return false;
+#endif
+}
+
+bool recover_device_demag_visual_field(
+    Context &ctx,
+    void *raw_stream,
+    std::string &reason)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (!recover_device_demag_full_domain_field_device(ctx, raw_stream, reason)) {
+        return false;
+    }
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
     if (!cuda_ok(cudaStreamSynchronize(stream), "synchronize full-domain GPU demag visual recovery", reason)) {
         return false;
     }
     return gpu_state_download_component_aos(
-        gpu,
-        visual,
+        ctx.gpu_state.device,
+        ctx.gpu_state.device.demag_poisson.poisson_gradient,
         ctx.demag.h_visual_xyz,
         ctx.transfer_audit.audit,
         "H_demag visual",

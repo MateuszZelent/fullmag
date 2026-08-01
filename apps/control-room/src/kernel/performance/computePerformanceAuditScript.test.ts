@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+import { runComputePerformanceAudit } from "../../../scripts/audit-compute-performance.mjs";
 
 import {
   DATA_SCALARS_PATH,
@@ -14,15 +14,9 @@ const auditScriptUrl = new URL(
   "../../../scripts/audit-compute-performance.mjs",
   import.meta.url,
 );
-const appRootUrl = new URL("../../..", import.meta.url);
-
 describe("compute performance audit script", () => {
   it("executes successfully so syntax errors fail the test suite", () => {
-    const output = execFileSync(
-      process.execPath,
-      [fileURLToPath(auditScriptUrl)],
-      { cwd: fileURLToPath(appRootUrl), encoding: "utf8" },
-    );
+    const output = runComputePerformanceAudit();
 
     expect(output).toContain("Compute performance audit passed.");
   });
@@ -84,25 +78,22 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkObjectVisualizationPanelSessionStatusSelector");
     expect(auditScript).toContain("checkObjectVisualizationPanelVisualizationSelector");
     expect(auditScript).toContain("checkObjectVisualizationPanelNumberFieldCommitBoundary");
-    expect(auditScript).toContain("pendingValueRef");
-    expect(auditScript).toContain("queuedDraftValueRef");
-    expect(auditScript).toContain("window.requestAnimationFrame");
-    expect(auditScript).toContain("setDraftOverride(queuedValue)");
+    expect(auditScript).toContain("onValueCommit");
+    expect(auditScript).toContain("setDraftOverride(nextValue)");
+    expect(auditScript).toContain("setDraftOverride(null)");
     expect(auditScript).not.toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
     expect(auditScript).toContain("Wireframe opacity");
-    expect(auditScript).toContain("Vector alpha");
-    expect(auditScript).toContain("Vector thickness");
+    expect(auditScript).toContain('label="Vector opacity"');
+    expect(auditScript).toContain('label="Thickness"');
     expect(auditScript).toContain("Arrow length");
     expect(auditScript).toContain("Arrow budget");
     expect(auditScript).toContain("Extra surface gap");
-    expect(auditScript).toContain("label=\"Opacity\"");
+    expect(auditScript).toContain('label="Surface opacity"');
     expect(auditScript).toContain('patchNumber("vectorBudget"');
     expect(auditScript).toContain('patchNumber("vectorThickness"');
     expect(auditScript).toContain('patchNumber("vectorLengthScale"');
-    expect(auditScript).toContain("onPointerUp={flushDraft}");
-    expect(auditScript).toContain("onPointerCancel={flushDraft}");
-    expect(auditScript).toContain("onKeyUp={flushDraft}");
-    expect(auditScript).toContain("onBlur={flushDraft}");
+    expect(auditScript).toContain("onValueChange");
+    expect(auditScript).toContain("onChange(nextValue)");
     expect(auditScript).toContain("selectObjectVisualizationPanelSnapshot");
     expect(auditScript).toContain("objectVisualizationPanelSnapshotEquals");
     expect(auditScript).toContain("checkMeshDetailsPanelSessionStatusSelector");
@@ -153,7 +144,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("selectFooterTelemetryStatus");
     expect(auditScript).toContain("footerTelemetryStatusEquals");
     expect(auditScript).toContain("(sessionStatus) => sessionStatus.data");
-    expect(auditScript).toContain('useState<FooterTabId>("telemetry")');
+    expect(auditScript).toContain(
+      "useLayoutSelector((layout) => layout.activeBottomPanelTab)",
+    );
     expect(auditScript).toContain("checkViewportSmokeComputeMetrics");
     expect(auditScript).toContain("checkComputePerformanceSmokeScript");
     expect(auditScript).toContain("checkComputePerformanceMicrobenchCoverage");
@@ -164,12 +157,16 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("src/modules/analysis-plots/chartTableModel.ts");
     expect(auditScript).toContain("src/modules/analysis-plots/analysisPlotsModel.ts");
     expect(auditScript).toContain("src/modules/analysis-plots/useAnalysisPlotsController.ts");
+    expect(auditScript).toContain("shouldLoadPublishedTableRows(");
+    expect(auditScript).toContain("shouldPausePublishedTableRows(");
+    expect(auditScript).toContain("tableColumnIdsForQuery(tableColumns.data)");
+    expect(auditScript).toContain("hasPublishedTableSchema");
     expect(auditScript).toContain("ANALYSIS_SCALAR_COLUMNS");
     expect(auditScript).toContain('decimation: "minmax_lttb"');
     expect(auditScript).toContain("targetPoints: clampInteger(");
     expect(auditScript).toContain("Number.isFinite(x) && Number.isFinite(y)");
     expect(auditScript).toContain("DEFAULT_TABLE_CHART_COLUMNS");
-    expect(auditScript).toContain("mergeTableRows");
+    expect(auditScript).toContain("mergeChartTableWindows");
     expect(auditScript).toContain("computePerformanceMicrobench.test.ts");
     expect(auditScript).toContain("makeLargeTopologyBuffer");
     expect(auditScript).toContain("makeLargeQualityBuffer");

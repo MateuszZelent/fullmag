@@ -2,11 +2,7 @@
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { FormField } from "../../../primitives/FormField";
-import { InspectorSection } from "../../../primitives/InspectorSection";
-import {
-  HysteresisSettleAlgorithmsEditor,
-  HysteresisSettleBranchesEditor,
-} from "../../StudyPipelineSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import {
   displayValue,
   isRecord,
@@ -69,7 +65,9 @@ export function HysteresisSettlePipelineInspector({
     ? settlePipeline.settle_pipeline
     : null;
   const topLevelResolvedSteps = Array.isArray(settlePipeline?.resolved_steps)
-    ? settlePipeline.resolved_steps.filter(isRecord).map(resolvedSettleStep)
+    ? settlePipeline.resolved_steps.flatMap((step) =>
+        isRecord(step) ? [resolvedSettleStep(step)] : [],
+      )
     : [];
   const rawPipelineSteps = Array.isArray(pipeline?.steps)
     ? pipeline.steps.filter(isRecord)
@@ -97,8 +95,7 @@ export function HysteresisSettlePipelineInspector({
   const activeStep = activeNode?.children?.find((node) => node.status === "active");
 
   return (
-    <InspectorSection
-      value="hysteresis-settle"
+    <InspectorGroup
       title="Settle Pipeline"
       badge={`${settleSteps.length} step(s)`}
     >
@@ -123,10 +120,6 @@ export function HysteresisSettlePipelineInspector({
             <option value="sequence">Sequence</option>
             <option value="tree">Tree</option>
           </FormField>
-          <HysteresisSettleAlgorithmsEditor
-            draft={draft}
-            onUpdate={onUpdateDraft}
-          />
           <FormField
             label="Settle steps JSON"
             rows={5}
@@ -138,10 +131,6 @@ export function HysteresisSettlePipelineInspector({
           />
           {draft.settlePipelineMode === "tree" ? (
             <>
-              <HysteresisSettleBranchesEditor
-                draft={draft}
-                onUpdate={onUpdateDraft}
-              />
               <FormField
                 label="Fallback branches JSON"
                 rows={4}
@@ -242,6 +231,6 @@ export function HysteresisSettlePipelineInspector({
           ))}
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

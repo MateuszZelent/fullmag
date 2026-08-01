@@ -18,7 +18,11 @@ use crate::dev_smoke::run_post_materialization_dev_smoke_tests;
 use crate::formatting::*;
 use crate::interactive_runtime_host::{CurrentLiveDisplaySelectionHandle, InteractiveRuntimeHost};
 use crate::live_workspace::*;
+use crate::nvtx_range;
 use crate::python_bridge::*;
+use crate::simulation_preparation::{
+    PreparationLogLevel, PreparationStageId, PreparationStatus, SimulationPreparationState,
+};
 use crate::step_utils::*;
 use crate::types::*;
 
@@ -26,6 +30,798 @@ use crate::types::*;
 
 const FEM_FREQUENCY_RESPONSE_PROGRESS_KEY: &str = "fem_frequency_response_progress";
 const FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH: usize = 16;
+const DEFERRED_MESH_FAILURE_SUMMARY: &str = "Shared-domain mesh build failed";
+const SCRIPT_MESH_FAILURE_DETAIL: &str =
+    "Script materialization reached mesh generation before failure; timing unavailable";
+const INCOMPLETE_MATERIALIZED_IR_SKIP_DETAIL: &str =
+    "Skipped because a complete materialized IR was unavailable after mesh generation failure";
+const DEFERRED_DOMAIN_COMPLETION_DETAIL: &str =
+    "Domain completed during deferred materialization; timing unavailable";
+const DEFERRED_MESH_COMPLETION_DETAIL: &str =
+    "Mesh completed during deferred materialization; timing unavailable";
+
+fn preparation_unix_time_millis() -> Result<u64> {
+    u64::try_from(unix_time_millis()?).context("preparation timestamp exceeds u64")
+}
+
+fn new_simulation_preparation(
+    preparation_id: impl Into<String>,
+    started_at_unix_ms: u64,
+) -> Result<SimulationPreparationState> {
+    let mut preparation = SimulationPreparationState::new(preparation_id, started_at_unix_ms);
+    begin_preparation_stage(
+        &mut preparation,
+        PreparationStageId::RuntimeStartup,
+        started_at_unix_ms,
+        "Starting the local simulation runtime",
+    )?;
+    Ok(preparation)
+}
+
+fn push_preparation_log_once(
+    preparation: &mut SimulationPreparationState,
+    timestamp_unix_ms: u64,
+    level: PreparationLogLevel,
+    stage_id: PreparationStageId,
+    message: &str,
+) {
+    let is_duplicate = preparation.log_tail.back().is_some_and(|entry| {
+        entry.level == level && entry.stage_id == stage_id && entry.message == message
+    });
+    if !is_duplicate {
+        preparation.push_log(timestamp_unix_ms, level, stage_id, message);
+    }
+}
+
+fn begin_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.begin_stage(stage_id, timestamp_unix_ms, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn complete_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.complete_stage(stage_id, timestamp_unix_ms, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn skip_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.skip_stage(stage_id, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn fail_owned_preparation_stage(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    error_code: &str,
+    safe_summary: &str,
+) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Error,
+            stage_id,
+            safe_summary,
+        );
+        Ok(())
+    })
+}
+
+fn fail_owned_preparation_stage_with_diagnostics(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    error_code: &str,
+    safe_summary: &str,
+) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        let correlation_id = format!(
+            "preparation-{}-{}-{}",
+            stage_id.as_str(),
+            preparation.preparation_id,
+            timestamp_unix_ms
+        );
+        if let Some(failure) = preparation.failure.as_mut() {
+            failure.diagnostics_correlation_id = Some(correlation_id);
+        }
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Error,
+            stage_id,
+            safe_summary,
+        );
+        Ok(())
+    })
+}
+
+fn safe_validation_failure_summary(error: &anyhow::Error, fallback: &str) -> String {
+    let message = error.to_string();
+    let trimmed = message.trim();
+    let is_single_line = !trimmed.contains('\n') && !trimmed.contains('\r');
+    let is_bounded = !trimmed.is_empty() && trimmed.chars().count() <= 240;
+    let has_private_path = trimmed.contains('/') || trimmed.contains('\\');
+    let normalized = trimmed.to_ascii_lowercase();
+    let has_secret_marker = normalized.contains("secret") || normalized.contains("token");
+    if is_single_line && is_bounded && !has_private_path && !has_secret_marker {
+        trimmed.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn fail_active_preparation_stage(
+    workspace: &LocalLiveWorkspace,
+    error_code: &str,
+    safe_summary: &str,
+) -> Result<()> {
+    let active_stage_id = workspace
+        .snapshot()
+        .simulation_preparation
+        .as_ref()
+        .and_then(|preparation| preparation.active_stage_id);
+    if let Some(active_stage_id) = active_stage_id {
+        fail_owned_preparation_stage(workspace, active_stage_id, error_code, safe_summary)?;
+    }
+    Ok(())
+}
+
+fn run_active_preparation_operation<T>(
+    workspace: &LocalLiveWorkspace,
+    error_code: &str,
+    safe_failure_summary: &str,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    match operation() {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            fail_active_preparation_stage(workspace, error_code, safe_failure_summary)?;
+            Err(error)
+        }
+    }
+}
+
+fn own_preparation_boundary_failure<T>(
+    workspace: &LocalLiveWorkspace,
+    error_code: &str,
+    safe_failure_summary: &str,
+    result: Result<T>,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Err(record_error) = fail_owned_preparation_stage(
+                workspace,
+                PreparationStageId::ScriptMaterialization,
+                error_code,
+                safe_failure_summary,
+            ) {
+                eprintln!(
+                    "[fullmag-cli] WARNING: could not record safe preparation boundary failure: {}",
+                    record_error
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+fn wait_for_failed_preparation_close(
+    workspace: &LocalLiveWorkspace,
+    mut next_command: impl FnMut() -> Option<SessionCommand>,
+) {
+    let is_terminal_failure = workspace
+        .snapshot()
+        .simulation_preparation
+        .as_ref()
+        .is_some_and(|preparation| preparation.status == PreparationStatus::Failed);
+    if !is_terminal_failure {
+        return;
+    }
+
+    let failure = workspace
+        .snapshot()
+        .simulation_preparation
+        .and_then(|preparation| preparation.failure);
+    if let Some(failure) = failure {
+        eprintln!(
+            "[fullmag] simulation preparation failed: {}",
+            failure.summary
+        );
+        if let Some(detail) = failure.detail {
+            eprintln!("[fullmag] mesh failure detail: {detail}");
+        }
+        if let Some(correlation_id) = failure.diagnostics_correlation_id {
+            eprintln!("[fullmag] diagnostic correlation id: {correlation_id}");
+        }
+    } else {
+        eprintln!("[fullmag] simulation preparation failed");
+    }
+    eprintln!("[fullmag] Control Room remains available until explicit close");
+    workspace.push_log(
+        "system",
+        "Simulation preparation failed — Control Room remains available until Close",
+    );
+    loop {
+        let Some(command) = next_command() else {
+            continue;
+        };
+        let is_close = command.kind == "close"
+            || matches!(
+                crate::command_bridge::classify_command(&command),
+                Some(fullmag_runner::LiveControlCommand::Close)
+            );
+        if is_close {
+            workspace.push_log(
+                "system",
+                "Close acknowledged — shutting down the failed workspace",
+            );
+            return;
+        }
+    }
+}
+
+fn begin_script_materialization(workspace: &LocalLiveWorkspace) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        complete_preparation_stage(
+            preparation,
+            PreparationStageId::RuntimeStartup,
+            timestamp_unix_ms,
+            "Local simulation runtime started",
+        )?;
+        begin_preparation_stage(
+            preparation,
+            PreparationStageId::ScriptMaterialization,
+            timestamp_unix_ms,
+            "Materializing the Python simulation script",
+        )?;
+        Ok(())
+    })
+}
+
+fn run_owned_preparation_stage<T>(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    active_detail: &str,
+    completed_detail: &str,
+    skip_on_success: bool,
+    error_code: &str,
+    safe_failure_summary: &str,
+    expose_safe_operation_error: bool,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let started_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        if stage_id == PreparationStageId::SolverInitialization
+            && preparation.active_stage_id == Some(PreparationStageId::MeshPostprocessing)
+        {
+            complete_preparation_stage(
+                preparation,
+                PreparationStageId::MeshPostprocessing,
+                started_at_unix_ms,
+                "Mesh preparation complete",
+            )?;
+        }
+        begin_preparation_stage(preparation, stage_id, started_at_unix_ms, active_detail)?;
+        Ok(())
+    })?;
+
+    match operation() {
+        Ok(value) => {
+            let completed_at_unix_ms = preparation_unix_time_millis()?;
+            transition_preparation(workspace, |preparation| {
+                if skip_on_success {
+                    skip_preparation_stage(
+                        preparation,
+                        stage_id,
+                        completed_at_unix_ms,
+                        completed_detail,
+                    )?;
+                } else {
+                    complete_preparation_stage(
+                        preparation,
+                        stage_id,
+                        completed_at_unix_ms,
+                        completed_detail,
+                    )?;
+                }
+                Ok(())
+            })?;
+            Ok(value)
+        }
+        Err(error) => {
+            if expose_safe_operation_error {
+                let summary = safe_validation_failure_summary(&error, safe_failure_summary);
+                fail_owned_preparation_stage_with_diagnostics(
+                    workspace, stage_id, error_code, &summary,
+                )?;
+            } else {
+                fail_owned_preparation_stage(
+                    workspace,
+                    stage_id,
+                    error_code,
+                    safe_failure_summary,
+                )?;
+            }
+            Err(error)
+        }
+    }
+}
+
+fn run_solver_initialization_safety_check<T>(
+    workspace: &LocalLiveWorkspace,
+    active_detail: &'static str,
+    error_code: &'static str,
+    safe_failure_summary: &'static str,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        begin_preparation_stage(
+            preparation,
+            PreparationStageId::SolverInitialization,
+            timestamp_unix_ms,
+            active_detail,
+        )?;
+        Ok(())
+    })?;
+    match operation() {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            fail_owned_preparation_stage(
+                workspace,
+                PreparationStageId::SolverInitialization,
+                error_code,
+                safe_failure_summary,
+            )?;
+            Err(error)
+        }
+    }
+}
+
+fn run_solver_initialization<T>(
+    workspace: &LocalLiveWorkspace,
+    skip_on_success: bool,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let started_at_unix_ms = preparation_unix_time_millis()?;
+    let active_detail = if skip_on_success {
+        "Checking fully materialized workspace resources"
+    } else {
+        "Initializing the solver and checking the fully materialized runtime"
+    };
+    transition_preparation(workspace, |preparation| {
+        if preparation.active_stage_id == Some(PreparationStageId::MeshPostprocessing) {
+            complete_preparation_stage(
+                preparation,
+                PreparationStageId::MeshPostprocessing,
+                started_at_unix_ms,
+                "Mesh preparation complete",
+            )?;
+        }
+        begin_preparation_stage(
+            preparation,
+            PreparationStageId::SolverInitialization,
+            started_at_unix_ms,
+            active_detail,
+        )?;
+        Ok(())
+    })?;
+
+    match operation() {
+        Ok(value) => {
+            let completed_at_unix_ms = preparation_unix_time_millis()?;
+            transition_preparation(workspace, |preparation| {
+                if skip_on_success {
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::SolverInitialization,
+                        completed_at_unix_ms,
+                        "No solver stage is present in this workspace preparation",
+                    )?;
+                } else {
+                    complete_preparation_stage(
+                        preparation,
+                        PreparationStageId::SolverInitialization,
+                        completed_at_unix_ms,
+                        "Solver initialization complete",
+                    )?;
+                }
+                Ok(())
+            })?;
+            Ok(value)
+        }
+        Err(error) => {
+            let failure_is_already_owned = workspace
+                .snapshot()
+                .simulation_preparation
+                .as_ref()
+                .is_some_and(|preparation| preparation.failure.is_some());
+            if !failure_is_already_owned {
+                fail_owned_preparation_stage(
+                    workspace,
+                    PreparationStageId::SolverInitialization,
+                    "solver_initialization_failed",
+                    "Solver initialization failed",
+                )?;
+            }
+            Err(error)
+        }
+    }
+}
+
+fn run_script_preparation_preflight(
+    workspace: &LocalLiveWorkspace,
+    validate: impl FnOnce() -> Result<()>,
+    plan: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let materialized_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        complete_preparation_stage(
+            preparation,
+            PreparationStageId::ScriptMaterialization,
+            materialized_at_unix_ms,
+            "Python script materialized",
+        )?;
+        Ok(())
+    })?;
+    run_owned_preparation_stage(
+        workspace,
+        PreparationStageId::Validation,
+        "Validating the canonical simulation problem",
+        "Simulation problem validated",
+        false,
+        "validation_failed",
+        "Simulation validation failed",
+        true,
+        validate,
+    )?;
+    run_owned_preparation_stage(
+        workspace,
+        PreparationStageId::Planning,
+        "Resolving the simulation execution plan",
+        "Simulation execution plan resolved",
+        false,
+        "planning_failed",
+        "Simulation planning failed",
+        false,
+        plan,
+    )?;
+    let domain_started_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        begin_preparation_stage(
+            preparation,
+            PreparationStageId::DomainPreparation,
+            domain_started_at_unix_ms,
+            "Preparing simulation domain inputs",
+        )?;
+        Ok(())
+    })
+}
+
+fn project_completed_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.project_completed_stage(stage_id, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn deferred_mesh_failure_stage(
+    detailed_mesh_workspace: Option<&serde_json::Value>,
+) -> Option<PreparationStageId> {
+    let workspace = detailed_mesh_workspace?.as_object()?;
+    workspace
+        .get("last_build_error")
+        .and_then(serde_json::Value::as_str)
+        .filter(|error| !error.trim().is_empty())?;
+    let payload = workspace.get("last_build_summary")?;
+    match payload.get("phase").and_then(serde_json::Value::as_str) {
+        Some("preparing_domain" | "meshing" | "postprocessing") => {}
+        _ => return None,
+    }
+    match python_mesh_preparation_update("mesh_build_failed", payload)? {
+        PythonMeshPreparationUpdate::Failed { stage_id, .. } => Some(stage_id),
+        _ => None,
+    }
+}
+
+fn project_deferred_mesh_failure(
+    preparation: &mut SimulationPreparationState,
+    failure_stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    if !matches!(
+        preparation.active_stage_id,
+        None | Some(PreparationStageId::DomainPreparation)
+    ) {
+        return Err(
+            crate::simulation_preparation::PreparationTransitionError::StageIsNotActive {
+                stage_id: failure_stage_id,
+                active_stage_id: preparation.active_stage_id,
+            },
+        );
+    }
+    if failure_stage_id != PreparationStageId::DomainPreparation {
+        project_completed_preparation_stage(
+            preparation,
+            PreparationStageId::DomainPreparation,
+            timestamp_unix_ms,
+            DEFERRED_DOMAIN_COMPLETION_DETAIL,
+        )?;
+    }
+    if failure_stage_id == PreparationStageId::MeshPostprocessing {
+        project_completed_preparation_stage(
+            preparation,
+            PreparationStageId::Meshing,
+            timestamp_unix_ms,
+            DEFERRED_MESH_COMPLETION_DETAIL,
+        )?;
+    }
+    preparation.project_failed_stage(
+        failure_stage_id,
+        "mesh_build_failed",
+        DEFERRED_MESH_FAILURE_SUMMARY,
+    )?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Error,
+        failure_stage_id,
+        DEFERRED_MESH_FAILURE_SUMMARY,
+    );
+    Ok(())
+}
+
+fn project_script_export_failure(
+    workspace: &LocalLiveWorkspace,
+    early_preflight_completed: bool,
+    error: anyhow::Error,
+) -> Result<anyhow::Error> {
+    let snapshot = workspace.snapshot();
+    let deferred_failure_stage = deferred_mesh_failure_stage(snapshot.mesh_workspace.as_ref());
+    let is_phase1_fallback = !early_preflight_completed
+        && snapshot
+            .simulation_preparation
+            .as_ref()
+            .is_some_and(|preparation| {
+                preparation.active_stage_id == Some(PreparationStageId::ScriptMaterialization)
+            });
+    if let (true, Some(failure_stage_id)) = (is_phase1_fallback, deferred_failure_stage) {
+        let timestamp_unix_ms = preparation_unix_time_millis()?;
+        transition_preparation(workspace, |preparation| {
+            project_completed_preparation_stage(
+                preparation,
+                PreparationStageId::ScriptMaterialization,
+                timestamp_unix_ms,
+                SCRIPT_MESH_FAILURE_DETAIL,
+            )?;
+            skip_preparation_stage(
+                preparation,
+                PreparationStageId::Validation,
+                timestamp_unix_ms,
+                INCOMPLETE_MATERIALIZED_IR_SKIP_DETAIL,
+            )?;
+            skip_preparation_stage(
+                preparation,
+                PreparationStageId::Planning,
+                timestamp_unix_ms,
+                INCOMPLETE_MATERIALIZED_IR_SKIP_DETAIL,
+            )?;
+            project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)
+        })?;
+    } else {
+        fail_active_preparation_stage(
+            workspace,
+            "materialization_failed",
+            "Simulation materialization failed",
+        )?;
+    }
+    Ok(error)
+}
+
+fn finish_mesh_preparation(
+    workspace: &LocalLiveWorkspace,
+    detailed_mesh_workspace: Option<&serde_json::Value>,
+) -> Result<()> {
+    let deferred_failure_stage = deferred_mesh_failure_stage(detailed_mesh_workspace);
+    if deferred_failure_stage.is_some()
+        && workspace
+            .snapshot()
+            .simulation_preparation
+            .as_ref()
+            .is_some_and(|preparation| preparation.failure.is_some())
+    {
+        return Err(anyhow!(DEFERRED_MESH_FAILURE_SUMMARY));
+    }
+    let mesh_was_materialized = detailed_mesh_workspace
+        .and_then(|resource| resource.get("last_build_summary"))
+        .is_some_and(|summary| !summary.is_null());
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        if let Some(failure_stage_id) = deferred_failure_stage {
+            project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)?;
+            return Ok(());
+        }
+        match preparation.active_stage_id {
+            Some(PreparationStageId::DomainPreparation) => {
+                if mesh_was_materialized {
+                    project_completed_preparation_stage(
+                        preparation,
+                        PreparationStageId::DomainPreparation,
+                        timestamp_unix_ms,
+                        DEFERRED_DOMAIN_COMPLETION_DETAIL,
+                    )?;
+                    project_completed_preparation_stage(
+                        preparation,
+                        PreparationStageId::Meshing,
+                        timestamp_unix_ms,
+                        DEFERRED_MESH_COMPLETION_DETAIL,
+                    )?;
+                    project_completed_preparation_stage(
+                        preparation,
+                        PreparationStageId::MeshPostprocessing,
+                        timestamp_unix_ms,
+                        "Mesh postprocessing completed during deferred materialization; timing unavailable",
+                    )?;
+                } else {
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::DomainPreparation,
+                        timestamp_unix_ms,
+                        "No shared-domain preparation was required",
+                    )?;
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::Meshing,
+                        timestamp_unix_ms,
+                        "No meshing phase was required",
+                    )?;
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::MeshPostprocessing,
+                        timestamp_unix_ms,
+                        "No mesh postprocessing phase was required",
+                    )?;
+                }
+            }
+            Some(PreparationStageId::Meshing) => {
+                complete_preparation_stage(
+                    preparation,
+                    PreparationStageId::Meshing,
+                    timestamp_unix_ms,
+                    "Mesh generated",
+                )?;
+                skip_preparation_stage(
+                    preparation,
+                    PreparationStageId::MeshPostprocessing,
+                    timestamp_unix_ms,
+                    "No separate mesh postprocessing phase was reported",
+                )?;
+            }
+            Some(PreparationStageId::MeshPostprocessing) => {
+                complete_preparation_stage(
+                    preparation,
+                    PreparationStageId::MeshPostprocessing,
+                    timestamp_unix_ms,
+                    "Mesh preparation complete",
+                )?;
+            }
+            None => {}
+            _ => {
+                return Err(
+                    crate::simulation_preparation::PreparationTransitionError::StageIsNotActive {
+                        stage_id: PreparationStageId::MeshPostprocessing,
+                        active_stage_id: preparation.active_stage_id,
+                    },
+                );
+            }
+        }
+        Ok(())
+    })?;
+    if deferred_failure_stage.is_some() {
+        Err(anyhow!(DEFERRED_MESH_FAILURE_SUMMARY))
+    } else {
+        Ok(())
+    }
+}
+
+fn mark_preparation_ready(workspace: &LocalLiveWorkspace, detail: &str) -> Result<()> {
+    let ready_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        preparation.mark_ready(ready_at_unix_ms, detail)?;
+        push_preparation_log_once(
+            preparation,
+            ready_at_unix_ms,
+            PreparationLogLevel::Info,
+            PreparationStageId::Ready,
+            detail,
+        );
+        Ok(())
+    })
+}
+
+fn mark_ui_shell_preparation_ready(workspace: &LocalLiveWorkspace) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    const SKIP_DETAIL: &str =
+        "The UI launch prepares an authoring workspace without materializing a simulation";
+    transition_preparation(workspace, |preparation| {
+        complete_preparation_stage(
+            preparation,
+            PreparationStageId::RuntimeStartup,
+            timestamp_unix_ms,
+            "Authoring workspace runtime started",
+        )?;
+        for stage_id in [
+            PreparationStageId::ScriptMaterialization,
+            PreparationStageId::Validation,
+            PreparationStageId::Planning,
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+            PreparationStageId::SolverInitialization,
+        ] {
+            skip_preparation_stage(preparation, stage_id, timestamp_unix_ms, SKIP_DETAIL)?;
+        }
+        preparation.mark_ready(timestamp_unix_ms, "Authoring workspace ready")?;
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Info,
+            PreparationStageId::Ready,
+            "Authoring workspace ready",
+        );
+        Ok(())
+    })
+}
 
 fn interactive_dense_ram_budget_bytes(available_ram: u64) -> u64 {
     let available_budget = (available_ram as f64 * 0.8) as u64;
@@ -109,6 +905,7 @@ fn current_live_metadata(
         "ir_version": &problem.ir_version,
         "source_hash": &problem.problem_meta.source_hash,
         "problem_meta": &problem.problem_meta,
+        "table_autosave": problem.study.sampling().table_autosave.as_ref(),
         "execution_plan": plan,
         "runtime_engine": runtime_engine,
         "resolved_execution": resolved_execution,
@@ -426,19 +1223,30 @@ fn publish_live_step_update(
     run_id: &str,
     session_id: &str,
     artifact_dir: &Path,
-    update: &fullmag_runner::StepUpdate,
+    update: fullmag_runner::StepUpdate,
     include_scalar_row: bool,
-) {
-    live_workspace.update(|state| {
-        apply_live_step_update_to_workspace_state(
+) -> fullmag_runner::StepUpdate {
+    let mut remainder = None;
+    let timings = live_workspace.update_profiled(|state| {
+        remainder = Some(apply_live_step_update_to_workspace_state(
             state,
             run_id,
             session_id,
             artifact_dir,
             update,
             include_scalar_row,
-        );
+        ));
     });
+    let mut update = remainder.expect("live step update should be consumed under workspace lock");
+    update.stats.live_state_build_wall_time_ns = update
+        .stats
+        .live_state_build_wall_time_ns
+        .saturating_add(timings.live_state_build_wall_time_ns);
+    update.stats.publisher_replace_wall_time_ns = update
+        .stats
+        .publisher_replace_wall_time_ns
+        .saturating_add(timings.publisher_replace_wall_time_ns);
+    update
 }
 
 fn solver_profile_config_from_command(
@@ -472,18 +1280,69 @@ fn drain_solver_profile_commands(
     }
 }
 
-fn record_solver_profile_step_with_orchestration(
+#[derive(Clone, Copy)]
+struct SolverProfileCallbackRecord {
+    step: u64,
+    recorded_callback_wall_time_ns: u64,
+    callback_thread_cpu_started_ns: Option<u64>,
+    recorded_callback_thread_cpu_time_ns: u64,
+    sampled: bool,
+    record_start: Instant,
+}
+
+fn begin_solver_profile_step_with_orchestration(
     live_workspace: &LocalLiveWorkspace,
-    stats: &fullmag_runner::StepStats,
-    callback_start: Instant,
-) {
+    stats: &mut fullmag_runner::StepStats,
+    callback_start: Option<Instant>,
+) -> Option<SolverProfileCallbackRecord> {
+    let Some(callback_start) = callback_start else {
+        return None;
+    };
     let orchestration_wall_time_ns = callback_start.elapsed().as_nanos() as u64;
-    let mut profiled_stats = stats.clone();
-    profiled_stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
-    profiled_stats.wall_time_ns = profiled_stats
+    stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
+    let callback_thread_cpu_started_ns = stats.preview_callback_thread_cpu_started_ns;
+    let callback_thread_cpu_time_ns =
+        fullmag_runner::elapsed_current_thread_cpu_ns(callback_thread_cpu_started_ns);
+    stats.preview_callback_thread_cpu_time_ns = callback_thread_cpu_time_ns;
+    stats.wall_time_ns = stats
         .wall_time_ns
         .saturating_add(orchestration_wall_time_ns);
-    live_workspace.record_solver_profile_step(&profiled_stats);
+    let record_start = Instant::now();
+    let sampled = live_workspace.record_solver_profile_step(stats);
+    Some(SolverProfileCallbackRecord {
+        step: stats.step,
+        recorded_callback_wall_time_ns: orchestration_wall_time_ns,
+        callback_thread_cpu_started_ns,
+        recorded_callback_thread_cpu_time_ns: callback_thread_cpu_time_ns,
+        sampled,
+        record_start,
+    })
+}
+
+fn finish_solver_profile_step_with_orchestration(
+    live_workspace: &LocalLiveWorkspace,
+    callback_start: Option<Instant>,
+    record: Option<SolverProfileCallbackRecord>,
+) {
+    let (Some(callback_start), Some(record)) = (callback_start, record) else {
+        return;
+    };
+    let callback_wall_time_ns = saturating_nanos_u64(callback_start.elapsed());
+    let callback_thread_cpu_time_ns =
+        fullmag_runner::elapsed_current_thread_cpu_ns(record.callback_thread_cpu_started_ns);
+    live_workspace.finish_solver_profile_callback(
+        record.step,
+        record.recorded_callback_wall_time_ns,
+        callback_wall_time_ns,
+        record.recorded_callback_thread_cpu_time_ns,
+        callback_thread_cpu_time_ns,
+        record.sampled,
+        record.record_start,
+    );
+}
+
+fn solver_profile_callback_start(live_workspace: &LocalLiveWorkspace) -> Option<Instant> {
+    live_workspace.solver_profile_enabled().then(Instant::now)
 }
 
 fn force_record_solver_profile_finalization(
@@ -508,87 +1367,107 @@ fn force_record_solver_profile_finalization(
     live_workspace.force_record_solver_profile_step(&adjusted);
 }
 
-fn live_step_ingest_legacy_mag_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .magnetization
-        .as_ref()
-        .map(|values| values.len())
-        .unwrap_or(0)
-}
-
-fn live_step_ingest_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .preview_field
-        .as_ref()
-        .map(|field| field.vector_field_values.len())
-        .unwrap_or(0)
-}
-
-fn live_step_ingest_cached_m_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .cached_preview_fields
-        .as_ref()
-        .and_then(|fields| fields.iter().find(|field| field.quantity == "m"))
-        .map(|field| field.vector_field_values.len())
-        .unwrap_or(0)
-}
-
 fn apply_live_step_update_to_workspace_state(
     state: &mut LocalLiveWorkspaceState,
     run_id: &str,
     session_id: &str,
     artifact_dir: &Path,
-    update: &fullmag_runner::StepUpdate,
+    mut update: fullmag_runner::StepUpdate,
     include_scalar_row: bool,
-) {
-    let mut update = update.clone();
+) -> fullmag_runner::StepUpdate {
     preserve_frequency_response_progress_scalars_from_live_state(state, &mut update);
-    let cached_preview_count = update
-        .cached_preview_fields
-        .as_ref()
-        .map(|fields| fields.len())
-        .unwrap_or(0);
-    if update.stats.step <= 2 || update.preview_field.is_some() || cached_preview_count > 0 {
-        eprintln!(
-            "[fullmag-cli] live step ingest step={} legacy_mag_len={} preview_field={} preview_quantity={} preview_len={} cached_preview_fields={} cached_m_preview_len={} scalar_row_due={} finished={}",
-            update.stats.step,
-            live_step_ingest_legacy_mag_len(&update),
-            update.preview_field.is_some(),
-            update
-                .preview_field
-                .as_ref()
-                .map(|field| field.quantity.as_str())
-                .unwrap_or("-"),
-            live_step_ingest_preview_len(&update),
-            cached_preview_count,
-            live_step_ingest_cached_m_preview_len(&update),
-            update.scalar_row_due,
-            update.finished,
-        );
-    }
     state.session.status = if update.finished {
         "completed".to_string()
     } else {
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
-    let previous_step = state.live_state.latest_step.clone();
-    state.live_state = live_state_manifest_from_update(&update);
-    if state.live_state.latest_step.magnetization.is_none()
-        && !step_update_has_magnetization_preview(&update)
-    {
-        state.live_state.latest_step.magnetization = previous_step.magnetization;
-    }
-    if state.live_state.latest_step.fem_mesh.is_none() {
-        state.live_state.latest_step.fem_mesh = previous_step.fem_mesh;
-    }
-    merge_cached_preview_fields_from_update(state, &update);
+    let previous_magnetization = state.live_state.latest_step.magnetization.take();
+    let previous_fem_mesh_generation_id =
+        state.live_state.latest_step.fem_mesh_generation_id.take();
+    let incoming_has_magnetization = ingest_magnetization_field_from_update(state, &mut update);
+    let incoming_has_magnetization_preview = step_update_has_magnetization_preview(&update);
+    crate::live_workspace::ingest_preview_fields_from_update(state, &mut update);
     apply_hysteresis_progress_to_stage_execution(state, &update);
     apply_fem_eigen_progress_to_stage_execution(state, &update);
     apply_fem_frequency_response_progress_to_stage_execution(state, &update);
     if include_scalar_row {
         set_latest_scalar_row_if_due(state, &update);
     }
+    let remainder = fullmag_runner::StepUpdate {
+        stats: update.stats.clone(),
+        grid: update.grid,
+        fem_mesh_generation_id: update.fem_mesh_generation_id.clone(),
+        magnetization: None,
+        preview_field: None,
+        cached_preview_fields: None,
+        hysteresis_field_m_t: update.hysteresis_field_m_t,
+        hysteresis_point_index: update.hysteresis_point_index,
+        hysteresis_settle_step_index: update.hysteresis_settle_step_index,
+        hysteresis_settle_step_kind: update.hysteresis_settle_step_kind.clone(),
+        hysteresis_settle_step_method: update.hysteresis_settle_step_method.clone(),
+        scalar_row_due: update.scalar_row_due,
+        finished: update.finished,
+    };
+    state.live_state = live_state_manifest_from_update(update);
+    if state.live_state.latest_step.magnetization.is_none()
+        && !incoming_has_magnetization
+        && !incoming_has_magnetization_preview
+    {
+        state.live_state.latest_step.magnetization = previous_magnetization;
+    }
+    if state
+        .live_state
+        .latest_step
+        .fem_mesh_generation_id
+        .is_none()
+    {
+        state.live_state.latest_step.fem_mesh_generation_id = previous_fem_mesh_generation_id;
+    }
+    remainder
+}
+
+fn ingest_magnetization_field_from_update(
+    state: &mut LocalLiveWorkspaceState,
+    update: &mut fullmag_runner::StepUpdate,
+) -> bool {
+    let Some(values) = update.magnetization.take() else {
+        return false;
+    };
+    let source_step = update
+        .stats
+        .magnetization_source_step
+        .unwrap_or(update.stats.step);
+    let source_revision = update
+        .stats
+        .magnetization_source_revision
+        .unwrap_or(source_step);
+    let materialized_at_unix_ms = update
+        .stats
+        .magnetization_materialized_at_unix_ms
+        .unwrap_or_else(current_unix_millis_u64);
+    let materialization_wall_time_ns = update
+        .stats
+        .magnetization_materialization_wall_time_ns
+        .unwrap_or(update.stats.field_copy_wall_time_ns);
+    state.latest_fields.insert(
+        "m".to_string(),
+        serde_json::json!({
+            "quantity": "m",
+            "unit": "1",
+            "values": values,
+            "source_step": source_step,
+            "source_revision": source_revision,
+            "materialized_at_unix_ms": materialized_at_unix_ms,
+            "materialization_wall_time_ns": materialization_wall_time_ns,
+            "layout": {
+                "grid_cells": update.grid,
+                "spatial_kind": "mesh",
+                "quantity_domain": "magnetic_only",
+            }
+        }),
+    );
+    true
 }
 
 fn preserve_frequency_response_progress_scalars_from_live_state(
@@ -630,31 +1509,6 @@ fn active_stage_kind_is_frequency_response(state: &LocalLiveWorkspaceState) -> b
 
 fn is_frequency_response_stage_kind(kind: &str) -> bool {
     matches!(kind, "frequency_response" | "flat_frequency_response")
-}
-
-fn preserve_frequency_response_progress_scalars_from_previous_update(
-    previous: &fullmag_runner::StepUpdate,
-    update: &mut fullmag_runner::StepUpdate,
-) {
-    if update
-        .stats
-        .per_object_scalars
-        .contains_key(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
-    {
-        return;
-    }
-    let Some(previous_progress) = previous
-        .stats
-        .per_object_scalars
-        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
-        .cloned()
-    else {
-        return;
-    };
-    update.stats.per_object_scalars.insert(
-        FEM_FREQUENCY_RESPONSE_PROGRESS_KEY.to_string(),
-        previous_progress,
-    );
 }
 
 fn apply_fem_frequency_response_progress_to_stage_execution(
@@ -1247,15 +2101,8 @@ fn ensure_frequency_response_relaxed_continuation_is_qualified(
     );
 }
 
-#[derive(Clone)]
-struct StageHeartbeatSnapshot {
-    latest_update: fullmag_runner::StepUpdate,
-    last_step_at: Instant,
-    stage_started_at: Instant,
-}
-
 struct StageProgressHeartbeat {
-    snapshot: Arc<Mutex<StageHeartbeatSnapshot>>,
+    snapshot: Arc<Mutex<crate::stage_heartbeat::StageHeartbeatProgress>>,
     stop_tx: Option<mpsc::Sender<()>>,
     join_handle: Option<JoinHandle<()>>,
 }
@@ -1265,18 +2112,15 @@ impl StageProgressHeartbeat {
         initial_update: fullmag_runner::StepUpdate,
         live_workspace: LocalLiveWorkspace,
         run_id: String,
-        session_id: String,
-        artifact_dir: PathBuf,
+        _session_id: String,
+        _artifact_dir: PathBuf,
         terminal_prefix: String,
         ui_label: String,
         torque_mode: Option<TorqueDisplayMode>,
     ) -> Self {
-        let stage_started_at = Instant::now();
-        let snapshot = Arc::new(Mutex::new(StageHeartbeatSnapshot {
-            latest_update: initial_update,
-            last_step_at: stage_started_at,
-            stage_started_at,
-        }));
+        let snapshot = Arc::new(Mutex::new(
+            crate::stage_heartbeat::StageHeartbeatProgress::new(&initial_update),
+        ));
         let (stop_tx, stop_rx) = mpsc::channel();
         let thread_snapshot = Arc::clone(&snapshot);
         let join_handle = std::thread::Builder::new()
@@ -1289,41 +2133,45 @@ impl StageProgressHeartbeat {
                     Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
-                let snapshot = match thread_snapshot.lock() {
+                let progress = match thread_snapshot.lock() {
                     Ok(snapshot) => snapshot.clone(),
                     Err(_) => break,
                 };
-                if snapshot.latest_update.finished
-                    || snapshot.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
+                if progress.finished
+                    || progress.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
                 {
                     continue;
                 }
 
-                let mut heartbeat_update = snapshot.latest_update.clone();
-                heartbeat_update.stats.wall_time_ns = heartbeat_update
+                let mut progress = progress;
+                progress.stats.wall_time_ns = progress
                     .stats
                     .wall_time_ns
-                    .max(saturating_nanos_u64(snapshot.stage_started_at.elapsed()));
-                let idle_for = snapshot.last_step_at.elapsed();
+                    .max(saturating_nanos_u64(progress.stage_started_at.elapsed()));
+                let idle_for = progress.last_step_at.elapsed();
                 let terminal_line = format_stage_progress_line(
                     &terminal_prefix,
-                    &heartbeat_update.stats,
+                    &progress.stats,
                     torque_mode,
                     Some(idle_for),
-                    heartbeat_update.hysteresis_field_m_t,
+                    progress.hysteresis_field_m_t,
                 );
                 eprintln!("{terminal_line}");
                 let heartbeat_message =
-                    format_stage_heartbeat_message(&ui_label, &heartbeat_update, idle_for);
+                    format_stage_heartbeat_message(&ui_label, &progress.stats, idle_for);
                 live_workspace.update(|state| {
-                    apply_live_step_update_to_workspace_state(
-                        state,
-                        &run_id,
-                        &session_id,
-                        &artifact_dir,
-                        &heartbeat_update,
-                        false,
+                    state.session.status = if progress.finished {
+                        "completed".to_string()
+                    } else {
+                        "running".to_string()
+                    };
+                    progress.apply_to_run(&mut state.run);
+                    state.live_state.status = state.session.status.clone();
+                    state.live_state.runtime_status = Some(
+                        fullmag_runner::RuntimeStatus::from_status_code(&state.session.status),
                     );
+                    state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+                    progress.apply_to_live_step(&mut state.live_state.latest_step);
                     if let Some(stage_execution) = state.stage_execution.as_mut() {
                         if let Some(active_index) = stage_execution.active_stage_index {
                             if let Some(stage) = stage_execution.stages.get_mut(active_index) {
@@ -1347,15 +2195,9 @@ impl StageProgressHeartbeat {
         }
     }
 
-    fn record(&mut self, update: &fullmag_runner::StepUpdate) {
+    fn record(&mut self, update: &mut fullmag_runner::StepUpdate) {
         if let Ok(mut snapshot) = self.snapshot.lock() {
-            let mut update = update.clone();
-            preserve_frequency_response_progress_scalars_from_previous_update(
-                &snapshot.latest_update,
-                &mut update,
-            );
-            snapshot.latest_update = update;
-            snapshot.last_step_at = Instant::now();
+            snapshot.record(update);
         }
     }
 
@@ -1371,16 +2213,16 @@ impl StageProgressHeartbeat {
 
 fn format_stage_heartbeat_message(
     ui_label: &str,
-    update: &fullmag_runner::StepUpdate,
+    stats: &fullmag_runner::StepStats,
     idle_for: Duration,
 ) -> String {
     let mut message = format!(
         "{STAGE_HEARTBEAT_LOG_PREFIX}{ui_label}: last completed step {} at t={:.4e}, waiting {:.1}s for the next solver update",
-        update.stats.step,
-        update.stats.time,
+        stats.step,
+        stats.time,
         idle_for.as_secs_f64(),
     );
-    if let Some(progress) = frequency_response_step_progress_segment(&update.stats) {
+    if let Some(progress) = frequency_response_step_progress_segment(stats) {
         message.push_str("; ");
         message.push_str(&progress);
     }
@@ -1417,11 +2259,13 @@ pub(crate) fn requested_runtime_selection(
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
     }
 }
 
 fn session_runtime_selection_for_problem(
     problem: &ProblemIR,
+    field_every_n: u64,
     fallback_requested_backend: &str,
     fallback_requested_mode: &str,
     fallback_requested_precision: &str,
@@ -1440,7 +2284,7 @@ fn session_runtime_selection_for_problem(
         requested_mode,
         requested_cpu_threads,
     );
-    match fullmag_runner::resolve_session_runtime(problem) {
+    match fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n) {
         Ok(resolved) => {
             selection.requested_cpu_threads = resolved
                 .requested_cpu_threads
@@ -1455,6 +2299,7 @@ fn session_runtime_selection_for_problem(
             selection.resolved_worker = resolved.resolved_worker;
             selection.resolved_cpu_threads = u32::try_from(resolved.resolved_cpu_threads).ok();
             selection.resolved_fallback = resolved.resolved_fallback;
+            selection.fem_crossover_decision = resolved.fem_crossover_decision;
         }
         Err(_) => {
             selection.requested_backend = fallback_requested_backend.to_string();
@@ -1476,6 +2321,7 @@ fn fem_mesh_payload_from_backend_plan(
     }
 }
 
+#[cfg(test)]
 fn fem_live_mesh_payload_and_initial_magnetization(
     backend_plan: &BackendPlanIR,
 ) -> anyhow::Result<(fullmag_runner::FemMeshPayload, Vec<[f64; 3]>)> {
@@ -1495,10 +2341,11 @@ fn fem_live_mesh_payload_and_initial_magnetization(
 fn initial_live_state_manifest_from_backend_plan(
     update: &fullmag_runner::StepUpdate,
     backend_plan: &BackendPlanIR,
+    mesh_payload: Option<fullmag_runner::FemMeshPayload>,
     continuation_magnetization: Option<&[[f64; 3]]>,
-) -> anyhow::Result<LiveStateManifest> {
-    let mut live_state = live_state_manifest_from_update(update);
-    if let Some(mesh_payload) = fem_mesh_payload_from_backend_plan(backend_plan) {
+) -> anyhow::Result<(LiveStateManifest, Option<fullmag_runner::FemMeshPayload>)> {
+    let mut live_state = live_state_manifest_from_update(update.clone());
+    if let Some(mesh_payload) = mesh_payload.as_ref() {
         let initial_magnetization =
             current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
         if mesh_payload.nodes.len() != initial_magnetization.len() {
@@ -1508,10 +2355,10 @@ fn initial_live_state_manifest_from_backend_plan(
                 initial_magnetization.len()
             );
         }
-        live_state.latest_step.fem_mesh = Some(mesh_payload);
+        live_state.latest_step.fem_mesh_generation_id = mesh_payload.generation_id.clone();
         live_state.latest_step.magnetization = Some(flatten_magnetization(&initial_magnetization));
     }
-    Ok(live_state)
+    Ok((live_state, mesh_payload))
 }
 
 fn default_domain_region_markers(
@@ -1665,14 +2512,12 @@ fn validate_periodic_remesh_candidate(
     if candidate.periodic_boundary_pairs.is_empty() || candidate.periodic_node_pairs.is_empty() {
         bail!("periodic_remesh_requires_recertification");
     }
-    let certificate = candidate
-        .periodic_mesh_certificate_v6()
-        .map_err(|errors| {
-            anyhow!(
-                "periodic_remesh_candidate_recertification_failed: {}",
-                errors.join("; ")
-            )
-        })?;
+    let certificate = candidate.periodic_mesh_certificate_v6().map_err(|errors| {
+        anyhow!(
+            "periodic_remesh_candidate_recertification_failed: {}",
+            errors.join("; ")
+        )
+    })?;
     if certificate.certificate_status != "accepted" {
         bail!(
             "periodic_remesh_candidate_recertification_failed: status={}",
@@ -1802,9 +2647,28 @@ fn refresh_materialized_stage_execution_plans(
                 continue;
             }
         }
-        *plan_slot = fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+        *plan_slot = plan_materialized_stage_snapshot(stage)?;
     }
     Ok(())
+}
+
+fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<ExecutionPlanIR> {
+    let mut planning_ir = stage.ir.clone();
+    if stage.action.is_some() {
+        let sampling = planning_ir.study.sampling_mut();
+        if sampling.table_autosave.as_ref().is_some_and(|table| {
+            table.requests_auto_sinc_cutoff() && table.resolved_sample_period_s.is_none()
+        }) {
+            sampling.table_autosave = None;
+        }
+        sampling.outputs.retain(|output| {
+            !matches!(
+                output,
+                fullmag_ir::OutputIR::FieldAuto { .. } | fullmag_ir::OutputIR::ScalarAuto { .. }
+            )
+        });
+    }
+    fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))
 }
 
 #[derive(Debug, Clone)]
@@ -2020,7 +2884,7 @@ fn current_fem_mesh_workspace(
 
     serde_json::json!({
         "mesh_summary": {
-            "mesh_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.elements.len()),
+            "mesh_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.cell_count()),
             "mesh_name": mesh.mesh_name,
             "mesh_source": mesh_source,
             "backend": "fem",
@@ -2028,8 +2892,8 @@ fn current_fem_mesh_workspace(
             "order": fe_order,
             "hmax": hmax,
             "node_count": mesh.nodes.len(),
-            "element_count": mesh.elements.len(),
-            "boundary_face_count": mesh.boundary_faces.len(),
+            "element_count": mesh.cell_count(),
+            "boundary_face_count": mesh.facet_count(),
             "bounds_min": bounds_min,
             "bounds_max": bounds_max,
             "mesh_extent": mesh_extent,
@@ -2038,7 +2902,7 @@ fn current_fem_mesh_workspace(
             "world_extent_source": world_extent_source,
             "domain_frame": domain_frame,
             "domain_mesh_mode": domain_mesh_mode,
-            "generation_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.elements.len()),
+            "generation_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.cell_count()),
         },
         "mesh_quality_summary": quality_summary.map(|quality| serde_json::json!({
             "n_elements": quality.n_elements,
@@ -2054,8 +2918,8 @@ fn current_fem_mesh_workspace(
         "mesh_statistics": mesh_statistics.cloned(),
         "mesh_cost_report": {
             "node_count": mesh.nodes.len(),
-            "element_count": mesh.elements.len(),
-            "boundary_face_count": mesh.boundary_faces.len(),
+            "element_count": mesh.cell_count(),
+            "boundary_face_count": mesh.facet_count(),
             "estimated_dense_ram_gb": ram_estimate_gb,
             "available_ram_gb": available_ram_gb,
             "time_seconds": mesh_time_seconds,
@@ -2064,10 +2928,10 @@ fn current_fem_mesh_workspace(
         "mesh_pipeline_status": [
             {"id": "import", "label": "Import", "status": "done", "detail": mesh_source.map(|source| source.to_string()).unwrap_or_else(|| "Inline/generated geometry".to_string())},
             {"id": "classify", "label": "Classify", "status": if source_kind == "stl_surface" { "done" } else { "idle" }, "detail": if source_kind == "stl_surface" { "Surface classification completed for STL import".to_string() } else { "No explicit surface classification stage".to_string() }},
-            {"id": "generate", "label": "Generate", "status": if mesh.elements.is_empty() { "idle" } else { "done" }, "detail": format!("{} nodes, {} tetrahedra", mesh.nodes.len(), mesh.elements.len())},
+            {"id": "generate", "label": "Generate", "status": if mesh.cells.is_empty() { "idle" } else { "done" }, "detail": format!("{} nodes, {} cells", mesh.nodes.len(), mesh.cell_count())},
             {"id": "optimize", "label": "Optimize", "status": "idle", "detail": "Optimization policy depends on remesh request".to_string()},
             {"id": "quality", "label": "Quality", "status": if quality_summary.is_some() { "done" } else { "idle" }, "detail": quality_summary.map(|quality| format!("SICN p5 {:.3}, gamma min {:.3}", quality.sicn_p5, quality.gamma_min)).unwrap_or_else(|| "Quality metrics not extracted yet".to_string())},
-            {"id": "validation", "label": "Validation", "status": if mesh.elements.is_empty() { "warning" } else { "done" }, "detail": if mesh.elements.is_empty() { "Mesh has no tetrahedra".to_string() } else { "Mesh validated and ready for FEM plan lowering".to_string() }},
+            {"id": "validation", "label": "Validation", "status": if mesh.cells.is_empty() { "warning" } else { "done" }, "detail": if mesh.cells.is_empty() { "Mesh has no cells".to_string() } else { "Mesh validated and ready for FEM plan lowering".to_string() }},
             {"id": "readiness", "label": "Solver Readiness", "status": readiness_status, "detail": format!("Estimated dense RAM {:.1} GB / {:.1} GB available · status {}", ram_estimate_gb, available_ram_gb, status)},
         ],
         "mesh_capabilities": {
@@ -2157,6 +3021,13 @@ struct CurrentMeshBuildOverlay {
     active_phase: Option<String>,
     progress_percent: Option<u8>,
     progress_label: Option<String>,
+    attempt_index: Option<u64>,
+    algorithm_3d: Option<String>,
+    attempt_status: Option<String>,
+    attempt_failure_reason: Option<String>,
+    next_algorithm_3d: Option<String>,
+    progress_kind: Option<String>,
+    last_recoverable_attempt: Option<serde_json::Value>,
     phase_started_at: Instant,
     phase_durations_ms: Vec<(String, u64)>,
     failed: bool,
@@ -2248,6 +3119,7 @@ fn mesh_build_pipeline_status_json(
     progress_label: Option<&str>,
     active_elapsed_ms: Option<u64>,
     phase_durations_ms: &[(String, u64)],
+    attempt_telemetry: Option<&CurrentMeshBuildOverlay>,
 ) -> serde_json::Value {
     let phase_details = [
         (
@@ -2307,6 +3179,29 @@ fn mesh_build_pipeline_status_json(
                     if let Some(duration_ms) = active_elapsed_ms {
                         phase["duration_ms"] = serde_json::json!(duration_ms);
                     }
+                    if let Some(telemetry) = attempt_telemetry {
+                        if let Some(value) = telemetry.attempt_index {
+                            phase["attempt_index"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.algorithm_3d.as_deref() {
+                            phase["algorithm_3d"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.attempt_status.as_deref() {
+                            phase["attempt_status"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.attempt_failure_reason.as_deref() {
+                            phase["attempt_failure_reason"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.next_algorithm_3d.as_deref() {
+                            phase["next_algorithm_3d"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.progress_kind.as_deref() {
+                            phase["progress_kind"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.last_recoverable_attempt.as_ref() {
+                            phase["last_recoverable_attempt"] = value.clone();
+                        }
+                    }
                 } else if let Some((_, duration_ms)) = phase_durations_ms
                     .iter()
                     .find(|(phase_id, _)| phase_id == id)
@@ -2346,6 +3241,106 @@ fn transition_mesh_build_phase(overlay: &mut CurrentMeshBuildOverlay, next_phase
     overlay.phase_started_at = now;
 }
 
+fn update_mesh_attempt_overlay_from_payload(
+    overlay: &mut CurrentMeshBuildOverlay,
+    kind: &str,
+    payload: &serde_json::Value,
+) -> bool {
+    if kind != "mesh_build_phase" || payload.get("attempt_index").is_none() {
+        return false;
+    }
+    let phase = payload
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("meshing");
+    transition_mesh_build_phase(overlay, phase);
+    overlay.progress_percent = payload
+        .get("progress_percent")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok());
+    overlay.progress_label = payload
+        .get("progress_label")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.attempt_index = payload
+        .get("attempt_index")
+        .and_then(serde_json::Value::as_u64);
+    overlay.algorithm_3d = payload
+        .get("algorithm_3d")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.attempt_status = payload
+        .get("attempt_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.attempt_failure_reason = payload
+        .get("attempt_failure_reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.next_algorithm_3d = payload
+        .get("next_algorithm_3d")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.progress_kind = payload
+        .get("progress_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if overlay.attempt_status.as_deref() == Some("failed_recoverable") {
+        overlay.last_recoverable_attempt = Some(serde_json::json!({
+            "attempt_index": overlay.attempt_index,
+            "algorithm_3d": overlay.algorithm_3d,
+            "attempt_status": overlay.attempt_status,
+            "attempt_failure_reason": overlay.attempt_failure_reason,
+            "next_algorithm_3d": overlay.next_algorithm_3d,
+            "progress_kind": overlay.progress_kind,
+        }));
+    }
+    overlay.failed = false;
+    true
+}
+
+fn gmsh_indeterminate_heartbeat(message: &str) -> bool {
+    message.trim_start().starts_with("Gmsh: meshing active (")
+}
+
+fn remesh_progress_label(
+    overlay: &CurrentMeshBuildOverlay,
+    stage: RemeshTerminalProgress,
+) -> String {
+    match (overlay.attempt_index, overlay.algorithm_3d.as_deref()) {
+        (Some(attempt_index), Some(algorithm)) if stage.percent.is_none() => {
+            format!("Attempt {attempt_index} — {algorithm} — {}", stage.label)
+        }
+        _ => stage.label.to_string(),
+    }
+}
+
+fn update_mesh_overlay_from_terminal_progress(
+    overlay: &mut CurrentMeshBuildOverlay,
+    stage: RemeshTerminalProgress,
+) {
+    let next_phase = match stage.label {
+        "mesh ready" | "extracting quality metrics" | "extracting mesh data" => "postprocessing",
+        "generating 3D mesh" | "meshing curves" | "meshing surfaces" | "meshing 3D volume"
+        | "optimizing mesh" => "meshing",
+        "accepted" => "queued",
+        _ => "preparing_domain",
+    };
+    transition_mesh_build_phase(overlay, next_phase);
+    overlay.progress_percent = stage.percent;
+    overlay.progress_label = Some(remesh_progress_label(overlay, stage));
+    if next_phase != "meshing" {
+        overlay.attempt_index = None;
+        overlay.algorithm_3d = None;
+        overlay.attempt_status = None;
+        overlay.attempt_failure_reason = None;
+        overlay.next_algorithm_3d = None;
+        overlay.progress_kind = None;
+        overlay.last_recoverable_attempt = None;
+    }
+    overlay.failed = false;
+}
+
 fn overlay_mesh_workspace(
     mesh_workspace: &mut serde_json::Value,
     overlay: &CurrentMeshBuildOverlay,
@@ -2361,7 +3356,32 @@ fn overlay_mesh_workspace(
         overlay
             .active_build
             .clone()
-            .unwrap_or(serde_json::Value::Null),
+            .map_or(serde_json::Value::Null, |mut value| {
+                if let Some(object) = value.as_object_mut() {
+                    if overlay.attempt_index.is_some() {
+                        object.insert(
+                            "runtime_attempt".to_string(),
+                            serde_json::json!({
+                                "attempt_index": overlay.attempt_index,
+                                "algorithm_3d": overlay.algorithm_3d,
+                                "attempt_status": overlay.attempt_status,
+                                "attempt_failure_reason": overlay.attempt_failure_reason,
+                                "next_algorithm_3d": overlay.next_algorithm_3d,
+                                "progress_kind": overlay.progress_kind,
+                            }),
+                        );
+                    }
+                    if let Some(last_recoverable_attempt) =
+                        overlay.last_recoverable_attempt.as_ref()
+                    {
+                        object.insert(
+                            "last_recoverable_attempt".to_string(),
+                            last_recoverable_attempt.clone(),
+                        );
+                    }
+                }
+                value
+            }),
     );
     obj.insert(
         "effective_airbox_target".to_string(),
@@ -2405,6 +3425,7 @@ fn overlay_mesh_workspace(
                 .as_ref()
                 .map(|_| saturating_duration_millis_u64(overlay.phase_started_at.elapsed())),
             &overlay.phase_durations_ms,
+            Some(overlay),
         ),
     );
 }
@@ -3124,13 +4145,10 @@ fn execute_manual_interactive_remesh(
         apply_scene_problem_patch(&mut remesh_problem_source, patch);
     }
     if let Some(source_scene_revision) = mesh_source_scene_revision(&opts) {
-        remesh_problem_source
-            .problem_meta
-            .runtime_metadata
-            .insert(
-                "mesh_source_scene_revision".to_string(),
-                serde_json::json!(source_scene_revision),
-            );
+        remesh_problem_source.problem_meta.runtime_metadata.insert(
+            "mesh_source_scene_revision".to_string(),
+            serde_json::json!(source_scene_revision),
+        );
     }
     let mesh_reason = command
         .mesh_reason
@@ -3275,6 +4293,13 @@ fn execute_manual_interactive_remesh(
             active_phase: Some("queued".to_string()),
             progress_percent: None,
             progress_label: None,
+            attempt_index: None,
+            algorithm_3d: None,
+            attempt_status: None,
+            attempt_failure_reason: None,
+            next_algorithm_3d: None,
+            progress_kind: None,
+            last_recoverable_attempt: None,
             phase_started_at: Instant::now(),
             phase_durations_ms: Vec::new(),
             failed: false,
@@ -3292,7 +4317,7 @@ fn execute_manual_interactive_remesh(
             state.mesh_workspace = Some(workspace);
         });
         let mesh_start = std::time::Instant::now();
-        let remesh_progress_stage = Arc::new(Mutex::new(None::<u8>));
+        let remesh_progress_stage = Arc::new(Mutex::new(None::<RemeshTerminalProgress>));
         let remesh_progress_callback = Some({
             let live_workspace = live_workspace.clone();
             let remesh_progress_stage = Arc::clone(&remesh_progress_stage);
@@ -3308,27 +4333,17 @@ fn execute_manual_interactive_remesh(
                                     let mut guard = remesh_progress_stage
                                         .lock()
                                         .expect("remesh progress mutex poisoned");
-                                    if guard
-                                        .map(|current| current == stage.percent)
-                                        .unwrap_or(false)
+                                    if guard.as_ref() == Some(&stage)
+                                        && !gmsh_indeterminate_heartbeat(message)
                                     {
                                         None
                                     } else {
-                                        *guard = Some(stage.percent);
-                                        let next_phase = if stage.percent >= 92 {
-                                            "postprocessing"
-                                        } else if stage.percent >= 75 {
-                                            "meshing"
-                                        } else if stage.percent >= 15 {
-                                            "preparing_domain"
-                                        } else {
-                                            "queued"
-                                        };
+                                        *guard = Some(stage);
                                         if let Ok(mut overlay) = build_overlay.lock() {
-                                            transition_mesh_build_phase(&mut overlay, next_phase);
-                                            overlay.progress_percent = Some(stage.percent);
-                                            overlay.progress_label = Some(stage.label.to_string());
-                                            overlay.failed = false;
+                                            update_mesh_overlay_from_terminal_progress(
+                                                &mut overlay,
+                                                stage,
+                                            );
                                             let overlay_snapshot = overlay.clone();
                                             live_workspace.update(|state| {
                                                 let mut workspace = state
@@ -3342,10 +4357,16 @@ fn execute_manual_interactive_remesh(
                                                 state.mesh_workspace = Some(workspace);
                                             });
                                         }
-                                        Some(format!(
-                                            "[fullmag] remesh {:02}% - {}",
-                                            stage.percent, stage.label
-                                        ))
+                                        Some(match stage.percent {
+                                            Some(percent) => format!(
+                                                "[fullmag] remesh {percent:02}% - {}",
+                                                stage.label
+                                            ),
+                                            None => format!(
+                                                "[fullmag] remesh active (indeterminate) - {}",
+                                                stage.label
+                                            ),
+                                        })
                                     }
                                 }
                                 None => Some(format!("[fullmag] remesh info - {}", message)),
@@ -3353,10 +4374,26 @@ fn execute_manual_interactive_remesh(
                         }
                     }
                     PythonProgressEvent::FemSurfacePreview { .. } => None,
-                    PythonProgressEvent::Structured { payload, .. } => payload
-                        .get("message")
-                        .and_then(|value| value.as_str())
-                        .map(|message| format!("[fullmag] remesh info - {}", message)),
+                    PythonProgressEvent::Structured { kind, payload } => {
+                        if let Ok(mut overlay) = build_overlay.lock() {
+                            if update_mesh_attempt_overlay_from_payload(&mut overlay, kind, payload)
+                            {
+                                let overlay_snapshot = overlay.clone();
+                                live_workspace.update(|state| {
+                                    let mut workspace = state
+                                        .mesh_workspace
+                                        .clone()
+                                        .unwrap_or_else(|| serde_json::json!({}));
+                                    overlay_mesh_workspace(&mut workspace, &overlay_snapshot);
+                                    state.mesh_workspace = Some(workspace);
+                                });
+                            }
+                        }
+                        payload
+                            .get("message")
+                            .and_then(|value| value.as_str())
+                            .map(|message| format!("[fullmag] remesh info - {}", message))
+                    }
                 };
                 apply_python_progress_event(&live_workspace, event);
                 if let Some(line) = terminal_update {
@@ -3399,8 +4436,8 @@ fn execute_manual_interactive_remesh(
                     validate_periodic_remesh_candidate(previous_mesh, &new_mesh)?;
                 }
                 let node_count = new_mesh.nodes.len();
-                let elem_count = new_mesh.elements.len();
-                let face_count = new_mesh.boundary_faces.len();
+                let elem_count = new_mesh.cell_count();
+                let face_count = new_mesh.facet_count();
                 let remeshed_mesh_source = if shared_domain_remesh {
                     None
                 } else {
@@ -3523,7 +4560,9 @@ fn execute_manual_interactive_remesh(
                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
                 live_workspace.update(|state| {
-                    state.live_state.latest_step.fem_mesh = Some(live_mesh_payload);
+                    state.live_state.latest_step.fem_mesh_generation_id =
+                        live_mesh_payload.generation_id.clone();
+                    state.fem_mesh = Some(live_mesh_payload);
                     state.live_state.latest_step.magnetization =
                         Some(flatten_magnetization(&remeshed_magnetization));
                     let mut workspace = current_fem_mesh_workspace(
@@ -3629,6 +4668,18 @@ fn execute_manual_interactive_remesh(
                 live_workspace.push_log("error", format!("Remesh failed: {}", error));
                 if let Ok(mut overlay) = build_overlay.lock() {
                     overlay.active_build = None;
+                    overlay.last_build_summary = Some(serde_json::json!({
+                        "kind": "mesh_build_failed",
+                        "phase": overlay.active_phase.clone(),
+                        "attempt_index": overlay.attempt_index,
+                        "algorithm_3d": overlay.algorithm_3d.clone(),
+                        "attempt_status": overlay.attempt_status.clone(),
+                        "attempt_failure_reason": overlay.attempt_failure_reason.clone(),
+                        "next_algorithm_3d": overlay.next_algorithm_3d.clone(),
+                        "last_recoverable_attempt": overlay.last_recoverable_attempt.clone(),
+                        "error": error.to_string(),
+                        "duration_ms": saturating_duration_millis_u64(elapsed),
+                    }));
                     overlay.last_build_error = Some(error.to_string());
                     overlay.active_phase = Some(
                         overlay
@@ -3665,6 +4716,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     stage: &mut ResolvedScriptStage,
     execution_plan: &mut ExecutionPlanIR,
     stage_result: &mut fullmag_runner::RunResult,
+    stage_fem_mesh_asset: &mut Option<fullmag_runner::StageFemMeshAsset>,
     live_workspace: &LocalLiveWorkspace,
     stage_index: usize,
     stage_count: usize,
@@ -3721,15 +4773,13 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         );
         return Ok(false);
     }
-    let resolved_convergence_metric = resolve_adaptive_convergence_metric(
-        &settings.convergence_metric,
-    )
-    .map_err(|reason| {
-        anyhow!(
-            "{reason}: no estimator is available for convergence metric '{}'",
-            settings.convergence_metric
-        )
-    })?;
+    let resolved_convergence_metric =
+        resolve_adaptive_convergence_metric(&settings.convergence_metric).map_err(|reason| {
+            anyhow!(
+                "{reason}: no estimator is available for convergence metric '{}'",
+                settings.convergence_metric
+            )
+        })?;
 
     let geometry_entry = stage
         .ir
@@ -3771,19 +4821,18 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             _ => break,
         };
         let current_solve_summary = latest_relaxation_solve_summary(stage_result);
-        let convergence_summary =
-            previous_solve_summary
-                .zip(current_solve_summary)
-                .map(|(previous, current)| {
-                    adaptive_convergence_summary(
-                        resolved_convergence_metric,
-                        settings.error_tolerance,
-                        previous,
-                        current,
-                    )
-                })
-                .transpose()
-                .map_err(|reason| anyhow!("{reason}"))?;
+        let convergence_summary = previous_solve_summary
+            .zip(current_solve_summary)
+            .map(|(previous, current)| {
+                adaptive_convergence_summary(
+                    resolved_convergence_metric,
+                    settings.error_tolerance,
+                    previous,
+                    current,
+                )
+            })
+            .transpose()
+            .map_err(|reason| anyhow!("{reason}"))?;
         if let Some(summary) = convergence_summary.as_ref() {
             if summary.converged {
                 let current_runtime_state = serde_json::json!({
@@ -4047,10 +5096,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
 
         let candidate_execution_plan =
             fullmag_plan::plan(&candidate_stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-        let mesh_payload = fem_mesh_payload_from_backend_plan(
+        let remeshed_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
             &candidate_execution_plan.backend_plan,
         )
         .ok_or_else(|| anyhow!("adaptive FEM replan did not produce an exact FEM mesh payload"))?;
+        let mesh_payload = remeshed_mesh_asset.payload.clone();
 
         // Commit only after transfer, marker propagation, IR validation and replanning succeed.
         *stage = candidate_stage;
@@ -4064,8 +5114,8 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             "mesh_name": new_mesh.mesh_name,
             "generation_mode": remesh_result.generation_mode,
             "node_count": new_mesh.nodes.len(),
-            "element_count": new_mesh.elements.len(),
-            "boundary_face_count": new_mesh.boundary_faces.len(),
+            "element_count": new_mesh.cell_count(),
+            "boundary_face_count": new_mesh.facet_count(),
             "kind": "adaptive_pass",
             "adaptive_pass": remesh_pass_count,
             "quality": remesh_result.quality.as_ref().map(|quality| serde_json::json!({
@@ -4078,7 +5128,9 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         }));
         live_workspace.update(|state| {
             state.metadata = Some(current_live_metadata(&stage.ir, execution_plan, "running"));
-            state.live_state.latest_step.fem_mesh = Some(mesh_payload);
+            state.live_state.latest_step.fem_mesh_generation_id =
+                mesh_payload.generation_id.clone();
+            state.fem_mesh = Some(mesh_payload);
             state.live_state.latest_step.magnetization =
                 Some(flatten_magnetization(&transferred_magnetization));
             state.mesh_workspace = current_mesh_workspace(
@@ -4096,7 +5148,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 "Adaptive remesh {} complete — {} nodes, {} elements (transfer fallback: {})",
                 remesh_pass_count,
                 new_mesh.nodes.len(),
-                new_mesh.elements.len(),
+                new_mesh.cell_count(),
                 transfer.n_nearest_fallback
             ),
         );
@@ -4105,13 +5157,14 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             current_stage_artifact_dir.join(format!("adaptive_pass_{:02}", remesh_pass_count));
         fs::create_dir_all(&pass_output_dir)?;
         let adaptive_pass_label = format!("adaptive remesh pass {}", remesh_pass_count);
+        let mut adaptive_initial_update = initial_step_update(
+            &execution_plan.backend_plan,
+            Some(remeshed_mesh_asset.identity.generation_id().to_string()),
+        );
+        adaptive_initial_update.stats.step += global_step_offset + local_step_offset;
+        adaptive_initial_update.stats.time += global_time_offset + local_time_offset;
         let mut stage_heartbeat = Some(StageProgressHeartbeat::spawn(
-            offset_step_update(
-                &initial_step_update(&execution_plan.backend_plan),
-                global_step_offset + local_step_offset,
-                global_time_offset + local_time_offset,
-                false,
-            ),
+            adaptive_initial_update,
             live_workspace.clone(),
             run_id.to_string(),
             session_id.to_string(),
@@ -4121,31 +5174,41 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             torque_mode,
         ));
         let mut live_cadence = LiveProgressCadence::default();
-        let pass_result = fullmag_runner::run_problem_with_callback(
+        let pass_result = fullmag_runner::run_planned_problem_with_callback_and_fem_mesh_identity(
             &stage.ir,
+            execution_plan,
+            Some(&remeshed_mesh_asset.identity),
             stage.until_seconds,
             &pass_output_dir,
             field_every_n,
             |update| {
-                let adjusted = offset_step_update(
-                    &update,
+                let callback_start = solver_profile_callback_start(live_workspace);
+                let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
+                let mut adjusted = offset_step_update(
+                    update,
                     global_step_offset + local_step_offset,
                     global_time_offset + local_time_offset,
                     false,
                 );
                 if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                    heartbeat.record(&adjusted);
+                    heartbeat.record(&mut adjusted);
                 }
+                let profile_record = begin_solver_profile_step_with_orchestration(
+                    live_workspace,
+                    &mut adjusted.stats,
+                    callback_start,
+                );
                 if live_cadence.should_publish(&adjusted) {
-                    live_workspace.update(|state| {
-                        apply_live_step_update_to_workspace_state(
+                    let mut next_adjusted = None;
+                    let timings = live_workspace.update_profiled(|state| {
+                        next_adjusted = Some(apply_live_step_update_to_workspace_state(
                             state,
                             run_id,
                             session_id,
                             artifact_dir,
-                            &adjusted,
+                            adjusted,
                             true,
-                        );
+                        ));
                         state.metadata =
                             Some(current_live_metadata(&stage.ir, execution_plan, "running"));
                         state.mesh_workspace = current_mesh_workspace(
@@ -4156,7 +5219,22 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                             current_mesh_history,
                         );
                     });
+                    adjusted = next_adjusted
+                        .expect("adaptive live update should be consumed under workspace lock");
+                    adjusted.stats.live_state_build_wall_time_ns = adjusted
+                        .stats
+                        .live_state_build_wall_time_ns
+                        .saturating_add(timings.live_state_build_wall_time_ns);
+                    adjusted.stats.publisher_replace_wall_time_ns = adjusted
+                        .stats
+                        .publisher_replace_wall_time_ns
+                        .saturating_add(timings.publisher_replace_wall_time_ns);
                 }
+                finish_solver_profile_step_with_orchestration(
+                    live_workspace,
+                    callback_start,
+                    profile_record,
+                );
                 fullmag_runner::StepAction::Continue
             },
         );
@@ -4174,6 +5252,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         stage_result.steps.extend(pass_steps);
         stage_result.final_magnetization = pass_result.final_magnetization;
         stage_result.status = pass_result.status;
+        *stage_fem_mesh_asset = Some(remeshed_mesh_asset);
 
         eprintln!(
             "stage {}/{} ({}) adaptive pass {} complete",
@@ -4225,6 +5304,7 @@ pub(crate) fn build_session_manifest(
         resolved_worker: runtime.resolved_worker.clone(),
         resolved_cpu_threads: runtime.resolved_cpu_threads,
         resolved_fallback: runtime.resolved_fallback.clone(),
+        fem_crossover_decision: runtime.fem_crossover_decision.clone(),
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms,
         finished_at_unix_ms,
@@ -4529,7 +5609,7 @@ fn refresh_problem_energy_state(
 fn is_control_checkpoint_only(update: &fullmag_runner::StepUpdate) -> bool {
     update.preview_field.is_none()
         && !update.scalar_row_due
-        && update.fem_mesh.is_none()
+        && update.fem_mesh_generation_id.is_none()
         && update.magnetization.is_none()
         && !update.finished
 }
@@ -4566,6 +5646,7 @@ fn wait_for_solve_prompt(backend_plan: &BackendPlanIR) -> &'static str {
 enum WaitForSolveCommandAction {
     RefreshFields,
     RefreshEnergies,
+    ConfigureProfiler,
     StartSolver,
     Remesh,
     Stop,
@@ -4576,6 +5657,7 @@ fn classify_wait_for_solve_command(kind: &str) -> WaitForSolveCommandAction {
     match kind {
         "compute_fields" => WaitForSolveCommandAction::RefreshFields,
         "compute_energies" => WaitForSolveCommandAction::RefreshEnergies,
+        "set_solver_profile" => WaitForSolveCommandAction::ConfigureProfiler,
         "solve" | "compute" | "run" => WaitForSolveCommandAction::StartSolver,
         "remesh" => WaitForSolveCommandAction::Remesh,
         "stop" => WaitForSolveCommandAction::Stop,
@@ -4854,6 +5936,24 @@ fn write_synthetic_stage_record(
     Ok(())
 }
 
+fn write_sampling_resolution_stage_record(
+    current_stage_artifact_dir: &Path,
+    sampling_resolution: Option<&serde_json::Value>,
+) -> Result<()> {
+    let Some(sampling_resolution) = sampling_resolution else {
+        return Ok(());
+    };
+    fs::create_dir_all(current_stage_artifact_dir)?;
+    fs::write(
+        current_stage_artifact_dir.join("sampling_stage_record.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "sampling_stage_record.v1",
+            "sampling_resolution": sampling_resolution,
+        }))?,
+    )?;
+    Ok(())
+}
+
 struct SyntheticStageOutcome {
     magnetization: Vec<[f64; 3]>,
     message: String,
@@ -5008,10 +6108,127 @@ fn execute_synthetic_stage(
                 message: format!("Added regional field drive {}", drive.id),
             })
         }
+        ResolvedScriptStageAction::RemoveFieldDrive { drive_id } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "remove_field_drive",
+                    "drive_id": drive_id,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Removed regional field drive {}", drive_id),
+            })
+        }
+        ResolvedScriptStageAction::TableAutosave {
+            enabled,
+            table_autosave,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "table_autosave",
+                    "enabled": enabled,
+                    "table_autosave": table_autosave,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "Table autosave {}",
+                    if *enabled { "enabled" } else { "disabled" }
+                ),
+            })
+        }
+        ResolvedScriptStageAction::Autosave {
+            enabled,
+            quantity,
+            output,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "autosave",
+                    "enabled": enabled,
+                    "quantity": quantity,
+                    "output": output,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "Autosave {}{}",
+                    if *enabled { "enabled" } else { "disabled" },
+                    quantity
+                        .as_deref()
+                        .map(|quantity| format!(" for {quantity}"))
+                        .unwrap_or_default()
+                ),
+            })
+        }
+        ResolvedScriptStageAction::FftResponse { enabled, request } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "fft_response",
+                    "enabled": enabled,
+                    "request": request,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "FFT response {}",
+                    if *enabled { "enabled" } else { "disabled" }
+                ),
+            })
+        }
     }
 }
 
 // ── main orchestration entry point ───────────────────────────────────────────
+
+fn resolve_preview_field_every_n(
+    preview_3d_disabled: bool,
+    requested_backend_name: &str,
+    override_raw: Option<&str>,
+) -> Result<u64> {
+    if preview_3d_disabled {
+        return Ok(u64::MAX);
+    }
+    if let Some(raw) = override_raw {
+        let every_n = match raw.trim().parse::<u64>() {
+            Ok(every_n) => every_n,
+            Err(_) => bail!("FULLMAG_PREVIEW_EVERY_N must be a positive integer, got '{raw}'"),
+        };
+        if every_n == 0 || every_n > u64::from(u32::MAX) {
+            bail!(
+                "FULLMAG_PREVIEW_EVERY_N must be between 1 and {}, got {}",
+                u32::MAX,
+                every_n
+            );
+        }
+        return Ok(every_n);
+    }
+    Ok(if requested_backend_name == "fem" {
+        10
+    } else {
+        50
+    })
+}
 
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let args = ScriptCli::parse_from(raw_args);
@@ -5096,26 +6313,39 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
     let session_id = format!("session-{}-{}", started_at_unix_ms, std::process::id());
     let run_id = format!("run-{}", session_id);
-    let workspace_dir = args.session_root.join(&session_id);
-    let artifact_dir = args
-        .output_dir
-        .clone()
-        .unwrap_or_else(|| workspace_dir.join("artifacts"));
+    let output_paths = resolve_script_output_paths(
+        &script_path,
+        args.output_dir.as_deref(),
+        &args.session_root,
+        &session_id,
+    );
+    let workspace_dir = output_paths.workspace_dir.clone();
+    let artifact_dir = output_paths.artifact_dir.clone();
 
-    fs::create_dir_all(&workspace_dir)
-        .with_context(|| format!("failed to create workspace dir {}", workspace_dir.display()))?;
+    if output_paths.is_sibling_zarr_bundle {
+        replace_and_initialize_script_result_bundle(&output_paths, &script_path, &session_id)?;
+        eprintln!("- result_bundle: {}", workspace_dir.display());
+    } else {
+        fs::create_dir_all(&workspace_dir).with_context(|| {
+            format!("failed to create workspace dir {}", workspace_dir.display())
+        })?;
+    }
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:
     // too-large step intervals make 3D magnetization look "stuck" even while
-    // the run progresses in wall-clock time.
+    // the run progresses in wall-clock time. The explicit override exists for
+    // reproducible preview performance qualification and applies to both the
+    // active field and the cached-field refresh cadence.
     let preview_3d_disabled = crate::live_workspace::feature_flags().disable_preview_3d;
-    let field_every_n: u64 = if preview_3d_disabled {
-        u64::MAX
-    } else if requested_backend_name == "fem" {
-        10
-    } else {
-        50
-    };
+    let preview_every_n_override_raw = std::env::var("FULLMAG_PREVIEW_EVERY_N").ok();
+    let field_every_n = resolve_preview_field_every_n(
+        preview_3d_disabled,
+        &requested_backend_name,
+        preview_every_n_override_raw.as_deref(),
+    )?;
+    let preview_every_n_override = preview_every_n_override_raw
+        .as_ref()
+        .map(|_| field_every_n as u32);
     let current_live_publisher = CurrentLivePublisher::spawn(&session_id);
     let bootstrapping_runtime = requested_runtime_selection(
         &requested_backend_name,
@@ -5144,19 +6374,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let bootstrapping_run_manifest =
         build_run_manifest(&run_id, &session_id, "bootstrapping", &artifact_dir);
     let bootstrap_live_state_manifest = bootstrap_live_state("bootstrapping");
+    let simulation_preparation = new_simulation_preparation(
+        format!("preparation-{session_id}"),
+        u64::try_from(started_at_unix_ms).context("preparation start timestamp exceeds u64")?,
+    )?;
     let live_workspace = LocalLiveWorkspace::new(
         LocalLiveWorkspaceState {
             session: bootstrapping_session_manifest.clone(),
             run: bootstrapping_run_manifest.clone(),
             live_state: bootstrap_live_state_manifest.clone(),
+            fem_mesh: None,
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
@@ -5196,6 +6434,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // The control room (API + frontend) starts concurrently.
     // This gives the frontend early metadata (~300ms) while the mesh builds.
     live_workspace.publish_snapshot();
+    begin_script_materialization(&live_workspace)?;
     live_workspace.update(|state| {
         state.session.status = "materializing_script".to_string();
         state.run.status = "materializing_script".to_string();
@@ -5211,68 +6450,92 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let phase1_backend = args.backend;
     let phase1_mode = args.mode;
     let phase1_precision = args.precision;
-    let phase1_handle = std::thread::Builder::new()
-        .name("fullmag-materialize-phase1".to_string())
-        .spawn(move || -> Result<ScriptExecutionConfig> {
-            use clap::ValueEnum;
-            let mut helper_args = vec![
-                "-m".to_string(),
-                "fullmag.runtime.helper".to_string(),
-                "export-run-config".to_string(),
-                "--script".to_string(),
-                phase1_script_path.display().to_string(),
-                "--skip-geometry-assets".to_string(),
-            ];
-            if let Some(backend) = phase1_backend {
-                helper_args.push("--backend".to_string());
-                helper_args.push(backend.to_possible_value().unwrap().get_name().to_string());
-            }
-            if let Some(mode) = phase1_mode {
-                helper_args.push("--mode".to_string());
-                helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
-            }
-            if let Some(precision) = phase1_precision {
-                helper_args.push("--precision".to_string());
-                helper_args.push(
-                    precision
-                        .to_possible_value()
-                        .unwrap()
-                        .get_name()
-                        .to_string(),
-                );
-            }
-            let output = run_python_helper_with_progress(&helper_args, None)
-                .context("phase-1 python helper failed")?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
-            }
-            let stdout =
-                String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
-            let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
-            serde_json::from_str(json_str)
-                .context("failed to deserialize phase-1 script execution config")
-        })
-        .context("failed to spawn phase-1 materialization thread")?;
+    let phase1_runtime_device = crate::python_bridge::managed_fem_execution_device(
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+    );
+    let phase1_handle = own_preparation_boundary_failure(
+        &live_workspace,
+        "script_materialization_thread_start_failed",
+        "Python script materialization could not start",
+        std::thread::Builder::new()
+            .name("fullmag-materialize-phase1".to_string())
+            .spawn(move || -> Result<ScriptExecutionConfig> {
+                use clap::ValueEnum;
+                let mut helper_args = vec![
+                    "-m".to_string(),
+                    "fullmag.runtime.helper".to_string(),
+                    "export-run-config".to_string(),
+                    "--script".to_string(),
+                    phase1_script_path.display().to_string(),
+                    "--skip-geometry-assets".to_string(),
+                ];
+                if let Some(backend) = phase1_backend {
+                    helper_args.push("--backend".to_string());
+                    helper_args.push(backend.to_possible_value().unwrap().get_name().to_string());
+                }
+                if let Some(mode) = phase1_mode {
+                    helper_args.push("--mode".to_string());
+                    helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
+                }
+                if let Some(precision) = phase1_precision {
+                    helper_args.push("--precision".to_string());
+                    helper_args.push(
+                        precision
+                            .to_possible_value()
+                            .unwrap()
+                            .get_name()
+                            .to_string(),
+                    );
+                }
+                if let Some(device) = phase1_runtime_device {
+                    helper_args.push("--runtime-device".to_string());
+                    helper_args.push(device.to_string());
+                }
+                let output = run_python_helper_with_progress(&helper_args, None)
+                    .context("phase-1 python helper failed")?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
+                }
+                let stdout =
+                    String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
+                let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
+                serde_json::from_str(json_str)
+                    .context("failed to deserialize phase-1 script execution config")
+            })
+            .context("failed to spawn phase-1 materialization thread"),
+    )?;
 
     eprintln!("fullmag materializing script");
 
     if !args.headless {
-        let (web_port, child, frontend_child) =
-            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace)
-                .with_context(|| {
+        let (web_port, child, frontend_child) = own_preparation_boundary_failure(
+            &live_workspace,
+            "control_room_bootstrap_failed",
+            "Control Room bootstrap failed",
+            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace).with_context(
+                || {
                     format!(
                         "failed to bootstrap control room for workspace {}",
                         session_id
                     )
-                })?;
+                },
+            ),
+        )?;
         eprintln!("fullmag control room bootstrap verified");
         live_workspace.push_log("system", "Control room bootstrap verified");
         _control_room_guard = ControlRoomGuard::active(web_port, child, frontend_child);
+        let failed_workspace = live_workspace.clone();
+        let failure_control = display_selection_handle.clone();
+        _control_room_guard.retain_terminal_failure_until_close(move || {
+            wait_for_failed_preparation_close(&failed_workspace, || {
+                failure_control.wait_next_command_coalesced(Duration::from_millis(250))
+            });
+        });
     }
 
     // Join Phase 1 and push early metadata to the already-loaded frontend.
-    match phase1_handle
+    let early_config = match phase1_handle
         .join()
         .unwrap_or_else(|_| Err(anyhow::anyhow!("phase-1 thread panicked")))
     {
@@ -5314,12 +6577,57 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     geometry_names.len()
                 ),
             );
+            Some(early_config)
         }
         Err(err) => {
             // Phase 1 failure is non-fatal — Phase 2 will produce the real error if needed.
             eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
+            let timestamp_unix_ms = preparation_unix_time_millis()?;
+            transition_preparation(&live_workspace, |preparation| {
+                push_preparation_log_once(
+                    preparation,
+                    timestamp_unix_ms,
+                    PreparationLogLevel::Warning,
+                    PreparationStageId::ScriptMaterialization,
+                    "Lightweight script preflight was unavailable; using full materialization",
+                );
+                Ok(())
+            })?;
+            None
         }
-    }
+    };
+    let early_preflight_completed = if let Some(early_config) = early_config {
+        let early_stages = run_active_preparation_operation(
+            &live_workspace,
+            "script_materialization_failed",
+            "Python script materialization failed",
+            || materialize_script_stages(early_config),
+        )?;
+        run_script_preparation_preflight(
+            &live_workspace,
+            || {
+                if early_stages.is_empty() {
+                    bail!("script did not produce any executable stages");
+                }
+                for stage in &early_stages {
+                    validate_ir(&stage.ir)?;
+                }
+                Ok(())
+            },
+            || {
+                for stage in &early_stages {
+                    stage
+                        .ir
+                        .plan_for(args.backend.map(BackendTarget::from))
+                        .map_err(join_errors)?;
+                }
+                Ok(())
+            },
+        )?;
+        true
+    } else {
+        false
+    };
     let script_config = match export_script_execution_config_via_python(
         &script_path,
         &args,
@@ -5348,8 +6656,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     ) {
         Ok(config) => config,
         Err(error) => {
+            let error =
+                project_script_export_failure(&live_workspace, early_preflight_completed, error)?;
             let failed_at_unix_ms = unix_time_millis()?;
-            let previous_engine_log = live_workspace.snapshot().engine_log;
+            let failed_snapshot = live_workspace.snapshot();
             let failed_runtime = requested_runtime_selection(
                 &requested_backend_name,
                 false,
@@ -5381,15 +6691,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     live_state.latest_step.finished = true;
                     live_state
                 },
-                metadata: None,
-                mesh_workspace: None,
+                fem_mesh: failed_snapshot.fem_mesh,
+                metadata: failed_snapshot.metadata,
+                mesh_workspace: failed_snapshot.mesh_workspace,
                 stage_execution: None,
+                simulation_preparation: failed_snapshot.simulation_preparation,
                 latest_scalar_row: None,
                 latest_fields: CurrentLiveLatestFields::default(),
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+                superseded_pending_preview_fields: Vec::new(),
                 clear_preview_cache: false,
-                engine_log: previous_engine_log,
+                preview_cache_revision: 0,
+                engine_log: failed_snapshot.engine_log,
                 solver_profile: fullmag_runner::SolverProfileState::default(),
                 published_fem_mesh_generation_id: None,
             });
@@ -5397,37 +6711,121 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             return Err(error);
         }
     };
-    let mut stages = materialize_script_stages(script_config)?;
-    if stages.is_empty() {
-        bail!("script did not produce any executable stages");
-    }
-    let initial_magnetization_override = initial_magnetization_state_override(&args)?;
-    apply_initial_magnetization_state_override(
-        &mut stages[0].ir,
-        initial_magnetization_override.as_ref(),
+    let mut stages = run_active_preparation_operation(
+        &live_workspace,
+        "script_materialization_failed",
+        "Simulation stage materialization failed",
+        || materialize_script_stages(script_config),
     )?;
-    for stage in &stages {
-        validate_ir(&stage.ir)?;
+    if !early_preflight_completed {
+        run_script_preparation_preflight(
+            &live_workspace,
+            || {
+                if stages.is_empty() {
+                    bail!("script did not produce any executable stages");
+                }
+                for stage in &stages {
+                    validate_ir(&stage.ir)?;
+                }
+                Ok(())
+            },
+            || {
+                for stage in &stages {
+                    stage
+                        .ir
+                        .plan_for(args.backend.map(BackendTarget::from))
+                        .map_err(join_errors)?;
+                }
+                Ok(())
+            },
+        )?;
     }
-    let mut stage_execution_plans = stages
+    let detailed_mesh_workspace = live_workspace.snapshot().mesh_workspace;
+    finish_mesh_preparation(&live_workspace, detailed_mesh_workspace.as_ref())?;
+    let solver_initialization_required = stages
         .iter()
-        .map(|stage| fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string())))
-        .collect::<Result<Vec<_>>>()?;
+        .any(|stage| stage.action.is_none() && stage.entrypoint_kind != "flat_workspace");
 
-    let mut current_plan_summary = stages[0]
-        .ir
-        .plan_for(args.backend.map(BackendTarget::from))
-        .map_err(join_errors)?;
+    let (
+        mut stage_execution_plans,
+        mut current_plan_summary,
+        initial_execution_plan,
+        initial_live_state,
+        initial_fem_mesh,
+        mut initial_fem_mesh_asset,
+    ) = run_solver_initialization(&live_workspace, !solver_initialization_required, || {
+        let initial_magnetization_override = run_solver_initialization_safety_check(
+            &live_workspace,
+            "Checking fully materialized runtime validity",
+            "solver_initialization_materialized_validation_failed",
+            "Fully materialized runtime validation failed during solver initialization",
+            || {
+                if stages.is_empty() {
+                    bail!("script did not produce any executable stages");
+                }
+                let initial_magnetization_override = initial_magnetization_state_override(&args)?;
+                apply_initial_magnetization_state_override(
+                    &mut stages[0].ir,
+                    initial_magnetization_override.as_ref(),
+                )?;
+                for stage in &stages {
+                    validate_ir(&stage.ir)?;
+                }
+                Ok(initial_magnetization_override)
+            },
+        )?;
+        let (stage_execution_plans, current_plan_summary) = run_solver_initialization_safety_check(
+            &live_workspace,
+            "Checking the fully materialized execution plan",
+            "solver_initialization_materialized_planning_failed",
+            "Fully materialized execution planning failed during solver initialization",
+            || {
+                let stage_execution_plans = stages
+                    .iter()
+                    .map(plan_materialized_stage_snapshot)
+                    .collect::<Result<Vec<_>>>()?;
+                let current_plan_summary = stages[0]
+                    .ir
+                    .plan_for(args.backend.map(BackendTarget::from))
+                    .map_err(join_errors)?;
+                Ok((stage_execution_plans, current_plan_summary))
+            },
+        )?;
+        let initial_execution_plan = stage_execution_plans[0].clone();
+        let initial_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+            &initial_execution_plan.backend_plan,
+        );
+        let initial_update = initial_step_update(
+            &initial_execution_plan.backend_plan,
+            initial_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.identity.generation_id().to_string()),
+        );
+        let initial_magnetization_override_values = initial_magnetization_override
+            .as_ref()
+            .map(|state| state.values.clone());
+        let (initial_live_state, initial_fem_mesh) = initial_live_state_manifest_from_backend_plan(
+            &initial_update,
+            &initial_execution_plan.backend_plan,
+            initial_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.payload.clone()),
+            initial_magnetization_override_values.as_deref(),
+        )?;
+        Ok((
+            stage_execution_plans,
+            current_plan_summary,
+            initial_execution_plan,
+            initial_live_state,
+            initial_fem_mesh,
+            initial_fem_mesh_asset,
+        ))
+    })?;
     let mut current_mesh_history = Vec::<serde_json::Value>::new();
     let mut current_mesh_quality: Option<crate::python_bridge::RemeshQualitySummary> = None;
     let mut current_fem_mesh_override: Option<fullmag_ir::MeshIR> = None;
     let mut current_fem_hmax_override: Option<f64> = None;
     let mut current_adaptive_runtime_state: Option<serde_json::Value> = None;
-    let initial_execution_plan = stage_execution_plans[0].clone();
-    let initial_update = initial_step_update(&initial_execution_plan.backend_plan);
-    let initial_magnetization_override_values = initial_magnetization_override
-        .as_ref()
-        .map(|state| state.values.clone());
 
     let final_problem_name = stages
         .last()
@@ -5480,6 +6878,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .map(|stage| {
             session_runtime_selection_for_problem(
                 &stage.ir,
+                field_every_n,
                 backend_target_name(final_requested_backend),
                 execution_mode_name(final_execution_mode),
                 execution_precision_name(final_precision),
@@ -5496,9 +6895,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             )
         });
 
-    let previous_engine_log = live_workspace.snapshot().engine_log;
+    let previous_workspace = live_workspace.snapshot();
     let initial_runtime = session_runtime_selection_for_problem(
         &stages[0].ir,
+        field_every_n,
         backend_target_name(final_requested_backend),
         execution_mode_name(final_execution_mode),
         execution_precision_name(final_precision),
@@ -5518,33 +6918,37 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             plan_summary_json(&current_plan_summary),
         ),
         run: build_run_manifest(&run_id, &session_id, "running", &artifact_dir),
-        live_state: initial_live_state_manifest_from_backend_plan(
-            &initial_update,
-            &initial_execution_plan.backend_plan,
-            initial_magnetization_override_values.as_deref(),
-        )?,
+        live_state: initial_live_state,
+        fem_mesh: initial_fem_mesh,
         metadata: Some(current_live_metadata(
             &stages[0].ir,
             &initial_execution_plan,
             "running",
         )),
-        mesh_workspace: current_mesh_workspace(
-            &stages[0].ir,
-            &initial_execution_plan,
-            "running",
-            current_mesh_quality.as_ref(),
-            &current_mesh_history,
+        mesh_workspace: merge_detailed_mesh_workspace(
+            current_mesh_workspace(
+                &stages[0].ir,
+                &initial_execution_plan,
+                "running",
+                current_mesh_quality.as_ref(),
+                &current_mesh_history,
+            ),
+            previous_workspace.mesh_workspace.as_ref(),
         ),
         stage_execution: None,
+        simulation_preparation: previous_workspace.simulation_preparation,
         latest_scalar_row: None,
         latest_fields: CurrentLiveLatestFields::default(),
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+        superseded_pending_preview_fields: Vec::new(),
         clear_preview_cache: false,
-        engine_log: previous_engine_log,
+        preview_cache_revision: 0,
+        engine_log: previous_workspace.engine_log,
         solver_profile: fullmag_runner::SolverProfileState::default(),
         published_fem_mesh_generation_id: None,
     });
+    mark_preparation_ready(&live_workspace, "Simulation is ready")?;
     live_workspace.push_log(
         "system",
         format!(
@@ -5587,6 +6991,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // If the script declared `fm.visualization(active_quantity_id="...")`, push a
     // synthetic display-sync so the control room opens on that quantity.
     // If airbox or geometry hints are present, patch visualization overrides once.
+    let mut initial_display_hint_applied = false;
     if let Some(viz_hint) = stages[0]
         .ir
         .problem_meta
@@ -5595,7 +7000,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     {
         if let Some(qty) = viz_hint.get("active_quantity_id").and_then(|v| v.as_str()) {
             if !qty.is_empty() {
-                display_selection_handle.set_quantity_hint(qty);
+                display_selection_handle.set_quantity_hint(qty, preview_every_n_override);
+                initial_display_hint_applied = true;
             }
         }
 
@@ -5931,6 +7337,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
         }
     }
+    if !initial_display_hint_applied {
+        if let Some(every_n) = preview_every_n_override {
+            display_selection_handle.set_quantity_hint("m", Some(every_n));
+        }
+    }
 
     // ── wait_for_solve gate ──────────────────────────────────────────────
     let wait_for_solve_requested = stages
@@ -6102,7 +7513,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     new_ram as f64 / 1e9
                                 );
 
-                                let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
+                                let (remeshed_mesh_asset, remeshed_magnetization, remeshed_plan) = {
                                     let mut remeshed_problem = stages[0].ir.clone();
                                     apply_current_fem_overrides(
                                         &mut remeshed_problem,
@@ -6151,14 +7562,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     }
                                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                                         .map_err(|error| anyhow!(error.to_string()))?;
-                                    let (mesh_payload, magnetization) =
-                                        fem_live_mesh_payload_and_initial_magnetization(
-                                            &remeshed_plan.backend_plan,
-                                        )
-                                        .context(
-                                            "auto-coarsen updated backend plan is inconsistent",
-                                        )?;
-                                    (mesh_payload, magnetization, remeshed_plan)
+                                    let mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+                                        &remeshed_plan.backend_plan,
+                                    )
+                                    .ok_or_else(|| anyhow!("auto-coarsen updated backend plan did not produce a FEM mesh asset"))?;
+                                    let magnetization = current_stage_magnetization_vectors(
+                                        None,
+                                        &remeshed_plan.backend_plan,
+                                    );
+                                    if mesh_asset.payload.nodes.len() != magnetization.len() {
+                                        bail!(
+                                            "auto-coarsen FEM mesh has {} nodes but initial magnetization has {} vectors",
+                                            mesh_asset.payload.nodes.len(),
+                                            magnetization.len()
+                                        );
+                                    }
+                                    (mesh_asset, magnetization, remeshed_plan)
                                 };
                                 let prepared_remesh = prepare_remesh_stage_transaction(
                                     &stages,
@@ -6174,6 +7593,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 )?;
 
                                 if new_ram <= ram_budget {
+                                    let live_mesh_payload = remeshed_mesh_asset.payload.clone();
+                                    initial_fem_mesh_asset = Some(remeshed_mesh_asset);
                                     current_mesh_quality = remesh_result.quality.clone();
                                     current_fem_mesh_override = Some(new_mesh.clone());
                                     current_fem_hmax_override = Some(current_hmax);
@@ -6183,8 +7604,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         "mesh_name": new_mesh.mesh_name,
                                         "generation_mode": remesh_result.generation_mode,
                                         "node_count": new_nodes,
-                                        "element_count": new_mesh.elements.len(),
-                                        "boundary_face_count": new_mesh.boundary_faces.len(),
+                                        "element_count": new_mesh.cell_count(),
+                                        "boundary_face_count": new_mesh.facet_count(),
                                         "kind": "auto_coarsen",
                                         "mesh_target": "study_domain",
                                         "mesh_reason": "auto_coarsen",
@@ -6192,8 +7613,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                                     }));
                                     live_workspace.update(|state| {
-                                        state.live_state.latest_step.fem_mesh =
-                                            Some(live_mesh_payload);
+                                        state.live_state.latest_step.fem_mesh_generation_id =
+                                            live_mesh_payload.generation_id.clone();
+                                        state.fem_mesh = Some(live_mesh_payload);
                                         state.live_state.latest_step.magnetization =
                                             Some(flatten_magnetization(&remeshed_magnetization));
                                         state.mesh_workspace = Some(current_fem_mesh_workspace(
@@ -6392,6 +7814,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     continue;
                 }
+                WaitForSolveCommandAction::ConfigureProfiler => {
+                    apply_solver_profile_command(&live_workspace, &cmd);
+                    continue;
+                }
                 WaitForSolveCommandAction::StartSolver => {
                     eprintln!("[fullmag] compute requested — starting solver");
                     start_solver_command_id = Some(cmd.command_id.clone());
@@ -6542,7 +7968,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         } else {
             fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?
         };
-        emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
+        emit_initial_state_warnings(Some(&live_workspace), &stage.ir, &execution_plan)?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
             BackendPlanIR::Fdm(_)
@@ -6567,9 +7993,41 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_stage_artifact_dir.display()
             )
         })?;
+        if output_paths.is_sibling_zarr_bundle {
+            initialize_zarr_group(
+                &current_stage_artifact_dir,
+                serde_json::json!({
+                    "fullmag_role": "stage_artifacts",
+                    "stage_index": stage_index,
+                    "entrypoint_kind": stage.entrypoint_kind,
+                }),
+            )?;
+            initialize_zarr_group(
+                &current_stage_artifact_dir.join("fields"),
+                serde_json::json!({"fullmag_role": "sampled_fields"}),
+            )?;
+        }
+        write_sampling_resolution_stage_record(
+            &current_stage_artifact_dir,
+            stage
+                .ir
+                .problem_meta
+                .runtime_metadata
+                .get("sampling_resolution"),
+        )?;
 
+        let mut stage_fem_mesh_asset = if stage_index == 0 {
+            initial_fem_mesh_asset.take()
+        } else {
+            fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&execution_plan.backend_plan)
+        };
         let stage_initial_update = offset_step_update(
-            &initial_step_update(&execution_plan.backend_plan),
+            initial_step_update(
+                &execution_plan.backend_plan,
+                stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string()),
+            ),
             step_offset,
             time_offset,
             false,
@@ -6587,6 +8045,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         live_workspace.update(|state| {
             let stage_runtime = session_runtime_selection_for_problem(
                 &stage.ir,
+                field_every_n,
                 backend_target_name(stage.ir.backend_policy.requested_backend),
                 execution_mode_name(stage.ir.validation_profile.execution_mode),
                 execution_precision_name(stage.ir.backend_policy.execution_precision),
@@ -6618,7 +8077,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &artifact_dir,
                 &stage_initial_update,
             );
-            state.live_state = live_state_manifest_from_update(&stage_initial_update);
+            state.live_state = live_state_manifest_from_update(stage_initial_update.clone());
             state.stage_execution = Some(scripted_stage_execution_state(
                 stage_count,
                 stage_index,
@@ -6648,6 +8107,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let mut snapshot = live_workspace.snapshot();
                     let failed_runtime = session_runtime_selection_for_problem(
                         &stage.ir,
+                        field_every_n,
                         backend_target_name(final_requested_backend),
                         execution_mode_name(final_execution_mode),
                         execution_precision_name(final_precision),
@@ -6694,6 +8154,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let synthetic_stats = aggregated_steps.last().cloned().unwrap_or_default();
             let final_update = snapshot_step_update_from_stats(
                 &execution_plan.backend_plan,
+                stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string()),
                 synthetic_stats,
                 &synthetic_outcome.magnetization,
                 is_session_final_stage,
@@ -6711,7 +8174,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &artifact_dir,
                     &final_update,
                 );
-                state.live_state = live_state_manifest_from_update(&final_update);
+                state.live_state = live_state_manifest_from_update(final_update.clone());
                 state.stage_execution = Some(scripted_stage_execution_state(
                     stage_count,
                     stage_index,
@@ -6776,7 +8239,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
         let mut stage_heartbeat = use_live_callback.then(|| {
             StageProgressHeartbeat::spawn(
-                stage_initial_update.clone(),
+                stage_initial_update,
                 live_workspace.clone(),
                 run_id.clone(),
                 session_id.clone(),
@@ -6791,62 +8254,70 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
                     &stage.ir,
                     &execution_plan,
+                    stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                     stage.until_seconds,
                     &current_stage_artifact_dir,
+                    &artifact_dir,
                     field_every_n,
                     &display_selection,
                     Some(interrupt_signal.as_ref()),
                     !args.headless && !preview_3d_disabled,
                     Some(&current_stage_id),
                     |update| {
-                        let callback_start = Instant::now();
-                        let adjusted = offset_step_update(
-                            &update,
+                        let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
+                        let finished = update.finished && is_session_final_stage;
+                        let mut adjusted = offset_step_update(
+                            update,
                             step_offset,
                             time_offset,
-                            update.finished && is_session_final_stage,
+                            finished,
                         );
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
+                            heartbeat.record(&mut adjusted);
                         }
                         drain_solver_profile_commands(&display_selection_handle, &live_workspace);
+                        let profile_record = begin_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            &mut adjusted.stats,
+                            callback_start,
+                        );
                         if is_control_checkpoint_only(&adjusted) {
                             if live_cadence.should_publish(&adjusted) {
-                                publish_live_step_update(
+                                adjusted = publish_live_step_update(
                                     &live_workspace,
                                     &run_id,
                                     &session_id,
                                     &artifact_dir,
-                                    &adjusted,
+                                    adjusted,
                                     false,
                                 );
                             }
                             if let Some(action) = display_selection_handle.process_running_control()
                             {
-                                record_solver_profile_step_with_orchestration(
+                                finish_solver_profile_step_with_orchestration(
                                     &live_workspace,
-                                    &adjusted.stats,
                                     callback_start,
+                                    profile_record,
                                 );
                                 return action;
                             }
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                &adjusted.stats,
                                 callback_start,
+                                profile_record,
                             );
                             return fullmag_runner::StepAction::Continue;
                         }
-                        let s = &adjusted.stats;
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &stage_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -6855,27 +8326,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            publish_live_step_update(
+                            adjusted = publish_live_step_update(
                                 &live_workspace,
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                adjusted,
                                 true,
                             );
                         }
                         if let Some(action) = display_selection_handle.process_running_control() {
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
                                 callback_start,
+                                profile_record,
                             );
                             return action;
                         }
-                        record_solver_profile_step_with_orchestration(
+                        finish_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
                             callback_start,
+                            profile_record,
                         );
                         fullmag_runner::StepAction::Continue
                     },
@@ -6890,24 +8361,26 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     field_every_n,
                     Some(&current_stage_id),
                     |update| {
-                        let callback_start = Instant::now();
-                        let adjusted = offset_step_update(
-                            &update,
-                            step_offset,
-                            time_offset,
-                            update.finished && is_session_final_stage,
-                        );
-                        let s = &adjusted.stats;
+                        let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
+                        let finished = update.finished && is_session_final_stage;
+                        let mut adjusted =
+                            offset_step_update(update, step_offset, time_offset, finished);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
+                            heartbeat.record(&mut adjusted);
                         }
                         drain_solver_profile_commands(&display_selection_handle, &live_workspace);
+                        let profile_record = begin_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            &mut adjusted.stats,
+                            callback_start,
+                        );
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &stage_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -6916,19 +8389,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            publish_live_step_update(
+                            adjusted = publish_live_step_update(
                                 &live_workspace,
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                adjusted,
                                 true,
                             );
                         }
-                        record_solver_profile_step_with_orchestration(
+                        finish_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
                             callback_start,
+                            profile_record,
                         );
                         fullmag_runner::StepAction::Continue
                     },
@@ -6952,6 +8425,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut snapshot = live_workspace.snapshot();
                 let failed_runtime = session_runtime_selection_for_problem(
                     &stage.ir,
+                    field_every_n,
                     backend_target_name(final_requested_backend),
                     execution_mode_name(final_execution_mode),
                     execution_precision_name(final_precision),
@@ -6996,6 +8470,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &mut stage,
             &mut execution_plan,
             &mut stage_result,
+            &mut stage_fem_mesh_asset,
             &live_workspace,
             stage_index,
             stage_count,
@@ -7041,14 +8516,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 | BackendPlanIR::FemEigen(_)
                 | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
             };
-            let fem_mesh = match &execution_plan.backend_plan {
-                BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                BackendPlanIR::FemFrequencyResponse(fem) => {
-                    Some(fullmag_runner::FemMeshPayload::from(fem))
-                }
-                BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-            };
+            let fem_mesh_generation_id = stage_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.identity.generation_id().to_string());
             let mut live_cadence = LiveProgressCadence::default();
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
@@ -7058,7 +8528,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .next()
                         .expect("single step should offset"),
                     grid,
-                    fem_mesh: fem_mesh.clone(),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: if is_final_step
                         && is_session_final_stage
                         && matches!(&execution_plan.backend_plan, BackendPlanIR::Fdm(_))
@@ -7090,7 +8560,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &artifact_dir,
                             &update,
                         );
-                        state.live_state = live_state_manifest_from_update(&update);
+                        state.live_state = live_state_manifest_from_update(update.clone());
                         set_latest_scalar_row_if_due(state, &update);
                     });
                 }
@@ -7099,6 +8569,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         if let Some(final_update) = final_stage_step_update(
             &execution_plan.backend_plan,
+            stage_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.identity.generation_id().to_string()),
             &stage_result.steps,
             &stage_result.final_magnetization,
             step_offset,
@@ -7117,7 +8590,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &artifact_dir,
                     &final_update,
                 );
-                state.live_state = live_state_manifest_from_update(&final_update);
+                state.live_state = live_state_manifest_from_update(final_update.clone());
                 set_latest_scalar_row_if_due(state, &final_update);
             });
         }
@@ -7174,6 +8647,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     integrator: None,
                     fixed_timestep: None,
                     max_error: None,
+                    solver_policy: None,
                     relax_algorithm: None,
                     relax_alpha: None,
                     mesh_options: None,
@@ -7876,7 +9350,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .map_err(join_errors)?;
             let execution_plan =
                 fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-            emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
+            emit_initial_state_warnings(Some(&live_workspace), &stage.ir, &execution_plan)?;
             let use_live_callback = matches!(
                 &execution_plan.backend_plan,
                 BackendPlanIR::Fdm(_)
@@ -7899,9 +9373,39 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_stage_artifact_dir.display()
                 )
             })?;
+            if output_paths.is_sibling_zarr_bundle {
+                initialize_zarr_group(
+                    &current_stage_artifact_dir,
+                    serde_json::json!({
+                        "fullmag_role": "interactive_stage_artifacts",
+                        "stage_index": interactive_stage_index,
+                        "entrypoint_kind": stage.entrypoint_kind,
+                    }),
+                )?;
+                initialize_zarr_group(
+                    &current_stage_artifact_dir.join("fields"),
+                    serde_json::json!({"fullmag_role": "sampled_fields"}),
+                )?;
+            }
+            write_sampling_resolution_stage_record(
+                &current_stage_artifact_dir,
+                stage
+                    .ir
+                    .problem_meta
+                    .runtime_metadata
+                    .get("sampling_resolution"),
+            )?;
             let running_at_unix_ms = unix_time_millis()?;
+            let stage_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+                &execution_plan.backend_plan,
+            );
             let stage_initial_update = offset_step_update(
-                &initial_step_update(&execution_plan.backend_plan),
+                initial_step_update(
+                    &execution_plan.backend_plan,
+                    stage_fem_mesh_asset
+                        .as_ref()
+                        .map(|asset| asset.identity.generation_id().to_string()),
+                ),
                 step_offset,
                 time_offset,
                 false,
@@ -7939,7 +9443,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 state.stage_execution = active_sequence.as_ref().map(|sequence| {
                     sequence.stage_execution(Some(&stage.entrypoint_kind), "running")
                 });
-                state.live_state = live_state_manifest_from_update(&stage_initial_update);
+                state.live_state = live_state_manifest_from_update(stage_initial_update.clone());
                 clear_cached_preview_fields(state);
             });
 
@@ -7947,7 +9451,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let interactive_progress_label = format!("interactive {}", stage.entrypoint_kind);
             let mut stage_heartbeat = use_live_callback.then(|| {
                 StageProgressHeartbeat::spawn(
-                    stage_initial_update.clone(),
+                    stage_initial_update,
                     live_workspace.clone(),
                     run_id.clone(),
                     session_id.clone(),
@@ -7964,45 +9468,51 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let display_selection = || running_control.display_selection_snapshot();
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
-                        let callback_start = Instant::now();
-                        let adjusted = offset_step_update(&update, step_offset, time_offset, false);
+                        let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
+                        let mut adjusted =
+                            offset_step_update(update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
+                            heartbeat.record(&mut adjusted);
                         }
                         drain_solver_profile_commands(&running_control, &live_workspace);
+                        let profile_record = begin_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            &mut adjusted.stats,
+                            callback_start,
+                        );
                         if is_control_checkpoint_only(&adjusted) {
                             if live_cadence.should_publish(&adjusted) {
-                                publish_live_step_update(
+                                adjusted = publish_live_step_update(
                                     &live_workspace,
                                     &run_id,
                                     &session_id,
                                     &artifact_dir,
-                                    &adjusted,
+                                    adjusted,
                                     false,
                                 );
                             }
                             if let Some(action) = running_control.process_running_control() {
-                                record_solver_profile_step_with_orchestration(
+                                finish_solver_profile_step_with_orchestration(
                                     &live_workspace,
-                                    &adjusted.stats,
                                     callback_start,
+                                    profile_record,
                                 );
                                 return action;
                             }
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                &adjusted.stats,
                                 callback_start,
+                                profile_record,
                             );
                             return fullmag_runner::StepAction::Continue;
                         }
-                        let s = &adjusted.stats;
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &interactive_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -8011,28 +9521,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            publish_live_step_update(
+                            adjusted = publish_live_step_update(
                                 &live_workspace,
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                adjusted,
                                 true,
                             );
                         }
 
                         if let Some(action) = running_control.process_running_control() {
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
                                 callback_start,
+                                profile_record,
                             );
                             return action;
                         }
-                        record_solver_profile_step_with_orchestration(
+                        finish_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
                             callback_start,
+                            profile_record,
                         );
                         fullmag_runner::StepAction::Continue
                     };
@@ -8047,6 +9557,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Err(error) = interactive_runtime_host.ensure_runtime_for_problem(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref(),
+                            field_every_n,
                             continuation_magnetization.as_deref(),
                             &live_workspace,
                         ) {
@@ -8062,9 +9574,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
 
                     if hysteresis_study {
-                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                             stage.until_seconds,
                             &current_stage_artifact_dir,
                             field_every_n,
@@ -8087,9 +9600,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &mut on_step,
                         )
                     } else {
-                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                             stage.until_seconds,
                             &current_stage_artifact_dir,
                             field_every_n,
@@ -8110,20 +9624,25 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         field_every_n,
                         Some(&current_stage_id),
                         |update| {
-                            let callback_start = Instant::now();
-                            let adjusted =
-                                offset_step_update(&update, step_offset, time_offset, false);
-                            let s = &adjusted.stats;
+                            let callback_start = solver_profile_callback_start(&live_workspace);
+                            let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
+                            let mut adjusted =
+                                offset_step_update(update, step_offset, time_offset, false);
                             if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                                heartbeat.record(&adjusted);
+                                heartbeat.record(&mut adjusted);
                             }
                             drain_solver_profile_commands(&running_control, &live_workspace);
+                            let profile_record = begin_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                &mut adjusted.stats,
+                                callback_start,
+                            );
                             if live_cadence.should_log(&adjusted) {
                                 eprintln!(
                                     "{}",
                                     format_stage_progress_line(
                                         &interactive_progress_label,
-                                        s,
+                                        &adjusted.stats,
                                         torque_mode,
                                         None,
                                         adjusted.hysteresis_field_m_t,
@@ -8132,30 +9651,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             }
 
                             if live_cadence.should_publish(&adjusted) {
-                                live_workspace.update(|state| {
-                                    apply_live_step_update_to_workspace_state(
-                                        state,
-                                        &run_id,
-                                        &session_id,
-                                        &artifact_dir,
-                                        &adjusted,
-                                        true,
-                                    );
-                                });
+                                adjusted = publish_live_step_update(
+                                    &live_workspace,
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    adjusted,
+                                    true,
+                                );
                             }
 
                             if let Some(action) = running_control.process_running_control() {
-                                record_solver_profile_step_with_orchestration(
+                                finish_solver_profile_step_with_orchestration(
                                     &live_workspace,
-                                    s,
                                     callback_start,
+                                    profile_record,
                                 );
                                 return action;
                             }
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
                                 callback_start,
+                                profile_record,
                             );
                             fullmag_runner::StepAction::Continue
                         },
@@ -8576,14 +10093,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     | BackendPlanIR::FemEigen(_)
                     | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
                 };
-                let fem_mesh = match &execution_plan.backend_plan {
-                    BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                    BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                    BackendPlanIR::FemFrequencyResponse(fem) => {
-                        Some(fullmag_runner::FemMeshPayload::from(fem))
-                    }
-                    BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-                };
+                let fem_mesh_generation_id = stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string());
                 let mut live_cadence = LiveProgressCadence::default();
                 for stats in &stage_result.steps {
                     let update = fullmag_runner::StepUpdate {
@@ -8596,7 +10108,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .next()
                         .expect("single step should offset"),
                         grid,
-                        fem_mesh: fem_mesh.clone(),
+                        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization: None,
                         preview_field: None,
                         cached_preview_fields: None,
@@ -8617,7 +10129,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &artifact_dir,
                                 &update,
                             );
-                            state.live_state = live_state_manifest_from_update(&update);
+                            state.live_state = live_state_manifest_from_update(update.clone());
                             set_latest_scalar_row_if_due(state, &update);
                         });
                     }
@@ -8626,6 +10138,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             if let Some(final_update) = final_stage_step_update(
                 &execution_plan.backend_plan,
+                stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string()),
                 &stage_result.steps,
                 &stage_result.final_magnetization,
                 step_offset,
@@ -8644,7 +10159,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &artifact_dir,
                         &final_update,
                     );
-                    state.live_state = live_state_manifest_from_update(&final_update);
+                    state.live_state = live_state_manifest_from_update(final_update.clone());
                     set_latest_scalar_row_if_due(state, &final_update);
                 });
             }
@@ -8818,6 +10333,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         final_e_dmi: aggregated_steps.last().map(|step| step.e_dmi),
         final_e_total: aggregated_steps.last().map(|step| step.e_total),
         wall_time_ns: aggregated_steps.last().map(|step| step.wall_time_ns),
+        backend_create_wall_time_ns: aggregated_steps
+            .iter()
+            .map(|step| step.backend_create_wall_time_ns)
+            .find(|duration| *duration > 0),
+        first_accepted_step_demag_solver_apply_wall_time_ns: aggregated_steps
+            .iter()
+            .map(|step| step.demag_solver_apply_wall_time_ns)
+            .find(|duration| *duration > 0),
         exchange_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.exchange_wall_time_ns),
@@ -8890,6 +10413,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             step: step.step,
             time: step.time,
             solver_dt: step.dt,
+            error_estimate: step.error_estimate,
+            max_error: step.max_error,
+            dt_suggested: step.dt_suggested,
+            rejected_attempts: step.rejected_attempts,
             pseudo_time_s: step.pseudo_time_s,
             active_runtime_s: Some(step.wall_time_ns as f64 * 1.0e-9),
             mx: step.mx,
@@ -8991,19 +10518,27 @@ pub(crate) fn prepare_live_workspace_for_ui(
     let bootstrapping_run_manifest =
         build_run_manifest(&run_id, &session_id, "bootstrapping", &artifact_dir);
     let bootstrap_live_state_manifest = bootstrap_live_state("bootstrapping");
+    let simulation_preparation = new_simulation_preparation(
+        format!("preparation-{session_id}"),
+        u64::try_from(started_at_unix_ms).context("preparation start timestamp exceeds u64")?,
+    )?;
     let live_workspace = LocalLiveWorkspace::new(
         LocalLiveWorkspaceState {
             session: bootstrapping_session_manifest,
             run: bootstrapping_run_manifest,
             live_state: bootstrap_live_state_manifest,
+            fem_mesh: None,
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
@@ -9027,7 +10562,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             requested_backend_name, requested_mode_name, requested_precision_name
         ),
     );
-    live_workspace.publish_snapshot();
+    mark_ui_shell_preparation_ready(&live_workspace)?;
     Ok((session_id, live_workspace))
 }
 
@@ -9037,29 +10572,119 @@ mod tests {
         adaptive_remesh_legality_reason, apply_current_fem_overrides,
         apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
-        attach_initial_magnetization_state_override_metadata, classify_wait_for_solve_command,
-        attach_region_realization_revisions,
-        cumulative_rhs_evals, default_domain_region_markers, discard_active_paused_stage_execution,
+        attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
+        classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
+        deferred_mesh_failure_stage, discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
-        fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
-        fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        format_stage_heartbeat_message, format_stage_progress_line, has_heavy_live_payload,
+        fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
+        fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
+        fem_mesh_payload_from_backend_plan, format_stage_heartbeat_message,
+        format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
-        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
-        live_step_ingest_preview_len, mesh_build_pipeline_status_json,
-        mesh_source_scene_revision,
-        prepare_remesh_stage_transaction,
-        resolve_adaptive_convergence_metric,
-        resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
+        mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
+        mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
+        plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
+        project_script_export_failure, resolve_adaptive_convergence_metric,
+        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
+        run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
+        run_solver_initialization_safety_check, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
-        validate_periodic_remesh_candidate,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
+        validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
-        ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
-        SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL, RuntimeCommandPrecondition,
+        write_sampling_resolution_stage_record, ActiveSequenceState, LiveProgressCadence,
+        LoadedInitialMagnetizationState, RuntimeCommandPrecondition, SceneProblemPatch,
+        StageProgressHeartbeat, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
+    use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
+    use crate::simulation_preparation::{
+        PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
+    };
+    use crate::types::PythonProgressEvent;
+
+    #[test]
+    fn adaptive_followup_callback_and_heartbeat_clone_sites_stay_profiled() {
+        let source = include_str!("orchestrator.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production orchestrator source");
+        let adaptive = source
+            .split("fn maybe_execute_adaptive_relaxation_followup_passes")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
+            .expect("adaptive follow-up implementation");
+        assert!(adaptive.contains("solver_profile_callback_start(live_workspace)"));
+        assert!(adaptive.contains("live_workspace.update_profiled"));
+        assert!(adaptive.contains("begin_solver_profile_step_with_orchestration"));
+        assert!(adaptive.contains("finish_solver_profile_step_with_orchestration"));
+        assert_eq!(
+            production.matches("stage_initial_update.clone()").count(),
+            0
+        );
+        assert_eq!(
+            production.matches("snapshot.latest_update.clone()").count(),
+            0
+        );
+        assert!(production.contains("StageHeartbeatProgress::new(&initial_update)"));
+        assert!(!adaptive.contains("offset_step_update(\n                &initial_step_update"));
+        assert!(adaptive
+            .contains("StageProgressHeartbeat::spawn(\n            adaptive_initial_update"));
+    }
+
+    #[test]
+    fn task4_step_update_offset_and_heartbeat_are_lightweight_by_contract() {
+        let step_utils = include_str!("step_utils.rs");
+        assert!(
+            step_utils.contains(
+                "pub(crate) fn offset_step_update(\n    mut update: fullmag_runner::StepUpdate,"
+            ),
+            "offset_step_update must consume StepUpdate so callback payload ownership can move"
+        );
+        assert!(
+            !step_utils.contains("let mut adjusted = update.clone();"),
+            "offsetting must not deep-clone the step payload"
+        );
+
+        let heartbeat = include_str!("stage_heartbeat.rs");
+        let heartbeat_fields = heartbeat
+            .split("struct StageHeartbeatProgress {")
+            .nth(1)
+            .and_then(|source| source.split_once('}'))
+            .map(|(fields, _)| fields)
+            .expect("StageHeartbeatProgress fields");
+        assert!(heartbeat_fields.contains("stats: fullmag_runner::StepStats"));
+        for forbidden in [
+            "StepUpdate",
+            "magnetization",
+            "preview_field",
+            "cached_preview_fields",
+            "FemMeshPayload",
+        ] {
+            assert!(
+                !heartbeat_fields.contains(forbidden),
+                "heartbeat state must not retain heavy field `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn remesh_paths_keep_one_authoritative_stage_mesh_asset() {
+        let source = include_str!("orchestrator.rs");
+        let production = source;
+        assert!(production.contains("initial_fem_mesh_asset = Some(remeshed_mesh_asset)"));
+        let adaptive = production
+            .split("fn maybe_execute_adaptive_relaxation_followup_passes")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
+            .expect("adaptive follow-up implementation");
+        assert!(adaptive.contains("stage_fem_mesh_asset: &mut Option<"));
+        assert!(adaptive.contains("run_planned_problem_with_callback_and_fem_mesh_identity"));
+        assert!(!adaptive.contains("run_problem_with_callback("));
+        assert!(adaptive.contains("*stage_fem_mesh_asset = Some(remeshed_mesh_asset)"));
+    }
 
     #[test]
     fn mesh_source_scene_revision_reads_geometry_realization_contract() {
@@ -9269,9 +10894,9 @@ mod tests {
         let previous = MeshIR {
             mesh_name: "previous".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x".to_string(),
@@ -9295,9 +10920,9 @@ mod tests {
         let candidate = MeshIR {
             mesh_name: "candidate".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -9306,7 +10931,9 @@ mod tests {
 
         let error = validate_periodic_remesh_candidate(&previous, &candidate)
             .expect_err("periodic remesh must not publish a candidate without recertified pairs");
-        assert!(error.to_string().contains("periodic_remesh_requires_recertification"));
+        assert!(error
+            .to_string()
+            .contains("periodic_remesh_requires_recertification"));
     }
 
     #[test]
@@ -9327,9 +10954,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -9355,6 +10982,35 @@ mod tests {
             .contains("shared-domain remesh produced no fem_domain_mesh_asset"));
         assert_eq!(stages[0].ir, stages_before[0].ir);
         assert_eq!(plans, plans_before);
+    }
+
+    #[test]
+    fn synthetic_sampling_configuration_can_be_preplanned_before_run_resolution() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.study.sampling_mut().outputs = vec![fullmag_ir::OutputIR::FieldAuto {
+            name: "m".to_string(),
+            sample_period_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        }];
+        let stage = ResolvedScriptStage::synthetic(
+            problem,
+            "study_pipeline_autosave",
+            ResolvedScriptStageAction::Autosave {
+                enabled: true,
+                quantity: Some("m".to_string()),
+                output: None,
+            },
+        );
+
+        let plan = plan_materialized_stage_snapshot(&stage)
+            .expect("synthetic configuration must preplan without resolving Run-only sampling");
+
+        assert!(matches!(plan.backend_plan, BackendPlanIR::Fdm(_)));
+        assert!(matches!(
+            stage.ir.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::FieldAuto { .. }]
+        ));
     }
 
     use crate::args::ScriptCli;
@@ -9390,7 +11046,7 @@ mod tests {
                 ..StepStats::default()
             },
             grid: [1, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
@@ -9407,6 +11063,10 @@ mod tests {
     fn test_preview_field(quantity: &str, revision: u64, z: f64) -> LivePreviewField {
         LivePreviewField {
             config_revision: revision,
+            source_step: 0,
+            source_revision: revision,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: quantity.to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "mesh".to_string(),
@@ -9425,22 +11085,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn live_step_ingest_diagnostics_distinguish_preview_m_from_legacy_magnetization() {
-        let mut update = test_step_update(50);
-        update.preview_field = Some(test_preview_field("m", 7, -1.0));
-        update.cached_preview_fields = Some(vec![
-            test_preview_field("m", 7, -1.0),
-            test_preview_field("H_eff", 7, 2.0),
-        ]);
-
-        assert_eq!(live_step_ingest_legacy_mag_len(&update), 0);
-        assert_eq!(live_step_ingest_preview_len(&update), 3);
-        assert_eq!(live_step_ingest_cached_m_preview_len(&update), 3);
-    }
-
     fn test_workspace_state() -> crate::live_workspace::LocalLiveWorkspaceState {
         crate::live_workspace::LocalLiveWorkspaceState {
+            fem_mesh: None,
             session: SessionManifest {
                 session_id: "session-test".to_string(),
                 run_id: "run-test".to_string(),
@@ -9465,6 +11112,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,
@@ -9488,14 +11136,657 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
+        }
+    }
+
+    fn preparation_workspace(active_stage: PreparationStageId) -> LocalLiveWorkspace {
+        let mut state = test_workspace_state();
+        let mut preparation = SimulationPreparationState::new("prep-orchestration", 1_000);
+        preparation
+            .begin_stage(active_stage, 1_000, "Preparing simulation")
+            .expect("test stage should start");
+        state.simulation_preparation = Some(preparation);
+        LocalLiveWorkspace::new(
+            state,
+            CurrentLivePublisher::spawn("prep-orchestration-test"),
+        )
+    }
+
+    fn assert_owned_preparation_failure(
+        workspace: &LocalLiveWorkspace,
+        stage_id: PreparationStageId,
+        error_code: &str,
+        safe_summary: &str,
+        raw_error: &str,
+    ) {
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(preparation.status, PreparationStatus::Failed);
+        let failure = preparation.failure.expect("owned failure");
+        assert_eq!(failure.stage_id, stage_id);
+        assert_eq!(failure.error_code, error_code);
+        assert_eq!(failure.summary, safe_summary);
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn script_preflight_emits_validation_then_planning_before_domain_preparation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        run_script_preparation_preflight(
+            &workspace,
+            || {
+                calls.borrow_mut().push("validation");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("planning");
+                Ok(())
+            },
+        )
+        .expect("preflight should succeed");
+
+        assert_eq!(calls.into_inner(), vec!["validation", "planning"]);
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(
+            preparation.active_stage_id,
+            Some(PreparationStageId::DomainPreparation)
+        );
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == PreparationStageId::Validation)
+                .expect("validation stage")
+                .status,
+            PreparationStageStatus::Completed
+        );
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == PreparationStageId::Planning)
+                .expect("planning stage")
+                .status,
+            PreparationStageStatus::Completed
+        );
+    }
+
+    #[test]
+    fn validation_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "sampling.table_autosave.every_steps is only valid for relaxation studies";
+
+        let error = run_script_preparation_preflight(
+            &workspace,
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+            || panic!("planning must not run after validation failure"),
+        )
+        .expect_err("validation should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.expect("owned failure");
+        assert_eq!(failure.stage_id, PreparationStageId::Validation);
+        assert_eq!(failure.error_code, "validation_failed");
+        assert_eq!(failure.summary, raw_error);
+        assert!(failure
+            .diagnostics_correlation_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("preparation-validation-")));
+        assert!(preparation.log_tail.iter().any(|entry| {
+            entry.level == crate::simulation_preparation::PreparationLogLevel::Error
+                && entry.message == raw_error
+        }));
+    }
+
+    #[test]
+    fn validation_failure_keeps_unsafe_details_out_of_public_preparation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "validator leaked /private/model/path\nsecret-token";
+
+        run_script_preparation_preflight(
+            &workspace,
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+            || panic!("planning must not run after validation failure"),
+        )
+        .expect_err("validation should fail");
+
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::Validation,
+            "validation_failed",
+            "Simulation validation failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn planner_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "planner leaked backend internals";
+
+        let error = run_script_preparation_preflight(
+            &workspace,
+            || Ok(()),
+            || Err(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("planning should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::Planning,
+            "planning_failed",
+            "Simulation planning failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn phase_one_thread_creation_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "phase-one thread failure leaked /private/model.py";
+        let error = own_preparation_boundary_failure::<()>(
+            &workspace,
+            "script_materialization_thread_start_failed",
+            "Python script materialization could not start",
+            Err(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("thread creation failure must propagate");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "script_materialization_thread_start_failed",
+            "Python script materialization could not start",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn control_room_bootstrap_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "control-room bootstrap leaked token secret-token";
+        let error = own_preparation_boundary_failure::<()>(
+            &workspace,
+            "control_room_bootstrap_failed",
+            "Control Room bootstrap failed",
+            Err(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("control-room bootstrap failure must propagate");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "control_room_bootstrap_failed",
+            "Control Room bootstrap failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn terminal_preparation_failure_waits_for_explicit_close_and_remains_served() {
+        let workspace = preparation_workspace(PreparationStageId::Validation);
+        fail_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::Validation,
+            "validation_failed",
+            "Simulation validation failed",
+        )
+        .expect("test preparation should fail");
+        let mut commands = vec!["run", "close"].into_iter();
+        let mut received = Vec::new();
+
+        wait_for_failed_preparation_close(&workspace, || {
+            let kind = commands.next()?;
+            received.push(kind);
+            serde_json::from_value(serde_json::json!({
+                "command_id": format!("cmd-{kind}"),
+                "kind": kind,
+                "created_at_unix_ms": 0,
+            }))
+            .ok()
+        });
+
+        assert_eq!(received, vec!["run", "close"]);
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("terminal preparation must remain served until close");
+        assert_eq!(preparation.status, PreparationStatus::Failed);
+        assert_eq!(
+            preparation.failure.expect("failure provenance").error_code,
+            "validation_failed"
+        );
+    }
+
+    #[test]
+    fn successful_preparation_does_not_enter_failure_close_wait() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+
+        wait_for_failed_preparation_close(&workspace, || {
+            panic!("nonfailed preparation must not wait for a close command")
+        });
+    }
+
+    #[test]
+    fn fallback_helper_error_boundary_projects_terminal_mesh_failure_in_order() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "mesher stderr leaked /private/model/mesh.msh";
+
+        crate::live_workspace::apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::Structured {
+                kind: "mesh_build_failed".to_string(),
+                payload: serde_json::json!({
+                    "phase": "postprocessing",
+                    "message": "Shared-domain mesh build failed",
+                    "error": raw_error,
+                }),
+            },
+        );
+        let deferred = workspace.snapshot();
+        assert_eq!(
+            deferred
+                .simulation_preparation
+                .as_ref()
+                .and_then(|preparation| preparation.active_stage_id),
+            Some(PreparationStageId::ScriptMaterialization)
+        );
+        assert_eq!(
+            deferred
+                .mesh_workspace
+                .as_ref()
+                .and_then(|resource| resource.get("last_build_error")),
+            Some(&serde_json::json!(raw_error))
+        );
+
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("fallback projection should preserve the original helper error");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::MeshPostprocessing,
+            "mesh_build_failed",
+            "Shared-domain mesh build failed",
+            raw_error,
+        );
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let script_materialization = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::ScriptMaterialization)
+            .expect("script materialization stage");
+        assert_eq!(
+            script_materialization.status,
+            PreparationStageStatus::Completed
+        );
+        assert_eq!(script_materialization.duration_ms, None);
+        assert_eq!(
+            script_materialization.detail,
+            "Script materialization reached mesh generation before failure; timing unavailable"
+        );
+        for stage_id in [PreparationStageId::Validation, PreparationStageId::Planning] {
+            let stage = preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == stage_id)
+                .expect("skipped incomplete-IR stage");
+            assert_eq!(
+                stage.status,
+                PreparationStageStatus::Skipped,
+                "a complete materialized IR was unavailable"
+            );
+            assert_eq!(
+                stage.detail,
+                "Skipped because a complete materialized IR was unavailable after mesh generation failure"
+            );
+        }
+        for stage_id in [
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+        ] {
+            let stage = preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == stage_id)
+                .expect("projected mesh predecessor");
+            assert_eq!(stage.status, PreparationStageStatus::Completed);
+            assert_eq!(stage.duration_ms, None);
+            assert!(stage.detail.contains("timing unavailable"));
+        }
+        let failed_postprocessing = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::MeshPostprocessing)
+            .expect("projected failure owner");
+        assert_eq!(failed_postprocessing.status, PreparationStageStatus::Failed);
+        assert_eq!(failed_postprocessing.completed_at_unix_ms, None);
+        assert_eq!(failed_postprocessing.duration_ms, None);
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn helper_error_without_authoritative_mesh_failure_remains_script_owned() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper exited before mesh generation";
+
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("generic materialization failure should preserve the original error");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "materialization_failed",
+            "Simulation materialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn deferred_mesh_failure_rejects_missing_phase() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "missing-phase mesher failure";
+        crate::live_workspace::apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::Structured {
+                kind: "mesh_build_failed".to_string(),
+                payload: serde_json::json!({
+                    "error": raw_error,
+                    "message": "Shared-domain mesh build failed"
+                }),
+            },
+        );
+        let snapshot = workspace.snapshot();
+
+        assert_eq!(
+            deferred_mesh_failure_stage(snapshot.mesh_workspace.as_ref()),
+            None
+        );
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("missing phase should remain a generic helper failure");
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "materialization_failed",
+            "Simulation materialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn deferred_mesh_failure_rejects_unknown_phase() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "unknown-phase mesher failure";
+        crate::live_workspace::apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::Structured {
+                kind: "mesh_build_failed".to_string(),
+                payload: serde_json::json!({
+                    "phase": "finalizing",
+                    "error": raw_error,
+                    "message": "Shared-domain mesh build failed"
+                }),
+            },
+        );
+        let snapshot = workspace.snapshot();
+
+        assert_eq!(
+            deferred_mesh_failure_stage(snapshot.mesh_workspace.as_ref()),
+            None
+        );
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("unknown phase should remain a generic helper failure");
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "materialization_failed",
+            "Simulation materialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn deferred_mesh_failure_accepts_recognized_phase() {
+        for (phase, stage_id) in [
+            ("preparing_domain", PreparationStageId::DomainPreparation),
+            ("meshing", PreparationStageId::Meshing),
+            ("postprocessing", PreparationStageId::MeshPostprocessing),
+        ] {
+            let workspace = serde_json::json!({
+                "last_build_error": "raw mesher failure",
+                "last_build_summary": {
+                    "phase": phase,
+                    "message": "Shared-domain mesh build failed"
+                }
+            });
+
+            assert_eq!(
+                deferred_mesh_failure_stage(Some(&workspace)),
+                Some(stage_id)
+            );
+        }
+    }
+
+    #[test]
+    fn materialized_validation_safety_failure_is_owned_by_solver_initialization() {
+        let workspace = preparation_workspace(PreparationStageId::MeshPostprocessing);
+        let raw_error = "materialized validator leaked /private/model/path";
+
+        let error = run_solver_initialization(&workspace, false, || {
+            run_solver_initialization_safety_check(
+                &workspace,
+                "Checking fully materialized runtime validity",
+                "solver_initialization_materialized_validation_failed",
+                "Fully materialized runtime validation failed during solver initialization",
+                || Err::<(), _>(anyhow::anyhow!(raw_error)),
+            )
+        })
+        .expect_err("materialized validation should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "solver_initialization_materialized_validation_failed",
+            "Fully materialized runtime validation failed during solver initialization",
+            raw_error,
+        );
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert!(preparation.log_tail.iter().any(|entry| {
+            entry.stage_id == PreparationStageId::SolverInitialization
+                && entry.message == "Checking fully materialized runtime validity"
+        }));
+        assert!(preparation
+            .stages
+            .iter()
+            .filter(|stage| {
+                matches!(
+                    stage.id,
+                    PreparationStageId::Validation | PreparationStageId::Planning
+                )
+            })
+            .all(|stage| stage.status != PreparationStageStatus::Failed));
+    }
+
+    #[test]
+    fn materialized_planning_safety_failure_is_owned_by_solver_initialization() {
+        let workspace = preparation_workspace(PreparationStageId::MeshPostprocessing);
+        let raw_error = "materialized planner leaked backend internals";
+
+        let error = run_solver_initialization(&workspace, false, || {
+            run_solver_initialization_safety_check(
+                &workspace,
+                "Checking the fully materialized execution plan",
+                "solver_initialization_materialized_planning_failed",
+                "Fully materialized execution planning failed during solver initialization",
+                || Err::<(), _>(anyhow::anyhow!(raw_error)),
+            )
+        })
+        .expect_err("materialized planning should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "solver_initialization_materialized_planning_failed",
+            "Fully materialized execution planning failed during solver initialization",
+            raw_error,
+        );
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert!(preparation.log_tail.iter().any(|entry| {
+            entry.stage_id == PreparationStageId::SolverInitialization
+                && entry.message == "Checking the fully materialized execution plan"
+        }));
+        assert!(preparation
+            .stages
+            .iter()
+            .filter(|stage| {
+                matches!(
+                    stage.id,
+                    PreparationStageId::Validation | PreparationStageId::Planning
+                )
+            })
+            .all(|stage| stage.status != PreparationStageStatus::Failed));
+    }
+
+    #[test]
+    fn solver_construction_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::MeshPostprocessing);
+        let raw_error = "solver constructor leaked native path";
+
+        let error = run_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "Initializing the solver",
+            "Solver initialized",
+            false,
+            "solver_initialization_failed",
+            "Solver initialization failed",
+            false,
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("solver construction should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "solver_initialization_failed",
+            "Solver initialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn workspace_only_preparation_skips_solver_initialization() {
+        let workspace = preparation_workspace(PreparationStageId::MeshPostprocessing);
+
+        run_solver_initialization(&workspace, true, || Ok(()))
+            .expect("workspace resource validation should succeed");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == PreparationStageId::SolverInitialization)
+                .expect("solver initialization stage")
+                .status,
+            PreparationStageStatus::Skipped
+        );
+    }
+
+    #[test]
+    fn ui_shell_launch_skips_simulation_only_stages_before_ready() {
+        let workspace = preparation_workspace(PreparationStageId::RuntimeStartup);
+
+        mark_ui_shell_preparation_ready(&workspace).expect("UI shell should become ready");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(preparation.status, PreparationStatus::Ready);
+        for stage_id in [
+            PreparationStageId::ScriptMaterialization,
+            PreparationStageId::Validation,
+            PreparationStageId::Planning,
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+            PreparationStageId::SolverInitialization,
+        ] {
+            assert_eq!(
+                preparation
+                    .stages
+                    .iter()
+                    .find(|stage| stage.id == stage_id)
+                    .expect("canonical stage")
+                    .status,
+                PreparationStageStatus::Skipped
+            );
+        }
+        for stage_id in [
+            PreparationStageId::RuntimeStartup,
+            PreparationStageId::ScriptMaterialization,
+            PreparationStageId::Validation,
+            PreparationStageId::Planning,
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+            PreparationStageId::SolverInitialization,
+            PreparationStageId::Ready,
+        ] {
+            assert!(preparation
+                .log_tail
+                .iter()
+                .any(|entry| entry.stage_id == stage_id));
         }
     }
 
@@ -9527,12 +11818,12 @@ mod tests {
         update.hysteresis_settle_step_kind = Some("minimize".to_string());
         update.hysteresis_settle_step_method = Some("projected_gradient_bb".to_string());
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             false,
         );
 
@@ -9583,12 +11874,12 @@ mod tests {
             .per_object_scalars
             .insert("fem_eigen_progress".to_string(), progress);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             false,
         );
 
@@ -9663,12 +11954,12 @@ mod tests {
             .per_object_scalars
             .insert("fem_frequency_response_progress".to_string(), progress);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             false,
         );
 
@@ -9721,22 +12012,22 @@ mod tests {
             .per_object_scalars
             .insert("fem_frequency_response_progress".to_string(), progress);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &progress_update,
+            progress_update,
             false,
         );
 
         let generic_update = test_step_update(258);
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &generic_update,
+            generic_update,
             false,
         );
 
@@ -9824,7 +12115,7 @@ mod tests {
                 ..fullmag_runner::StepStats::default()
             },
             grid: [0, 0, 0],
-            fem_mesh: None,
+            fem_mesh_generation_id: Some("test-generation".to_string()),
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
@@ -9837,8 +12128,11 @@ mod tests {
             finished: false,
         };
 
-        let message =
-            format_stage_heartbeat_message("Frequency response 3", &update, Duration::from_secs(8));
+        let message = format_stage_heartbeat_message(
+            "Frequency response 3",
+            &update.stats,
+            Duration::from_secs(8),
+        );
 
         assert!(message.contains("Frequency response 3"));
         assert!(message.contains("waiting 8.0s for the next solver update"));
@@ -9924,7 +12218,7 @@ mod tests {
     }
 
     #[test]
-    fn stage_heartbeat_reuses_live_step_ingest_for_frequency_response_progress() {
+    fn stage_heartbeat_applies_lightweight_progress_without_full_live_ingest() {
         let source = include_str!("orchestrator.rs");
         let heartbeat_block = source
             .split("let heartbeat_message =")
@@ -9933,9 +12227,10 @@ mod tests {
             .expect("heartbeat publish block should stay visible to the contract test");
 
         assert!(
-            heartbeat_block.contains("apply_live_step_update_to_workspace_state("),
-            "heartbeat publishing must reuse live-step ingest so frequency-response sweep progress is re-applied before generic idle progress"
+            heartbeat_block.contains("progress.apply_to_live_step("),
+            "heartbeat publishing must update scalar progress through its lightweight state"
         );
+        assert!(!heartbeat_block.contains("apply_live_step_update_to_workspace_state("));
     }
 
     #[test]
@@ -9983,7 +12278,7 @@ mod tests {
             "orchestrator must resolve the preview-disabled benchmark flag once"
         );
         assert!(
-            source.contains("let field_every_n: u64 = if preview_3d_disabled {\n        u64::MAX"),
+            source.contains("resolve_preview_field_every_n(\n        preview_3d_disabled"),
             "preview-disabled benchmark mode must disable heavy payload cadence"
         );
         assert!(
@@ -9991,6 +12286,28 @@ mod tests {
                 && source.contains("!preview_3d_disabled"),
             "preview-disabled benchmark mode must also disable initial 3D preview snapshots"
         );
+    }
+
+    #[test]
+    fn preview_matrix_cadence_override_is_positive_and_explicit() {
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fem", Some("25")).unwrap(),
+            25
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fem", None).unwrap(),
+            10
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fdm", None).unwrap(),
+            50
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(true, "fem", Some("25")).unwrap(),
+            u64::MAX
+        );
+        assert!(resolve_preview_field_every_n(false, "fem", Some("0")).is_err());
+        assert!(resolve_preview_field_every_n(false, "fem", Some("not-a-number")).is_err());
     }
 
     #[test]
@@ -10047,6 +12364,26 @@ mod tests {
             source.contains("resolve_planned_runtime_engine(problem, plan)")
                 && source.contains("resolve_planned_runtime_capabilities(problem, plan)"),
             "live metadata must resolve runtime information from the materialized plan"
+        );
+    }
+
+    #[test]
+    fn production_interactive_route_threads_authoritative_fem_mesh_asset() {
+        let orchestrator = include_str!("orchestrator.rs");
+        let host = include_str!("interactive_runtime_host.rs");
+        let runner = include_str!("../../fullmag-runner/src/lib.rs");
+
+        assert!(orchestrator.contains(
+            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),\n                            field_every_n,"
+        ));
+        assert!(host.contains("stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>"));
+        assert!(host.contains(
+            "create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence("
+        ));
+        assert!(
+            runner.contains(
+                "pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence("
+            )
         );
     }
 
@@ -10135,6 +12472,7 @@ mod tests {
             Some("generating 3D mesh"),
             Some(420),
             &[("queued".to_string(), 12)],
+            None,
         );
         let phases = phases
             .as_array()
@@ -10158,6 +12496,118 @@ mod tests {
     }
 
     #[test]
+    fn manual_remesh_attempt_survives_indeterminate_heartbeats_and_retry() {
+        let mut overlay = super::CurrentMeshBuildOverlay {
+            active_build: Some(serde_json::json!({"target": "study_domain"})),
+            effective_airbox_target: None,
+            effective_per_object_targets: None,
+            last_build_summary: None,
+            last_build_error: None,
+            active_phase: Some("meshing".to_string()),
+            progress_percent: Some(75),
+            progress_label: Some("legacy heuristic".to_string()),
+            attempt_index: None,
+            algorithm_3d: None,
+            attempt_status: None,
+            attempt_failure_reason: None,
+            next_algorithm_3d: None,
+            progress_kind: None,
+            last_recoverable_attempt: None,
+            phase_started_at: Instant::now(),
+            phase_durations_ms: Vec::new(),
+            failed: false,
+        };
+
+        assert!(super::update_mesh_attempt_overlay_from_payload(
+            &mut overlay,
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "attempt_index": 1,
+                "algorithm_3d": "Delaunay",
+                "attempt_status": "active",
+                "progress_label": "Attempt 1 — Delaunay — progress indeterminate",
+            }),
+        ));
+        super::update_mesh_overlay_from_terminal_progress(
+            &mut overlay,
+            super::RemeshTerminalProgress {
+                percent: None,
+                label: "generating 3D mesh",
+            },
+        );
+        assert_eq!(overlay.progress_percent, None);
+        assert_eq!(
+            overlay.progress_label.as_deref(),
+            Some("Attempt 1 — Delaunay — generating 3D mesh")
+        );
+
+        assert!(super::update_mesh_attempt_overlay_from_payload(
+            &mut overlay,
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "attempt_index": 1,
+                "algorithm_3d": "Delaunay",
+                "attempt_status": "failed_recoverable",
+                "attempt_failure_reason": "degenerate tetra volume",
+                "next_algorithm_3d": "Frontal",
+                "progress_kind": "indeterminate",
+                "progress_label": "Attempt 1 — Delaunay — failed; retrying",
+            }),
+        ));
+        assert!(super::update_mesh_attempt_overlay_from_payload(
+            &mut overlay,
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "attempt_index": 2,
+                "algorithm_3d": "Frontal",
+                "attempt_status": "active",
+                "progress_label": "Attempt 2 — Frontal — progress indeterminate",
+            }),
+        ));
+        super::update_mesh_overlay_from_terminal_progress(
+            &mut overlay,
+            super::RemeshTerminalProgress {
+                percent: None,
+                label: "generating 3D mesh",
+            },
+        );
+
+        assert_eq!(overlay.attempt_index, Some(2));
+        assert_eq!(overlay.algorithm_3d.as_deref(), Some("Frontal"));
+        assert_eq!(overlay.attempt_status.as_deref(), Some("active"));
+        assert_eq!(
+            overlay.last_recoverable_attempt.as_ref().unwrap()["attempt_failure_reason"],
+            "degenerate tetra volume"
+        );
+        assert_eq!(
+            overlay.last_recoverable_attempt.as_ref().unwrap()["next_algorithm_3d"],
+            "Frontal"
+        );
+        assert_eq!(overlay.progress_percent, None);
+        assert_eq!(
+            overlay.progress_label.as_deref(),
+            Some("Attempt 2 — Frontal — generating 3D mesh")
+        );
+        let mut workspace = serde_json::json!({});
+        super::overlay_mesh_workspace(&mut workspace, &overlay);
+        let meshing = workspace["mesh_pipeline_status"]
+            .as_array()
+            .and_then(|phases| phases.iter().find(|phase| phase["id"] == "meshing"))
+            .expect("meshing phase");
+        assert_eq!(meshing["attempt_index"], 2);
+        assert_eq!(meshing["algorithm_3d"], "Frontal");
+        assert_eq!(meshing["attempt_status"], "active");
+        assert_eq!(
+            workspace["active_build"]["last_recoverable_attempt"]["attempt_failure_reason"],
+            "degenerate tetra volume"
+        );
+        assert!(meshing.get("progress_percent").is_none());
+    }
+
+    #[test]
     fn heavy_live_payload_forces_publish_without_waiting_for_heartbeat() {
         let mut cadence = LiveProgressCadence::default();
         let baseline = test_step_update(2);
@@ -10166,6 +12616,10 @@ mod tests {
         let mut heavy = test_step_update(3);
         heavy.preview_field = Some(LivePreviewField {
             config_revision: 1,
+            source_step: 0,
+            source_revision: 1,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: "m".to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "grid".to_string(),
@@ -10231,23 +12685,27 @@ mod tests {
             test_preview_field("h_eff", 3, 2.0),
         ]);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             true,
         );
 
         assert_eq!(state.live_state.latest_step.step, 12);
-        assert!(state.live_state.latest_step.preview_field.is_some());
-        assert_eq!(state.preview_fields.to_vec().len(), 2);
+        assert!(state.live_state.latest_step.preview_field.is_none());
+        assert!(state.preview_fields.is_empty());
+        assert!(state.latest_fields.is_empty());
         assert_eq!(state.pending_preview_fields.to_vec().len(), 2);
         assert_eq!(
             state.latest_scalar_row.as_ref().map(|row| row.step),
             Some(12)
         );
+        let delta = state.publish_delta();
+        assert_eq!(delta.preview_fields.as_ref().map(Vec::len), Some(2));
+        assert_eq!(state.preview_fields.to_vec().len(), 2);
     }
 
     #[test]
@@ -10256,12 +12714,12 @@ mod tests {
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         let update = test_step_update(13);
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             true,
         );
 
@@ -10272,27 +12730,127 @@ mod tests {
     }
 
     #[test]
+    fn production_ingest_preserves_large_retained_magnetization_by_pointer() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.magnetization = Some(vec![1.0; 3_000_000]);
+        let retained_ptr = state
+            .live_state
+            .latest_step
+            .magnetization
+            .as_ref()
+            .unwrap()
+            .as_ptr();
+        let publisher = crate::live_workspace::CurrentLivePublisher::spawn_with_test_sink(
+            "production-retained-magnetization-ingest",
+            |_, _| Ok(()),
+        );
+        let workspace = crate::live_workspace::LocalLiveWorkspace::new(state, publisher);
+        let mut callback_durations = Vec::new();
+
+        for step in 1..=5 {
+            let update = test_step_update(step);
+            let mut observed_ptr = std::ptr::null();
+            let started = Instant::now();
+            workspace.update_profiled(|state| {
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
+                    "run-test",
+                    "session-test",
+                    PathBuf::from("/tmp/artifacts").as_path(),
+                    update,
+                    false,
+                );
+                observed_ptr = state
+                    .live_state
+                    .latest_step
+                    .magnetization
+                    .as_ref()
+                    .unwrap()
+                    .as_ptr();
+            });
+            callback_durations.push(started.elapsed());
+            assert_eq!(
+                observed_ptr, retained_ptr,
+                "thin ingest must preserve Vec ownership"
+            );
+        }
+
+        callback_durations.sort_unstable();
+        assert!(callback_durations[callback_durations.len() - 1] < Duration::from_millis(10));
+    }
+
+    #[test]
+    fn production_ingest_moves_large_preview_into_single_pending_owner() {
+        let publisher = crate::live_workspace::CurrentLivePublisher::spawn_with_test_sink(
+            "production-preview-ingest",
+            |_, _| Ok(()),
+        );
+        let workspace =
+            crate::live_workspace::LocalLiveWorkspace::new(test_workspace_state(), publisher);
+        let mut callback_durations = Vec::new();
+
+        for step in 1..=5 {
+            let mut preview = test_preview_field("h_eff", step, 2.0);
+            preview.vector_field_values = vec![step as f64; 3_000_000];
+            let input_ptr = preview.vector_field_values.as_ptr();
+            let mut update = test_step_update(step);
+            update.preview_field = Some(preview);
+            let mut observed_ptr = std::ptr::null();
+            let started = Instant::now();
+            workspace.update_profiled(|state| {
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
+                    "run-test",
+                    "session-test",
+                    PathBuf::from("/tmp/artifacts").as_path(),
+                    update,
+                    false,
+                );
+                observed_ptr = state
+                    .pending_preview_fields
+                    .vector_values_ptr("h_eff")
+                    .unwrap();
+                assert_ne!(
+                    state.preview_fields.vector_values_ptr("h_eff"),
+                    Some(input_ptr),
+                    "the current preview must not be cloned into the persistent cache in callback"
+                );
+                assert!(state.latest_fields.is_empty());
+            });
+            callback_durations.push(started.elapsed());
+            assert_eq!(
+                observed_ptr, input_ptr,
+                "preview Vec must move into pending cache"
+            );
+        }
+
+        callback_durations.sort_unstable();
+        assert!(callback_durations[callback_durations.len() - 1] < Duration::from_millis(10));
+    }
+
+    #[test]
     fn publish_live_step_update_does_not_shadow_fresh_m_preview_with_previous_magnetization() {
         let mut state = test_workspace_state();
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         let mut update = test_step_update(14);
         update.preview_field = Some(test_preview_field("m", 2, -1.0));
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             true,
         );
 
         assert_eq!(state.live_state.latest_step.magnetization, None);
+        let delta = state.publish_delta();
         assert_eq!(
-            state
+            delta
                 .preview_fields
-                .to_vec()
-                .first()
+                .as_ref()
+                .and_then(|fields| fields.first())
                 .map(|field| field.vector_field_values.as_slice()),
             Some(&[0.0, 0.0, -1.0][..])
         );
@@ -10365,9 +12923,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -10482,9 +13040,9 @@ mod tests {
                     [2.0, 0.0, 1.0],
                     [3.0, 0.0, 0.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 2],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 2],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -10640,9 +13198,9 @@ mod tests {
                     mesh: Some(MeshIR {
                         mesh_name: "old_shared".to_string(),
                         nodes: vec![[0.0, 0.0, 0.0]],
-                        elements: Vec::new(),
+                        cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
                         element_markers: Vec::new(),
-                        boundary_faces: Vec::new(),
+                        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                         boundary_markers: Vec::new(),
                         periodic_boundary_pairs: Vec::new(),
                         periodic_node_pairs: Vec::new(),
@@ -10668,6 +13226,7 @@ mod tests {
                 },
                 sampling: SamplingIR {
                     table_autosave: None,
+                    stage_autosave: None,
                     outputs: Vec::new(),
                 },
             },
@@ -10683,6 +13242,7 @@ mod tests {
             validation_profile: ValidationProfileIR {
                 execution_mode: ExecutionMode::Strict,
             },
+            planar_monitors: Vec::new(),
             field_drives: Vec::new(),
             current_modules: Vec::new(),
             spin_torque_modules: Vec::new(),
@@ -10741,6 +13301,7 @@ mod tests {
             solver_policy: None,
             sampling: SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: Vec::new(),
             },
         };
@@ -11091,6 +13652,10 @@ mod tests {
             WaitForSolveCommandAction::RefreshFields
         );
         assert_eq!(
+            classify_wait_for_solve_command("set_solver_profile"),
+            WaitForSolveCommandAction::ConfigureProfiler
+        );
+        assert_eq!(
             classify_wait_for_solve_command("run"),
             WaitForSolveCommandAction::StartSolver
         );
@@ -11150,6 +13715,100 @@ mod tests {
     }
 
     #[test]
+    fn profiled_step_update_clone_carries_only_mesh_generation_and_clone_count() {
+        let mut update = test_step_update(7);
+        update.fem_mesh_generation_id = Some("mesh-gen-1".to_string());
+
+        let adjusted = offset_step_update(update, 10, 2.0, true);
+
+        assert_eq!(adjusted.stats.step, 17);
+        assert_eq!(adjusted.stats.time, 2.0);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        assert_eq!(adjusted.stats.mesh_payload_wall_time_ns, 0);
+        assert_eq!(
+            adjusted.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-1")
+        );
+        assert!(adjusted.finished);
+    }
+
+    #[test]
+    fn fem_stage_mesh_payload_is_built_once_until_generation_changes() {
+        let plan = tiny_shared_domain_fem_plan();
+        let stage_mesh = fem_mesh_payload_from_backend_plan(&plan)
+            .expect("shared-domain plan should produce a FEM stage mesh");
+        let stage_generation = stage_mesh.generation_id.clone();
+        for step in 1..=12 {
+            let mut update = test_step_update(step);
+            update.fem_mesh_generation_id = stage_generation.clone();
+            let adjusted = offset_step_update(update, 0, 0.0, false);
+            assert_eq!(adjusted.fem_mesh_generation_id, stage_generation);
+            assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        }
+
+        let mut remeshed_plan = plan.clone();
+        let BackendPlanIR::Fem(remeshed_fem) = &mut remeshed_plan else {
+            unreachable!("fixture is FEM")
+        };
+        remeshed_fem.mesh.nodes[7][0] += 0.25;
+        let remeshed = fem_mesh_payload_from_backend_plan(&remeshed_plan)
+            .expect("remesh should produce a replacement FEM stage mesh");
+        assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
+    }
+
+    #[test]
+    fn heartbeat_snapshot_retains_only_lightweight_progress() {
+        let initial = test_step_update(0);
+        let snapshot = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::stage_heartbeat::StageHeartbeatProgress::new(&initial),
+        ));
+        let mut heartbeat = StageProgressHeartbeat {
+            snapshot: std::sync::Arc::clone(&snapshot),
+            stop_tx: None,
+            join_handle: None,
+        };
+        let mut adjusted = offset_step_update(test_step_update(1), 0, 0.0, false);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        heartbeat.record(&mut adjusted);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        assert_eq!(
+            snapshot.lock().unwrap().stats.step_update_deep_clone_count,
+            0
+        );
+    }
+
+    #[test]
+    fn lightweight_heartbeat_preserves_heavy_live_field_identity() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.grid = [17, 19, 23];
+        state.live_state.latest_step.fem_mesh_generation_id = Some("mesh-gen-stable".to_string());
+        state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
+        state.live_state.latest_step.preview_field = Some(test_preview_field("h_eff", 1, 2.0));
+        let mut update = test_step_update(9);
+        update.stats.e_total = 42.0;
+        let progress = crate::stage_heartbeat::StageHeartbeatProgress::new(&update);
+
+        progress.apply_to_live_step(&mut state.live_state.latest_step);
+
+        assert_eq!(state.live_state.latest_step.step, 9);
+        assert_eq!(state.live_state.latest_step.e_total, 42.0);
+        assert_eq!(state.live_state.latest_step.grid, [17, 19, 23]);
+        assert_eq!(
+            state
+                .live_state
+                .latest_step
+                .fem_mesh_generation_id
+                .as_deref(),
+            Some("mesh-gen-stable")
+        );
+        assert_eq!(
+            state.live_state.latest_step.magnetization.as_deref(),
+            Some([1.0, 0.0, 0.0].as_slice())
+        );
+        assert!(state.live_state.latest_step.preview_field.is_some());
+    }
+
+    #[test]
     fn fem_live_mesh_payload_carries_matching_initial_magnetization() {
         let (payload, initial_magnetization) =
             fem_live_mesh_payload_and_initial_magnetization(&tiny_shared_domain_fem_plan())
@@ -11162,31 +13821,43 @@ mod tests {
     #[test]
     fn initial_live_state_publishes_shared_domain_fem_mesh_before_solver_start() {
         let plan = tiny_shared_domain_fem_plan();
-        let update = initial_step_update(&plan);
+        let asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("shared-domain FEM asset");
+        let update = initial_step_update(&plan, Some(asset.identity.generation_id().to_string()));
 
-        let live_state = initial_live_state_manifest_from_backend_plan(&update, &plan, None)
-            .expect("initial FEM live state should carry shared-domain mesh");
+        let (live_state, _) = initial_live_state_manifest_from_backend_plan(
+            &update,
+            &plan,
+            Some(asset.payload),
+            None,
+        )
+        .expect("initial FEM live state should carry shared-domain mesh");
 
-        let mesh = live_state
-            .latest_step
-            .fem_mesh
-            .as_ref()
-            .expect("shared-domain FEM mesh should be published before compute");
-        assert_eq!(mesh.object_segments.len(), 2);
+        let generation_id = live_state.latest_step.fem_mesh_generation_id.as_deref();
+        assert!(
+            generation_id.is_some(),
+            "FEM mesh generation should be referenced before compute"
+        );
+        let node_count = fem_mesh_payload_from_backend_plan(&plan)
+            .expect("shared-domain plan should produce a stage mesh")
+            .nodes
+            .len();
         assert_eq!(
             live_state
                 .latest_step
                 .magnetization
                 .as_ref()
                 .map(|values| values.len()),
-            Some(mesh.nodes.len() * 3)
+            Some(node_count * 3)
         );
     }
 
     #[test]
     fn initial_live_state_uses_loaded_initial_magnetization_override() {
         let plan = tiny_shared_domain_fem_plan();
-        let update = initial_step_update(&plan);
+        let asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("shared-domain FEM asset");
+        let update = initial_step_update(&plan, Some(asset.identity.generation_id().to_string()));
         let override_m = vec![
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
@@ -11198,9 +13869,13 @@ mod tests {
             [0.0, 0.5, 0.5],
         ];
 
-        let live_state =
-            initial_live_state_manifest_from_backend_plan(&update, &plan, Some(&override_m))
-                .expect("initial FEM live state should accept matching override");
+        let (live_state, _) = initial_live_state_manifest_from_backend_plan(
+            &update,
+            &plan,
+            Some(asset.payload),
+            Some(&override_m),
+        )
+        .expect("initial FEM live state should accept matching override");
 
         assert_eq!(
             live_state.latest_step.magnetization.as_deref(),
@@ -11417,9 +14092,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [2.0, 0.0, 0.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -11484,9 +14159,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![7],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -11581,7 +14256,59 @@ mod tests {
         assert_eq!(export_outcome.magnetization, current);
         assert!(export_stage_dir.join("synthetic_stage.json").is_file());
 
+        let remove_stage_dir = artifact_dir.join("stage_remove_drive");
+        let remove_outcome = execute_synthetic_stage(
+            &ResolvedScriptStageAction::RemoveFieldDrive {
+                drive_id: "antenna".to_string(),
+            },
+            &artifact_dir,
+            &remove_stage_dir,
+            &backend_plan,
+            Some(current.as_slice()),
+        )
+        .expect("remove_field_drive should succeed");
+        assert_eq!(remove_outcome.magnetization, current);
+        assert_eq!(
+            remove_outcome.message,
+            "Removed regional field drive antenna"
+        );
+        let removal: serde_json::Value = serde_json::from_slice(
+            &fs::read(remove_stage_dir.join("synthetic_stage.json"))
+                .expect("removal stage record should exist"),
+        )
+        .expect("removal stage record should be JSON");
+        assert_eq!(removal["kind"], "remove_field_drive");
+        assert_eq!(removal["drive_id"], "antenna");
+        assert_eq!(removal["vector_count"], 1);
+
         let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn auto_sampling_stage_record_preserves_planner_resolution() {
+        let stage_dir = temp_test_dir("auto-sampling-stage-record");
+        let resolution = serde_json::json!({
+            "requested_policy": {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+            "sample_period_s": 7.692307692307691e-11,
+            "maximum_cutoff_hz": 5.0e9,
+            "nyquist_guard_factor": 1.3,
+            "target_nyquist_hz": 6.5e9,
+            "sampling_frequency_hz": 13.0e9,
+            "source_drive_ids": ["drive-5"],
+            "target_stage_id": "excite"
+        });
+
+        write_sampling_resolution_stage_record(&stage_dir, Some(&resolution))
+            .expect("sampling stage record should write");
+
+        let record: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage_dir.join("sampling_stage_record.v1.json"))
+                .expect("sampling stage record should be readable"),
+        )
+        .expect("sampling stage record should be JSON");
+        assert_eq!(record["schema_version"], "sampling_stage_record.v1");
+        assert_eq!(record["sampling_resolution"], resolution);
+        let _ = fs::remove_dir_all(stage_dir);
     }
 
     #[test]

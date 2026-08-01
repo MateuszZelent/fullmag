@@ -18,8 +18,8 @@ use crate::relaxation::direct_minimizer::{
     DirectMinimizerAlgorithm, DirectMinimizerControl, DirectMinimizerState,
     DirectMinimizerTrialEvaluation, NONLINEAR_CG_MAX_BACKTRACK, PROJECTED_GRADIENT_MAX_BACKTRACK,
 };
-use crate::relaxation::vector_math::{max_torque_from_field, tangent_gradient_from_field};
-use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
+use crate::relaxation::vector_math::tangent_gradient_from_field;
+use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::scalar_metrics::single_object_scalars;
 use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
@@ -70,6 +70,7 @@ pub(crate) fn execute_direct_minimizer(
     let mut latest_stats = Some(current_stats.clone());
     let mut cancelled = false;
     let mut numerical_stagnation = false;
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut state = DirectMinimizerState::new(
         backend.copy_m(cell_count)?,
         backend.copy_h_eff(cell_count)?,
@@ -117,7 +118,7 @@ pub(crate) fn execute_direct_minimizer(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization: Some(flatten_vectors(&state.magnetization)),
                     preview_field,
                     cached_preview_fields: None,
@@ -142,10 +143,6 @@ pub(crate) fn execute_direct_minimizer(
             break;
         }
 
-        let max_torque = max_torque_from_field(&state.magnetization, &state.h_eff);
-        if relaxation_stop_criteria_satisfied(control, None, max_torque) {
-            break;
-        }
         let weighted_gradient_norm_sq =
             energy_metric_dot(&state.gradient, &state.gradient, &ms_apm, &volumes_m3);
         if direct_minimizer_gradient_invalid(weighted_gradient_norm_sq) {
@@ -323,7 +320,7 @@ pub(crate) fn execute_direct_minimizer(
         current_stats = accepted_stats;
 
         let energy_plateau_range = energy_plateau.record(state.energy_j);
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque_apm) {
+        if torque_confirmation.observe(control, energy_plateau_range, torque_apm) {
             break;
         }
     }

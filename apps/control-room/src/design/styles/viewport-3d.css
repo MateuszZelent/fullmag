@@ -16,7 +16,7 @@
 
 .fm-viewport-3d__hud {
   position: absolute;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   top: var(--fm-space-2);
   left: var(--fm-space-2);
   display: flex;
@@ -77,7 +77,7 @@
   height: 1rem;
   flex: 0 0 1rem;
   place-items: center;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background:
     conic-gradient(
       var(--fm-accent) var(--fm-refresh-progress, 0deg),
@@ -89,7 +89,7 @@
 .fm-viewport-3d__refresh-countdown-core {
   width: 0.42rem;
   height: 0.42rem;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background: var(--fm-bg-viewport);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--fm-bg-chrome) 80%, transparent);
 }
@@ -221,8 +221,10 @@
 .fm-viewport-3d__colorbar-stack {
   position: absolute;
   z-index: 2;
-  right: var(--fm-space-3);
-  bottom: var(--fm-space-3);
+  left: var(--fm-space-3);
+  bottom: calc(
+    var(--fm-space-3) + var(--fm-control-height-compact) + var(--fm-space-2)
+  );
   display: grid;
   width: min(18rem, calc(100% - var(--fm-space-6)));
   gap: var(--fm-space-1);
@@ -233,61 +235,86 @@
 
 .fm-viewport-3d__colorbar {
   display: grid;
-  gap: var(--fm-space-1);
-  border: 1px solid color-mix(in srgb, var(--fm-border-subtle) 58%, transparent);
-  border-radius: var(--fm-radius-sm);
-  background: color-mix(in srgb, var(--fm-bg-chrome) 72%, transparent);
-  box-shadow: var(--fm-shadow-panel);
+  gap: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-surface) 94%, transparent);
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-xs);
   padding: var(--fm-space-2);
   pointer-events: none;
-  backdrop-filter: blur(6px);
   user-select: none;
 }
 
 .fm-viewport-3d__colorbar-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--fm-space-2);
   min-width: 0;
+}
+
+.fm-viewport-3d__colorbar-identity {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.fm-viewport-3d__colorbar-context,
+.fm-viewport-3d__colorbar-component,
+.fm-viewport-3d__colorbar-range-label {
   overflow: hidden;
-  color: var(--fm-text-secondary);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  letter-spacing: 0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-viewport-3d__colorbar-quantity {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.fm-viewport-3d__colorbar-header > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .fm-viewport-3d__colorbar-unit {
   flex: 0 0 auto;
-  max-width: 5rem;
-  border: 1px solid color-mix(in srgb, var(--fm-border-subtle) 72%, transparent);
+  max-width: 6rem;
+  min-height: var(--fm-control-height-compact);
+  border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);
-  background: color-mix(in srgb, var(--fm-bg-elevated) 88%, transparent);
+  background: var(--fm-bg-panel);
   color: var(--fm-text-primary);
   font: inherit;
+  font-family: var(--fm-font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--fm-control-height-compact);
   padding: 0 var(--fm-space-1);
   pointer-events: auto;
 }
 
+.fm-viewport-3d__colorbar-range {
+  display: grid;
+  gap: var(--fm-space-1);
+  padding-top: var(--fm-space-1);
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
 .fm-viewport-3d__colorbar-row {
   display: grid;
-  grid-template-columns: minmax(3rem, auto) minmax(5rem, 1fr) minmax(3rem, auto);
+  grid-template-columns: minmax(3.5rem, auto) minmax(4rem, 1fr) minmax(3.5rem, auto);
   gap: var(--fm-space-2);
   align-items: center;
 }
 
 .fm-viewport-3d__colorbar-limit {
   overflow: hidden;
-  color: var(--fm-text-muted);
+  color: var(--fm-text-secondary);
   font-family: var(--fm-font-mono);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -644,9 +671,9 @@
 }
 
 .fm-viewport-3d__settings-switch-track {
-  width: 36px;
-  height: 20px;
-  border-radius: 10px;
+  width: var(--fm-inspector-nav-icon-size);
+  height: var(--fm-control-height-compact);
+  border-radius: var(--fm-radius-lg);
   background: var(--fm-border-default);
   transition: background-color var(--fm-transition-fast);
   position: relative;
@@ -657,8 +684,8 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 16px;
-  height: 16px;
+  width: var(--fm-space-4);
+  height: var(--fm-space-4);
   border-radius: 50%;
   background: var(--fm-text-primary);
   transition: transform var(--fm-transition-fast);

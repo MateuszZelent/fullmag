@@ -74,12 +74,23 @@ bool gpu_rk_reduce_final_external_energy_terms(
             reduce_bytes, stream);
         return cuda_launch_ok(reduce_label, reason);
     };
-    if (ctx.zeeman.has_external_field &&
-        !reduce_field(gpu.fields.h_ext, GpuFinalScalarSlot::ExternalEnergy,
-            "launch GPU RK external energy blocks", "launch GPU RK external energy reduction")) {
-        return false;
+    if (ctx.zeeman.has_external_field) {
+        if (gpu.fields.h_ext.x == nullptr || gpu.fields.h_ext.y == nullptr ||
+            gpu.fields.h_ext.z == nullptr) {
+            reason = "GPU RK external energy requires device-resident H_ext";
+            return false;
+        }
+        if (!reduce_field(gpu.fields.h_ext, GpuFinalScalarSlot::ExternalEnergy,
+                "launch GPU RK external energy blocks", "launch GPU RK external energy reduction")) {
+            return false;
+        }
     }
     if (has_drive) {
+        if (gpu.fields.h_drive.x == nullptr || gpu.fields.h_drive.y == nullptr ||
+            gpu.fields.h_drive.z == nullptr) {
+            reason = "GPU RK drive energy requires device-resident H_drive";
+            return false;
+        }
         if (!gpu_regional_field_drive_materialize_and_accumulate(
                 ctx, stream, n, ctx.state.current_time, false, reason)) return false;
         if (!reduce_field(gpu.fields.h_drive, GpuFinalScalarSlot::DriveEnergy,

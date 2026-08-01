@@ -1,6 +1,6 @@
 import type { MeshPolicyDiffRow } from "@/shared/domain/mesh/meshPolicyDiff";
 
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { MeshResourceEmpty } from "../MeshResourceView";
 
 export function MeshPolicyComparisonSection({
@@ -9,12 +9,11 @@ export function MeshPolicyComparisonSection({
   rows: MeshPolicyDiffRow[];
 }) {
   return (
-    <InspectorSection
-      value="policy-comparison"
+    <InspectorGroup
       title="Policy Comparison"
       badge={`${rows.length}`}
       collapsible
-      defaultCollapsed={rows.length === 0}
+      defaultOpen={rows.length > 0}
     >
       {rows.length > 0 ? (
         <div className="fm-mesh-detail-table" role="table">
@@ -43,6 +42,6 @@ export function MeshPolicyComparisonSection({
       ) : (
         <MeshResourceEmpty label="No shared-domain policy fields are available for comparison yet." />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

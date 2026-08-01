@@ -10,6 +10,7 @@ pub mod mesh_assets;
 pub mod mesh_hints;
 pub mod model;
 pub mod plan;
+pub mod planar_monitor;
 pub mod quantities;
 pub mod spectral_validation;
 pub mod study;
@@ -22,6 +23,7 @@ pub use mesh_assets::*;
 pub use mesh_hints::*;
 pub use model::*;
 pub use plan::*;
+pub use planar_monitor::*;
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
@@ -29,11 +31,34 @@ pub use spectral_validation::BlochWavevectorIR;
 pub use study::*;
 use validation::*;
 
-pub const IR_VERSION: &str = "0.2.0";
+pub const IR_VERSION: &str = "0.3.0";
 pub const CURRENT_IR_VERSION: &str = IR_VERSION;
-pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.1.0";
-pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
+pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
+pub const LEGACY_PUBLIC_IR_VERSION: &str = "0.1.0";
+pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[
+    CURRENT_IR_VERSION,
+    PREVIOUS_PUBLIC_IR_VERSION,
+    LEGACY_PUBLIC_IR_VERSION,
+];
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
+
+fn validate_sampling_period_policy(
+    path: &str,
+    policy: &SamplingPeriodPolicyIR,
+    errors: &mut Vec<String>,
+) {
+    match policy {
+        SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor,
+        } => {
+            if *nyquist_guard_factor != AUTO_SINC_NYQUIST_GUARD_FACTOR {
+                errors.push(format!(
+                    "{path}.nyquist_guard_factor must be exactly {AUTO_SINC_NYQUIST_GUARD_FACTOR}"
+                ));
+            }
+        }
+    }
+}
 
 pub fn is_supported_ir_version_for_read(version: &str) -> bool {
     let normalized = version.trim();
@@ -66,6 +91,27 @@ fn migrate_legacy_cylinder_axes(value: &mut Value) {
     }
 }
 
+fn migrate_dynamics_adaptive_tolerance_mode(value: &mut Value) {
+    if let Some(adaptive) = value
+        .as_object_mut()
+        .and_then(|dynamics| dynamics.get_mut("adaptive_timestep"))
+        .and_then(Value::as_object_mut)
+    {
+        adaptive
+            .entry("tolerance_mode".to_string())
+            .or_insert_with(|| Value::String("advanced".to_string()));
+    }
+}
+
+fn migrate_study_adaptive_tolerance_modes(value: &mut Value) {
+    let Some(study) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(dynamics) = study.get_mut("dynamics") {
+        migrate_dynamics_adaptive_tolerance_mode(dynamics);
+    }
+}
+
 pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
     let object = value
         .as_object_mut()
@@ -79,10 +125,11 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
     if version == CURRENT_IR_VERSION {
         return Ok(false);
     }
-    if version != PREVIOUS_PUBLIC_IR_VERSION {
+    if !SUPPORTED_READ_IR_VERSIONS.contains(&version) {
         return Err(format!("ir_version '{version}' is not supported for read"));
     }
 
+    let source_version = version.to_string();
     object.insert(
         "ir_version".to_string(),
         Value::String(CURRENT_IR_VERSION.to_string()),
@@ -93,21 +140,32 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
         .and_then(Value::as_object_mut)
     {
         for key in ["script_api_version", "serializer_version"] {
-            if meta
-                .get(key)
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.trim() == PREVIOUS_PUBLIC_IR_VERSION)
-            {
-                meta.insert(
-                    key.to_string(),
-                    Value::String(CURRENT_IR_VERSION.to_string()),
-                );
+            if let Some(value) = meta.get(key).and_then(Value::as_str).map(str::trim) {
+                if SUPPORTED_READ_IR_VERSIONS.contains(&value) && value != source_version {
+                    return Err(format!("ProblemIR.ir_version '{source_version}' conflicts with problem_meta.{key} '{value}'"));
+                }
+                if value == source_version {
+                    meta.insert(
+                        key.to_string(),
+                        Value::String(CURRENT_IR_VERSION.to_string()),
+                    );
+                }
             }
         }
     }
 
-    for value in object.values_mut() {
-        migrate_legacy_cylinder_axes(value);
+    if source_version == LEGACY_PUBLIC_IR_VERSION {
+        for value in object.values_mut() {
+            migrate_legacy_cylinder_axes(value);
+        }
+    }
+    if matches!(
+        source_version.as_str(),
+        PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION
+    ) {
+        if let Some(study) = object.get_mut("study") {
+            migrate_study_adaptive_tolerance_modes(study);
+        }
     }
 
     Ok(true)
@@ -128,6 +186,8 @@ pub struct ProblemIR {
     pub magnets: Vec<MagnetIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<CouplingIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planar_monitors: Vec<PlanarMonitorIR>,
     pub energy_terms: Vec<EnergyTermIR>,
     pub study: StudyIR,
     pub backend_policy: BackendPolicyIR,
@@ -227,6 +287,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             magnets: Vec<MagnetIR>,
             #[serde(default)]
             couplings: Vec<CouplingIR>,
+            #[serde(default)]
+            planar_monitors: Vec<PlanarMonitorIR>,
             energy_terms: Vec<EnergyTermIR>,
             study: StudyIR,
             backend_policy: BackendPolicyIR,
@@ -287,6 +349,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             material_parameter_fields: wire.material_parameter_fields,
             magnets: wire.magnets,
             couplings: wire.couplings,
+            planar_monitors: wire.planar_monitors,
             energy_terms: wire.energy_terms,
             study: wire.study,
             backend_policy: wire.backend_policy,
@@ -380,6 +443,7 @@ impl ProblemIR {
                 initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
             }],
             couplings: Vec::new(),
+            planar_monitors: Vec::new(),
             energy_terms: vec![EnergyTermIR::Exchange],
             study: StudyIR::TimeEvolution {
                 dynamics: DynamicsIR::Llg {
@@ -392,6 +456,7 @@ impl ProblemIR {
                 },
                 sampling: SamplingIR {
                     table_autosave: None,
+                    stage_autosave: None,
                     outputs: vec![
                         OutputIR::Field {
                             name: "m".to_string(),
@@ -483,6 +548,7 @@ impl ProblemIR {
         if self.problem_meta.entrypoint_kind.trim().is_empty() {
             errors.push("problem_meta.entrypoint_kind must not be empty".to_string());
         }
+        validate_runtime_selection(self, &mut errors);
         if self.geometry.entries.is_empty() {
             errors.push("at least one geometry entry is required".to_string());
         }
@@ -502,6 +568,7 @@ impl ProblemIR {
         }
         validate_current_modules(self, &mut errors);
         validate_field_drives(self, &mut errors);
+        validate_planar_monitors(self, &mut errors);
         validate_spin_wave_response_request(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
         validate_dmi_energy_terms(self, &mut errors);
@@ -520,41 +587,110 @@ impl ProblemIR {
         if self.magnets.is_empty() {
             errors.push("at least one magnet is required".to_string());
         }
-        if self.energy_terms.is_empty() {
-            errors.push("at least one energy term is required".to_string());
+        let has_material_anisotropy = self.materials.iter().any(|material| {
+            material.uniaxial_anisotropy.is_some()
+                || material.uniaxial_anisotropy_k2.is_some()
+                || material.cubic_anisotropy_kc1.is_some()
+                || material.cubic_anisotropy_kc2.is_some()
+                || material.cubic_anisotropy_kc3.is_some()
+                || material.ku_field.is_some()
+                || material.ku2_field.is_some()
+                || material.kc1_field.is_some()
+                || material.kc2_field.is_some()
+                || material.kc3_field.is_some()
+        });
+        if self.energy_terms.is_empty() && !has_material_anisotropy {
+            errors.push("at least one interaction or material anisotropy is required".to_string());
         }
-        if self.study.sampling().outputs.is_empty() {
-            errors.push("at least one output is required".to_string());
+        if matches!(
+            &self.study,
+            StudyIR::Eigenmodes { .. } | StudyIR::FrequencyResponse { .. }
+        ) && self.study.sampling().outputs.is_empty()
+        {
+            errors.push("spectral study requires at least one output".to_string());
         }
         for output in &self.study.sampling().outputs {
+            match output {
+                OutputIR::FieldResolvedAuto {
+                    requested_policy, ..
+                } => validate_sampling_period_policy(
+                    "field_resolved_auto output",
+                    requested_policy,
+                    &mut errors,
+                ),
+                OutputIR::ScalarResolvedAuto {
+                    requested_policy, ..
+                } => validate_sampling_period_policy(
+                    "scalar_resolved_auto output",
+                    requested_policy,
+                    &mut errors,
+                ),
+                _ => {}
+            }
             match output {
                 OutputIR::Field {
                     name,
                     every_seconds,
+                }
+                | OutputIR::FieldResolvedAuto {
+                    name,
+                    every_seconds,
+                    ..
                 } => {
                     if name.trim().is_empty() {
                         errors.push("field output name must not be empty".to_string());
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "field output '{}' must have positive every_seconds",
+                            "field output '{}' must have finite positive every_seconds",
                             name
                         ));
                     }
                 }
+                OutputIR::FieldAuto {
+                    name,
+                    sample_period_policy,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("field_auto output name must not be empty".to_string());
+                    }
+                    validate_sampling_period_policy(
+                        "field_auto output",
+                        sample_period_policy,
+                        &mut errors,
+                    );
+                }
                 OutputIR::Scalar {
                     name,
                     every_seconds,
+                }
+                | OutputIR::ScalarResolvedAuto {
+                    name,
+                    every_seconds,
+                    ..
                 } => {
                     if name.trim().is_empty() {
                         errors.push("scalar output name must not be empty".to_string());
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "scalar output '{}' must have positive every_seconds",
+                            "scalar output '{}' must have finite positive every_seconds",
                             name
                         ));
                     }
+                }
+                OutputIR::ScalarAuto {
+                    name,
+                    sample_period_policy,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("scalar_auto output name must not be empty".to_string());
+                    }
+                    validate_sampling_period_policy(
+                        "scalar_auto output",
+                        sample_period_policy,
+                        &mut errors,
+                    );
                 }
                 OutputIR::Snapshot {
                     field,
@@ -572,9 +708,9 @@ impl ProblemIR {
                             component
                         ));
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "snapshot '{}' must have positive every_seconds",
+                            "snapshot '{}' must have finite positive every_seconds",
                             field
                         ));
                     }
@@ -611,9 +747,9 @@ impl ProblemIR {
                     if quantity_id.trim().is_empty() {
                         errors.push("save_quantity quantity_id must not be empty".to_string());
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "save_quantity '{}' must have positive every_seconds",
+                            "save_quantity '{}' must have finite positive every_seconds",
                             quantity_id
                         ));
                     }
@@ -627,8 +763,67 @@ impl ProblemIR {
             if table_autosave.table_id.trim().is_empty() {
                 errors.push("sampling.table_autosave.table_id must not be empty".to_string());
             }
-            if table_autosave.sample_period_s <= 0.0 {
-                errors.push("sampling.table_autosave.sample_period_s must be positive".to_string());
+            match (
+                table_autosave.sample_period_s,
+                table_autosave.sample_period_policy.as_ref(),
+                table_autosave.resolved_sample_period_s,
+                table_autosave.every_steps,
+            ) {
+                (None, None, None, None) => errors.push(
+                    "sampling.table_autosave requires sample_period_s or sample_period_policy"
+                        .to_string(),
+                ),
+                (Some(sample_period_s), None, None, None) => {
+                    if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
+                        errors.push(
+                            "sampling.table_autosave.sample_period_s must be finite and positive"
+                                .to_string(),
+                        );
+                    }
+                }
+                (None, Some(policy), None, None) => validate_sampling_period_policy(
+                    "sampling.table_autosave.sample_period_policy",
+                    policy,
+                    &mut errors,
+                ),
+                (None, Some(policy), Some(resolved_sample_period_s), None) => {
+                    if !resolved_sample_period_s.is_finite() || resolved_sample_period_s <= 0.0 {
+                        errors.push(
+                            "sampling.table_autosave.resolved_sample_period_s must be finite and positive"
+                                .to_string(),
+                        );
+                    }
+                    validate_sampling_period_policy(
+                        "sampling.table_autosave.sample_period_policy",
+                        policy,
+                        &mut errors,
+                    );
+                }
+                (None, None, None, Some(every_steps)) => {
+                    if every_steps == 0 {
+                        errors.push(
+                            "sampling.table_autosave.every_steps must be a positive accepted-step count"
+                                .to_string(),
+                        );
+                    }
+                }
+                _ => errors.push(
+                    "sampling.table_autosave cadence state is ambiguous; use exactly one of explicit sample_period_s, unresolved sample_period_policy, sample_period_policy with resolved_sample_period_s, or every_steps"
+                        .to_string(),
+                ),
+            }
+            let is_relaxation = matches!(&self.study, StudyIR::Relaxation { .. });
+            if table_autosave.accepted_step_cadence().is_some() && !is_relaxation {
+                errors.push(
+                    "sampling.table_autosave.every_steps is only valid for relaxation studies"
+                        .to_string(),
+                );
+            }
+            if table_autosave.accepted_step_cadence().is_none() && is_relaxation {
+                errors.push(
+                    "relaxation table_autosave must use every_steps; simulation-time cadence is not physically meaningful for relaxation"
+                        .to_string(),
+                );
             }
             if table_autosave.quantities.is_empty() {
                 errors.push("sampling.table_autosave.quantities must not be empty".to_string());
@@ -639,6 +834,11 @@ impl ProblemIR {
                         "sampling.table_autosave.quantities must not contain empty ids".to_string(),
                     );
                 }
+            }
+        }
+        if let Some(stage_autosave) = &self.study.sampling().stage_autosave {
+            if let Err(stage_errors) = stage_autosave.validate_for_study(&self.study) {
+                errors.extend(stage_errors);
             }
         }
         match &self.study {
@@ -749,7 +949,7 @@ impl ProblemIR {
                 magnetostatic_bc,
                 ..
             } => {
-                validate_study_dynamics(dynamics, &mut errors);
+                validate_frequency_response_dynamics(dynamics, &mut errors);
                 if *count == 0 {
                     errors.push("eigenmodes.count must be > 0".to_string());
                 }
@@ -865,7 +1065,11 @@ impl ProblemIR {
                     if matches!(
                         output,
                         OutputIR::Field { .. }
+                            | OutputIR::FieldAuto { .. }
+                            | OutputIR::FieldResolvedAuto { .. }
                             | OutputIR::Scalar { .. }
+                            | OutputIR::ScalarAuto { .. }
+                            | OutputIR::ScalarResolvedAuto { .. }
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(
@@ -1009,7 +1213,11 @@ impl ProblemIR {
                     if matches!(
                         output,
                         OutputIR::Field { .. }
+                            | OutputIR::FieldAuto { .. }
+                            | OutputIR::FieldResolvedAuto { .. }
                             | OutputIR::Scalar { .. }
+                            | OutputIR::ScalarAuto { .. }
+                            | OutputIR::ScalarResolvedAuto { .. }
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(
@@ -1356,9 +1564,7 @@ impl ProblemIR {
                             name
                         ));
                     } else {
-                        let norm_sq = axis[0] * axis[0]
-                            + axis[1] * axis[1]
-                            + axis[2] * axis[2];
+                        let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
                         if norm_sq <= 1e-30 {
                             errors.push(format!(
                                 "cylinder geometry '{}' axis must be non-zero",
@@ -1546,15 +1752,17 @@ impl ProblemIR {
 
         if let Some(hints) = &self.backend_policy.discretization_hints {
             if let Some(fdm) = &hints.fdm {
-                let legacy_cell = (!fdm.cell.iter().all(|component| *component == 0.0))
-                    .then_some(fdm.cell);
+                let legacy_cell =
+                    (!fdm.cell.iter().all(|component| *component == 0.0)).then_some(fdm.cell);
                 let default_cell = fdm.default_cell.or(legacy_cell);
                 if let Some(cell) = default_cell {
                     if cell
                         .iter()
                         .any(|component| !component.is_finite() || *component <= 0.0)
                     {
-                        errors.push("fdm.default_cell components must be finite and positive".to_string());
+                        errors.push(
+                            "fdm.default_cell components must be finite and positive".to_string(),
+                        );
                     }
                 }
                 if let Some(per_magnet) = &fdm.per_magnet {
@@ -2252,6 +2460,22 @@ fn validate_material_scalar_values(problem: &ProblemIR, errors: &mut Vec<String>
             material.damping,
             errors,
         );
+        if let Some(value) = material.uniaxial_anisotropy {
+            validate_material_parameter_number(
+                &format!("materials[{index}].uniaxial_anisotropy"),
+                MaterialParameterNameIR::Ku1,
+                value,
+                errors,
+            );
+        }
+        if let Some(value) = material.uniaxial_anisotropy_k2 {
+            validate_material_parameter_number(
+                &format!("materials[{index}].uniaxial_anisotropy_k2"),
+                MaterialParameterNameIR::Ku2,
+                value,
+                errors,
+            );
+        }
     }
 }
 

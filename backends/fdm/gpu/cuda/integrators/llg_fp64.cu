@@ -62,6 +62,12 @@ __global__ void llg_rhs_fp64_kernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    if (stt.active_mask && stt.active_mask[idx] == 0) {
+        out_x[idx] = 0.0;
+        out_y[idx] = 0.0;
+        out_z[idx] = 0.0;
+        return;
+    }
 
     double m0 = mx[idx], m1 = my[idx], m2 = mz[idx];
     double h0 = hx[idx], h1 = hy[idx], h2 = hz[idx];
@@ -104,39 +110,39 @@ __global__ void llg_rhs_fp64_kernel(
         double dmx_u = 0.0, dmy_u = 0.0, dmz_u = 0.0;
         
         // x-derivative
-        if (ux > 0.0 && x > 0) {
-            int prev = idx - 1;
+        if (ux > 0.0 && (x > 0 || stt.periodic_x)) {
+            int prev = (x > 0) ? idx - 1 : idx + nx - 1;
             dmx_u += ux * (m0 - mx[prev]) / stt.dx;
             dmy_u += ux * (m1 - my[prev]) / stt.dx;
             dmz_u += ux * (m2 - mz[prev]) / stt.dx;
-        } else if (ux < 0.0 && x < nx - 1) {
-            int next = idx + 1;
+        } else if (ux < 0.0 && (x < nx - 1 || stt.periodic_x)) {
+            int next = (x < nx - 1) ? idx + 1 : idx - nx + 1;
             dmx_u += ux * (mx[next] - m0) / stt.dx;
             dmy_u += ux * (my[next] - m1) / stt.dx;
             dmz_u += ux * (mz[next] - m2) / stt.dx;
         }
 
         // y-derivative
-        if (uy > 0.0 && y > 0) {
-            int prev = idx - nx;
+        if (uy > 0.0 && (y > 0 || stt.periodic_y)) {
+            int prev = (y > 0) ? idx - nx : idx + nx * (ny - 1);
             dmx_u += uy * (m0 - mx[prev]) / stt.dy;
             dmy_u += uy * (m1 - my[prev]) / stt.dy;
             dmz_u += uy * (m2 - mz[prev]) / stt.dy;
-        } else if (uy < 0.0 && y < ny - 1) {
-            int next = idx + nx;
+        } else if (uy < 0.0 && (y < ny - 1 || stt.periodic_y)) {
+            int next = (y < ny - 1) ? idx + nx : idx - nx * (ny - 1);
             dmx_u += uy * (mx[next] - m0) / stt.dy;
             dmy_u += uy * (my[next] - m1) / stt.dy;
             dmz_u += uy * (mz[next] - m2) / stt.dy;
         }
 
         // z-derivative
-        if (uz > 0.0 && z > 0) {
-            int prev = idx - nx * ny;
+        if (uz > 0.0 && (z > 0 || stt.periodic_z)) {
+            int prev = (z > 0) ? idx - nx * ny : idx + nx * ny * (nz - 1);
             dmx_u += uz * (m0 - mx[prev]) / stt.dz;
             dmy_u += uz * (m1 - my[prev]) / stt.dz;
             dmz_u += uz * (m2 - mz[prev]) / stt.dz;
-        } else if (uz < 0.0 && z < nz - 1) {
-            int next = idx + nx * ny;
+        } else if (uz < 0.0 && (z < nz - 1 || stt.periodic_z)) {
+            int next = (z < nz - 1) ? idx + nx * ny : idx - nx * ny * (nz - 1);
             dmx_u += uz * (mx[next] - m0) / stt.dz;
             dmy_u += uz * (my[next] - m1) / stt.dz;
             dmz_u += uz * (mz[next] - m2) / stt.dz;
@@ -195,7 +201,8 @@ __global__ void llg_rhs_fp64_kernel(
     }
 
     // --- Spin-Orbit Torque (SOT) --- Manchon-Zhang DL + FL model
-    // dm/dt|_SOT = amp * [ -xi_DL * m×(m×σ̂) + xi_FL * (m×σ̂) ]
+    // `amp` is an effective field [A/m].  Convert it once through the
+    // Gilbert-form LLG inverse so the exported contribution is a RHS [1/s].
     if (sot.has_sot) {
         double m_dot_s = m0*sot.sx + m1*sot.sy + m2*sot.sz;
         // FL term: m × σ̂
@@ -206,9 +213,15 @@ __global__ void llg_rhs_fp64_kernel(
         double dl_x = m_dot_s*m0 - sot.sx;
         double dl_y = m_dot_s*m1 - sot.sy;
         double dl_z = m_dot_s*m2 - sot.sz;
-        rhs_x += sot.amp * (-sot.xi_dl*dl_x + sot.xi_fl*fl_x);
-        rhs_y += sot.amp * (-sot.xi_dl*dl_y + sot.xi_fl*fl_y);
-        rhs_z += sot.amp * (-sot.xi_dl*dl_z + sot.xi_fl*fl_z);
+        double raw_x = -sot.xi_dl*dl_x + sot.xi_fl*fl_x;
+        double raw_y = -sot.xi_dl*dl_y + sot.xi_fl*fl_y;
+        double raw_z = -sot.xi_dl*dl_z + sot.xi_fl*fl_z;
+        double m_cross_raw_x = m1 * raw_z - m2 * raw_y;
+        double m_cross_raw_y = m2 * raw_x - m0 * raw_z;
+        double m_cross_raw_z = m0 * raw_y - m1 * raw_x;
+        rhs_x += gamma_bar * sot.amp * (raw_x + alpha * m_cross_raw_x);
+        rhs_y += gamma_bar * sot.amp * (raw_y + alpha * m_cross_raw_y);
+        rhs_z += gamma_bar * sot.amp * (raw_z + alpha * m_cross_raw_z);
     }
 
     out_x[idx] = rhs_x;

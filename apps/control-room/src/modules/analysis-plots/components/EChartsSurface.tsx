@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { ECharts } from "echarts";
-
+import type { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { EChartsCanvasSurface } from "@/shared/analysis-charts/EChartsCanvasSurface";
+import { PointsTableDialog } from "@/shared/analysis-charts/PointsTableDialog";
+import {
+  ChartExportControls,
+  exportChartData,
+  exportChartPng,
+} from "@/shared/analysis-charts/ChartExportControls";
+import type { ChartRendererOwner, ChartRenderModel } from "@/shared/analysis-charts/chartRenderer";
 import {
   chartCursorPointFromEChartsClick,
   chartRangeFromDataZoomEvent,
@@ -12,198 +20,200 @@ import {
   type ChartValueRange,
 } from "../chartTableModel";
 import {
-  createChartFrameScheduler,
-  type ChartFrameScheduler,
-} from "./chartFrameScheduler";
-import {
   recordChartDispatchDataZoom,
   recordChartDispatchPointClick,
   recordChartInstanceCreated,
   recordChartInstanceDisposed,
+  recordChartModelBuilt,
   recordChartResize,
+  recordChartSetOption,
 } from "./chartDiagnostics";
-import {
-  cancelRangeCommit,
-  chartStatusOverlay,
-  type ChartRendererStatus,
-  scheduleChartOptionUpdate,
-  scheduleRangeCommit,
-} from "./chartSurfaceModel";
+import { cancelRangeCommit, scheduleRangeCommit } from "./chartRangeCommit";
 
 interface EChartsSurfaceProps {
+  bus?: EventBus<KernelEventMap>;
   dataStatus?: string;
+  fitRequest?: number;
   onPointSelect?: (point: ChartCursorPoint) => void;
   onRangeChange?: (range: ChartValueRange) => void;
+  /** Visible series — rendered in the chart */
   series: readonly ChartSeries[];
+  /** All series in this resource family — used for stable axis labels regardless of visibility */
+  allSeries?: readonly ChartSeries[];
   xAxisLabel?: string;
 }
 
 export function EChartsSurface({
+  bus,
   dataStatus,
+  fitRequest = 0,
   onPointSelect,
   onRangeChange,
   series,
+  allSeries,
   xAxisLabel,
 }: EChartsSurfaceProps) {
-  const elementRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<ECharts | null>(null);
-  const onPointSelectRef = useRef(onPointSelect);
-  const onRangeChangeRef = useRef(onRangeChange);
+  const [isTableOpen, setIsTableOpen] = useState(false);
+  const exportRef = useRef<ChartRendererOwner | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
-  const resizeSchedulerRef = useRef<ChartFrameScheduler | null>(null);
-  const setOptionSchedulerRef = useRef<ChartFrameScheduler | null>(null);
-  const model = useMemo(() => series, [series]);
-  const modelRef = useRef(model);
-  const xAxisLabelRef = useRef(xAxisLabel);
-  const [rendererStatus, setRendererStatus] = useReducer(
-    (_status: ChartRendererStatus, nextStatus: ChartRendererStatus) =>
-      nextStatus,
-    "loading",
+  const model = useMemo(
+    () => tableSeriesRenderModel(series, allSeries ?? series, xAxisLabel, dataStatus),
+    [dataStatus, series, allSeries, xAxisLabel],
   );
-  const updateRendererStatus = (status: ChartRendererStatus) => {
-    setRendererStatus(status);
-  };
-  const hasSamples = series.some((item) => item.points.length > 0);
-  const overlay = chartStatusOverlay({
-    dataStatus,
-    hasSamples,
-    rendererStatus,
-  });
 
+  useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), []);
   useEffect(() => {
-    modelRef.current = model;
-  }, [model]);
-
+    if (fitRequest > 0) exportRef.current?.fitView();
+  }, [fitRequest]);
   useEffect(() => {
-    onPointSelectRef.current = onPointSelect;
-  }, [onPointSelect]);
-
-  useEffect(() => {
-    onRangeChangeRef.current = onRangeChange;
-  }, [onRangeChange]);
-
-  useEffect(() => {
-    xAxisLabelRef.current = xAxisLabel;
-  }, [xAxisLabel]);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    if (!element) return;
-    let disposed = false;
-    let cleanupChartEvents: (() => void) | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-    const resizeScheduler = createChartFrameScheduler();
-    const setOptionScheduler = createChartFrameScheduler();
-    resizeSchedulerRef.current = resizeScheduler;
-    setOptionSchedulerRef.current = setOptionScheduler;
-
-    void import("echarts")
-      .then((echarts) => {
-        if (disposed) return;
-        let chart: ECharts;
-        try {
-          chart = echarts.init(element, undefined, { renderer: "canvas" });
-        } catch {
-          if (!disposed) updateRendererStatus("error");
-          return;
-        }
-        chartRef.current = chart;
-        recordChartInstanceCreated();
-        if (onRangeChangeRef.current) {
-          recordChartDispatchDataZoom(chart);
-        }
-        recordChartDispatchPointClick((seriesIndex, dataIndex) => {
-          const point = chartCursorPointFromEChartsClick(
-            { dataIndex, seriesIndex },
-            modelRef.current,
-          );
-          if (!point) return;
-          onPointSelectRef.current?.(point);
-        });
-        updateRendererStatus("ready");
-        if (modelRef.current.length > 0) {
-          scheduleChartOptionUpdate({
-            chart,
-            element,
-            scheduler: setOptionScheduler,
-            series: modelRef.current,
-            xAxisLabel: xAxisLabelRef.current,
-          });
-        }
-        const handleDataZoom = (event: unknown) => {
-          const range = chartRangeFromDataZoomEvent(event);
-          if (!range) return;
-          scheduleRangeCommit(rangeCommitTimerRef, () => {
-            onRangeChangeRef.current?.(range);
-          });
-        };
-        const selectChartPoint = (event: unknown) => {
-          const point = chartCursorPointFromEChartsClick(
-            event,
-            modelRef.current,
-          );
-          if (!point) return;
-          onPointSelectRef.current?.(point);
-        };
-        chart.on("dataZoom", handleDataZoom);
-        chart.on("click", selectChartPoint);
-        cleanupChartEvents = () => {
-          chart.off("dataZoom", handleDataZoom);
-          chart.off("click", selectChartPoint);
-        };
-        resizeObserver = new ResizeObserver(() => {
-          resizeScheduler.schedule(() => {
-            recordChartResize();
-            chart.resize();
-          });
-        });
-        resizeObserver.observe(element);
-      })
-      .catch(() => {
-        if (!disposed) updateRendererStatus("error");
-      });
-
-    return () => {
-      disposed = true;
-      resizeObserver?.disconnect();
-      resizeScheduler.cancel();
-      setOptionScheduler.cancel();
-      cancelRangeCommit(rangeCommitTimerRef);
-      resizeSchedulerRef.current = null;
-      setOptionSchedulerRef.current = null;
-      cleanupChartEvents?.();
-      const chart = chartRef.current;
-      if (chart) {
-        chart.off("dataZoom");
-        chart.off("click");
-        chart.dispose();
-        recordChartInstanceDisposed();
+    if (!bus) return;
+    const chartId = series[0]?.source.tableId ?? "default";
+    return bus.on("analysis-plots:export-requested", (request) => {
+      if (request.chartId !== chartId) return;
+      if (request.format === "png") {
+        exportChartPng(model, exportRef);
+      } else {
+        exportChartData(model, request.format);
       }
-      chartRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    if (chartRef.current && element && model.length > 0) {
-      scheduleChartOptionUpdate({
-        chart: chartRef.current,
-        element,
-        scheduler: setOptionSchedulerRef.current,
-        series: model,
-        xAxisLabel,
-      });
-    }
-  }, [model, xAxisLabel]);
+    });
+  }, [bus, model, series]);
 
   return (
     <div className="fm-analysis-plots__chart-frame">
-      <div ref={elementRef} className="fm-analysis-plots__echarts" />
-      {overlay ? (
-        <div className="fm-analysis-plots__chart-empty" role={overlay.role}>
-          {overlay.label}
-        </div>
-      ) : null}
+      <EChartsCanvasSurface
+        diagnostics={{
+          instanceCreated: (chart) => {
+            recordChartInstanceCreated();
+            if (onRangeChange) recordChartDispatchDataZoom(chart as never);
+          },
+          instanceDisposed: recordChartInstanceDisposed,
+          modelUpdated: (nextModel) => {
+            recordChartModelBuilt(nextModel);
+            recordChartDispatchPointClick((seriesIndex, dataIndex) => {
+              const point = chartCursorPointFromEChartsClick(
+                { dataIndex, seriesIndex },
+                series,
+              );
+              if (point) onPointSelect?.(point);
+            });
+          },
+          resized: recordChartResize,
+          setOption: recordChartSetOption,
+        }}
+        exportRef={exportRef}
+        model={model}
+        onClick={(event) => {
+          const point = chartCursorPointFromEChartsClick(event, series);
+          if (point) onPointSelect?.(point);
+        }}
+        onDataZoom={(event) => {
+          const range = chartRangeFromDataZoomEvent(event);
+          if (!range) return;
+          scheduleRangeCommit(rangeCommitTimerRef, () => onRangeChange?.(range));
+        }}
+      />
+      <ChartExportControls
+        model={model}
+        rendererRef={exportRef}
+        onOpenPointsTable={() => setIsTableOpen(true)}
+      />
+      <PointsTableDialog
+        model={model}
+        open={isTableOpen}
+        onClose={() => setIsTableOpen(false)}
+      />
     </div>
   );
+}
+
+export function tableSeriesRenderModel(
+  series: readonly ChartSeries[],
+  allSeries: readonly ChartSeries[],
+  xAxisLabel?: string,
+  dataStatus?: string,
+): ChartRenderModel {
+  // Use allSeries for unit grouping so axis slots are stable when series are hidden
+  const units = [...new Set(allSeries.map((item) => item.unit))].slice(0, 2);
+  const allSeriesHaveSamples = allSeries.some((item) => item.points.length > 0);
+  // X-axis unit comes from the series metadata (xUnit field)
+  const xUnit = series.find((s) => s.xUnit)?.xUnit ?? allSeries.find((s) => s.xUnit)?.xUnit ?? "";
+  const status =
+    dataStatus === "error"
+      ? "error"
+      : dataStatus === "loading"
+        ? "loading"
+        : dataStatus === "stale"
+          ? "stale"
+          : series.some((item) => item.points.length > 0)
+            ? "ready"
+            : "empty";
+  return {
+    ariaLabel: "Analysis chart",
+    key: JSON.stringify([
+      xAxisLabel ?? "x",
+      dataStatus ?? "ready",
+      ...series.map((item) => [
+        item.id,
+        item.points.length,
+        item.points.at(-1)?.rowIndex,
+      ]),
+    ]),
+    provenance: {
+      dataRevision: series[0]?.dataRevision ?? null,
+      decimation: "minmax_lttb",
+      descriptorId: `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
+      query: JSON.stringify({ xAxisLabel, series: series.map((item) => item.id) }),
+      resourceKey: series[0]?.source.resourceKey ?? "data.table:default",
+    },
+    series: series.map((item) => ({
+      id: item.id,
+      kind: "line",
+      label: item.label || item.quantity,
+      points: item.points,
+      unit: item.unit,
+      yAxis: Math.max(0, units.indexOf(item.unit)),
+    })),
+    status,
+    statusMessage:
+      status === "error"
+        ? "Table samples unavailable"
+        : status === "loading" || status === "stale"
+          ? "Loading table samples"
+          : status === "empty"
+            ? allSeriesHaveSamples
+              ? "All selected series are hidden"
+              : "No table samples"
+            : undefined,
+    // Keep semantic label and canonical unit separate. The renderer applies the
+    // same auto-scale to ticks, tooltip and axis name (e.g. t [ns]).
+    xAxis: { label: xAxisLabel ?? "x", unit: xUnit },
+    yAxes: (units.length > 0 ? units : [""]).map((unit) => ({
+      // Derive axis label from ALL series in family (not just visible)
+      // so the axis name stays stable when series are hidden/shown.
+      label: quantityLabelForUnit(unit, allSeries),
+      unit,
+    })),
+  };
+}
+
+/**
+ * Derive a human-readable dimension label for a Y axis from the unit and the series
+ * it contains. Falls back to the unit itself if no better label is available.
+ */
+function quantityLabelForUnit(unit: string, series: readonly ChartSeries[]): string {
+  // Find the first series with this unit and use its label as the axis name
+  const match = series.find((s) => s.unit === unit);
+  if (!match) return "Value";
+  // For single-quantity axes (one series with this unit), use the label directly
+  const sameUnit = series.filter((s) => s.unit === unit);
+  if (sameUnit.length === 1) return match.label || match.quantity;
+  const labels = sameUnit.map((entry) => entry.quantity.toLowerCase());
+  if (labels.every((label) => ["mx", "my", "mz", "m"].includes(label))) {
+    return "Magnetization";
+  }
+  if (labels.every((label) => label.includes("torque"))) return "Torque";
+  if (labels.every((label) => label.includes("residual"))) return "Residual";
+  // For mixed quantities, retain a visible semantic caption instead of
+  // forcing the user to infer meaning from a unit alone.
+  return "Value";
 }

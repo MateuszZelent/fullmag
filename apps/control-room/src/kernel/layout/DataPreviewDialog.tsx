@@ -1,17 +1,12 @@
 "use client";
 
-import { GripHorizontal, RefreshCw, X } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { RefreshCw } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { useDataPreviewFieldVector } from "@/kernel/resources/dataPreviewResources";
 import { useSolverStatusResource } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
+import { DraggablePanel } from "@/shared/ui/DraggablePanel";
 
 import {
   buildDataPreviewRows,
@@ -26,12 +21,6 @@ interface DataPreviewDialogProps {
   open: boolean;
 }
 
-interface DragState {
-  offsetX: number;
-  offsetY: number;
-  pointerId: number;
-}
-
 const COMPONENT_OPTIONS = ["full", "magnitude", "x", "y", "z"];
 
 export function DataPreviewDialog({
@@ -41,9 +30,6 @@ export function DataPreviewDialog({
   const [quantityId, setQuantityId] = useState("m");
   const [component, setComponent] = useState("full");
   const [sampleCountInput, setSampleCountInput] = useState("17");
-  const [position, setPosition] = useState({ x: 96, y: 96 });
-  const dragRef = useRef<DragState | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
   const sampleCount = normalizeDataPreviewSampleCount(sampleCountInput);
   const resolvedQuantityId = quantityId.trim() || "m";
   const solverStatus = useSolverStatusResource({ enabled: open });
@@ -70,66 +56,16 @@ export function DataPreviewDialog({
     [solverStatus.data],
   );
 
-  useEffect(() => {
-    if (!open) return;
-
-    const onPointerMove = (event: PointerEvent) => {
-      const drag = dragRef.current;
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const panel = panelRef.current;
-      const width = panel?.offsetWidth ?? 420;
-      const height = panel?.offsetHeight ?? 360;
-      setPosition({
-        x: clamp(event.clientX - drag.offsetX, 8, window.innerWidth - width - 8),
-        y: clamp(event.clientY - drag.offsetY, 8, window.innerHeight - height - 8),
-      });
-    };
-    const onPointerUp = (event: PointerEvent) => {
-      if (dragRef.current?.pointerId === event.pointerId) {
-        dragRef.current = null;
-      }
-    };
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, [open]);
-
-  const beginDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const panel = panelRef.current;
-    if (!panel || event.button !== 0) return;
-    const bounds = panel.getBoundingClientRect();
-    dragRef.current = {
-      offsetX: event.clientX - bounds.left,
-      offsetY: event.clientY - bounds.top,
-      pointerId: event.pointerId,
-    };
-  };
-
   if (!open) return null;
 
-  // This panel is intentionally non-modal so it can stay open while the
-  // workspace receives clicks during live solver diagnostics.
   return (
-    <section
-      ref={panelRef}
-      aria-label="Data Preview"
-      aria-modal="false"
+    <DraggablePanel
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Data Preview"
+      subtitle={resource.status}
       className="fm-data-preview"
-      role="dialog"
-      style={{ left: position.x, top: position.y }}
-    >
-      <div className="fm-data-preview__handle" onPointerDown={beginDrag}>
-        <GripHorizontal size={15} aria-hidden="true" />
-        <div className="fm-data-preview__heading">
-          <h2>Data Preview</h2>
-          <span>{resource.status}</span>
-        </div>
+      headerActions={
         <Button
           aria-label="Refresh data preview"
           className="fm-data-preview__icon-btn"
@@ -138,24 +74,11 @@ export function DataPreviewDialog({
           type="button"
           variant="ghost"
           onClick={resource.refetch}
-          onPointerDown={(event) => event.stopPropagation()}
         >
           <RefreshCw size={14} aria-hidden="true" />
         </Button>
-        <Button
-          aria-label="Close data preview"
-          className="fm-data-preview__icon-btn"
-          size="icon"
-          title="Close"
-          type="button"
-          variant="ghost"
-          onClick={() => onOpenChange(false)}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <X size={14} aria-hidden="true" />
-        </Button>
-      </div>
-
+      }
+    >
       <div className="fm-data-preview__controls">
         <label>
           <span>Quantity</span>
@@ -258,10 +181,6 @@ export function DataPreviewDialog({
       <div className="fm-data-preview__resource" title={resourceKey}>
         {resourceKey}
       </div>
-    </section>
+    </DraggablePanel>
   );
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
 }

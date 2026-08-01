@@ -6,7 +6,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisBranchDetailInspector({
@@ -19,8 +19,7 @@ export function HysteresisBranchDetailInspector({
 >) {
   if (activeBranch?.kind === "minor-loops") {
     return (
-      <InspectorSection
-        value="hysteresis-branch-detail"
+      <InspectorGroup
         title="Minor Loops"
         badge={`${minorLoops.length} loop(s)`}
       >
@@ -35,7 +34,7 @@ export function HysteresisBranchDetailInspector({
             No minor-loop artifact is available for this hysteresis stage.
           </div>
         )}
-      </InspectorSection>
+      </InspectorGroup>
     );
   }
 
@@ -45,8 +44,7 @@ export function HysteresisBranchDetailInspector({
   );
 
   return (
-    <InspectorSection
-      value="hysteresis-branch-detail"
+    <InspectorGroup
       title={activeBranch?.kind === "branch" ? branchTitle(activeBranch) : "Branch"}
       badge={selectedBranch ? `${selectedBranch.point_count} point(s)` : "not available"}
     >
@@ -57,7 +55,7 @@ export function HysteresisBranchDetailInspector({
           Branch metadata is not available yet for the selected branch.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

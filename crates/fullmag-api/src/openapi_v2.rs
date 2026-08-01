@@ -37,6 +37,13 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::fields::get_field_slice_matrix_json,
         crate::router_v2::handlers::data::fields::get_field_slice_render_png,
         crate::router_v2::handlers::data::fields::get_field_slice_arrows,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_meta,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_scalar,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_vectors,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_empty_mask,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_mesh_overlay,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_probe,
+        crate::router_v2::handlers::data::planar_fields::get_planar_field_render_png,
         crate::router_v2::handlers::data::scalars::get_scalars,
         crate::router_v2::handlers::data::tables::list_tables,
         crate::router_v2::handlers::data::tables::get_table,
@@ -141,11 +148,18 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::model::authoring::patch_authoring_object_interaction,
         crate::router_v2::handlers::model::authoring::get_authoring_script_source,
         crate::router_v2::handlers::model::authoring::sync_authoring_script,
+        crate::router_v2::handlers::model::planar_monitors::list_planar_monitors,
+        crate::router_v2::handlers::model::planar_monitors::create_planar_monitor,
+        crate::router_v2::handlers::model::planar_monitors::get_planar_monitor,
+        crate::router_v2::handlers::model::planar_monitors::patch_planar_monitor,
+        crate::router_v2::handlers::model::planar_monitors::delete_planar_monitor,
+        crate::router_v2::handlers::model::planar_monitors::duplicate_planar_monitor,
         crate::router_v2::handlers::simulation::commands::submit_command,
         crate::router_v2::handlers::simulation::runtime::get_command_status,
         crate::router_v2::handlers::simulation::runtime::get_command_detail,
         crate::router_v2::handlers::persistence::assets::import_asset,
         crate::router_v2::handlers::simulation::runtime::get_current_run,
+        crate::router_v2::handlers::simulation::runtime::get_simulation_preparation,
         crate::router_v2::handlers::simulation::runtime::get_run_by_id,
         crate::router_v2::handlers::simulation::runtime::get_stage_execution,
         crate::router_v2::handlers::simulation::runtime::get_hysteresis_plan,
@@ -244,6 +258,7 @@ use utoipa::OpenApi;
         crate::schemas::quantities::QuantityCatalogEntry,
         crate::schemas::fields::FieldCatalog,
         crate::schemas::fields::FieldDescriptor,
+        crate::schemas::fields::FieldMaterializationState,
         crate::schemas::fields::FieldMeta,
         crate::schemas::fields::FieldStats,
         crate::schemas::fields::FieldVectorQuery,
@@ -254,6 +269,27 @@ use utoipa::OpenApi;
         crate::schemas::fields::FieldSliceGrid,
         crate::schemas::fields::FieldSliceBounds,
         crate::schemas::fields::FieldSliceBinaryDescriptor,
+        crate::schemas::planar_monitors::PlanarMonitorSchema,
+        crate::schemas::planar_monitors::PlanarMonitorTargetSchema,
+        crate::schemas::planar_monitors::PlanarFrameSchema,
+        crate::schemas::planar_monitors::PlanarFramePresetSchema,
+        crate::schemas::planar_monitors::PlanarExtentSchema,
+        crate::schemas::planar_monitors::PlanarOperatorSchema,
+        crate::schemas::planar_monitors::PlanarReductionSchema,
+        crate::schemas::planar_monitors::PlanarEmptyPolicySchema,
+        crate::schemas::planar_monitors::PlanarSurfaceBoundarySelectorSchema,
+        crate::schemas::planar_monitors::PlanarSurfaceVisibilityPolicySchema,
+        crate::schemas::planar_monitors::PlanarMonitorCollectionResource,
+        crate::schemas::planar_monitors::PlanarMonitorResource,
+        crate::schemas::planar_monitors::PlanarMonitorCreateRequest,
+        crate::schemas::planar_monitors::PlanarMonitorPatchRequest,
+        crate::schemas::planar_monitors::PlanarMonitorDeleteRequest,
+        crate::schemas::planar_monitors::PlanarMonitorDuplicateRequest,
+        crate::schemas::planar_fields::PlanarFieldFrameResource,
+        crate::schemas::planar_fields::PlanarFieldOccupancyResource,
+        crate::schemas::planar_fields::PlanarFieldLinksResource,
+        crate::schemas::planar_fields::PlanarFieldMetaResource,
+        crate::schemas::planar_fields::PlanarFieldProbeResource,
         crate::schemas::logs::EngineLogResource,
         crate::schemas::scalars::ScalarWindow,
         crate::schemas::tables::TableColumnMeta,
@@ -325,6 +361,17 @@ use utoipa::OpenApi;
         crate::schemas::workspace::WorkspaceLayoutReplaceRequest,
         crate::schemas::mesh::MeshSummaryResource,
         crate::schemas::mesh::MeshCapabilitiesResource,
+        crate::schemas::mesh::MeshCapabilityMatrixResource,
+        crate::schemas::mesh::MeshFeatureCapabilityResource,
+        crate::schemas::mesh::MeshLayeredPolicyResource,
+        crate::schemas::mesh::MeshMixedLayerTopologyCertificateSummaryResource,
+        crate::schemas::mesh::MeshMixedCertificateFamilyQualityGateResource,
+        crate::schemas::mesh::MeshMixedCertificateQualityEvidenceResource,
+        crate::schemas::mesh::MeshMixedCertificateQualityEvidenceStatus,
+        crate::schemas::mesh::MeshMixedP1ExecutionResource,
+        crate::schemas::mesh::MeshMixedLayerTopologyRejectionResource,
+        crate::schemas::mesh::MeshMixedTopologyProvenanceResource,
+        crate::schemas::mesh::MeshSharedDomainBuildReportResource,
         crate::schemas::mesh::MeshSemanticsResource,
         crate::schemas::mesh::MeshUniverseConfigResource,
         crate::schemas::mesh::MeshUniverseConfigReplaceRequest,
@@ -378,6 +425,14 @@ use utoipa::OpenApi;
         crate::schemas::authoring::AuthoringTransactionResponse,
         crate::schemas::authoring::StudyRuntimeResource,
         crate::schemas::authoring::StudyRuntimePatchRequest,
+        crate::schemas::authoring::SamplingPeriodPolicyResource,
+        crate::schemas::authoring::AutomaticOutputSamplingResource,
+        crate::schemas::authoring::AutomaticTableAutosaveResource,
+        crate::schemas::authoring::StageAutosaveLayoutResource,
+        crate::schemas::authoring::StageAutosaveFormatResource,
+        crate::schemas::authoring::StageTableAutosaveResource,
+        crate::schemas::authoring::FieldAutosaveResource,
+        crate::schemas::authoring::StageAutosaveResource,
         crate::schemas::authoring::NullableU32PatchValue,
         crate::schemas::authoring::NullableF64PatchValue,
         crate::schemas::authoring::NullableStringPatchValue,
@@ -433,6 +488,16 @@ use utoipa::OpenApi;
         crate::schemas::authoring::UniverseFitRequest,
         crate::schemas::runtime::CurrentRunResource,
         crate::schemas::runtime::ResolvedFallbackResource,
+        crate::schemas::preparation::SimulationPreparationResource,
+        crate::schemas::preparation::PreparationStatus,
+        crate::schemas::preparation::PreparationStageId,
+        crate::schemas::preparation::PreparationStageStatus,
+        crate::schemas::preparation::PreparationLogLevel,
+        crate::schemas::preparation::PreparationExecutionSummary,
+        crate::schemas::preparation::PreparationClockAdjustment,
+        crate::schemas::preparation::PreparationProgressStage,
+        crate::schemas::preparation::PreparationLogEntryResource,
+        crate::schemas::preparation::PreparationFailureResource,
         crate::schemas::runtime::StageExecutionResource,
         crate::schemas::runtime::StageExecutionRecordResource,
         crate::schemas::hysteresis::HysteresisStagePlanSchema,
@@ -462,6 +527,9 @@ use utoipa::OpenApi;
         crate::schemas::common::HostEngineEntry,
         crate::schemas::common::RuntimeCapabilityMatrix,
         crate::types::ArtifactEntry,
+        crate::types::ArtifactResource,
+        crate::types::StageAutosaveArtifactMetadata,
+        crate::types::StageAutosaveArtifactStageMetadata,
         crate::types::RegionOwnedArtifactProvenance,
         crate::field_slice::SlicePlane,
         crate::types::ImportSessionAssetRequest,
@@ -565,6 +633,9 @@ pub fn openapi_json() -> Value {
     let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("OpenAPI v2 should serialize");
     add_platform_document_paths(&mut doc);
     add_session_collection_paths(&mut doc);
+    doc["x-fullmag-study-primitive-stage-kinds"] =
+        serde_json::to_value(fullmag_authoring::StudyPrimitiveStageKind::ALL)
+            .expect("study primitive stage catalog should serialize");
     normalize_operation_ids(&mut doc);
     doc
 }
@@ -686,6 +757,65 @@ fn sanitize_operation_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::openapi_json;
+
+    #[test]
+    fn openapi_declares_complete_study_primitive_stage_catalog() {
+        let document = openapi_json();
+
+        assert_eq!(
+            document["x-fullmag-study-primitive-stage-kinds"],
+            serde_json::json!([
+                "relax",
+                "run",
+                "eigenmodes",
+                "frequency_response",
+                "hysteresis",
+                "change_device",
+                "add_field_drive",
+                "remove_field_drive",
+                "table_autosave",
+                "autosave",
+                "fft_response",
+                "set_field",
+                "set_current",
+                "save_state",
+                "load_state",
+                "export"
+            ])
+        );
+    }
+
+    #[test]
+    fn openapi_declares_automatic_sampling_authoring_fragments() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+
+        assert!(schemas["SamplingPeriodPolicyResource"]
+            .to_string()
+            .contains("auto_sinc_cutoff"));
+        assert!(schemas["AutomaticOutputSamplingResource"]
+            .to_string()
+            .contains("field_auto"));
+        assert!(schemas["AutomaticOutputSamplingResource"]
+            .to_string()
+            .contains("scalar_auto"));
+    }
+
+    #[test]
+    fn openapi_declares_stage_autosave_authoring_contract() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let stage = schemas["StageAutosaveResource"].to_string();
+        assert!(stage.contains("target"));
+        assert!(stage.contains("layout"));
+        assert!(stage.contains("format"));
+        assert!(schemas["StageAutosaveFormatResource"]
+            .to_string()
+            .contains("hdf5"));
+        assert!(schemas["StageAutosaveLayoutResource"]
+            .to_string()
+            .contains("continuous"));
+    }
 
     #[test]
     fn openapi_topological_charge_v2_is_closed_and_versioned() {

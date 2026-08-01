@@ -33,12 +33,19 @@ from __future__ import annotations
 
 import copy
 import math
+import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence, cast
 
 from fullmag._progress import emit_progress
-from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
+from fullmag._validation import (
+    SamplingPeriod,
+    as_vector3,
+    require_non_empty,
+    require_non_negative,
+    require_positive,
+)
 from fullmag.model.antenna import (
     AntennaFieldSource,
     Antenna,
@@ -48,7 +55,15 @@ from fullmag.model.antenna import (
 )
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, TimeDependence, Zeeman
+from fullmag.model.energy import (
+    BulkDMI,
+    Demag,
+    Exchange,
+    InterfacialDMI,
+    ThermalNoise,
+    TimeDependence,
+    Zeeman,
+)
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
     INTEGRATOR_ALIASES,
@@ -59,7 +74,12 @@ from fullmag.model.dynamics import (
     LLG,
 )
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
+from fullmag.model.planar_monitor import (
+    PlanarMonitor,
+    StudyMonitorRegistry,
+)
 from fullmag.model.study import (
+    DEFAULT_RELAXATION_TORQUE_TOLERANCE_T,
     AdaptiveRefinement,
     Eigenmodes,
     FieldOrientation,
@@ -77,6 +97,7 @@ from fullmag.model.study import (
     SaturationProbe,
     SettlePipeline,
     SettleTree,
+    StageAutosave,
     TableAutosave,
     TimeEvolution,
     DEFAULT_RELAXATION_MAX_STEPS,
@@ -404,6 +425,7 @@ class MagnetHandle:
         self.Dbulk: float | None = None
         self.Ku1: float | None = None
         self.anisU: tuple[float, float, float] | None = None
+        self.Kc1: float | None = None
         self._m_value: Any = None
         self._m_proxy = MagnetizationHandle(self)
         self._field_states: dict[str, object] = {}
@@ -468,6 +490,7 @@ class MagnetHandle:
             alpha=self.alpha,
             Ku1=self.Ku1,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
+            Kc1=self.Kc1,
             Dind=self.Dind,
             Dbulk=self.Dbulk,
         )
@@ -934,6 +957,11 @@ class _MeshSpecState:
     through_thickness_element_ratio: float | None = None
     through_thickness_symmetric: bool = False
     sweep_face_meshing: str | None = None
+    topology: str | None = None
+    sweep_direction: str | None = None
+    element_family: str | None = None
+    transition_policy: str | None = None
+    exact_layer_count: bool | None = None
     periodic_pair_ids: list[str] = field(default_factory=list)
 
     def is_configured(self) -> bool:
@@ -984,8 +1012,21 @@ class _MeshSpecState:
             or self.through_thickness_element_ratio is not None
             or self.through_thickness_symmetric
             or self.sweep_face_meshing is not None
+            or self.topology is not None
+            or self.sweep_direction is not None
+            or self.element_family is not None
+            or self.transition_policy is not None
+            or self.exact_layer_count is not None
             or bool(self.periodic_pair_ids)
         )
+
+
+def _element_layer_count(value: object, *, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an integer element-layer count")
+    if value < 1:
+        raise ValueError(f"{context} must be >= 1")
+    return value
 
 
 def _unwrap_translated_box(geometry: object) -> Box | None:
@@ -1069,6 +1110,147 @@ def _normalize_transition_distance_value(
         qualifier = "non-negative" if allow_zero else "positive"
         raise ValueError(f"{context} must be {qualifier}")
     return resolved
+
+
+def _clear_layered_mesh_intent(spec: _MeshSpecState) -> None:
+    spec.mesh_strategy = None
+    spec.through_thickness_elements = None
+    spec.through_thickness_distribution = None
+    spec.through_thickness_element_ratio = None
+    spec.through_thickness_symmetric = False
+    spec.sweep_face_meshing = None
+    spec.topology = None
+    spec.sweep_direction = None
+    spec.element_family = None
+    spec.transition_policy = None
+    spec.exact_layer_count = None
+
+
+def _validate_layered_mesh_spec(
+    spec: _MeshSpecState,
+    *,
+    context: str,
+    require_complete: bool,
+) -> None:
+    if spec.topology not in {None, "prismatic", "tetrahedral"}:
+        raise ValueError(f"{context}.topology must be 'prismatic' or 'tetrahedral'")
+    if spec.sweep_direction not in {None, "auto", "x", "y", "z"}:
+        raise ValueError(f"{context}.sweep_direction must be 'auto', 'x', 'y', or 'z'")
+    if spec.element_family not in {None, "prism", "hex"}:
+        raise ValueError(f"{context}.element_family must be 'prism' or 'hex'")
+    if spec.transition_policy not in {None, "pyramid_to_tetrahedra", "reject"}:
+        raise ValueError(
+            f"{context}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+        )
+    if spec.through_thickness_distribution not in {
+        None,
+        "fixed",
+        "linear",
+        "exponential",
+    }:
+        raise ValueError(
+            f"{context}.through_thickness_distribution must be "
+            "'fixed', 'linear', or 'exponential'"
+        )
+    if spec.exact_layer_count is not None and not isinstance(
+        spec.exact_layer_count, bool
+    ):
+        raise TypeError(f"{context}.exact_layer_count must be bool")
+    if spec.through_thickness_element_ratio is not None:
+        ratio = spec.through_thickness_element_ratio
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+            raise TypeError(
+                f"{context}.through_thickness_element_ratio must be a number"
+            )
+        if not math.isfinite(float(ratio)) or float(ratio) <= 0.0:
+            raise ValueError(
+                f"{context}.through_thickness_element_ratio must be finite and positive"
+            )
+    if not isinstance(spec.through_thickness_symmetric, bool):
+        raise TypeError(f"{context}.through_thickness_symmetric must be bool")
+    if spec.through_thickness_elements is not None:
+        _element_layer_count(
+            spec.through_thickness_elements,
+            context=f"{context}.through_thickness_elements",
+        )
+
+    if (
+        spec.exact_layer_count is True
+        and spec.through_thickness_distribution not in {None, "fixed"}
+    ):
+        raise ValueError(f"{context} exact layer count requires fixed distribution")
+    if (
+        spec.exact_layer_count is True
+        and spec.through_thickness_element_ratio is not None
+        and not math.isclose(float(spec.through_thickness_element_ratio), 1.0)
+    ):
+        raise ValueError(f"{context} exact layer count rejects graded distribution")
+    if spec.exact_layer_count is True and spec.through_thickness_symmetric:
+        raise ValueError(f"{context} exact layer count rejects symmetric distribution")
+
+    if spec.topology == "tetrahedral" and any(
+        value is not None
+        for value in (
+            spec.sweep_direction,
+            spec.element_family,
+            spec.transition_policy,
+            spec.exact_layer_count,
+        )
+    ):
+        raise ValueError(f"{context} tetrahedral topology contradicts swept element intent")
+
+    if spec.element_family == "prism" or spec.topology == "prismatic":
+        if spec.order not in {None, 1}:
+            raise ValueError(f"{context} prismatic topology supports order=1 only")
+        if spec.element_family not in {None, "prism"}:
+            raise ValueError(f"{context} prismatic topology requires element_family='prism'")
+        if spec.sweep_face_meshing not in {None, "triangular"}:
+            raise ValueError(f"{context} prism elements require triangular source faces")
+        if spec.mesh_strategy not in {None, "swept_prism"}:
+            raise ValueError(f"{context} prism elements require mesh_strategy='swept_prism'")
+        if spec.exact_layer_count is False and _state._execution_mode != "extended":
+            raise ValueError(f"{context} strict prismatic mesh requires exact_layer_count=True")
+    if spec.topology == "prismatic" and spec.transition_policy not in {
+        None,
+        "pyramid_to_tetrahedra",
+    }:
+        raise ValueError(
+            f"{context} prismatic thin-film topology requires pyramid_to_tetrahedra transition"
+        )
+    if spec.element_family == "hex":
+        if spec.mesh_strategy not in {None, "swept_hex"}:
+            raise ValueError(f"{context} hex elements require mesh_strategy='swept_hex'")
+        if spec.sweep_face_meshing not in {None, "quadrilateral"}:
+            raise ValueError(f"{context} hex elements require quadrilateral source faces")
+        if spec.transition_policy == "pyramid_to_tetrahedra":
+            raise ValueError(f"{context} hex elements contradict pyramid_to_tetrahedra transition")
+
+    layered_strategy = spec.mesh_strategy in {"swept_prism", "swept_hex"}
+    typed_layered_intent = spec.topology == "prismatic" or any(
+        value is not None
+        for value in (
+            spec.sweep_direction,
+            spec.element_family,
+            spec.transition_policy,
+            spec.exact_layer_count,
+            spec.through_thickness_element_ratio,
+        )
+    ) or spec.through_thickness_symmetric
+    if require_complete and (layered_strategy or typed_layered_intent):
+        required = {
+            "through_thickness_elements": spec.through_thickness_elements,
+            "through_thickness_distribution": spec.through_thickness_distribution,
+            "sweep_face_meshing": spec.sweep_face_meshing,
+            "sweep_direction": spec.sweep_direction,
+            "element_family": spec.element_family,
+            "transition_policy": spec.transition_policy,
+            "exact_layer_count": spec.exact_layer_count,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(
+                f"{context} layered mesh intent is incomplete: {', '.join(missing)}"
+            )
 
 
 def _normalize_int_tags(value: Sequence[int] | None, *, context: str) -> list[int] | None:
@@ -1156,11 +1338,22 @@ class GeometryMeshHandle:
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
+        topology: Literal["tetrahedral", "prismatic"] | None = None,
         through_thickness_elements: int | None = None,
-        through_thickness_distribution: str | None = None,
+        through_thickness_distribution: Literal[
+            "fixed", "linear", "exponential"
+        ]
+        | None = None,
         through_thickness_element_ratio: float | None = None,
         through_thickness_symmetric: bool | None = None,
-        sweep_face_meshing: str | None = None,
+        sweep_face_meshing: Literal["triangular", "quadrilateral"] | None = None,
+        sweep_direction: Literal["auto", "x", "y", "z"] | None = None,
+        element_family: Literal["prism", "hex"] | None = None,
+        transition_policy: Literal[
+            "pyramid_to_tetrahedra", "reject"
+        ]
+        | None = None,
+        exact_layer_count: bool | None = None,
     ) -> "GeometryMeshHandle":
         return self.configure(
             hmax=hmax, hmin=hmin,
@@ -1200,11 +1393,16 @@ class GeometryMeshHandle:
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
             mesh_strategy=mesh_strategy,
+            topology=topology,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
             sweep_face_meshing=sweep_face_meshing,
+            sweep_direction=sweep_direction,
+            element_family=element_family,
+            transition_policy=transition_policy,
+            exact_layer_count=exact_layer_count,
         )
 
     def configure(
@@ -1253,11 +1451,22 @@ class GeometryMeshHandle:
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
+        topology: Literal["tetrahedral", "prismatic"] | None = None,
         through_thickness_elements: int | None = None,
-        through_thickness_distribution: str | None = None,
+        through_thickness_distribution: Literal[
+            "fixed", "linear", "exponential"
+        ]
+        | None = None,
         through_thickness_element_ratio: float | None = None,
         through_thickness_symmetric: bool | None = None,
-        sweep_face_meshing: str | None = None,
+        sweep_face_meshing: Literal["triangular", "quadrilateral"] | None = None,
+        sweep_direction: Literal["auto", "x", "y", "z"] | None = None,
+        element_family: Literal["prism", "hex"] | None = None,
+        transition_policy: Literal[
+            "pyramid_to_tetrahedra", "reject"
+        ]
+        | None = None,
+        exact_layer_count: bool | None = None,
     ) -> "GeometryMeshHandle":
         """Configure mesh generation parameters.
 
@@ -1307,8 +1516,19 @@ class GeometryMeshHandle:
             Extract SICN/gamma quality metrics after meshing.
         per_element_quality : bool, optional
             Include per-element quality arrays (for visualization).
+        topology : str, optional
+            Requested element topology: ``"prismatic"`` or ``"tetrahedral"``.
+        sweep_direction : str, optional
+            Swept-mesh direction: ``"auto"``, ``"x"``, ``"y"``, or ``"z"``.
+        element_family : str, optional
+            Swept volume family: ``"prism"`` or ``"hex"``.
+        transition_policy : str, optional
+            Shared-domain transition policy: ``"pyramid_to_tetrahedra"`` or
+            ``"reject"``.
+        exact_layer_count : bool, optional
+            Require the requested through-thickness element count exactly.
         """
-        spec = self._owner._mesh_spec
+        spec = copy.deepcopy(self._owner._mesh_spec)
         resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
             hmax=hmax,
             hmin=hmin,
@@ -1466,6 +1686,8 @@ class GeometryMeshHandle:
             spec.per_element_quality_configured = True
         if mesh_strategy is not None:
             spec.mesh_strategy = mesh_strategy
+        if topology is not None:
+            spec.topology = topology
         if through_thickness_elements is not None:
             spec.through_thickness_elements = through_thickness_elements
         if through_thickness_distribution is not None:
@@ -1476,11 +1698,25 @@ class GeometryMeshHandle:
             spec.through_thickness_symmetric = through_thickness_symmetric
         if sweep_face_meshing is not None:
             spec.sweep_face_meshing = sweep_face_meshing
+        if sweep_direction is not None:
+            spec.sweep_direction = sweep_direction
+        if element_family is not None:
+            spec.element_family = element_family
+        if transition_policy is not None:
+            spec.transition_policy = transition_policy
+        if exact_layer_count is not None:
+            spec.exact_layer_count = exact_layer_count
         _validate_perimeter_refinement_spec(
             self._owner._shape,
             spec,
             context=f"{self._owner._name}.mesh",
         )
+        _validate_layered_mesh_spec(
+            spec,
+            context=f"{self._owner._name}.mesh",
+            require_complete=True,
+        )
+        self._owner._mesh_spec = spec
         return self
 
     def algorithm(self, *, dim2: int | None = None, dim3: int | None = None) -> "GeometryMeshHandle":
@@ -1547,10 +1783,13 @@ class GeometryMeshHandle:
     def swept(
         self,
         elements: int = 6,
-        distribution: str = "fixed",
+        distribution: Literal["fixed", "linear", "exponential"] = "fixed",
         element_ratio: float = 1.0,
         symmetric: bool = False,
-        face_meshing: str = "triangular",
+        face_meshing: Literal["triangular", "quadrilateral"] = "triangular",
+        sweep_direction: Literal["auto", "x", "y", "z"] = "auto",
+        transition: Literal["pyramid_to_tetrahedra", "reject"] | None = None,
+        exact_layers: bool | None = None,
     ) -> "GeometryMeshHandle":
         """Configure swept (through-thickness) meshing for thin-film geometries.
 
@@ -1566,14 +1805,92 @@ class GeometryMeshHandle:
             Mirror the distribution about the mid-plane.
         face_meshing : str
             Source face mesh type: ``"triangular"`` or ``"quadrilateral"``.
+        sweep_direction : str
+            ``"auto"`` or the explicit sweep axis ``"x"``, ``"y"``, or ``"z"``.
+        transition : str, optional
+            ``"pyramid_to_tetrahedra"`` for prism-to-tet shared-domain
+            transition, or ``"reject"`` when no transition is permitted.
+        exact_layers : bool, optional
+            Require the realized mesh to preserve exactly ``elements`` layers.
         """
-        spec = self._owner._mesh_spec
-        spec.mesh_strategy = "swept_prism" if face_meshing == "triangular" else "swept_hex"
-        spec.through_thickness_elements = elements
+        layer_count = _element_layer_count(
+            elements,
+            context=f"{self._owner._name}.mesh.swept.elements",
+        )
+        if distribution not in {"fixed", "linear", "exponential"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.distribution must be "
+                "'fixed', 'linear', or 'exponential'"
+            )
+        if face_meshing not in {"triangular", "quadrilateral"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.face_meshing must be "
+                "'triangular' or 'quadrilateral'"
+            )
+        if sweep_direction not in {"auto", "x", "y", "z"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.sweep_direction must be "
+                "'auto', 'x', 'y', or 'z'"
+            )
+        if exact_layers is not None and not isinstance(exact_layers, bool):
+            raise TypeError(f"{self._owner._name}.mesh.swept.exact_layers must be bool")
+
+        element_family = "prism" if face_meshing == "triangular" else "hex"
+        resolved_transition = transition or (
+            "pyramid_to_tetrahedra" if element_family == "prism" else "reject"
+        )
+        if resolved_transition not in {"pyramid_to_tetrahedra", "reject"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.transition must be "
+                "'pyramid_to_tetrahedra' or 'reject'"
+            )
+        if element_family == "hex" and resolved_transition == "pyramid_to_tetrahedra":
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept quadrilateral/hex meshing "
+                "contradicts transition='pyramid_to_tetrahedra'"
+            )
+        resolved_exact_layers = True if exact_layers is None else exact_layers
+        if (
+            element_family == "prism"
+            and not resolved_exact_layers
+            and _state._execution_mode != "extended"
+        ):
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept prismatic strict intent "
+                "requires exact_layers=True"
+            )
+        if resolved_exact_layers and distribution != "fixed":
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept exact layers require distribution='fixed'"
+            )
+        if resolved_exact_layers and (not math.isclose(element_ratio, 1.0) or symmetric):
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept fixed exact layers reject graded or symmetric distribution"
+            )
+
+        spec = copy.deepcopy(self._owner._mesh_spec)
+        _clear_layered_mesh_intent(spec)
+        if element_family == "prism" and spec.order not in {None, 1}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept prismatic topology supports order=1 only"
+            )
+        spec.mesh_strategy = "swept_prism" if element_family == "prism" else "swept_hex"
+        spec.through_thickness_elements = layer_count
         spec.through_thickness_distribution = distribution
         spec.through_thickness_element_ratio = element_ratio
         spec.through_thickness_symmetric = symmetric
         spec.sweep_face_meshing = face_meshing
+        spec.topology = None
+        spec.sweep_direction = sweep_direction
+        spec.element_family = element_family
+        spec.transition_policy = resolved_transition
+        spec.exact_layer_count = resolved_exact_layers
+        _validate_layered_mesh_spec(
+            spec,
+            context=f"{self._owner._name}.mesh.swept",
+            require_complete=True,
+        )
+        self._owner._mesh_spec = spec
         return self
 
     def thin_film(
@@ -1587,6 +1904,9 @@ class GeometryMeshHandle:
         curvature_factor: float | None = None,
         narrow_region_resolution: float | None = None,
         layers: int = 1,
+        topology: Literal["tetrahedral", "prismatic"] | None = None,
+        exact_layers: bool | None = None,
+        transition: Literal["pyramid_to_tetrahedra", "reject"] | None = None,
         interface_maximum_element_size: float | None = None,
         surface_maximum_element_size: float | None = None,
         interface_thickness: float | None = None,
@@ -1600,15 +1920,48 @@ class GeometryMeshHandle:
         corner_extent: float | None = None,
         corner_transition_distance: float | str | None = None,
     ) -> "GeometryMeshHandle":
-        """Configure a feature-aware tetrahedral preset for thin-film FEM meshes.
+        """Configure explicit thin-film FEM mesh intent.
 
-        The final shared-domain mesh remains conforming and tetrahedral.  This
-        helper records thin-film intent and fills the canonical surface, edge,
-        corner, and through-thickness mesh controls.
+        Omitting ``topology`` preserves the legacy conforming tetrahedral
+        preset. ``topology="prismatic"`` requests strict P1 prism layers with
+        a pyramid-to-tetrahedra shared-domain transition.
         """
-        layer_count = int(layers)
-        if layer_count < 1:
-            raise ValueError(f"{self._owner._name}.mesh.thin_film.layers must be >= 1")
+        layer_count = _element_layer_count(
+            layers,
+            context=f"{self._owner._name}.mesh.thin_film.layers",
+        )
+        if topology not in {None, "tetrahedral", "prismatic"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.thin_film.topology must be "
+                "'tetrahedral' or 'prismatic'"
+            )
+        if exact_layers is not None and not isinstance(exact_layers, bool):
+            raise TypeError(f"{self._owner._name}.mesh.thin_film.exact_layers must be bool")
+
+        prismatic = topology == "prismatic"
+        if prismatic:
+            if order not in {None, 1}:
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film prismatic topology supports order=1 only"
+                )
+            if exact_layers is False and _state._execution_mode != "extended":
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film prismatic strict intent "
+                    "requires exact_layers=True"
+                )
+            resolved_transition = transition or "pyramid_to_tetrahedra"
+            if resolved_transition != "pyramid_to_tetrahedra":
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film prismatic topology requires "
+                    "transition='pyramid_to_tetrahedra'"
+                )
+        else:
+            if exact_layers is not None or transition is not None:
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film exact_layers/transition "
+                    "require topology='prismatic'"
+                )
+            resolved_transition = None
 
         spec = self._owner._mesh_spec
         resolved_hmax, resolved_hmin, _ = _coalesce_mesh_size_controls(
@@ -1620,6 +1973,58 @@ class GeometryMeshHandle:
             maximum_element_growth_rate=None,
         )
         body_hmax = _positive_float_or_none(resolved_hmax) or _positive_float_or_none(spec.hmax)
+
+        if prismatic:
+            original_spec = self._owner._mesh_spec
+            candidate = copy.deepcopy(original_spec)
+            _clear_layered_mesh_intent(candidate)
+            candidate.mesh_strategy = "swept_prism"
+            candidate.through_thickness_elements = layer_count
+            candidate.through_thickness_distribution = "fixed"
+            candidate.through_thickness_symmetric = False
+            candidate.sweep_face_meshing = "triangular"
+            candidate.topology = "prismatic"
+            candidate.sweep_direction = "auto"
+            candidate.element_family = "prism"
+            candidate.transition_policy = resolved_transition
+            candidate.exact_layer_count = True if exact_layers is None else exact_layers
+            self._owner._mesh_spec = candidate
+            try:
+                return self.configure(
+                    maximum_element_size=resolved_hmax,
+                    minimum_element_size=resolved_hmin,
+                    order=1,
+                    curvature_factor=curvature_factor,
+                    narrow_region_resolution=narrow_region_resolution,
+                    interface_maximum_element_size=(
+                        surface_maximum_element_size
+                        if surface_maximum_element_size is not None
+                        else interface_maximum_element_size
+                    ),
+                    interface_thickness=(
+                        surface_thickness
+                        if surface_thickness is not None
+                        else interface_thickness
+                    ),
+                    transition_distance=(
+                        surface_transition_distance
+                        if surface_transition_distance is not None
+                        else transition_distance
+                    ),
+                    edge_maximum_element_size=edge_maximum_element_size,
+                    edge_thickness=edge_thickness,
+                    edge_transition_distance=edge_transition_distance,
+                    corner_maximum_element_size=corner_maximum_element_size,
+                    corner_extent=corner_extent,
+                    corner_transition_distance=corner_transition_distance,
+                    mesh_strategy="swept_prism",
+                    through_thickness_elements=layer_count,
+                    through_thickness_distribution="fixed",
+                    sweep_face_meshing="triangular",
+                )
+            except Exception:
+                self._owner._mesh_spec = original_spec
+                raise
 
         thickness = None
         try:
@@ -1679,26 +2084,53 @@ class GeometryMeshHandle:
             resolved_corner_extent = None
             resolved_corner_transition = None
 
-        return self.configure(
-            maximum_element_size=resolved_hmax,
-            minimum_element_size=body_hmin,
-            order=order,
-            curvature_factor=curvature_factor,
-            narrow_region_resolution=narrow_region_resolution,
-            interface_maximum_element_size=surface_hmax,
-            interface_thickness=surface_shell,
-            transition_distance=surface_transition,
-            edge_maximum_element_size=edge_hmax,
-            edge_thickness=edge_shell,
-            edge_transition_distance=edge_transition,
-            corner_maximum_element_size=corner_hmax,
-            corner_extent=resolved_corner_extent,
-            corner_transition_distance=resolved_corner_transition,
-            mesh_strategy="thin_film_tetrahedral",
-            through_thickness_elements=layer_count,
-            through_thickness_distribution="fixed",
-            sweep_face_meshing="triangular",
-        )
+        validation_hmin = body_hmin
+        if (
+            isinstance(body_hmax, (int, float))
+            and body_hmin is not None
+            and body_hmin > float(body_hmax)
+        ):
+            # Preserve the legacy thin-film metadata contract: the inferred
+            # through-thickness target may be larger than the in-plane hmax.
+            validation_hmin = None
+
+        original_spec = self._owner._mesh_spec
+        candidate = copy.deepcopy(original_spec)
+        _clear_layered_mesh_intent(candidate)
+        candidate.mesh_strategy = "thin_film_tetrahedral"
+        candidate.through_thickness_elements = layer_count
+        candidate.through_thickness_distribution = "fixed"
+        candidate.through_thickness_symmetric = False
+        candidate.sweep_face_meshing = "triangular"
+        self._owner._mesh_spec = candidate
+        try:
+            configured = self.configure(
+                maximum_element_size=resolved_hmax,
+                minimum_element_size=validation_hmin,
+                order=order,
+                curvature_factor=curvature_factor,
+                narrow_region_resolution=narrow_region_resolution,
+                interface_maximum_element_size=surface_hmax,
+                interface_thickness=surface_shell,
+                transition_distance=surface_transition,
+                edge_maximum_element_size=edge_hmax,
+                edge_thickness=edge_shell,
+                edge_transition_distance=edge_transition,
+                corner_maximum_element_size=corner_hmax,
+                corner_extent=resolved_corner_extent,
+                corner_transition_distance=resolved_corner_transition,
+                mesh_strategy="thin_film_tetrahedral",
+                through_thickness_elements=layer_count,
+                through_thickness_distribution="fixed",
+                sweep_face_meshing="triangular",
+            )
+        except Exception:
+            self._owner._mesh_spec = original_spec
+            raise
+        spec = self._owner._mesh_spec
+        if validation_hmin is None and body_hmin is not None:
+            spec.hmin = body_hmin
+        return configured
 
     def quality(self) -> object | None:
         """Return the last quality report if ``compute_quality`` was enabled.
@@ -1817,6 +2249,7 @@ class _WorldState:
     _exchange_enabled: bool = True
     _demag_enabled: bool = True
     _demag_realization: str | None = None
+    _thermal_noise: ThermalNoise | None = None
 
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
@@ -1828,9 +2261,8 @@ class _WorldState:
     _b_ext: tuple[float, float, float] | None = None
 
     # Solver
-    _dt: float | None = None
-    _max_error: float | None = None
-    _adaptive_dt_min: float | None = None
+    _fixed_timestep: float | None = None
+    _adaptive_timestep_policy: AdaptiveTimestep | None = None
     _integrator: str | None = None
     _gamma: float | None = None
     _demag_interval_s: float | None = None
@@ -1845,9 +2277,11 @@ class _WorldState:
 
     # Outputs
     _outputs: list = field(default_factory=list)
+    _outputs_explicit: bool = False
     _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
+    _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -1869,6 +2303,7 @@ class _WorldState:
 
     # Shared geometry/mesh asset cache for flat scripts.
     _geometry_asset_cache: dict[str, dict[str, object] | None] = field(default_factory=dict)
+    _active_mesh_artifact: object | None = None
     _default_mesh_spec: _MeshSpecState = field(default_factory=_MeshSpecState)
     _script_source_root: Path | None = None
     _declared_stages: list[CapturedStage] = field(default_factory=list)
@@ -1879,6 +2314,7 @@ _state = _WorldState()
 _capture_enabled = False
 _capture_skip_geometry_assets = False
 _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
+_RELAXATION_DEFAULT_TORQUE_TOLERANCE_T = DEFAULT_RELAXATION_TORQUE_TOLERANCE_T
 _RELAX_UNSET = object()
 
 
@@ -1890,11 +2326,14 @@ class CapturedStage:
     action: dict[str, object] | None = None
     stage_id: str | None = None
     output_every_seconds: float | None = None
+    table_autosave: TableAutosave | None = None
+    autosave: StageAutosave | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class RelaxStageSpec:
     tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM
+    tol_unit: str = "T"
     max_steps: int = DEFAULT_RELAXATION_MAX_STEPS
     algorithm: str = "llg_overdamped"
     energy_tolerance: float | None = None
@@ -1907,6 +2346,9 @@ class RelaxStageSpec:
     max_error: float | None = None
     dt_min: float | None = None
     dt_max: float | None = None
+    dt_initial: float | None = None
+    max_err: float | None = None
+    adaptive_timestep: AdaptiveTimestep | None = None
     field_refresh: FieldRefreshPolicy | None = None
     stop: RelaxStop | None = None
 
@@ -1914,9 +2356,6 @@ class RelaxStageSpec:
 @dataclass(frozen=True, slots=True)
 class RunStageSpec:
     until: float
-    outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None
-    table_autosave: TableAutosave | bool | None = None
-    spin_wave_response: GammaResponseAnalysis | bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2155,17 +2594,42 @@ def _resolve_flat_relax_stop(
     *,
     stop: RelaxStop | None,
     tol: object,
+    tolA: object,
+    tolT: object,
     energy_tolerance: object,
     max_steps: object,
     max_relaxation_time_s: object,
     max_pseudotime_s: object,
     max_physical_time_s: object,
-) -> tuple[RelaxStop | None, float | None, float | None, int | None, float | None]:
-    resolved_tol = (
-        DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
-        if tol is _RELAX_UNSET
-        else None if tol is None else float(tol)
-    )
+) -> tuple[
+    RelaxStop | None,
+    float | None,
+    float | None,
+    int | None,
+    float | None,
+    str,
+]:
+    if tol is not _RELAX_UNSET:
+        raise ValueError("tol has been removed; use tolT or tolA")
+    if tolA is not _RELAX_UNSET and tolT is not _RELAX_UNSET:
+        raise ValueError("provide only one of tolT or tolA")
+    if tolA is _RELAX_UNSET:
+        tol_tesla = (
+            _RELAXATION_DEFAULT_TORQUE_TOLERANCE_T
+            if tolT is _RELAX_UNSET
+            else float(tolT)
+        )
+        if not math.isfinite(tol_tesla) or tol_tesla <= 0.0:
+            raise ValueError("tolT must be finite and positive")
+        resolved_tol = tol_tesla / _MU_0
+        authored_tol = tolT
+        authored_tol_unit = "T"
+    else:
+        resolved_tol = float(tolA)
+        if not math.isfinite(resolved_tol) or resolved_tol <= 0.0:
+            raise ValueError("tolA must be finite and positive")
+        authored_tol = tolA
+        authored_tol_unit = "A/m"
     resolved_energy = (
         None
         if energy_tolerance is _RELAX_UNSET or energy_tolerance is None
@@ -2194,7 +2658,7 @@ def _resolve_flat_relax_stop(
         )
     else:
         scalar_values = (
-            ("torque_tolerance", tol, resolved_tol, stop.torque_tolerance_apm),
+            ("torque_tolerance", authored_tol, resolved_tol, stop.torque_tolerance_apm),
             (
                 "energy_tolerance",
                 energy_tolerance,
@@ -2219,12 +2683,15 @@ def _resolve_flat_relax_stop(
         resolved_stop.energy_tolerance_j,
         resolved_stop.max_steps,
         resolved_stop.max_relaxation_time_s,
+        authored_tol_unit,
     )
 
 
 def relax_stage(
     *,
     tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: object = _RELAX_UNSET,
     algorithm: str = "llg_overdamped",
     energy_tolerance: object = _RELAX_UNSET,
@@ -2237,6 +2704,9 @@ def relax_stage(
     max_error: float | None = None,
     dt_min: float | None = None,
     dt_max: float | None = None,
+    dt_initial: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
@@ -2246,9 +2716,12 @@ def relax_stage(
         energy_tolerance,
         max_steps,
         max_relaxation_time_s,
+        tol_unit,
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         energy_tolerance=energy_tolerance,
         max_steps=max_steps,
         max_relaxation_time_s=max_relaxation_time_s,
@@ -2275,8 +2748,12 @@ def relax_stage(
         max_error=max_error,
         dt_min=dt_min,
         dt_max=dt_max,
+        dt_initial=dt_initial,
+        max_err=max_err,
+        adaptive_timestep=adaptive_timestep,
         field_refresh=field_refresh,
         relax_alpha=resolved_relax_alpha,
+        require_explicit_timestep=True,
     )
     return RelaxStageSpec(
         tol=tol,
@@ -2292,26 +2769,21 @@ def relax_stage(
         max_error=max_error,
         dt_min=dt_min,
         dt_max=dt_max,
+        dt_initial=dt_initial,
+        max_err=max_err,
+        adaptive_timestep=adaptive_timestep,
         field_refresh=field_refresh,
         stop=resolved_stop,
+        tol_unit=tol_unit,
     )
 
 
 def run_stage(
     until: float,
-    *,
-    outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None,
-    table_autosave: TableAutosave | bool | None = None,
-    spin_wave_response: GammaResponseAnalysis | bool | None = None,
 ) -> RunStageSpec:
     if until <= 0.0:
         raise ValueError("run_stage(until) requires a positive stop time")
-    return RunStageSpec(
-        until=until,
-        outputs=outputs,
-        table_autosave=table_autosave,
-        spin_wave_response=spin_wave_response,
-    )
+    return RunStageSpec(until=until)
 
 
 def eigenmodes_stage(
@@ -2463,13 +2935,18 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         max_error=spec.max_error,
         dt_min=spec.dt_min,
         dt_max=spec.dt_max,
+        dt_initial=spec.dt_initial,
+        max_err=spec.max_err,
+        adaptive_timestep=spec.adaptive_timestep,
         field_refresh=spec.field_refresh,
         relax_alpha=spec.relax_alpha,
+        require_explicit_timestep=True,
     )
     problem = _build_problem(
         study_kind="relaxation",
         relax_algorithm=spec.algorithm,
         relax_torque_tolerance=spec.tol,
+        relax_torque_tolerance_unit=spec.tol_unit,
         relax_energy_tolerance=spec.energy_tolerance,
         relax_max_steps=spec.max_steps,
         relax_max_relaxation_time_s=spec.max_relaxation_time_s,
@@ -2504,39 +2981,6 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
         problem = _build_problem()
         if not isinstance(problem.study, TimeEvolution):
             raise TypeError("run stage requires a time-evolution study")
-        outputs = (
-            tuple(stage_spec.outputs)
-            if stage_spec.outputs is not None
-            else tuple(problem.study.outputs)
-        )
-        if stage_spec.table_autosave is None:
-            table_autosave = problem.study._table_autosave
-        elif stage_spec.table_autosave is False:
-            table_autosave = None
-        elif isinstance(stage_spec.table_autosave, TableAutosave):
-            table_autosave = stage_spec.table_autosave
-        else:
-            raise TypeError("table_autosave must be TableAutosave, False, or None")
-        runtime_metadata = copy.deepcopy(problem.runtime_metadata)
-        if stage_spec.spin_wave_response is False:
-            runtime_metadata.pop("spin_wave_response", None)
-        elif isinstance(stage_spec.spin_wave_response, GammaResponseAnalysis):
-            runtime_metadata["spin_wave_response"] = (
-                stage_spec.spin_wave_response.to_runtime_metadata()
-            )
-        elif stage_spec.spin_wave_response is not None:
-            raise TypeError(
-                "spin_wave_response must be GammaResponseAnalysis, False, or None"
-            )
-        problem = replace(
-            problem,
-            study=TimeEvolution(
-                dynamics=problem.study.dynamics,
-                outputs=outputs,
-                table_autosave=table_autosave,
-            ),
-            runtime_metadata=runtime_metadata,
-        )
         return CapturedStage(
             problem=problem,
             entrypoint_kind="flat_run",
@@ -3002,6 +3446,94 @@ def capture_declared_stages() -> list[CapturedStage]:
     return list(_state._declared_stages)
 
 
+class RelaxStageBuilder:
+    """Configuration handle for one declared relaxation stage."""
+
+    def __init__(self, stage_id: str) -> None:
+        self._stage_id = stage_id
+
+    def autosave(self, policy: StageAutosave) -> "RelaxStageBuilder":
+        _attach_stage_autosave(self._stage_id, "relax", policy)
+        return self
+
+    def tableautosave(
+        self,
+        *,
+        every_steps: int,
+        quantities: Sequence[str] | None = None,
+        table_id: str = "default",
+    ) -> "RelaxStageBuilder":
+        configured = TableAutosave(
+            every_steps=every_steps,
+            quantities=quantities,
+            table_id=table_id,
+        )
+        for index, stage in enumerate(_state._declared_stages):
+            if stage.stage_id != self._stage_id:
+                continue
+            if stage.entrypoint_kind != "flat_relax":
+                raise ValueError(
+                    f"stage {self._stage_id!r} is not a relaxation stage"
+                )
+            if stage.table_autosave is not None:
+                raise ValueError(
+                    f"relax stage {self._stage_id!r} already has table autosave configured"
+                )
+            _state._declared_stages[index] = replace(
+                stage,
+                table_autosave=configured,
+            )
+            return self
+        raise ValueError(f"relax stage {self._stage_id!r} is no longer declared")
+
+
+class RunStageBuilder:
+    """Configuration handle for one declared physical-time stage."""
+
+    def __init__(self, stage_id: str) -> None:
+        self._stage_id = stage_id
+
+    def autosave(self, policy: StageAutosave) -> "RunStageBuilder":
+        _attach_stage_autosave(self._stage_id, "run", policy)
+        return self
+
+
+def _attach_stage_autosave(
+    stage_id: str,
+    stage_kind: str,
+    policy: StageAutosave,
+) -> None:
+    if not isinstance(policy, StageAutosave):
+        raise TypeError("autosave policy must be StageAutosave")
+    _validate_stage_autosave_clock(stage_kind, policy)
+    expected_entrypoint = f"flat_{stage_kind}"
+    for index, stage in enumerate(_state._declared_stages):
+        if stage.stage_id != stage_id:
+            continue
+        if stage.entrypoint_kind != expected_entrypoint:
+            raise ValueError(f"stage {stage_id!r} is not a {stage_kind} stage")
+        if stage.autosave is not None:
+            raise ValueError(
+                f"{stage_kind} stage {stage_id!r} already has autosave configured"
+            )
+        _state._declared_stages[index] = replace(stage, autosave=policy)
+        return
+    raise ValueError(f"{stage_kind} stage {stage_id!r} is no longer declared")
+
+
+def _validate_stage_autosave_clock(stage_kind: str, policy: StageAutosave) -> None:
+    cadences = [
+        *((policy.table,) if policy.table is not None else ()),
+        *policy.fields,
+    ]
+    if stage_kind == "relax":
+        if any(cadence.every_steps is None for cadence in cadences):
+            raise ValueError("relax stage autosave requires accepted-step cadence")
+        return
+    if any(cadence.every_steps is not None for cadence in cadences):
+        raise ValueError("run stage autosave requires physical-time cadence")
+
+
 class StudyStagesBuilder:
     """Declarative stage authoring facade for the flat study builder."""
 
@@ -3045,6 +3577,8 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
         tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: object = _RELAX_UNSET,
         algorithm: str = "llg_overdamped",
         energy_tolerance: object = _RELAX_UNSET,
@@ -3057,12 +3591,17 @@ class StudyStagesBuilder:
         max_error: float | None = None,
         dt_min: float | None = None,
         dt_max: float | None = None,
+        dt_initial: float | None = None,
+        max_err: float | None = None,
+        adaptive_timestep: AdaptiveTimestep | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
-    ) -> "StudyStagesBuilder":
-        return self.add_stage(
+    ) -> RelaxStageBuilder:
+        captured_stage = _capture_stage(
             relax_stage(
                 tol=tol,
+                tolA=tolA,
+                tolT=tolT,
                 max_steps=max_steps,
                 algorithm=algorithm,
                 energy_tolerance=energy_tolerance,
@@ -3075,36 +3614,115 @@ class StudyStagesBuilder:
                 max_error=max_error,
                 dt_min=dt_min,
                 dt_max=dt_max,
+                dt_initial=dt_initial,
+                max_err=max_err,
+                adaptive_timestep=adaptive_timestep,
                 field_refresh=field_refresh,
                 stop=stop,
-            ),
-            stage_id=stage_id,
-            id_kind="relax",
+            )
         )
+        resolved_id = self._allocate_stage_id("relax", stage_id)
+        _state._declared_stages.append(
+            replace(captured_stage, stage_id=resolved_id)
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return RelaxStageBuilder(resolved_id)
 
     def add_run(
         self,
         until: float | None = None,
         *,
         stage_id: str | None = None,
-        output_every: float | None = None,
-        outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None,
-        table_autosave: TableAutosave | bool | None = None,
-        spin_wave_response: GammaResponseAnalysis | bool | None = None,
-    ) -> "StudyStagesBuilder":
+        **legacy_run_configuration: object,
+    ) -> RunStageBuilder:
         if until is None:
             raise TypeError("add_run() requires until")
-        return self.add_stage(
-            run_stage(
-                until,
-                outputs=outputs,
-                table_autosave=table_autosave,
-                spin_wave_response=spin_wave_response,
-            ),
-            stage_id=stage_id,
-            output_every=output_every,
-            id_kind="run",
+        if legacy_run_configuration:
+            self._expand_legacy_run_configuration(legacy_run_configuration)
+        captured_stage = _capture_stage(run_stage(until))
+        resolved_id = self._allocate_stage_id("run", stage_id)
+        _state._declared_stages.append(
+            replace(captured_stage, stage_id=resolved_id)
         )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return RunStageBuilder(resolved_id)
+
+    def _expand_legacy_run_configuration(
+        self,
+        configuration: Mapping[str, object],
+    ) -> None:
+        allowed = {
+            "output_every",
+            "outputs",
+            "spin_wave_response",
+            "table_autosave",
+        }
+        unsupported = sorted(set(configuration) - allowed)
+        if unsupported:
+            joined = ", ".join(unsupported)
+            raise TypeError(f"add_run() got unsupported legacy keyword(s): {joined}")
+        warnings.warn(
+            "Run-local sampling and FFT arguments are deprecated; Fullmag expanded "
+            "them into visible Table autosave, Autosave, and FFT response stages.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+        table_autosave = configuration.get("table_autosave")
+        if table_autosave is False:
+            self._append_table_autosave_action(None, enabled=False, stage_id=None)
+        elif isinstance(table_autosave, TableAutosave):
+            self._append_table_autosave_action(
+                table_autosave,
+                enabled=True,
+                stage_id=None,
+            )
+        elif table_autosave is not None:
+            raise TypeError(
+                "legacy table_autosave must be TableAutosave, False, or None"
+            )
+
+        outputs = configuration.get("outputs")
+        if outputs is not None:
+            if isinstance(outputs, (str, bytes)) or not isinstance(outputs, Sequence):
+                raise TypeError("legacy outputs must be a sequence of SaveField/SaveScalar")
+            self.autosave(enabled=False)
+            for output in outputs:
+                if not isinstance(output, (SaveField, SaveScalar)):
+                    raise TypeError(
+                        "legacy Run outputs support SaveField and SaveScalar; "
+                        "configure snapshots independently"
+                    )
+                self._append_autosave_output_action(output, stage_id=None)
+
+        spin_wave_response = configuration.get("spin_wave_response")
+        if spin_wave_response is False:
+            self.fft_response(enabled=False)
+        elif isinstance(spin_wave_response, GammaResponseAnalysis):
+            self.fft_response(
+                spin_wave_response.response_component,
+                detrend=spin_wave_response.detrend,
+                window=spin_wave_response.window,
+                susceptibility_floor_fraction=(
+                    spin_wave_response.susceptibility_floor_fraction
+                ),
+            )
+        elif spin_wave_response is not None:
+            raise TypeError(
+                "legacy spin_wave_response must be GammaResponseAnalysis, False, or None"
+            )
+
+        output_every = configuration.get("output_every")
+        if output_every is not None:
+            require_positive(float(output_every), "output_every")
+            warnings.warn(
+                "legacy output_every had no independent runtime sampling contract and "
+                "is ignored; use explicit Table autosave or Autosave stages",
+                DeprecationWarning,
+                stacklevel=3,
+            )
 
     def add_field_drive(
         self,
@@ -3131,18 +3749,238 @@ class StudyStagesBuilder:
             _state._wait_for_solve = True
         return self
 
+    def remove_field_drive(
+        self,
+        drive_id: str,
+        *,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Remove one persistent regional field drive from subsequent stages."""
+        if not isinstance(drive_id, str):
+            raise TypeError("remove_field_drive() drive_id must be a string")
+        if not drive_id.strip():
+            raise ValueError("remove_field_drive() drive_id must be non-empty")
+        matching = [
+            index
+            for index, drive in enumerate(_state._field_drives)
+            if drive.id == drive_id
+        ]
+        if not matching:
+            raise ValueError(f"field drive id '{drive_id}' does not exist")
+        resolved_id = self._allocate_stage_id("remove-field-drive", stage_id)
+        problem_before_action = _build_problem()
+        del _state._field_drives[matching[0]]
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_remove_field_drive",
+                default_until_seconds=None,
+                action={"kind": "remove_field_drive", "drive_id": drive_id},
+                stage_id=resolved_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return self
+
+    def tableautosave(
+        self,
+        t_sampling: SamplingPeriod | None = None,
+        quantities: Sequence[str] | None = None,
+        *,
+        every_steps: int | None = None,
+        enabled: bool = True,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable or disable the scalar table clock for subsequent stages."""
+        if every_steps is not None:
+            warnings.warn(
+                "Persistent study.stages.tableautosave() is deprecated for relaxation; "
+                "use study.stages.add_relax(...).tableautosave(...) to bind accepted-step "
+                "sampling to one relaxation stage.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        configured: TableAutosave | None
+        if enabled:
+            configured = TableAutosave(
+                t_sampl=t_sampling,
+                every_steps=every_steps,
+                quantities=quantities,
+            )
+        else:
+            configured = None
+        return self._append_table_autosave_action(
+            configured,
+            enabled=enabled,
+            stage_id=stage_id,
+        )
+
+    def _append_table_autosave_action(
+        self,
+        configured: TableAutosave | None,
+        *,
+        enabled: bool,
+        stage_id: str | None,
+    ) -> "StudyStagesBuilder":
+        self._append_configuration_action(
+            problem=_build_problem(),
+            entrypoint_kind="flat_table_autosave",
+            stage_id=self._allocate_stage_id("table-autosave", stage_id),
+            action={
+                "kind": "table_autosave",
+                "enabled": bool(enabled),
+                "table_autosave": configured.to_ir() if configured else None,
+            },
+        )
+        _state._table_autosave = configured if enabled else None
+        return self
+
+    def autosave(
+        self,
+        quantity: str | None = None,
+        every: SamplingPeriod | None = None,
+        *,
+        enabled: bool = True,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable, replace, or disable periodic output for subsequent stages."""
+        output: SaveField | SaveScalar | None = None
+        if enabled:
+            if quantity is None:
+                raise TypeError("autosave() requires quantity when enabled=True")
+            if every is None:
+                raise TypeError("autosave() requires every when enabled=True")
+            output = _periodic_output(quantity, every)
+            return self._append_autosave_output_action(output, stage_id=stage_id)
+        resolved_id = self._allocate_stage_id("autosave", stage_id)
+        problem_before_action = _build_problem()
+        if quantity is None:
+            _state._outputs.clear()
+            _state._outputs_explicit = True
+        else:
+            _state._outputs = [
+                candidate
+                for candidate in _state._outputs
+                if _periodic_output_name(candidate) != quantity
+            ]
+            _state._outputs_explicit = True
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_autosave",
+            stage_id=resolved_id,
+            action={
+                "kind": "autosave",
+                "enabled": bool(enabled),
+                "quantity": quantity,
+                "output": output.to_ir() if output else None,
+            },
+        )
+        return self
+
+    def _append_autosave_output_action(
+        self,
+        output: SaveField | SaveScalar,
+        *,
+        stage_id: str | None,
+    ) -> "StudyStagesBuilder":
+        quantity = _periodic_output_name(output)
+        if quantity is None:
+            raise TypeError("autosave output must be SaveField or SaveScalar")
+        problem_before_action = _build_problem()
+        _state._outputs = [
+            candidate
+            for candidate in _state._outputs
+            if _periodic_output_name(candidate) != quantity
+        ]
+        _state._outputs.append(output)
+        _state._outputs_explicit = True
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_autosave",
+            stage_id=self._allocate_stage_id("autosave", stage_id),
+            action={
+                "kind": "autosave",
+                "enabled": True,
+                "quantity": quantity,
+                "output": output.to_ir(),
+            },
+        )
+        return self
+
+    def fft_response(
+        self,
+        response_component: str = "my",
+        *,
+        enabled: bool = True,
+        detrend: str = "linear",
+        window: str = "hann",
+        susceptibility_floor_fraction: float = 1e-6,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable or disable k=0 response FFT analysis for subsequent stages."""
+        resolved_id = self._allocate_stage_id("fft-response", stage_id)
+        problem_before_action = _build_problem()
+        request: dict[str, object] | None
+        if enabled:
+            request = GammaResponseAnalysis(
+                response_component=response_component,
+                detrend=detrend,
+                window=window,
+                susceptibility_floor_fraction=susceptibility_floor_fraction,
+            ).to_runtime_metadata()
+            _state._extra_runtime_metadata["spin_wave_response"] = request
+        else:
+            request = None
+            _state._extra_runtime_metadata.pop("spin_wave_response", None)
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_fft_response",
+            stage_id=resolved_id,
+            action={
+                "kind": "fft_response",
+                "enabled": bool(enabled),
+                "request": copy.deepcopy(request),
+            },
+        )
+        return self
+
+    def _append_configuration_action(
+        self,
+        *,
+        problem: Problem,
+        entrypoint_kind: str,
+        stage_id: str,
+        action: dict[str, object],
+    ) -> None:
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem,
+                entrypoint_kind=entrypoint_kind,
+                default_until_seconds=None,
+                action=action,
+                stage_id=stage_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+
     def add_minimize(
         self,
         *,
         stage_id: str | None = None,
         method: str = "bb",
-        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+        tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             relax_stage(
                 tol=tol,
+                tolA=tolA,
+                tolT=tolT,
                 max_steps=max_steps,
                 algorithm=_resolve_minimize_algorithm(method),
                 energy_tolerance=energy_tolerance,
@@ -3329,11 +4167,12 @@ class StudyStagesBuilder:
         self,
         *,
         field_values_t: Sequence[float],
+        timestep: float | AdaptiveTimestep,
         direction: Sequence[float] = (0.0, 0.0, 1.0),
         settle: RelaxStop | None = None,
         save_state: bool = False,
     ) -> "StudyStagesBuilder":
-        """Add a branch sweep that settles each field point with relaxation."""
+        """Add a branch sweep with an explicit fixed or adaptive settle policy."""
         values = [float(value) for value in field_values_t]
         if not values:
             raise ValueError("field_values_t must not be empty")
@@ -3355,10 +4194,18 @@ class StudyStagesBuilder:
                 magnitude_t * direction_unit[1],
                 magnitude_t * direction_unit[2],
             )
-            self.add_relax(
-                algorithm="llg_overdamped",
-                stop=settle_stop,
-            )
+            if isinstance(timestep, AdaptiveTimestep):
+                self.add_relax(
+                    algorithm="llg_overdamped",
+                    adaptive_timestep=timestep,
+                    stop=settle_stop,
+                )
+            else:
+                self.add_relax(
+                    algorithm="llg_overdamped",
+                    dt=timestep,
+                    stop=settle_stop,
+                )
             if save_state:
                 self.add_save_state(
                     artifact_name=f"hysteresis_branch_point_{point_index + 1:03d}"
@@ -3672,6 +4519,205 @@ class StudyObjectsHandle:
         self.mesh = StudyObjectsMeshHandle(owner)
 
 
+@dataclass(frozen=True, slots=True)
+class MeshPersistenceResult:
+    action: str
+    path: Path
+    topology_fingerprint: str
+    authoring_fingerprint: str
+    mismatch_reasons: tuple[str, ...] = ()
+
+
+class StudyMeshHandle:
+    """Persistence and interchange facade for the study's realized FEM mesh."""
+
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
+
+    def __call__(self, *args: object, **kwargs: object) -> None:
+        raise _mesh_api_migration_error(
+            "study.mesh(...)",
+            "study.objects.mesh.defaults(...) or body.mesh(...)",
+        )
+
+    def _current_artifact(self):
+        from fullmag.meshing.persistence import (
+            MeshArtifact,
+            mesh_authoring_fingerprint,
+            mesh_data_from_ir,
+        )
+
+        active = _state._active_mesh_artifact
+        current_authoring = _current_mesh_authoring_document()
+        if (
+            isinstance(active, MeshArtifact)
+            and active.authoring_fingerprint
+            == mesh_authoring_fingerprint(current_authoring)
+        ):
+            return active
+        if isinstance(active, MeshArtifact):
+            _clear_bound_mesh_artifact()
+        assets = _build_explicit_mesh_assets()
+        domain = (assets or {}).get("fem_domain_mesh_asset")
+        if not isinstance(domain, Mapping) or not isinstance(domain.get("mesh"), Mapping):
+            raise ValueError("study.mesh requires a realized shared-domain FEM mesh")
+        mesh_ir = domain["mesh"]
+        mesh = mesh_data_from_ir(mesh_ir)
+        boundary_map = _boundary_semantic_map(mesh)
+        return MeshArtifact(
+            mesh=mesh,
+            mesh_name=str(mesh_ir.get("mesh_name", "study_domain")),
+            authoring_document=current_authoring,
+            authoring_fingerprint="",
+            topology_fingerprint=mesh.topology_fingerprint_v3(),
+            region_markers=[dict(entry) for entry in domain.get("region_markers", [])],
+            object_region_markers=[
+                dict(entry) for entry in domain.get("object_region_markers", [])
+            ],
+            boundary_map=boundary_map,
+            build_report=(
+                dict(domain["build_report"])
+                if isinstance(domain.get("build_report"), Mapping)
+                else None
+            ),
+            provenance={"origin": "generated"},
+        )
+
+    def save(self, path: str | Path) -> Path:
+        from fullmag.meshing.persistence import save_mesh_artifact
+
+        artifact = self._current_artifact()
+        saved = save_mesh_artifact(
+            path,
+            mesh=artifact.mesh,
+            mesh_name=artifact.mesh_name,
+            authoring_document=_current_mesh_authoring_document(),
+            region_markers=artifact.region_markers,
+            object_region_markers=artifact.object_region_markers,
+            boundary_map=artifact.boundary_map,
+            build_report=artifact.build_report,
+            provenance=artifact.provenance,
+        )
+        return saved
+
+    def load(self, path: str | Path) -> MeshPersistenceResult:
+        from fullmag.meshing.persistence import load_mesh_artifact
+
+        artifact = load_mesh_artifact(
+            path,
+            expected_authoring_document=_current_mesh_authoring_document(),
+        )
+        _bind_mesh_artifact(artifact, Path(path))
+        return MeshPersistenceResult(
+            action="loaded",
+            path=Path(path),
+            topology_fingerprint=artifact.topology_fingerprint,
+            authoring_fingerprint=artifact.authoring_fingerprint,
+        )
+
+    def save_or_load(self, path: str | Path) -> MeshPersistenceResult:
+        from fullmag.meshing.persistence import (
+            MeshConfigurationMismatch,
+            load_mesh_artifact,
+        )
+
+        target = Path(path)
+        differences: tuple[str, ...] = ()
+        if target.exists():
+            try:
+                artifact = load_mesh_artifact(
+                    target,
+                    expected_authoring_document=_current_mesh_authoring_document(),
+                )
+            except MeshConfigurationMismatch as exc:
+                differences = exc.differences
+                _clear_bound_mesh_artifact()
+            else:
+                _bind_mesh_artifact(artifact, target)
+                return MeshPersistenceResult(
+                    action="loaded",
+                    path=target,
+                    topology_fingerprint=artifact.topology_fingerprint,
+                    authoring_fingerprint=artifact.authoring_fingerprint,
+                )
+        self.save(target)
+        artifact = load_mesh_artifact(target)
+        _bind_mesh_artifact(artifact, target)
+        return MeshPersistenceResult(
+            action="saved",
+            path=target,
+            topology_fingerprint=artifact.topology_fingerprint,
+            authoring_fingerprint=artifact.authoring_fingerprint,
+            mismatch_reasons=differences,
+        )
+
+    def export(self, path: str | Path, *, format: str = "auto") -> Path:
+        from fullmag.meshing.persistence import export_comsol_mesh, export_gmsh_mesh
+
+        target = Path(path)
+        resolved_format = (
+            "comsol" if target.suffix.lower() == ".mphtxt" else "gmsh"
+        ) if format == "auto" else format
+        if resolved_format == "comsol":
+            return export_comsol_mesh(self._current_artifact(), target)
+        if resolved_format == "gmsh":
+            return export_gmsh_mesh(self._current_artifact(), target)
+        raise ValueError(
+            "study.mesh.export() supports format='auto', 'comsol', or 'gmsh'"
+        )
+
+    def import_(
+        self,
+        path: str | Path,
+        *,
+        region_map: Mapping[str, int] | None = None,
+        boundary_map: Mapping[str, int] | None = None,
+        region_entity_map: Mapping[int, int] | None = None,
+        boundary_entity_map: Mapping[int, int] | None = None,
+        coordinate_unit: str | None = None,
+    ) -> MeshPersistenceResult:
+        from fullmag.meshing.persistence import (
+            import_comsol_mesh,
+            import_gmsh_mesh,
+            mesh_authoring_fingerprint,
+        )
+
+        source = Path(path)
+        importer = (
+            import_comsol_mesh
+            if source.suffix.lower() == ".mphtxt"
+            else import_gmsh_mesh
+        )
+        import_kwargs: dict[str, object] = {
+            "region_map": region_map,
+            "boundary_map": boundary_map,
+            "coordinate_unit": coordinate_unit,
+        }
+        if importer is import_comsol_mesh:
+            import_kwargs.update(
+                region_entity_map=region_entity_map,
+                boundary_entity_map=boundary_entity_map,
+            )
+        elif region_entity_map is not None or boundary_entity_map is not None:
+            raise ValueError(
+                "region_entity_map and boundary_entity_map are COMSOL .mphtxt options"
+            )
+        artifact = importer(source, **import_kwargs)
+        authoring_document = _current_mesh_authoring_document()
+        bound_artifact = replace(
+            artifact,
+            authoring_document=authoring_document,
+            authoring_fingerprint=mesh_authoring_fingerprint(authoring_document),
+        )
+        _bind_mesh_artifact(bound_artifact, source)
+        return MeshPersistenceResult(
+            action="imported",
+            path=source,
+            topology_fingerprint=bound_artifact.topology_fingerprint,
+            authoring_fingerprint=bound_artifact.authoring_fingerprint,
+        )
+
+
 class StudyCouplingsHandle:
     def __init__(self, owner: "StudyBuilder") -> None:
         self._owner = owner
@@ -3767,9 +4813,11 @@ class StudyBuilder:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
         self.field_drives = StudyFieldDriveRegistry()
+        self.monitors = StudyMonitorRegistry(_state._planar_monitors)
         self.universe = StudyUniverseHandle(self)
         self.airbox = StudyAirboxHandle(self)
         self.objects = StudyObjectsHandle(self)
+        self.mesh = StudyMeshHandle(self)
         self.couplings = StudyCouplingsHandle(self)
         self.regions = StudyRegionRegistry()
         if problem_name is not None:
@@ -4014,6 +5062,12 @@ class StudyBuilder:
         exchange(enabled=enabled)
         return self
 
+    def thermal_noise(
+        self, temperature: float, *, seed: int | None = None
+    ) -> "StudyBuilder":
+        thermal_noise(temperature, seed=seed)
+        return self
+
     def domain_mesh(
         self,
         source: str | Path,
@@ -4051,6 +5105,11 @@ class StudyBuilder:
     def solver(
         self,
         *,
+        fix_dt: float | None = None,
+        dt_initial: float | None = None,
+        dt_max: float | None = None,
+        max_err: float | None = None,
+        adaptive_timestep: AdaptiveTimestep | None = None,
         dt: float | None = None,
         max_error: float | None = None,
         dt_min: float | None = None,
@@ -4060,6 +5119,11 @@ class StudyBuilder:
         demag_interval_s: float | None = None,
     ) -> "StudyBuilder":
         solver(
+            fix_dt=fix_dt,
+            dt_initial=dt_initial,
+            dt_max=dt_max,
+            max_err=max_err,
+            adaptive_timestep=adaptive_timestep,
             dt=dt,
             max_error=max_error,
             dt_min=dt_min,
@@ -4086,7 +5150,7 @@ class StudyBuilder:
         self,
         quantity: str,
         *,
-        every: float | None = None,
+        every: SamplingPeriod | None = None,
         indices: Sequence[int] | None = None,
     ) -> "StudyBuilder":
         save(quantity, every=every, indices=indices)
@@ -4112,7 +5176,7 @@ class StudyBuilder:
 
     def tableautosave(
         self,
-        every: float,
+        every: SamplingPeriod,
         quantities: Sequence[str] | None = None,
     ) -> "StudyBuilder":
         tableautosave(every, quantities=quantities)
@@ -4226,6 +5290,8 @@ class StudyBuilder:
         self,
         *,
         tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: object = _RELAX_UNSET,
         algorithm: str = "llg_overdamped",
         energy_tolerance: object = _RELAX_UNSET,
@@ -4243,6 +5309,8 @@ class StudyBuilder:
     ) -> Any:
         return relax(
             tol=tol,
+            tolA=tolA,
+            tolT=tolT,
             max_steps=max_steps,
             algorithm=algorithm,
             energy_tolerance=energy_tolerance,
@@ -4263,13 +5331,17 @@ class StudyBuilder:
         self,
         *,
         method: str = "bb",
-        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+        tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> Any:
         return minimize(
             method=method,
             tol=tol,
+            tolA=tolA,
+            tolT=tolT,
             max_steps=max_steps,
             energy_tolerance=energy_tolerance,
         )
@@ -4282,6 +5354,7 @@ class StudyBuilder:
         target_frequency: float | None = None,
         frequency_min: float | None = None,
         frequency_max: float | None = None,
+        operator: str = "linearized_llg",
         include_demag: bool = True,
         equilibrium_source: str = "relax",
         equilibrium_artifact: str | None = None,
@@ -4298,6 +5371,7 @@ class StudyBuilder:
             target_frequency=target_frequency,
             frequency_min=frequency_min,
             frequency_max=frequency_max,
+            operator=operator,
             include_demag=include_demag,
             equilibrium_source=equilibrium_source,
             equilibrium_artifact=equilibrium_artifact,
@@ -4326,6 +5400,7 @@ class StudyBuilder:
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
         solver_method: str | None = None,
+        solver_preconditioner: str | None = None,
         solver_rtol: float | None = None,
         solver_max_iterations: int | None = None,
         solver_restart_iterations: int | None = None,
@@ -4346,6 +5421,7 @@ class StudyBuilder:
             bc=bc,
             magnetostatic_bc=magnetostatic_bc,
             solver_method=solver_method,
+            solver_preconditioner=solver_preconditioner,
             solver_rtol=solver_rtol,
             solver_max_iterations=solver_max_iterations,
             solver_restart_iterations=solver_restart_iterations,
@@ -4453,6 +5529,18 @@ def demag(
 def exchange(*, enabled: bool = True) -> None:
     """Configure whether exchange contributes to H_eff in the flat API."""
     _state._exchange_enabled = bool(enabled)
+
+
+def thermal_noise(temperature: float, *, seed: int | None = None) -> ThermalNoise:
+    """Configure Brown thermal noise for the flat/study scripting API.
+
+    The returned term is also stored in the script-local world state, so the
+    generated :class:`Problem` retains both temperature and an optional fixed
+    seed through canonical script rewrites.
+    """
+    term = ThermalNoise(temperature=temperature, seed=seed)
+    _state._thermal_noise = term
+    return term
 
 
 # ---------------------------------------------------------------------------
@@ -5388,6 +6476,11 @@ def _mesh_spec_declares_override(spec: _MeshSpecState) -> bool:
 
 
 def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
+    _validate_layered_mesh_spec(
+        spec,
+        context="mesh",
+        require_complete=True,
+    )
     payload: dict[str, object] = {}
     if spec.hmax is not None:
         payload["hmax"] = spec.hmax
@@ -5488,6 +6581,16 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["through_thickness_symmetric"] = True
     if spec.sweep_face_meshing is not None:
         payload["sweep_face_meshing"] = spec.sweep_face_meshing
+    if spec.topology is not None:
+        payload["topology"] = spec.topology
+    if spec.sweep_direction is not None:
+        payload["sweep_direction"] = spec.sweep_direction
+    if spec.element_family is not None:
+        payload["element_family"] = spec.element_family
+    if spec.transition_policy is not None:
+        payload["transition_policy"] = spec.transition_policy
+    if spec.exact_layer_count is not None:
+        payload["exact_layer_count"] = spec.exact_layer_count
     if spec.periodic_pair_ids:
         payload["periodic_pair_ids"] = list(spec.periodic_pair_ids)
     if spec.operations:
@@ -5667,7 +6770,111 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
     return mesh_workflow
 
 
-def _build_explicit_mesh_assets() -> None:
+def _current_mesh_authoring_document() -> dict[str, object]:
+    geometries = _collect_flat_geometries()
+    geometry_payloads: list[dict[str, object]] = []
+    for geometry in geometries:
+        payload = dict(geometry.to_ir())
+        source = payload.get("source")
+        if isinstance(source, str):
+            source_path = Path(source).expanduser()
+            if not source_path.is_absolute():
+                source_path = _mesh_source_root() / source_path
+            if source_path.is_file():
+                import hashlib
+
+                payload["source_sha256"] = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        geometry_payloads.append(payload)
+    fem_hint = _resolve_flat_fem_hint()
+    if (
+        _state._domain_mesh_source is not None
+        and _state._backend != "fem"
+        and not _state._default_mesh_spec.is_configured()
+        and not any(handle._mesh_spec.is_configured() for handle in _state._magnets)
+    ):
+        fem_hint = None
+    fem_payload = fem_hint.to_ir() if fem_hint is not None else None
+    if isinstance(fem_payload, dict):
+        fem_payload.pop("mesh", None)
+    return {
+        "geometries": geometry_payloads,
+        "fem": fem_payload,
+        "study_universe": (
+            _state._study_universe.to_ir() if _state._study_universe is not None else None
+        ),
+        "default_mesh": _mesh_spec_to_metadata(_state._default_mesh_spec),
+        "per_geometry_mesh": [
+            {
+                "geometry": handle._name,
+                "mesh": _mesh_spec_to_metadata(handle._mesh_spec),
+            }
+            for handle in _state._magnets
+        ],
+        "periodic_boundary_conditions": (
+            _state._pbc.to_ir() if _state._pbc is not None else None
+        ),
+        "object_regions": [
+            region.to_ir()
+            for handle in _state._magnets
+            for region in handle._object_regions
+        ],
+    }
+
+
+def _boundary_semantic_map(mesh: object) -> dict[str, int]:
+    markers = getattr(mesh, "boundary_markers")
+    roles = getattr(mesh, "facet_roles")
+    result: dict[str, int] = {}
+    for marker in sorted(set(int(value) for value in markers.tolist())):
+        marker_roles = sorted(
+            set(str(value) for value in roles[markers == marker].tolist())
+        )
+        role = marker_roles[0] if len(marker_roles) == 1 else "boundary"
+        result[f"{role}_{marker}"] = marker
+    return result
+
+
+def _bind_mesh_artifact(artifact: object, source: Path) -> None:
+    _state._active_mesh_artifact = artifact
+    _state._domain_mesh_source = str(source)
+    _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
+    _state._domain_object_region_markers = [
+        dict(entry) for entry in artifact.object_region_markers
+    ]
+    _state._extra_runtime_metadata["mesh_persistence"] = {
+        "source": str(source),
+        "origin": (artifact.provenance or {}).get("origin", "native_load"),
+        "topology_fingerprint": artifact.topology_fingerprint,
+        "authoring_fingerprint": artifact.authoring_fingerprint,
+    }
+
+
+def _clear_bound_mesh_artifact() -> None:
+    _state._active_mesh_artifact = None
+    _state._domain_mesh_source = None
+    _state._domain_region_markers = None
+    _state._domain_object_region_markers = None
+    _state._extra_runtime_metadata.pop("mesh_persistence", None)
+
+
+def _build_explicit_mesh_assets() -> dict[str, Any] | None:
+    from fullmag.meshing.persistence import MeshArtifact
+
+    active = _state._active_mesh_artifact
+    if isinstance(active, MeshArtifact):
+        domain_asset: dict[str, object] = {
+            "mesh_source": str(_state._domain_mesh_source) if _state._domain_mesh_source else None,
+            "mesh": active.mesh.to_ir(active.mesh_name),
+            "region_markers": [dict(entry) for entry in active.region_markers],
+            "object_region_markers": [dict(entry) for entry in active.object_region_markers],
+        }
+        if active.build_report is not None:
+            domain_asset["build_report"] = dict(active.build_report)
+        return {
+            "fdm_grid_assets": [],
+            "fem_mesh_assets": [],
+            "fem_domain_mesh_asset": domain_asset,
+        }
     geometries = _collect_flat_geometries()
     if not geometries:
         raise ValueError("No geometries defined — call fm.geometry(...) before build_mesh()")
@@ -5691,10 +6898,21 @@ def _build_explicit_mesh_assets() -> None:
         requested_backend=BackendTarget.FEM,
         geometries=resolved_geometries,
         discretization=DiscretizationHints(**discretization_kwargs),
+        study_universe=(
+            _state._study_universe.to_ir()
+            if _state._study_universe is not None
+            else None
+        ),
         mesh_workflow=_collect_mesh_workflow_metadata(),
+        object_regions=[
+            region.to_ir()
+            for handle in _state._magnets
+            for region in handle._object_regions
+        ],
         asset_cache=_state._geometry_asset_cache,
     )
     _cache_mesh_quality_reports(assets)
+    return assets
 
 
 def _mesh_quality_report_from_ir(payload: Mapping[str, object]) -> object | None:
@@ -5854,6 +7072,11 @@ def demag_quality(profile: str) -> None:
 
 def solver(
     *,
+    fix_dt: float | None = None,
+    dt_initial: float | None = None,
+    dt_max: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
     dt: float | None = None,
     max_error: float | None = None,
     dt_min: float | None = None,
@@ -5866,11 +7089,13 @@ def solver(
 
     Parameters
     ----------
-    dt : float, optional
-        Fixed timestep in seconds. When ``max_error`` is also provided, this
-        becomes the initial timestep for adaptive RK23/RK45 stepping.
-    max_error : float, optional
-        Adaptive integrator error tolerance.
+    fix_dt : float, optional
+        Fixed timestep in seconds. Mutually exclusive with adaptive controls.
+    dt_initial : float, optional
+        Initial adaptive timestep. Omission is preserved and resolves to
+        ``dt_min`` at runtime.
+    max_err : float, optional
+        Absolute maximum embedded vector error for adaptive stepping.
     dt_min : float, optional
         Minimum adaptive timestep in seconds.
     integrator : str, optional
@@ -5883,28 +7108,130 @@ def solver(
     """
     if gamma is not None and g is not None:
         raise ValueError("solver() accepts either gamma=... or g=..., not both")
+    if dt is not None and (fix_dt is not None or dt_initial is not None or max_err is not None):
+        raise ValueError("deprecated dt cannot be mixed with fix_dt, dt_initial, or max_err")
+    if max_error is not None and max_err is not None:
+        raise ValueError("deprecated max_error cannot be mixed with max_err")
+    if dt is not None or max_error is not None:
+        warnings.warn(
+            "solver(dt=..., max_error=...) is deprecated; use fix_dt or "
+            "dt_initial/max_err",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    legacy_adaptive = max_error is not None
     if dt is not None:
-        _state._dt = dt
+        if legacy_adaptive:
+            dt_initial = dt
+        else:
+            fix_dt = dt
     if max_error is not None:
-        _state._max_error = max_error
-    if dt_min is not None:
-        if dt_min <= 0.0:
-            raise ValueError("dt_min must be positive")
-        _state._adaptive_dt_min = dt_min
-    if integrator is not None:
-        _state._integrator = integrator
+        max_err = max_error
+
+    convenience_adaptive_requested = any(
+        value is not None for value in (dt_initial, dt_min, dt_max, max_err)
+    )
+    if adaptive_timestep is not None and (
+        fix_dt is not None or convenience_adaptive_requested
+    ):
+        raise ValueError(
+            "adaptive_timestep cannot be mixed with fixed or convenience adaptive controls"
+        )
+    if fix_dt is not None and convenience_adaptive_requested:
+        raise ValueError("fix_dt is mutually exclusive with adaptive timestep controls")
+    canonical_integrator = (
+        INTEGRATOR_ALIASES.get(integrator, integrator) if integrator is not None else None
+    )
+    if canonical_integrator is not None and canonical_integrator not in SUPPORTED_INTEGRATORS:
+        supported = ", ".join(sorted(SUPPORTED_INTEGRATORS))
+        raise ValueError(f"integrator must be one of: {supported}")
+    policy_was_requested = (
+        fix_dt is not None
+        or convenience_adaptive_requested
+        or adaptive_timestep is not None
+    )
+    resolved_fixed_timestep = _state._fixed_timestep
+    resolved_adaptive = _state._adaptive_timestep_policy
+    if fix_dt is not None:
+        require_positive(fix_dt, "fix_dt")
+        resolved_fixed_timestep = float(fix_dt)
+        resolved_adaptive = None
+    elif convenience_adaptive_requested:
+        previous_max_error = (
+            resolved_adaptive
+            if resolved_adaptive is not None
+            and resolved_adaptive._tolerance_mode == "max_error"
+            else None
+        )
+        resolved_max_err = (
+            float(max_err)
+            if max_err is not None
+            else previous_max_error.atol
+            if previous_max_error is not None
+            else None
+        )
+        if resolved_max_err is None:
+            raise ValueError("adaptive timestep controls require max_err")
+        resolved_adaptive = AdaptiveTimestep._from_max_error(
+            max_err=resolved_max_err,
+            dt_initial=(
+                dt_initial
+                if dt_initial is not None
+                else previous_max_error.dt_initial
+                if previous_max_error is not None
+                else None
+            ),
+            dt_min=(
+                dt_min
+                if dt_min is not None
+                else previous_max_error.dt_min
+                if previous_max_error is not None
+                else 1e-15
+            ),
+            dt_max=(
+                dt_max
+                if dt_max is not None
+                else previous_max_error.dt_max
+                if previous_max_error is not None
+                else None
+            ),
+        )
+        resolved_fixed_timestep = None
+    elif adaptive_timestep is not None:
+        if not isinstance(adaptive_timestep, AdaptiveTimestep):
+            raise TypeError("adaptive_timestep must be an AdaptiveTimestep")
+        resolved_adaptive = adaptive_timestep
+        resolved_fixed_timestep = None
+
+    effective_integrator = canonical_integrator or _state._integrator or "auto"
+    if (
+        resolved_adaptive is not None
+        and effective_integrator not in ADAPTIVE_INTEGRATORS
+        and effective_integrator != "auto"
+    ):
+        raise ValueError("adaptive timestep requires rk23, rk45, or auto")
+
+    resolved_demag_interval = _state._demag_interval_s
     if demag_interval_s is not None:
-        if demag_interval_s <= 0.0:
-            raise ValueError("demag_interval_s must be positive")
-        _state._demag_interval_s = demag_interval_s
+        resolved_demag_interval = require_positive(
+            demag_interval_s, "demag_interval_s"
+        )
+    resolved_gamma = _state._gamma
     if gamma is not None:
-        if gamma <= 0.0:
-            raise ValueError("gamma must be positive")
-        _state._gamma = gamma
+        resolved_gamma = require_positive(gamma, "gamma")
     elif g is not None:
-        if g <= 0.0:
-            raise ValueError("g must be positive")
-        _state._gamma = _gamma_from_g_factor(g)
+        require_positive(g, "g")
+        resolved_gamma = require_positive(_gamma_from_g_factor(g), "derived gamma")
+
+    # Commit only after the complete proposed configuration is valid.
+    if policy_was_requested:
+        _state._fixed_timestep = resolved_fixed_timestep
+        _state._adaptive_timestep_policy = resolved_adaptive
+    if canonical_integrator is not None:
+        _state._integrator = canonical_integrator
+    _state._demag_interval_s = resolved_demag_interval
+    _state._gamma = resolved_gamma
 
 
 # ---------------------------------------------------------------------------
@@ -6050,7 +7377,7 @@ _EIGEN_QUANTITIES = {"spectrum", "mode", "dispersion"}
 def save(
     quantity: str,
     *,
-    every: float | None = None,
+    every: SamplingPeriod | None = None,
     indices: Sequence[int] | None = None,
 ) -> None:
     """Register an output quantity to save periodically.
@@ -6061,12 +7388,13 @@ def save(
         Field name (``"m"``, ``"H_demag"``, ``"H_eff"``),
         scalar name (``"E_ex"``, ``"E_total"``, ``"max_h_eff"``),
         or eigen quantity (``"spectrum"``, ``"mode"``, ``"dispersion"``).
-    every : float, optional
-        Save interval in seconds.  Required for field/scalar outputs,
-        ignored for eigen outputs.
+    every : float or "auto", optional
+        Save interval in seconds, or automatic sampling derived from an active
+        sinc drive. Required for field/scalar outputs, ignored for eigen outputs.
     indices : sequence of int, optional
         Mode indices for ``"mode"`` output.
     """
+    _state._outputs_explicit = True
     if quantity in _EIGEN_QUANTITIES:
         if quantity == "spectrum":
             _state._outputs.append(SaveSpectrum())
@@ -6079,20 +7407,34 @@ def save(
         return
     if every is None:
         raise ValueError("save() requires every= for field/scalar outputs")
-    if quantity in _SCALAR_QUANTITIES or quantity.startswith("E_"):
-        _state._outputs.append(SaveScalar(scalar=quantity, every=every))
-    else:
-        _state._outputs.append(SaveField(field=quantity, every=every))
+    _state._outputs.append(_periodic_output(quantity, every))
+
+
+def _periodic_output(quantity: str, every: SamplingPeriod) -> SaveField | SaveScalar:
+    normalized = require_non_empty(quantity, "quantity")
+    if normalized in _SCALAR_QUANTITIES or normalized.startswith("E_"):
+        return SaveScalar(scalar=normalized, every=every)
+    return SaveField(field=normalized, every=every)
+
+
+def _periodic_output_name(output: object) -> str | None:
+    if isinstance(output, SaveField):
+        return output.field
+    if isinstance(output, SaveScalar):
+        return output.scalar
+    return None
 
 
 def save_response(observable: str = "susceptibility_tensor") -> None:
     """Register a frequency-response observable output."""
+    _state._outputs_explicit = True
     _state._outputs.append(SaveResponse(observable))
 
 
 def clear_outputs() -> None:
     """Clear previously registered flat-script output quantities."""
     _state._outputs.clear()
+    _state._outputs_explicit = True
 
 
 def snapshot(
@@ -6147,10 +7489,16 @@ def snapshot(
         )
 
     field, component = parse_snapshot_quantity(raw_quantity)
+    _state._outputs_explicit = True
     _state._outputs.append(Snapshot(field=field, component=component, every=every, layer=layer_name))
 
 
-def tableautosave(every: float, quantities: Sequence[str] | None = None) -> None:
+def tableautosave(
+    every: SamplingPeriod | None = None,
+    quantities: Sequence[str] | None = None,
+    *,
+    every_steps: int | None = None,
+) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the canonical ``sampling.table_autosave`` observable table.
@@ -6159,6 +7507,7 @@ def tableautosave(every: float, quantities: Sequence[str] | None = None) -> None
     """
     _state._table_autosave = TableAutosave(
         t_sampl=every,
+        every_steps=every_steps,
         quantities=quantities,
     )
 
@@ -6213,8 +7562,12 @@ def _build_relax_llg_dynamics(
     max_error: float | None,
     dt_min: float | None,
     dt_max: float | None,
+    dt_initial: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     relax_alpha: float | None = None,
+    require_explicit_timestep: bool = False,
 ) -> LLG | None:
     if algorithm != "llg_overdamped":
         if (
@@ -6223,17 +7576,48 @@ def _build_relax_llg_dynamics(
             or max_error is not None
             or dt_min is not None
             or dt_max is not None
+            or dt_initial is not None
+            or max_err is not None
+            or adaptive_timestep is not None
             or field_refresh is not None
             or relax_alpha is not None
         ):
             raise TypeError(
-                "solver/dt/max_error/dt_min/dt_max/field_refresh/relax_alpha "
+                "solver/dt/max_error/dt_initial/max_err/dt_min/dt_max/"
+                "adaptive_timestep/field_refresh/relax_alpha "
                 "are supported only for algorithm='llg_overdamped'"
             )
         return None
 
+    if dt is not None and (dt_initial is not None or max_err is not None):
+        raise ValueError("deprecated dt cannot be mixed with dt_initial or max_err")
+    if max_error is not None and max_err is not None:
+        raise ValueError("deprecated max_error cannot be mixed with max_err")
+    if max_error is not None and dt_initial is not None:
+        raise ValueError("deprecated max_error cannot be mixed with dt_initial")
+
     integrator = _resolve_relax_solver(solver)
     fixed_timestep, dt_is_auto = _coerce_relax_dt(dt)
+    if adaptive_timestep is not None:
+        if not isinstance(adaptive_timestep, AdaptiveTimestep):
+            raise TypeError("adaptive_timestep must be an AdaptiveTimestep")
+        if any(
+            value is not None
+            for value in (dt, max_error, dt_initial, max_err, dt_min, dt_max)
+        ):
+            raise ValueError(
+                "adaptive_timestep cannot be mixed with dt/max_error/"
+                "dt_initial/max_err/dt_min/dt_max"
+            )
+        if integrator not in ADAPTIVE_INTEGRATORS:
+            raise ValueError("adaptive_timestep requires an adaptive relax solver (rk23 or rk45)")
+        if require_explicit_timestep and (
+            not adaptive_timestep._dt_min_explicit
+            or adaptive_timestep.dt_max is None
+        ):
+            raise ValueError(
+                "executable adaptive relax stages require explicit dt_min and dt_max"
+            )
     if dt_min is not None:
         if dt_min <= 0.0:
             raise ValueError("dt_min must be positive when provided")
@@ -6245,32 +7629,43 @@ def _build_relax_llg_dynamics(
         if fixed_timestep is not None:
             raise ValueError("dt_max requires dt='auto' for relax()")
 
-    adaptive_timestep = None
-    if max_error is not None:
-        if max_error <= 0.0:
-            raise ValueError("max_error must be positive when provided")
+    resolved_adaptive_timestep = adaptive_timestep
+    resolved_max_err = max_err if max_err is not None else max_error
+    if dt_initial is not None and resolved_max_err is None:
+        raise ValueError("dt_initial requires max_err for relax()")
+    if resolved_max_err is not None:
+        max_err_name = "max_err" if max_err is not None else "max_error"
+        if require_explicit_timestep and (dt_min is None or dt_max is None):
+            raise ValueError(
+                "executable adaptive relax stages require explicit dt_min and dt_max"
+            )
+        if resolved_max_err <= 0.0:
+            raise ValueError(f"{max_err_name} must be positive when provided")
         if fixed_timestep is not None:
-            raise ValueError("max_error requires dt='auto' for relax()")
+            raise ValueError(f"{max_err_name} requires adaptive stepping for relax()")
         if integrator not in ADAPTIVE_INTEGRATORS:
             raise ValueError(
-                "max_error requires an adaptive relax solver (rk23 or rk45)"
+                f"{max_err_name} requires an adaptive relax solver (rk23 or rk45)"
             )
-        adaptive_kwargs: dict[str, Any] = {"atol": max_error}
-        if dt_min is not None:
-            adaptive_kwargs["dt_min"] = dt_min
-        if dt_max is not None:
-            adaptive_kwargs["dt_max"] = dt_max
-        adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
-    elif dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
-        # dt=None (default) with an adaptive integrator: use default adaptive
-        # stepping so the runner receives a valid AdaptiveTimeStepIR rather than
-        # both fixed_timestep=None and adaptive_timestep=None.
-        adaptive_kwargs = {}
-        if dt_min is not None:
-            adaptive_kwargs["dt_min"] = dt_min
-        if dt_max is not None:
-            adaptive_kwargs["dt_max"] = dt_max
-        adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
+        resolved_adaptive_timestep = AdaptiveTimestep._from_max_error(
+            max_err=resolved_max_err,
+            dt_initial=dt_initial,
+            dt_min=dt_min if dt_min is not None else 1e-15,
+            dt_max=dt_max,
+        )
+    elif resolved_adaptive_timestep is None and fixed_timestep is None:
+        if require_explicit_timestep:
+            raise ValueError(
+                "LLG relaxation requires an explicit fixed or complete adaptive "
+                "timestep policy"
+            )
+        if dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
+            adaptive_kwargs = {}
+            if dt_min is not None:
+                adaptive_kwargs["dt_min"] = dt_min
+            if dt_max is not None:
+                adaptive_kwargs["dt_max"] = dt_max
+            resolved_adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
         raise ValueError(
@@ -6282,7 +7677,7 @@ def _build_relax_llg_dynamics(
         gamma=gamma,
         integrator=integrator,
         fixed_timestep=fixed_timestep,
-        adaptive_timestep=adaptive_timestep,
+        adaptive_timestep=resolved_adaptive_timestep,
         field_refresh=field_refresh,
     )
 
@@ -6296,6 +7691,7 @@ def _build_problem(
     study_kind: str = "time_evolution",
     relax_algorithm: str = "llg_overdamped",
     relax_torque_tolerance: float = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
+    relax_torque_tolerance_unit: str = "T",
     relax_energy_tolerance: float | None = None,
     relax_max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
     relax_max_relaxation_time_s: float | None = None,
@@ -6362,26 +7758,27 @@ def _build_problem(
             break
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
+    if s._thermal_noise is not None:
+        energy.append(s._thermal_noise)
 
-    # Outputs
-    outputs = s._outputs if s._outputs else [
+    # Study pipelines start with autosave disabled. Flat scripts retain the
+    # historical default unless they explicitly configure or clear outputs.
+    default_outputs = [
         SaveField(field="m", every=1e-12),
         SaveScalar(scalar="E_total", every=1e-12),
     ]
+    outputs = (
+        list(s._outputs)
+        if s._outputs_explicit
+        else ([] if s._api_surface == "study" else default_outputs)
+    )
 
     # Dynamics
     llg_kwargs: dict[str, Any] = {}
-    if s._max_error is not None:
-        adaptive_kwargs: dict[str, Any] = {"atol": s._max_error}
-        if s._dt is not None:
-            adaptive_kwargs["dt_initial"] = s._dt
-        if s._adaptive_dt_min is not None:
-            adaptive_kwargs["dt_min"] = s._adaptive_dt_min
-        llg_kwargs["adaptive_timestep"] = AdaptiveTimestep(**adaptive_kwargs)
-    elif s._adaptive_dt_min is not None:
-        raise ValueError("dt_min requires max_error for adaptive solver configuration")
-    elif s._dt is not None:
-        llg_kwargs["fixed_timestep"] = s._dt
+    if s._adaptive_timestep_policy is not None:
+        llg_kwargs["adaptive_timestep"] = s._adaptive_timestep_policy
+    elif s._fixed_timestep is not None:
+        llg_kwargs["fixed_timestep"] = s._fixed_timestep
     if s._integrator is not None:
         llg_kwargs["integrator"] = s._integrator
     if s._gamma is not None and not math.isclose(s._gamma, DEFAULT_GAMMA):
@@ -6456,12 +7853,12 @@ def _build_problem(
     ]
 
     if study_kind == "relaxation":
-        relax_kwargs: dict[str, object] = {}
         if relax_stop is None:
             relax_kwargs = {
                 "torque_tolerance": relax_torque_tolerance,
                 "energy_tolerance": relax_energy_tolerance,
                 "max_steps": relax_max_steps,
+                "torque_tolerance_unit": relax_torque_tolerance_unit,
             }
             if relax_max_relaxation_time_s is not None:
                 relax_kwargs["max_relaxation_time_s"] = relax_max_relaxation_time_s
@@ -6469,11 +7866,10 @@ def _build_problem(
                 relax_kwargs["max_pseudotime_s"] = relax_max_pseudotime_s
             if relax_max_physical_time_s is not None:
                 relax_kwargs["max_physical_time_s"] = relax_max_physical_time_s
+        else:
+            relax_kwargs = {"torque_tolerance_unit": relax_torque_tolerance_unit}
         study = Relaxation(
-            outputs=td_outputs or [
-                SaveField(field="m", every=1e-12),
-                SaveScalar(scalar="E_total", every=1e-12),
-            ],
+            outputs=td_outputs,
             algorithm=relax_algorithm,
             stop=relax_stop,
             dynamics=relax_dynamics,
@@ -6528,7 +7924,7 @@ def _build_problem(
     else:
         study = TimeEvolution(
             dynamics=dynamics,
-            outputs=td_outputs or outputs,
+            outputs=td_outputs,
             table_autosave=s._table_autosave,
         )
 
@@ -6543,7 +7939,9 @@ def _build_problem(
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         current_modules=tuple(s._current_modules),
         field_drives=tuple(s._field_drives),
+        monitors=tuple(s._planar_monitors),
         couplings=s._couplings.items(),
+        temperature=s._thermal_noise.temperature if s._thermal_noise is not None else None,
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,
         pbc=s._pbc,
@@ -6603,8 +8001,11 @@ def run_while(
     relax_fn = globals()["relax"]
     if kwargs:
         if relax:
+            if "tol" in kwargs:
+                raise ValueError("tol has been removed; use tolT or tolA")
             allowed = {
-                "tol",
+                "tolA",
+                "tolT",
                 "algorithm",
                 "energy_tolerance",
                 "relax_alpha",
@@ -6628,6 +8029,11 @@ def run_while(
         max_steps=max_steps,
         relax=relax,
     )
+    relax_algorithm = str(relax_kwargs.get("algorithm", "llg_overdamped"))
+    relax_alpha = relax_kwargs.get(
+        "relax_alpha",
+        1.0 if relax_algorithm == "llg_overdamped" else None,
+    )
 
     if _capture_enabled:
         if cfg.relax:
@@ -6637,13 +8043,12 @@ def run_while(
             if cfg.max_steps is not None:
                 chunk_steps = min(chunk_steps, cfg.max_steps)
             return relax_fn(
-                tol=float(
-                    relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
-                ),
+                tolA=relax_kwargs.get("tolA", _RELAX_UNSET),
+                tolT=relax_kwargs.get("tolT", _RELAX_UNSET),
                 max_steps=chunk_steps,
-                algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
+                algorithm=relax_algorithm,
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
-                relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+                relax_alpha=relax_alpha,  # type: ignore[arg-type]
                 solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
                 dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
                 max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
@@ -6683,13 +8088,12 @@ def run_while(
                     break
                 chunk_steps = min(chunk_steps, remaining)
             last_result = relax_fn(
-                tol=float(
-                    relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
-                ),
+                tolA=relax_kwargs.get("tolA", _RELAX_UNSET),
+                tolT=relax_kwargs.get("tolT", _RELAX_UNSET),
                 max_steps=chunk_steps,
-                algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
+                algorithm=relax_algorithm,
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
-                relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+                relax_alpha=relax_alpha,  # type: ignore[arg-type]
                 solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
                 dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
                 max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
@@ -6742,6 +8146,8 @@ def RunWhile(
 def relax(
     *,
     tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: object = _RELAX_UNSET,
     algorithm: str = "llg_overdamped",
     energy_tolerance: object = _RELAX_UNSET,
@@ -6761,8 +8167,10 @@ def relax(
 
     Parameters
     ----------
-    tol : float
-        Torque convergence tolerance (max |m × H_eff|).
+    tolT : float, optional
+        Torque convergence tolerance in tesla. Defaults to ``1e-6``.
+    tolA : float, optional
+        Torque convergence tolerance in A/m. Mutually exclusive with ``tolT``.
     max_steps : int
         Maximum number of relaxation steps.
     algorithm : str
@@ -6796,9 +8204,12 @@ def relax(
         energy_tolerance,
         max_steps,
         max_relaxation_time_s,
+        tol_unit,
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         energy_tolerance=energy_tolerance,
         max_steps=max_steps,
         max_relaxation_time_s=max_relaxation_time_s,
@@ -6831,6 +8242,7 @@ def relax(
         study_kind="relaxation",
         relax_algorithm=algorithm,
         relax_torque_tolerance=tol,
+        relax_torque_tolerance_unit=tol_unit,
         relax_energy_tolerance=energy_tolerance,
         relax_max_steps=max_steps,
         relax_max_relaxation_time_s=max_relaxation_time_s,
@@ -6884,7 +8296,9 @@ def _relaxation_default_until_seconds(study: Relaxation) -> float:
 def minimize(
     *,
     method: str = "bb",
-    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+    tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: int = 50_000,
     energy_tolerance: float | None = None,
 ) -> Any:
@@ -6894,8 +8308,10 @@ def minimize(
     ----------
     method : str
         ``"bb"``/``"projected_gradient_bb"`` or ``"ncg"``/``"nonlinear_cg"``.
-    tol : float
-        Torque convergence tolerance (A/m).
+    tolT : float, optional
+        Torque convergence tolerance in tesla. Defaults to ``1e-6``.
+    tolA : float, optional
+        Torque convergence tolerance in A/m. Mutually exclusive with ``tolT``.
     max_steps : int
         Maximum minimization iterations.
     energy_tolerance : float, optional
@@ -6904,6 +8320,8 @@ def minimize(
     algorithm = _resolve_minimize_algorithm(method)
     return relax(
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         max_steps=max_steps,
         algorithm=algorithm,
         energy_tolerance=energy_tolerance,
@@ -6914,13 +8332,17 @@ def minimize(
 def Minimize(
     *,
     method: str = "bb",
-    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+    tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: int = 50_000,
     energy_tolerance: float | None = None,
 ) -> Any:
     return minimize(
         method=method,
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         max_steps=max_steps,
         energy_tolerance=energy_tolerance,
     )

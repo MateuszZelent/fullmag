@@ -1,8 +1,8 @@
 # Table Autosave Observables
 
-- Status: draft
+- Status: canonical
 - Owners: Fullmag core
-- Last updated: 2026-06-04
+- Last updated: 2026-07-31
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/16-charts-analysis-module.md`
 
@@ -14,9 +14,15 @@ or relaxation study, inspect the samples live in the control room, and export
 the same intent through the public Python model. The table is an observable
 stream, not a viewport cache and not a backend-specific debug log.
 
-The first production table is `default`. It records solver-step scalar
-observables at a simulation-time cadence. The live UI may display the data as
-1D, 2D, or 3D charts, but the chart state never owns the physical samples.
+The first production table is `default`. It records solver-state scalar
+observables at a simulation-time cadence or an accepted-relaxation-step
+cadence. The live UI may display the data as 1D, 2D, or 3D charts, but the
+chart state never owns the physical samples.
+
+`Relax` and `Run` stages may also own a complete autosave policy. That policy
+selects a named result target, storage layout, file format, table sampling, and
+field snapshots. Stage ownership is strict: a policy is active only while its
+owning stage executes and cannot leak into a following stage.
 
 ## 2. Physical Model
 
@@ -32,7 +38,7 @@ E_total(t_k) = E_ex + E_demag + E_ext + E_ani + E_dmi + ...
 max_torque(t_k) = max_x |torque proxy(x, t_k)|
 ```
 
-Sampling is triggered by simulation time:
+Time-evolution sampling is triggered by simulation time:
 
 ```text
 t_current + eps >= t_next_sample
@@ -42,12 +48,26 @@ When adaptive stepping crosses several requested sample times in one solver
 step, the first implementation records the current solver state once and marks
 the sample policy as coalesced. It does not invent interpolated physics values.
 
+Relaxation uses an explicit accepted-step cadence:
+
+```text
+accepted_step == 0
+or accepted_step mod every_steps == 0
+or accepted_step is the final accepted state
+```
+
+`every_steps` counts accepted solver states only. Rejected line-search,
+trust-region, or adaptive-controller candidates are diagnostics, not table
+rows. A relaxation table always includes the initial and final state; a final
+state already on cadence is not duplicated.
+
 ### 2.2 Symbols and SI Units
 
 | Symbol or column | Meaning | SI unit |
 |---|---|---|
 | `step` | solver step index | `1` |
-| `t` | simulation time | `s` |
+| `t` | physical simulation time, only for time evolution | `s` |
+| `pseudo_time_s` | algorithmic relaxation clock, never physical time | `s` |
 | `dt` | solver timestep | `s` |
 | `mx`, `my`, `mz` | volume averaged normalized magnetization components | `1` |
 | `e_total` | total magnetic energy | `J` |
@@ -64,11 +84,36 @@ Public authoring and UI labels use `t` and `dt`.
 
 - Table autosave samples reduced observables at solver states only.
 - It is disabled unless the user requests `table_autosave`.
-- The sampling cadence is in simulation seconds, not wall-clock seconds.
+- A time-evolution cadence is in simulation seconds, not wall-clock seconds.
+- A relaxation `every_steps` cadence is dimensionless and counts accepted
+  states. It is the compatible coordinate for direct minimizers.
+- A direct minimizer does not expose `t=0` as physical time. Its table charts
+  default to `step`; pseudo time may be displayed only as `pseudo_time_s`.
 - UI decimation is a display/read-model concern; it must preserve the stored
   table values and never become the canonical artifact.
 - The browser receives invalidations and cursor metadata over realtime events;
   it fetches row windows through HTTP resources.
+
+### 2.4 Solver attempts are not table-autosave rows
+
+Contract: `LLG-TD-ATTEMPT-V1`.
+
+Solver attempts include rejected candidates and controller decisions that do
+not correspond to published physical states. They are recorded in the bounded
+`solver_attempts.csv` diagnostic artifact defined by the canonical LLG
+time-domain contract. They are not inserted into a user table, resampled at an
+output cadence, interpolated, or coalesced.
+
+Table autosave contains accepted-state observables only. Its documented
+coalesced behavior when one adaptive step crosses several output times does
+not alter, compress, or replace the one-record-per-attempt solver trace.
+
+The live solver read-model may expose the latest accepted-step `Error`,
+configured `MaxError`, suggested next `dt`, and rejected-attempt count. In
+maximum-error mode `Error` and `MaxError` are absolute embedded vector errors
+and may be compared directly. The normalized controller metric `eta` remains
+in `solver_attempts.csv`; advanced `atol + rtol` mode must not relabel `eta` as
+an absolute error or compare it directly with `atol`.
 
 ## 3. Numerical Interpretation
 
@@ -77,14 +122,18 @@ Public authoring and UI labels use `t` and `dt`.
 FDM backends already compute scalar reductions for solver status and energy
 history. Table autosave reuses the same reduced quantities and stores selected
 columns in append-only row order. The CPU reference path remains the oracle for
-energy and magnetization reductions.
+energy and magnetization reductions. For every accepted state, including direct
+minimizer (`projected_gradient_bb` and `nonlinear_cg`) states, `mx/my/mz` are
+populated from the current magnetization before the row is stored; they must
+never be copied from an uninitialized step-stat snapshot.
 
 ### 3.2 FEM
 
 FEM backends expose the same public column identifiers. Backend-specific
-integration and weighting stay below the scalar observable boundary. The table
-contract does not expose MFEM, hypre, libCEED, mesh-part, or device-residency
-details.
+integration and weighting stay below the scalar observable boundary. The
+reduction is the magnetic-region volume/moment average (lumped FEM measure,
+including $M_s$ where it varies), not a node-count average. The table contract
+does not expose MFEM, hypre, libCEED, mesh-part, or device-residency details.
 
 ### 3.3 Hybrid
 
@@ -101,20 +150,55 @@ The public DSL adds:
 ```python
 fm.TableAutosave(t_sampl=1e-12)
 study.table_autosave(t_sampl=1e-12)
+
+# relaxation stage (canonical table-only shorthand)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=50_000,
+).tableautosave(every_steps=10)
+
+# complete stage-local autosave policy
+study.stages.add_relax(
+    stage_id="relax-2",
+    algorithm="projected_gradient_bb",
+    max_steps=50_000,
+).autosave(fm.StageAutosave(
+    target="main",
+    layout="continuous",
+    format="zarr",
+    table=fm.TableAutosave(
+        every_steps=10,
+        quantities=["step", "mx", "my", "mz", "e_total"],
+    ),
+    fields=[fm.FieldAutosave("m", every_steps=100)],
+))
 ```
 
-`TimeEvolution` and `Relaxation` accept `table_autosave=...`. The default
-column set is:
+`TimeEvolution` accepts only a physical-time cadence; `Relaxation` accepts
+only `every_steps`. The default column set is:
 
 ```text
 step, t, mx, my, mz, e_total, max_torque
 ```
 
+Persistent `study.stages.tableautosave(...)` actions remain readable for
+compatibility. New relaxation scripts attach accepted-step sampling directly
+to the owning relaxation stage so the cadence cannot leak into later stages.
+
+`FieldAutosave` requires exactly one cadence: `every` for physical-time Run
+stages or `every_steps` for accepted-step Relax stages. `StageAutosave`
+defaults to `target="main"`, `layout="continuous"`, and `format="zarr"`.
+At least one table or field policy is required.
+
 ### 4.2 ProblemIR Representation
 
-`SamplingIR` gains an optional `table_autosave` field with:
+`SamplingIR` exposes an optional stage autosave policy containing `target`,
+`layout = continuous | separate`, `format = zarr | hdf5 | txt`, an optional
+table policy, and zero or more field policies. The nested table policy keeps:
 
-- `sample_period_s`
+- exactly one cadence: `sample_period_s` / `sample_period_policy` or
+  `every_steps`
 - `quantities`
 - `table_id`
 
@@ -123,10 +207,46 @@ and Python-authored studies must lower to the same IR.
 
 ### 4.3 Planner and Capability-Matrix Impact
 
-Planners validate that the requested study has a time-like progression and that
-each requested quantity is supported by the resolved backend. Unsupported
-columns fail clearly or are reported as degraded in provenance; they are not
-silently omitted.
+Planners validate that time cadence is used for physical time evolution and
+that accepted-step cadence is used for relaxation. Each requested quantity
+must be supported by the resolved backend. Unsupported columns fail clearly;
+they are not silently omitted.
+
+Stages joining one continuous target must agree on format and compatible table
+and field schemas. Mesh identity, value type, component count, quantity
+identity, and chunking must remain compatible. Strict execution rejects a
+conflict before opening the target and never silently forks it.
+
+### 4.4 Storage formats and stage layout
+
+| Format | Scalar tables | Spatial fields | Default |
+|---|---:|---:|---:|
+| Zarr | yes | yes | yes |
+| HDF5 | yes | yes | no |
+| TXT | yes | no | no |
+
+TXT field autosave is invalid at every public boundary. The error must retain
+the user's field configuration for correction; UI authoring must not silently
+delete it.
+
+Zarr and HDF5 store numerical payloads once under explicit stage groups:
+
+```text
+stages/<stage-index>-<stage-id>/table/<quantity>
+stages/<stage-index>-<stage-id>/fields/<quantity>
+```
+
+For `layout="continuous"`, the same target also contains a `continuous`
+hierarchy with ordered indexes and manifests only. It does not duplicate table
+or field arrays. Readers reconstruct the logical sequence from stage-owned
+payloads. `layout="separate"` produces one target per stage using the same
+internal stage schema.
+
+Every logical sample carries `sample_index`, `stage_index`, `stage_id`,
+`stage_kind`, `stage_sample_index`, and `stage_step`. It also carries exactly
+the applicable clock coordinate: physical `time_s` for Run or
+`accepted_step` for Relax. Relaxation pseudotime is never merged with physical
+Run time.
 
 ## 5. Runtime, OpenAPI, and UI Impact
 
@@ -151,10 +271,26 @@ to the JSON row payload.
 default table. Status carries only `scalars_revision` and resource pointers.
 WebSocket events carry invalidations only, never full table rows.
 
+`TableResource` is the UI authority for the configured `columns`, `total_rows`
+and cadence metadata. The Analysis Inspector reads this summary resource and
+never guesses quantity availability from a chart or hard-coded scalar list.
+
 The control room renders charts in the existing `analysis-plots` center module.
 Chart zoom, series visibility, axis assignment, and trim range are UI state.
 Table samples stay in resource hooks/cache and are fetched by cursor or visible
 range with bounded row counts.
+
+Selecting a Relax or Run node exposes the same stage-local policy in its
+Inspector Autosave section: enablement, target, continuous/separate layout,
+format, table cadence and quantities, and field snapshot entries. It submits a
+canonical authoring transaction through the typed API facade. No direct
+component transport or separate autosave endpoint is introduced.
+
+At stage entry the runtime activates only the owning policy. At stage exit it
+flushes and drains the existing bounded artifact pipeline before committing
+the stage manifest. Encoding, compression, HDF5/Zarr writes, and TXT writes
+remain outside solver callbacks and GPU control fences. Failed stages preserve
+completed samples and record an incomplete marker and stop reason.
 
 ## 6. Validation Strategy
 
@@ -163,6 +299,11 @@ range with bounded row counts.
 - Constant magnetization keeps `mx`, `my`, `mz` constant across table rows.
 - Fixed-step runs sample exactly at the requested cadence.
 - Adaptive-step overshoot emits coalesced samples without interpolation.
+- Relaxation with `every_steps=10` emits `0, 10, 20, ...` accepted states and
+  one final state; rejected candidates do not alter that sequence.
+- A nonuniform accepted state publishes `mx/my/mz` equal to the spatial
+  component averages in both the global row and the per-object row.
+- Direct minimizer rows cannot be labelled or filtered as physical `t`.
 
 ### 6.2 Cross-Backend Checks
 
@@ -174,16 +315,28 @@ range with bounded row counts.
 ### 6.3 Regression Tests
 
 - Python DSL serialization for default and custom `TableAutosave`.
+- Python DSL serialization for `StageAutosave` and `FieldAutosave` in Relax
+  and Run, including canonical script round-trip.
 - ProblemIR serde round-trip for `sampling.table_autosave`.
+- Cross-stage continuous-target compatibility and stage-leakage tests.
+- Zarr and HDF5 layout/readback tests proving that `continuous` contains no
+  duplicate numerical payload.
+- TXT continuous/separate tests and TXT/field rejection.
+- Bounded artifact-pipeline and solver-callback timing regression tests.
+- Direct-minimizer scalar-row regression with nonuniform magnetization,
+  including the per-object scalar map.
 - v2 route tests for cursor, columns, limit, unit metadata, and scalar
   compatibility.
 - frontend API facade and resource-hook tests proving bounded fetches and no
   interval polling.
 - chart model tests for unit grouping, twin-axis limits, and visible-window
   decimation.
+- Python and script-export tests for mutually exclusive `t_sampl` and
+  `every_steps`, plus IR validation of ambiguous cadence input.
 
 ## 7. Completeness Checklist
 
+- [x] Physics contract
 - [ ] Python API
 - [ ] ProblemIR
 - [ ] Planner
@@ -191,7 +344,7 @@ range with bounded row counts.
 - [ ] FDM backend
 - [ ] FEM backend
 - [ ] Hybrid backend
-- [ ] Outputs / observables
+- [x] Outputs / observables contract
 - [ ] OpenAPI v2 and generated frontend transport
 - [ ] ECharts control-room UI
 - [ ] Tests / benchmarks
@@ -205,6 +358,9 @@ range with bounded row counts.
   acceptable for the first small-window route tests.
 - ECharts GL 3D series must stay behind a capability/config gate until the
   installed `echarts-gl` package is verified in `apps/control-room`.
+- HDF5 execution is capability-gated by the managed runtime. Strict mode fails
+  closed when the writer dependency is unavailable and never falls back to
+  Zarr.
 
 ## 9. References
 

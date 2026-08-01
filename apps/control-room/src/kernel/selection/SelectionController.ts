@@ -9,6 +9,11 @@ import {
 } from "./selectionTypes";
 
 type SelectionListener = (selection: Selection) => void;
+type SelectionChangeGuard = (
+  next: Selection,
+  previous: Selection,
+  source: ModuleId,
+) => boolean;
 
 /**
  * Kernel-owned selection state.
@@ -18,6 +23,7 @@ type SelectionListener = (selection: Selection) => void;
 export class SelectionController {
   private state: Selection = { ...EMPTY_SELECTION };
   private readonly listeners = new Set<SelectionListener>();
+  private readonly changeGuards = new Set<SelectionChangeGuard>();
 
   constructor(private readonly bus: EventBus<KernelEventMap>) {}
 
@@ -31,7 +37,7 @@ export class SelectionController {
   ): void {
     const prev = this.state;
     const carriesRef = Object.prototype.hasOwnProperty.call(patch, "ref");
-    this.state = {
+    const next: Selection = {
       ...prev,
       ...patch,
       moduleSource: source,
@@ -40,14 +46,20 @@ export class SelectionController {
 
     // Skip if nothing actually changed.
     if (
-      prev.kind === this.state.kind &&
-      prev.label === this.state.label &&
-      prev.objectId === this.state.objectId &&
-      prev.nodeId === this.state.nodeId &&
-      selectionRefEquals(prev.ref, this.state.ref)
+      prev.kind === next.kind &&
+      prev.label === next.label &&
+      prev.objectId === next.objectId &&
+      prev.nodeId === next.nodeId &&
+      selectionRefEquals(prev.ref, next.ref)
     ) {
       return;
     }
+
+    for (const guard of this.changeGuards) {
+      if (!guard(next, prev, source)) return;
+    }
+
+    this.state = next;
 
     this.bus.emit("workspace:selection-changed", {
       selectionId: this.state.objectId ?? this.state.nodeId,
@@ -69,5 +81,10 @@ export class SelectionController {
   subscribe(listener: SelectionListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  addChangeGuard(guard: SelectionChangeGuard): () => void {
+    this.changeGuards.add(guard);
+    return () => this.changeGuards.delete(guard);
   }
 }

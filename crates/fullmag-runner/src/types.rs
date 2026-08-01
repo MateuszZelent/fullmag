@@ -1,11 +1,42 @@
 //! Public and internal types for the runner.
 
 use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR, StageCompletionIR};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
+
+#[cfg(test)]
+thread_local! {
+    static FEM_MESH_PAYLOAD_BUILD_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FEM_MESH_FINGERPRINT_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_fem_mesh_payload_build_count() {
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn fem_mesh_payload_build_count() -> u64 {
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_fem_mesh_fingerprint_count() {
+    FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn fem_mesh_fingerprint_count() -> u64 {
+    FEM_MESH_FINGERPRINT_COUNT.with(std::cell::Cell::get)
+}
+
+fn record_fem_mesh_payload_build() {
+    #[cfg(test)]
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+}
 
 // ----- public types -----
 
@@ -303,6 +334,46 @@ pub enum StepAction {
     Pause,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SolverAttemptRecord {
+    pub attempt: u64,
+    pub target_step: u64,
+    pub time: f64,
+    pub dt_attempt: f64,
+    pub eta: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_norm_defect: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_spin_rotation: Option<f64>,
+    pub decision: String,
+    pub reason: String,
+    pub dt_next: f64,
+    pub demag_solves: u32,
+    pub demag_iterations: u32,
+    pub demag_residual: f64,
+    pub rhs_evals: u32,
+    pub estimator_order: i32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveFieldMaterializationState {
+    Pending,
+    Complete,
+    Superseded,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveFieldMaterializationStatus {
+    pub quantity: String,
+    pub source_step: u64,
+    pub request_revision: u64,
+    pub state: LiveFieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct StepStats {
@@ -338,7 +409,22 @@ pub struct StepStats {
     /// Comparable to mumax MaxTorque.
     #[serde(default)]
     pub max_torque_T: f64,
+    #[serde(default)]
+    pub accepted_energy_proof_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_delta_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_roundoff_bound_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_delta_upper_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_increment_rhs_j: Option<f64>,
     pub wall_time_ns: u64,
+    /// One-time wall time spent constructing the native backend/context.
+    ///
+    /// This is attached to the first accepted step produced by that backend.
+    #[serde(default)]
+    pub backend_create_wall_time_ns: u64,
     #[serde(default)]
     pub exchange_wall_time_ns: u64,
     #[serde(default)]
@@ -357,6 +443,23 @@ pub struct StepStats {
     pub demag_solver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_preconditioner: Option<String>,
+    /// Effective native BoomerAMG policy copied from the native step-stats ABI.
+    #[serde(default)]
+    pub demag_amg_relax_type: i32,
+    #[serde(default)]
+    pub demag_amg_coarsening: i32,
+    #[serde(default)]
+    pub demag_amg_interpolation: i32,
+    #[serde(default)]
+    pub demag_amg_aggressive_coarsening: i32,
+    #[serde(default)]
+    pub demag_amg_strength_threshold: f64,
+    #[serde(default)]
+    pub demag_amg_strength_threshold_is_set: bool,
+    #[serde(default)]
+    pub demag_amg_max_levels: i32,
+    #[serde(default)]
+    pub demag_amg_max_levels_is_set: bool,
     #[serde(default)]
     pub demag_recover_wall_time_ns: u64,
     #[serde(default)]
@@ -396,9 +499,90 @@ pub struct StepStats {
     /// Wall-clock time spent on cached (non-active) preview field copies (ns).
     #[serde(default)]
     pub cached_preview_wall_time_ns: u64,
+    /// Nonblocking worker-completion query time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_harvest_query_wall_time_ns: u64,
+    /// Completed preview result promotion into active/cache-ready ownership (ns).
+    #[serde(default)]
+    pub preview_result_promotion_wall_time_ns: u64,
+    /// Bounded-worker capacity checks inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_can_accept_wall_time_ns: u64,
+    /// Native vector-field snapshot scheduling time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_vector_snapshot_schedule_wall_time_ns: u64,
+    /// Native energy-density snapshot scheduling time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_energy_snapshot_schedule_wall_time_ns: u64,
+    /// Cache-cycle request coalescing time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_queue_coalescing_wall_time_ns: u64,
+    /// Bounded materializer job submission time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_submit_wall_time_ns: u64,
+    /// Time spent staging a deferred preview request for submission (ns).
+    #[serde(default)]
+    pub preview_submit_stage_wall_time_ns: u64,
+    /// Time spent constructing submission descriptors and identities (ns).
+    #[serde(default)]
+    pub preview_submit_descriptor_wall_time_ns: u64,
+    /// Time spent allocating per-submission acknowledgement channels (ns).
+    #[serde(default)]
+    pub preview_submit_channel_alloc_wall_time_ns: u64,
+    /// Time spent in the nonblocking worker-channel send (ns).
+    #[serde(default)]
+    pub preview_submit_try_send_wall_time_ns: u64,
+    /// Time spent recording submission ownership and failure state (ns).
+    #[serde(default)]
+    pub preview_submit_bookkeeping_wall_time_ns: u64,
+    /// Calling-thread CPU time consumed by preview submission (ns).
+    #[serde(default)]
+    pub preview_submit_thread_cpu_time_ns: u64,
+    /// Calling-thread CPU time consumed by the full preview callback (ns).
+    #[serde(default)]
+    pub preview_callback_thread_cpu_time_ns: u64,
+    /// Internal absolute thread-CPU timestamp carried across the synchronous runner callback.
+    #[serde(skip)]
+    pub preview_callback_thread_cpu_started_ns: Option<u64>,
+    /// Pre-step wait for the scheduler to enqueue exact-step native snapshots (ns).
+    #[serde(default)]
+    pub preview_schedule_fence_wall_time_ns: u64,
+    /// Preview requests deliberately superseded while the bounded worker was busy.
+    #[serde(default)]
+    pub preview_superseded_count: u64,
+    /// Bounded materializer ownership/state for each requested live field quantity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<LiveFieldMaterializationStatus>,
+    /// Capture step for the optional live magnetization payload in the enclosing StepUpdate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_source_step: Option<u64>,
+    /// Monotonic capture revision for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_source_revision: Option<u64>,
+    /// Wall-clock completion time for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_materialized_at_unix_ms: Option<u64>,
+    /// Snapshot completion/copy duration for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_materialization_wall_time_ns: Option<u64>,
     /// Wall-clock time spent in synchronous runner/CLI live callback orchestration (ns).
     #[serde(default)]
     pub orchestration_wall_time_ns: u64,
+    /// Wall-clock time spent materializing or cloning FEM mesh payloads for this callback (ns).
+    #[serde(default)]
+    pub mesh_payload_wall_time_ns: u64,
+    /// Number of deep `StepUpdate` clones performed by host orchestration.
+    #[serde(default)]
+    pub step_update_deep_clone_count: u64,
+    /// Wall-clock time spent building the live-state resource under the workspace lock (ns).
+    #[serde(default)]
+    pub live_state_build_wall_time_ns: u64,
+    /// Wall-clock time spent replacing the pending publisher payload synchronously (ns).
+    #[serde(default)]
+    pub publisher_replace_wall_time_ns: u64,
+    /// Wall-clock time spent preparing an enabled profiler sample for persistence (ns).
+    #[serde(default)]
+    pub profile_persist_enqueue_wall_time_ns: u64,
     /// Wall-clock time spent copying full field payloads for live/artifact handoff (ns).
     #[serde(default)]
     pub field_copy_wall_time_ns: u64,
@@ -445,15 +629,27 @@ pub struct StepStats {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dt_suggested: Option<f64>,
     #[serde(default)]
     pub rejected_attempts: u32,
+    #[serde(default)]
+    pub relaxation_energy_rejected_attempts: u64,
+    #[serde(default)]
+    pub relaxation_controller_tightenings: u64,
+    #[serde(default)]
+    pub relaxation_controller_at_floor: bool,
+    #[serde(default)]
+    pub relaxation_torque_confirmation_count: u32,
     #[serde(default)]
     pub rhs_evals: u32,
     #[serde(default)]
     pub demag_solves: u32,
     #[serde(default)]
     pub fsal_reused: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solver_attempts: Vec<SolverAttemptRecord>,
     /// Number of PCG iterations in the last Poisson demag solve.
     #[serde(default)]
     pub poisson_iterations: u32,
@@ -538,7 +734,13 @@ impl Default for StepStats {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
+            accepted_energy_proof_available: false,
+            accepted_energy_delta_j: None,
+            accepted_energy_roundoff_bound_j: None,
+            accepted_energy_delta_upper_j: None,
+            armijo_increment_rhs_j: None,
             wall_time_ns: 0,
+            backend_create_wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
             demag_assemble_wall_time_ns: 0,
@@ -548,6 +750,14 @@ impl Default for StepStats {
             demag_solver_setup_reused: false,
             demag_solver: None,
             demag_preconditioner: None,
+            demag_amg_relax_type: 0,
+            demag_amg_coarsening: 0,
+            demag_amg_interpolation: 0,
+            demag_amg_aggressive_coarsening: 0,
+            demag_amg_strength_threshold: 0.0,
+            demag_amg_strength_threshold_is_set: false,
+            demag_amg_max_levels: 0,
+            demag_amg_max_levels_is_set: false,
             demag_recover_wall_time_ns: 0,
             demag_energy_wall_time_ns: 0,
             rhs_wall_time_ns: 0,
@@ -566,7 +776,34 @@ impl Default for StepStats {
             native_ffi_overhead_wall_time_ns: 0,
             preview_wall_time_ns: 0,
             cached_preview_wall_time_ns: 0,
+            preview_harvest_query_wall_time_ns: 0,
+            preview_result_promotion_wall_time_ns: 0,
+            preview_can_accept_wall_time_ns: 0,
+            preview_vector_snapshot_schedule_wall_time_ns: 0,
+            preview_energy_snapshot_schedule_wall_time_ns: 0,
+            preview_queue_coalescing_wall_time_ns: 0,
+            preview_submit_wall_time_ns: 0,
+            preview_submit_stage_wall_time_ns: 0,
+            preview_submit_descriptor_wall_time_ns: 0,
+            preview_submit_channel_alloc_wall_time_ns: 0,
+            preview_submit_try_send_wall_time_ns: 0,
+            preview_submit_bookkeeping_wall_time_ns: 0,
+            preview_submit_thread_cpu_time_ns: 0,
+            preview_callback_thread_cpu_time_ns: 0,
+            preview_callback_thread_cpu_started_ns: None,
+            preview_schedule_fence_wall_time_ns: 0,
+            preview_superseded_count: 0,
+            field_materialization_states: Vec::new(),
+            magnetization_source_step: None,
+            magnetization_source_revision: None,
+            magnetization_materialized_at_unix_ms: None,
+            magnetization_materialization_wall_time_ns: None,
             orchestration_wall_time_ns: 0,
+            mesh_payload_wall_time_ns: 0,
+            step_update_deep_clone_count: 0,
+            live_state_build_wall_time_ns: 0,
+            publisher_replace_wall_time_ns: 0,
+            profile_persist_enqueue_wall_time_ns: 0,
             field_copy_wall_time_ns: 0,
             field_copy_bytes: 0,
             artifact_enqueue_block_wall_time_ns: 0,
@@ -582,11 +819,17 @@ impl Default for StepStats {
             finalization_field_copy_wall_time_ns: 0,
             finalization_field_copy_bytes: 0,
             error_estimate: None,
+            max_error: None,
             dt_suggested: None,
             rejected_attempts: 0,
+            relaxation_energy_rejected_attempts: 0,
+            relaxation_controller_tightenings: 0,
+            relaxation_controller_at_floor: false,
+            relaxation_torque_confirmation_count: 0,
             rhs_evals: 0,
             demag_solves: 0,
             fsal_reused: false,
+            solver_attempts: Vec::new(),
             poisson_iterations: 0,
             poisson_final_residual: 0.0,
             demag_refreshed: false,
@@ -613,7 +856,7 @@ impl Default for StepStats {
 
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
-    use super::{ExecutionProvenance, StepStats};
+    use super::{ExecutionProvenance, FdmMultilayerTransferTelemetry, StepStats};
 
     #[test]
     fn step_stats_carry_hot_loop_transfer_audit() {
@@ -642,6 +885,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
     #[test]
     fn demag_profile_step_stats_flow_into_diagnostics() {
         let stats = StepStats {
+            backend_create_wall_time_ns: 31,
             demag_wall_time_ns: 17,
             demag_assemble_wall_time_ns: 3,
             demag_solve_wall_time_ns: 5,
@@ -655,6 +899,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         };
 
         let diagnostics = stats.to_diagnostics();
+        assert_eq!(diagnostics.backend_create_wall_time_ns, 31);
         assert_eq!(diagnostics.demag_wall_time_ns, 17);
         assert_eq!(diagnostics.demag_assemble_wall_time_ns, 3);
         assert_eq!(diagnostics.demag_solve_wall_time_ns, 5);
@@ -732,8 +977,8 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(snapshot.latest_samples[1].step, 3);
         assert!(snapshot.latest_samples[1].sample_time_unix_ms > 0);
         assert!(snapshot.latest_samples[1].delta_wall_time_ns.is_some());
-        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 840);
-        assert_eq!(snapshot.latest_samples[1].missing_ns, 160);
+        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 815);
+        assert_eq!(snapshot.latest_samples[1].missing_ns, 185);
         assert_eq!(snapshot.latest_samples[1].artifact_enqueue_bytes, 4096);
         assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_max, 3);
         assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_current, 1);
@@ -822,7 +1067,62 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(finalization_phase.wall_time_ns, 700);
         assert_eq!(forced.finalization_field_copy_wall_time_ns, 500);
         assert_eq!(forced.finalization_field_copy_bytes, 24_000);
-        assert_eq!(profile.snapshot().latest_samples.len(), 2);
+        let samples = profile.snapshot().latest_samples;
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[1].span_step_count, 1);
+        assert_eq!(samples[2].span_step_count, 0);
+    }
+
+    #[test]
+    fn solver_profile_gap_excludes_all_steps_between_sparse_samples() {
+        let mut profile = crate::SolverProfileState::new(crate::SolverProfileConfig {
+            enabled: true,
+            sample_every: 3,
+            sample_interval_wall_ms: 0,
+            max_samples: 4,
+            emit_engine_log: false,
+            persist_artifact: false,
+        });
+
+        let first = profile
+            .record_step(&StepStats {
+                step: 3,
+                wall_time_ns: 1_000_000,
+                ..StepStats::default()
+            })
+            .expect("step 3 should be sampled");
+        assert_eq!(first.delta_wall_time_ns, None);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(profile
+            .record_step(&StepStats {
+                step: 4,
+                wall_time_ns: 2_000_000,
+                ..StepStats::default()
+            })
+            .is_none());
+        assert!(profile
+            .record_step(&StepStats {
+                step: 5,
+                wall_time_ns: 3_000_000,
+                ..StepStats::default()
+            })
+            .is_none());
+        let second = profile
+            .record_step(&StepStats {
+                step: 6,
+                wall_time_ns: 4_000_000,
+                ..StepStats::default()
+            })
+            .expect("step 6 should be sampled");
+
+        let delta = second
+            .delta_wall_time_ns
+            .expect("second sparse sample should have a wall delta");
+        assert_eq!(
+            second.unprofiled_gap_wall_time_ns,
+            Some(delta.saturating_sub(9_000_000)),
+        );
     }
 
     #[test]
@@ -907,6 +1207,39 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_control_scalar_host_sync_count, Some(0));
     }
+
+    #[test]
+    fn execution_provenance_serializes_fdm_multilayer_transfer_telemetry() {
+        let provenance = ExecutionProvenance {
+            fdm_multilayer_transfer_telemetry: Some(FdmMultilayerTransferTelemetry {
+                execution_shape: "cuda_assisted_multilayer".to_string(),
+                data_residency: "host_authoritative_with_cuda_field_roundtrips".to_string(),
+                h2d_transfer_count: 12,
+                d2h_transfer_count: 12,
+                h2d_bytes: 2_304,
+                d2h_bytes: 2_304,
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let value = serde_json::to_value(provenance).expect("provenance should serialize");
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["execution_shape"],
+            "cuda_assisted_multilayer"
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["data_residency"],
+            "host_authoritative_with_cuda_field_roundtrips"
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["h2d_transfer_count"],
+            12
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["d2h_bytes"],
+            2_304
+        );
+    }
 }
 
 impl StepStats {
@@ -917,6 +1250,7 @@ impl StepStats {
             time: self.time,
             dt: self.dt,
             wall_time_ns: self.wall_time_ns,
+            backend_create_wall_time_ns: self.backend_create_wall_time_ns,
             exchange_wall_time_ns: self.exchange_wall_time_ns,
             demag_wall_time_ns: self.demag_wall_time_ns,
             demag_assemble_wall_time_ns: self.demag_assemble_wall_time_ns,
@@ -943,6 +1277,7 @@ impl StepStats {
             finalization_field_copy_wall_time_ns: self.finalization_field_copy_wall_time_ns,
             finalization_field_copy_bytes: self.finalization_field_copy_bytes,
             error_estimate: self.error_estimate,
+            max_error: self.max_error,
             dt_suggested: self.dt_suggested,
             rejected_attempts: self.rejected_attempts,
             rhs_evals: self.rhs_evals,
@@ -995,9 +1330,9 @@ pub struct StepUpdate {
     pub stats: StepStats,
     /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
     pub grid: [u32; 3],
-    /// Optional FEM mesh payload for mesh-native preview in the control room.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fem_mesh: Option<FemMeshPayload>,
+    /// Stage-scoped FEM mesh generation resolved through the separate mesh resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
     /// **Deprecated (Q16):** Use [`fullmag_quantities::LiveQuantityFrame`]
     /// with `quantity_id = "m"` via [`Self::to_v2()`] instead.
     ///
@@ -1142,6 +1477,18 @@ impl Default for LivePreviewRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LivePreviewField {
     pub config_revision: u64,
+    /// Solver step whose state was captured for this completed field.
+    #[serde(default)]
+    pub source_step: u64,
+    /// Display/materialization request revision used for this field.
+    #[serde(default)]
+    pub source_revision: u64,
+    /// Wall-clock completion time for asynchronous materialization.
+    #[serde(default)]
+    pub materialized_at_unix_ms: u64,
+    /// Worker-side wait and field-materialization duration.
+    #[serde(default)]
+    pub materialization_wall_time_ns: u64,
     pub quantity: String,
     pub unit: String,
     pub spatial_kind: String,
@@ -1162,6 +1509,15 @@ pub struct LivePreviewField {
     /// ANY original cell in its block is active).  `None` means all cells active.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+}
+
+/// SHA-256 over the canonical little-endian `f64` preview payload bytes.
+pub fn live_preview_values_sha256(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    digest_hex(&hasher.finalize())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1206,7 +1562,7 @@ pub struct FemMeshPartPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_indices: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_faces: Vec<[u32; 3]>,
+    pub facet_global_ordinals: Vec<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds_min: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1254,15 +1610,15 @@ impl From<&MeshQualityIR> for MeshQualityPayload {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FemMeshPayload {
     pub mesh_name: String,
     pub mesh_id: String,
     pub nodes: Vec<[f64; 3]>,
-    pub elements: Vec<[u32; 4]>,
+    pub cells: fullmag_ir::FemConnectivityIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub element_markers: Vec<u32>,
-    pub boundary_faces: Vec<[u32; 3]>,
+    pub facets: fullmag_ir::FemFacetConnectivityIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boundary_markers: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1286,36 +1642,222 @@ pub struct FemMeshPayload {
     pub build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
 }
 
+#[derive(Deserialize)]
+struct FemMeshPayloadWire {
+    mesh_name: String,
+    mesh_id: String,
+    nodes: Vec<[f64; 3]>,
+    #[serde(default)]
+    cells: Option<fullmag_ir::FemConnectivityIR>,
+    #[serde(default)]
+    facets: Option<fullmag_ir::FemFacetConnectivityIR>,
+    #[serde(default)]
+    elements: Option<Vec<[u32; 4]>>,
+    #[serde(default)]
+    boundary_faces: Option<Vec<[u32; 3]>>,
+    #[serde(default)]
+    element_markers: Vec<u32>,
+    #[serde(default)]
+    boundary_markers: Vec<u32>,
+    #[serde(default)]
+    periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
+    #[serde(default)]
+    periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
+    #[serde(default)]
+    object_segments: Vec<FemMeshObjectSegment>,
+    #[serde(default)]
+    mesh_parts: Vec<FemMeshPartPayload>,
+    #[serde(default)]
+    domain_mesh_mode: Option<String>,
+    #[serde(default)]
+    domain_frame: Option<fullmag_ir::DomainFrameIR>,
+    #[serde(default)]
+    generation_id: Option<String>,
+    #[serde(default)]
+    per_domain_quality: HashMap<u32, MeshQualityPayload>,
+    #[serde(default)]
+    build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
+}
+
+impl<'de> Deserialize<'de> for FemMeshPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FemMeshPayloadWire::deserialize(deserializer)?;
+        let has_v2 = wire.cells.is_some() || wire.facets.is_some();
+        let has_legacy = wire.elements.is_some() || wire.boundary_faces.is_some();
+        if has_v2 && has_legacy {
+            return Err(D::Error::custom(
+                "FEM mesh payload contains both legacy and v2 topology",
+            ));
+        }
+        let (mut cells, mut facets) = if has_v2 {
+            (
+                wire.cells
+                    .ok_or_else(|| D::Error::custom("v2 FEM mesh payload requires cells"))?,
+                wire.facets
+                    .ok_or_else(|| D::Error::custom("v2 FEM mesh payload requires facets"))?,
+            )
+        } else if has_legacy {
+            (
+                fullmag_ir::FemConnectivityIR::from_tet4(wire.elements.ok_or_else(|| {
+                    D::Error::custom("legacy FEM mesh payload requires elements")
+                })?),
+                fullmag_ir::FemFacetConnectivityIR::from_tri3(wire.boundary_faces.ok_or_else(
+                    || D::Error::custom("legacy FEM mesh payload requires boundary_faces"),
+                )?),
+            )
+        } else {
+            return Err(D::Error::custom(
+                "FEM mesh payload must provide either v2 or legacy topology",
+            ));
+        };
+        if cells.global_ordinals.is_empty() && !cells.types.is_empty() {
+            cells.global_ordinals = (0..cells.types.len() as u64).collect();
+        }
+        if facets.global_ordinals.is_empty() && !facets.types.is_empty() {
+            facets.global_ordinals = (0..facets.types.len() as u64).collect();
+        }
+        Ok(Self {
+            mesh_name: wire.mesh_name,
+            mesh_id: wire.mesh_id,
+            nodes: wire.nodes,
+            cells,
+            element_markers: wire.element_markers,
+            facets,
+            boundary_markers: wire.boundary_markers,
+            periodic_boundary_pairs: wire.periodic_boundary_pairs,
+            periodic_node_pairs: wire.periodic_node_pairs,
+            object_segments: wire.object_segments,
+            mesh_parts: wire.mesh_parts,
+            domain_mesh_mode: wire.domain_mesh_mode,
+            domain_frame: wire.domain_frame,
+            generation_id: wire.generation_id,
+            per_domain_quality: wire.per_domain_quality,
+            build_report: wire.build_report,
+        })
+    }
+}
+
+impl FemMeshPayload {
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn facet_count(&self) -> usize {
+        self.facets.len()
+    }
+
+    pub fn require_tet4_elements(&self) -> Result<Vec<[u32; 4]>, String> {
+        if self.element_markers.len() != self.cells.len() {
+            return Err("mesh.element_markers length must match mesh.cells.types length".into());
+        }
+        self.cells.require_tet4()
+    }
+
+    pub fn require_tri3_boundary_faces(&self) -> Result<Vec<[u32; 3]>, String> {
+        if self.boundary_markers.len() != self.facets.len() {
+            return Err("mesh.boundary_markers length must match mesh.facets.types length".into());
+        }
+        self.facets.require_tri3()
+    }
+
+    pub fn set_tet4_cells(&mut self, elements: Vec<[u32; 4]>) {
+        self.cells = fullmag_ir::FemConnectivityIR::from_tet4(elements);
+    }
+
+    pub fn set_tri3_facets(&mut self, faces: Vec<[u32; 3]>) {
+        self.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(faces);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageFemMeshIdentity {
+    generation_id: String,
+}
+
+impl StageFemMeshIdentity {
+    pub(crate) fn from_generation_id(generation_id: String) -> Self {
+        Self { generation_id }
+    }
+
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    pub fn from_fem_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        Self {
+            generation_id: fem_plan_mesh_generation_id(plan),
+        }
+    }
+
+    pub fn from_fem_eigen_plan(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        Self {
+            generation_id: fem_eigen_mesh_generation_id(plan),
+        }
+    }
+
+    pub fn from_fem_frequency_response_plan(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Self {
+        Self {
+            generation_id: fem_frequency_response_mesh_generation_id(plan),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StageFemMeshAsset {
+    pub identity: StageFemMeshIdentity,
+    pub payload: FemMeshPayload,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FemStageExecutionContext {
+    pub mesh_identity: StageFemMeshIdentity,
+}
+
+impl FemStageExecutionContext {
+    pub fn from_mesh_identity(mesh_identity: StageFemMeshIdentity) -> Self {
+        Self { mesh_identity }
+    }
+
+    pub fn from_fem_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        Self {
+            mesh_identity: StageFemMeshIdentity::from_fem_plan(plan),
+        }
+    }
+
+    pub fn generation_id(&self) -> Option<String> {
+        Some(self.mesh_identity.generation_id().to_string())
+    }
+
+    pub fn from_backend_plan(plan: &fullmag_ir::BackendPlanIR) -> Option<Self> {
+        let mesh_identity = match plan {
+            fullmag_ir::BackendPlanIR::Fem(plan) => StageFemMeshIdentity::from_fem_plan(plan),
+            fullmag_ir::BackendPlanIR::FemEigen(plan) => {
+                StageFemMeshIdentity::from_fem_eigen_plan(plan)
+            }
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
+                StageFemMeshIdentity::from_fem_frequency_response_plan(plan)
+            }
+            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
+                return None;
+            }
+        };
+        Some(Self { mesh_identity })
+    }
+}
+
 pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
-    let mut hasher = Sha256::new();
-    update_hash_bytes(
-        &mut hasher,
-        "schema",
-        b"fullmag:fem-mesh-topology-fingerprint:v1",
-    );
-    update_hash_str(&mut hasher, "mesh_name", &mesh.mesh_name);
-    update_hash_str(&mut hasher, "mesh_id", &mesh.mesh_id);
-    update_hash_serialized(&mut hasher, "generation_id", &mesh.generation_id);
-    update_hash_nodes(&mut hasher, "nodes", &mesh.nodes);
-    update_hash_tets(&mut hasher, "elements", &mesh.elements);
-    update_hash_u32_slice(&mut hasher, "element_markers", &mesh.element_markers);
-    update_hash_triangles(&mut hasher, "boundary_faces", &mesh.boundary_faces);
-    update_hash_u32_slice(&mut hasher, "boundary_markers", &mesh.boundary_markers);
-    update_hash_serialized(
-        &mut hasher,
-        "periodic_boundary_pairs",
+    fullmag_ir::fem_mesh_topology_fingerprint_v2(
+        &mesh.nodes,
+        &mesh.cells,
+        &mesh.element_markers,
+        &mesh.facets,
+        &mesh.boundary_markers,
         &mesh.periodic_boundary_pairs,
-    );
-    update_hash_serialized(
-        &mut hasher,
-        "periodic_node_pairs",
         &mesh.periodic_node_pairs,
-    );
-    update_hash_serialized(&mut hasher, "object_segments", &mesh.object_segments);
-    update_hash_serialized(&mut hasher, "mesh_parts", &mesh.mesh_parts);
-    update_hash_serialized(&mut hasher, "domain_mesh_mode", &mesh.domain_mesh_mode);
-    update_hash_serialized(&mut hasher, "domain_frame", &mesh.domain_frame);
-    digest_hex(&hasher.finalize())
+    )
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -1366,13 +1908,15 @@ fn stable_fem_mesh_generation_id(
     domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR,
     domain_frame: &Option<fullmag_ir::DomainFrameIR>,
 ) -> String {
+    #[cfg(test)]
+    FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     let mut hasher = Sha256::new();
-    update_hash_bytes(&mut hasher, "schema", b"fullmag:fem-mesh-payload:v1");
+    update_hash_bytes(&mut hasher, "schema", b"fullmag:fem-mesh-payload:v2");
     update_hash_str(&mut hasher, "mesh_name", &mesh.mesh_name);
     update_hash_nodes(&mut hasher, "nodes", &mesh.nodes);
-    update_hash_tets(&mut hasher, "elements", &mesh.elements);
+    update_hash_serialized(&mut hasher, "cells", &mesh.cells);
     update_hash_u32_slice(&mut hasher, "element_markers", element_markers);
-    update_hash_triangles(&mut hasher, "boundary_faces", &mesh.boundary_faces);
+    update_hash_serialized(&mut hasher, "facets", &mesh.facets);
     update_hash_u32_slice(&mut hasher, "boundary_markers", &mesh.boundary_markers);
     update_hash_serialized(
         &mut hasher,
@@ -1425,26 +1969,6 @@ fn update_hash_nodes(hasher: &mut Sha256, label: &str, nodes: &[[f64; 3]]) {
     }
 }
 
-fn update_hash_tets(hasher: &mut Sha256, label: &str, elements: &[[u32; 4]]) {
-    hasher.update(label.as_bytes());
-    hasher.update((elements.len() as u64).to_le_bytes());
-    for element in elements {
-        for index in element {
-            hasher.update(index.to_le_bytes());
-        }
-    }
-}
-
-fn update_hash_triangles(hasher: &mut Sha256, label: &str, faces: &[[u32; 3]]) {
-    hasher.update(label.as_bytes());
-    hasher.update((faces.len() as u64).to_le_bytes());
-    for face in faces {
-        for index in face {
-            hasher.update(index.to_le_bytes());
-        }
-    }
-}
-
 fn update_hash_u32_slice(hasher: &mut Sha256, label: &str, values: &[u32]) {
     hasher.update(label.as_bytes());
     hasher.update((values.len() as u64).to_le_bytes());
@@ -1458,8 +1982,12 @@ fn update_hash_serialized<T: Serialize + ?Sized>(hasher: &mut Sha256, label: &st
     update_hash_bytes(hasher, label, &bytes);
 }
 
-impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
-    fn from(plan: &fullmag_ir::FemPlanIR) -> Self {
+impl FemMeshPayload {
+    pub fn from_fem_plan_with_generation(
+        plan: &fullmag_ir::FemPlanIR,
+        generation_id: String,
+    ) -> Self {
+        record_fem_mesh_payload_build();
         let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
             plan.region_materials
                 .iter()
@@ -1470,21 +1998,13 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             &plan.mesh.element_markers,
             magnetic_markers.as_ref(),
         );
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
             nodes: plan.mesh.nodes.clone(),
-            elements: plan.mesh.elements.clone(),
+            cells: plan.mesh.cells.clone(),
             element_markers,
-            boundary_faces: plan.mesh.boundary_faces.clone(),
+            facets: plan.mesh.facets.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
             periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
             periodic_node_pairs: plan.mesh.periodic_node_pairs.clone(),
@@ -1519,26 +2039,75 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             build_report: plan.mesh_build_report.clone(),
         }
     }
+}
+
+impl StageFemMeshAsset {
+    pub fn build_from_backend_plan(plan: &fullmag_ir::BackendPlanIR) -> Option<Self> {
+        match plan {
+            fullmag_ir::BackendPlanIR::Fem(plan) => Some(Self::build_from_fem_plan(plan)),
+            fullmag_ir::BackendPlanIR::FemEigen(plan) => {
+                Some(Self::build_from_fem_eigen_plan(plan))
+            }
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
+                Some(Self::build_from_fem_frequency_response_plan(plan))
+            }
+            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_) => None,
+        }
+    }
+
+    pub fn build_from_fem_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        let identity = StageFemMeshIdentity::from_fem_plan(plan);
+        let payload =
+            FemMeshPayload::from_fem_plan_with_generation(plan, identity.generation_id.clone());
+        Self { identity, payload }
+    }
+}
+
+impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
+    fn from(plan: &fullmag_ir::FemPlanIR) -> Self {
+        StageFemMeshAsset::build_from_fem_plan(plan).payload
+    }
+}
+
+pub fn fem_plan_mesh_generation_id(plan: &fullmag_ir::FemPlanIR) -> String {
+    let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
+        plan.region_materials
+            .iter()
+            .map(|region| region.element_marker)
+            .collect::<BTreeSet<_>>()
+    });
+    let element_markers =
+        normalized_payload_element_markers(&plan.mesh.element_markers, magnetic_markers.as_ref());
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
 }
 
 impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        StageFemMeshAsset::build_from_fem_eigen_plan(plan).payload
+    }
+}
+
+impl FemMeshPayload {
+    pub fn from_fem_eigen_plan_with_generation(
+        plan: &fullmag_ir::FemEigenPlanIR,
+        generation_id: String,
+    ) -> Self {
+        record_fem_mesh_payload_build();
         let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
             nodes: plan.mesh.nodes.clone(),
-            elements: plan.mesh.elements.clone(),
+            cells: plan.mesh.cells.clone(),
             element_markers,
-            boundary_faces: plan.mesh.boundary_faces.clone(),
+            facets: plan.mesh.facets.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
             periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
             periodic_node_pairs: plan.mesh.periodic_node_pairs.clone(),
@@ -1575,24 +2144,49 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     }
 }
 
+impl StageFemMeshAsset {
+    pub fn build_from_fem_eigen_plan(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        let identity = StageFemMeshIdentity::from_fem_eigen_plan(plan);
+        let payload = FemMeshPayload::from_fem_eigen_plan_with_generation(
+            plan,
+            identity.generation_id.clone(),
+        );
+        Self { identity, payload }
+    }
+}
+
+pub fn fem_eigen_mesh_generation_id(plan: &fullmag_ir::FemEigenPlanIR) -> String {
+    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
+}
+
 impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Self {
+        StageFemMeshAsset::build_from_fem_frequency_response_plan(plan).payload
+    }
+}
+
+impl FemMeshPayload {
+    pub fn from_fem_frequency_response_plan_with_generation(
+        plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+        generation_id: String,
+    ) -> Self {
+        record_fem_mesh_payload_build();
         let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
             nodes: plan.mesh.nodes.clone(),
-            elements: plan.mesh.elements.clone(),
+            cells: plan.mesh.cells.clone(),
             element_markers,
-            boundary_faces: plan.mesh.boundary_faces.clone(),
+            facets: plan.mesh.facets.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
             periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
             periodic_node_pairs: plan.mesh.periodic_node_pairs.clone(),
@@ -1627,6 +2221,33 @@ impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
             build_report: plan.mesh_build_report.clone(),
         }
     }
+}
+
+impl StageFemMeshAsset {
+    pub fn build_from_fem_frequency_response_plan(
+        plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    ) -> Self {
+        let identity = StageFemMeshIdentity::from_fem_frequency_response_plan(plan);
+        let payload = FemMeshPayload::from_fem_frequency_response_plan_with_generation(
+            plan,
+            identity.generation_id.clone(),
+        );
+        Self { identity, payload }
+    }
+}
+
+pub fn fem_frequency_response_mesh_generation_id(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> String {
+    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
 }
 
 impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
@@ -1651,7 +2272,7 @@ impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
                 selector_count(&part.node_selector)
             },
             node_indices: part.node_indices.clone(),
-            surface_faces: part.surface_faces.clone(),
+            facet_global_ordinals: part.facet_global_ordinals.clone(),
             bounds_min: part.bounds_min,
             bounds_max: part.bounds_max,
         }
@@ -1715,6 +2336,196 @@ impl From<fullmag_plan::PlanError> for RunError {
 
 // ----- execution provenance -----
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InitialTimestepReason {
+    Explicit,
+    DtMinDefault,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RequestedTimestepPolicy {
+    Fixed {
+        integrator: fullmag_ir::IntegratorChoice,
+        timestep_s: f64,
+    },
+    Adaptive {
+        integrator: fullmag_ir::IntegratorChoice,
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR,
+        atol: f64,
+        rtol: f64,
+        dt_initial_s: Option<f64>,
+        dt_min_s: f64,
+        dt_max_s: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
+        max_spin_rotation: Option<f64>,
+        norm_tolerance: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedTimestepPolicy {
+    Fixed {
+        integrator: fullmag_ir::IntegratorChoice,
+        timestep_s: f64,
+    },
+    Adaptive {
+        integrator: fullmag_ir::IntegratorChoice,
+        estimator_order: u8,
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR,
+        atol: f64,
+        rtol: f64,
+        dt_initial_s: f64,
+        dt_initial_reason: InitialTimestepReason,
+        dt_min_s: f64,
+        dt_max_s: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
+        max_spin_rotation: Option<f64>,
+        norm_tolerance: Option<f64>,
+    },
+}
+
+impl ResolvedTimestepPolicy {
+    pub fn initial_dt(&self) -> f64 {
+        match self {
+            Self::Fixed { timestep_s, .. } => *timestep_s,
+            Self::Adaptive { dt_initial_s, .. } => *dt_initial_s,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimestepPolicyProvenance {
+    pub requested: RequestedTimestepPolicy,
+    pub resolved: ResolvedTimestepPolicy,
+    pub execution_identity: TimestepExecutionIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation_controller: Option<RelaxationControllerPolicyProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelaxationControllerPolicyProvenance {
+    pub policy_id: String,
+    pub torque_confirmation_samples: u32,
+    pub energy_increase_relative_tolerance: f64,
+    pub energy_increase_absolute_tolerance_j: f64,
+    pub tightening_factor: f64,
+    pub max_error_floor: f64,
+}
+
+impl TimestepPolicyProvenance {
+    pub fn initial_dt(&self) -> f64 {
+        self.resolved.initial_dt()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepBackend {
+    Fdm,
+    Fem,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepDevice {
+    Cpu,
+    Cuda,
+    Gpu,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlgTimestepCapabilityId {
+    LlgTdPolicyV1,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlgTimestepQualificationId {
+    ExplicitFixedFdmCpuDouble,
+    ExplicitFixedFdmCudaDouble,
+    ExplicitFixedFdmCudaSingle,
+    ExplicitFixedFemCpuDouble,
+    ExplicitFixedFemGpuDouble,
+    ExplicitAdaptiveFdmCpuDouble,
+    ExplicitAdaptiveFemCpuDouble,
+    ExplicitAdaptiveFemGpuDouble,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepValidationState {
+    Unvalidated,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimestepExecutionIdentity {
+    pub capability_id: LlgTimestepCapabilityId,
+    pub qualification_id: LlgTimestepQualificationId,
+    pub backend: TimestepBackend,
+    pub device: TimestepDevice,
+    pub precision: fullmag_ir::ExecutionPrecision,
+    pub validation_state: TimestepValidationState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TimestepExecutionLane {
+    pub backend: TimestepBackend,
+    pub device: TimestepDevice,
+    pub precision: fullmag_ir::ExecutionPrecision,
+}
+
+impl TimestepExecutionLane {
+    pub(crate) const fn fdm_cpu() -> Self {
+        Self {
+            backend: TimestepBackend::Fdm,
+            device: TimestepDevice::Cpu,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+        }
+    }
+
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    pub(crate) const fn fdm_cuda(precision: fullmag_ir::ExecutionPrecision) -> Self {
+        Self {
+            backend: TimestepBackend::Fdm,
+            device: TimestepDevice::Cuda,
+            precision,
+        }
+    }
+
+    pub(crate) const fn fem_cpu(precision: fullmag_ir::ExecutionPrecision) -> Self {
+        Self {
+            backend: TimestepBackend::Fem,
+            device: TimestepDevice::Cpu,
+            precision,
+        }
+    }
+
+    #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+    pub(crate) const fn fem_gpu(precision: fullmag_ir::ExecutionPrecision) -> Self {
+        Self {
+            backend: TimestepBackend::Fem,
+            device: TimestepDevice::Gpu,
+            precision,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LegacyDtPolicy {
+    User,
+    Adaptive,
+    Fallback,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedFallback {
     pub occurred: bool,
@@ -1741,6 +2552,39 @@ pub struct FemPoissonDemagProvenance {
 }
 
 /// Records which engine and device produced a run.
+/// Measured host/device movement for the CUDA-assisted multilayer FDM lane.
+///
+/// The assisted lane deliberately keeps the state and RK orchestration on the
+/// host.  It must therefore never be presented as device-resident merely
+/// because its local exchange and (optionally) multilayer demag calls use CUDA.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FdmMultilayerTransferTelemetry {
+    /// Realization selected for the public multilayer run.
+    pub execution_shape: String,
+    /// Source of truth for the staged state during the hot loop.
+    pub data_residency: String,
+    /// Number of vector transfers from host to CUDA during this run.
+    pub h2d_transfer_count: u64,
+    /// Number of vector transfers from CUDA to host during this run.
+    pub d2h_transfer_count: u64,
+    /// Cumulative payload bytes moved from host to CUDA during this run.
+    pub h2d_bytes: u64,
+    /// Cumulative payload bytes moved from CUDA to host during this run.
+    pub d2h_bytes: u64,
+}
+
+/// Included in artifact metadata for reproducibility.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FemCrossoverDecision {
+    pub requested: String,
+    pub resolved: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
@@ -1783,6 +2627,9 @@ pub struct ExecutionProvenance {
     pub random_seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<ResolvedFallback>,
+    /// Qualified FEM auto-device crossover decision, if requested device was auto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
     /// Integrator that was requested by the user/plan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_integrator: Option<String>,
@@ -1804,15 +2651,27 @@ pub struct ExecutionProvenance {
     /// Demag realization actually used for execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_demag_realization: Option<String>,
-    /// Timestep policy: "user", "adaptive", or "fallback".
+    /// Canonical requested and resolved timestep policy for LLG execution.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dt_policy: Option<String>,
+    pub timestep_policy: Option<TimestepPolicyProvenance>,
+    /// Measured host/device transfers for the FDM multilayer realization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fdm_multilayer_transfer_telemetry: Option<FdmMultilayerTransferTelemetry>,
+    /// Read-only compatibility for artifacts written before `timestep_policy`.
+    #[serde(default, skip_serializing)]
+    pub dt_policy: Option<LegacyDtPolicy>,
     /// Resolved LLG RHS mode: "precessional" or "pure_damping".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llg_mode: Option<String>,
     /// FEM-030: MFEM device string used for this run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfem_device: Option<String>,
+    /// MFEM major.minor version reported by the loaded native FEM runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mfem_version: Option<String>,
+    /// HYPRE major.minor.patch version reported by the loaded native FEM runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypre_version: Option<String>,
     /// Canonical demag refresh cadence in seconds, if explicitly configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_refresh_interval_s: Option<f64>,
@@ -2018,14 +2877,31 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        fem_mesh_topology_fingerprint, normalized_payload_element_markers, FemMeshPartPayload,
-        FemMeshPayload, LivePreviewField, StepStats, StepUpdate,
+        fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
+        normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
+        reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
+        FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
+        LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
+        ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate, TimestepBackend,
+        TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
+        TimestepValidationState,
     };
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemMeshPartIR,
         FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR,
     };
     use std::collections::BTreeSet;
+
+    fn fdm_cpu_timestep_identity() -> TimestepExecutionIdentity {
+        TimestepExecutionIdentity {
+            capability_id: LlgTimestepCapabilityId::LlgTdPolicyV1,
+            qualification_id: LlgTimestepQualificationId::ExplicitFixedFdmCpuDouble,
+            backend: TimestepBackend::Fdm,
+            device: TimestepDevice::Cpu,
+            precision: ExecutionPrecision::Double,
+            validation_state: TimestepValidationState::Unvalidated,
+        }
+    }
 
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
@@ -2039,9 +2915,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2152,6 +3028,118 @@ mod tests {
     }
 
     #[test]
+    fn fem_mesh_payload_is_built_once_while_step_updates_reuse_generation() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let mut plan = tiny_fem_plan();
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let stage_generation = stage_asset.identity.generation_id().to_string();
+        let stage_mesh = &stage_asset.payload;
+        for _ in 0..12 {
+            assert_eq!(
+                Some(stage_generation.as_str()),
+                stage_mesh.generation_id.as_deref()
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+
+        let rebuilt_payload = FemMeshPayload::from_fem_plan_with_generation(
+            &plan,
+            stage_asset.identity.generation_id().to_string(),
+        );
+        assert_eq!(rebuilt_payload.generation_id, stage_mesh.generation_id);
+        assert_eq!(fem_mesh_payload_build_count(), 2);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+
+        plan.mesh.nodes[0][0] += 0.25;
+        let remeshed = FemMeshPayload::from(&plan);
+        assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
+        assert_eq!(fem_mesh_payload_build_count(), 3);
+        assert_eq!(fem_mesh_fingerprint_count(), 2);
+    }
+
+    #[test]
+    fn stage_fem_mesh_asset_survives_initialization_and_stage_zero_without_rehash() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let plan = tiny_fem_plan();
+
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let initialization_payload = stage_asset.payload.clone();
+        let stage_context =
+            super::FemStageExecutionContext::from_mesh_identity(stage_asset.identity.clone());
+
+        for _ in 0..16 {
+            assert_eq!(
+                initialization_payload.generation_id.as_deref(),
+                stage_context.generation_id().as_deref(),
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
+    fn production_interactive_asset_reuse_does_not_rebuild_or_refingerprint_mesh() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&tiny_fem_plan());
+
+        let (mesh, context) = crate::interactive_runtime::reuse_stage_fem_mesh_asset(&stage_asset);
+
+        assert_eq!(
+            mesh.generation_id.as_deref(),
+            context.generation_id().as_deref()
+        );
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
+    fn remeshed_stage_asset_publishes_and_executes_one_new_generation() {
+        let mut plan = tiny_fem_plan();
+        plan.mesh.nodes[1][0] += 0.25;
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+
+        let remeshed_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let published_generation = remeshed_asset
+            .payload
+            .generation_id
+            .as_deref()
+            .expect("published remesh generation");
+        let context =
+            super::FemStageExecutionContext::from_mesh_identity(remeshed_asset.identity.clone());
+        for step in 0..8 {
+            let update = StepUpdate {
+                stats: StepStats {
+                    step,
+                    ..StepStats::default()
+                },
+                grid: [0, 0, 0],
+                fem_mesh_generation_id: context.generation_id(),
+                magnetization: None,
+                preview_field: None,
+                cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                finished: step == 7,
+            };
+            assert_eq!(
+                update.fem_mesh_generation_id.as_deref(),
+                Some(published_generation)
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
     fn fem_mesh_topology_fingerprint_changes_for_node_reorder() {
         let base = FemMeshPayload::from(&tiny_fem_plan());
         let mut reordered = base.clone();
@@ -2167,7 +3155,7 @@ mod tests {
     fn fem_mesh_topology_fingerprint_changes_for_element_connectivity() {
         let base = FemMeshPayload::from(&tiny_fem_plan());
         let mut rewired = base.clone();
-        rewired.elements[0] = [0, 1, 3, 2];
+        rewired.cells.nodes = vec![0, 1, 3, 2];
 
         assert_ne!(
             fem_mesh_topology_fingerprint(&base),
@@ -2176,7 +3164,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_mesh_topology_fingerprint_changes_for_mesh_part_node_indices() {
+    fn fem_mesh_topology_fingerprint_excludes_non_topological_mesh_parts() {
         let base = FemMeshPayload::from(&tiny_fem_plan());
         let mut repartitioned = base.clone();
         repartitioned.mesh_parts.push(FemMeshPartPayload {
@@ -2194,12 +3182,12 @@ mod tests {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: None,
             bounds_max: None,
         });
 
-        assert_ne!(
+        assert_eq!(
             fem_mesh_topology_fingerprint(&base),
             fem_mesh_topology_fingerprint(&repartitioned)
         );
@@ -2244,7 +3232,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 4, count: 1 },
             boundary_face_indices: Vec::new(),
             node_indices: vec![0, 1, 2, 4],
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: None,
             bounds_max: None,
             parent_id: None,
@@ -2262,7 +3250,7 @@ mod tests {
         let update = StepUpdate {
             stats: StepStats::default(),
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,
@@ -2293,10 +3281,14 @@ mod tests {
         let update = StepUpdate {
             stats: StepStats::default(),
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: Some(LivePreviewField {
                 config_revision: 1,
+                source_step: 0,
+                source_revision: 1,
+                materialized_at_unix_ms: 0,
+                materialization_wall_time_ns: 0,
                 quantity: "eden_total".to_string(),
                 unit: "wrong".to_string(),
                 spatial_kind: "grid".to_string(),
@@ -2334,5 +3326,153 @@ mod tests {
         assert_eq!(frame.unit, spec.unit);
         assert_eq!(frame.n_comp, spec.n_comp);
         assert!(!frame.unit.is_empty());
+    }
+
+    #[test]
+    fn timestep_policy_serializes_without_legacy_dt_policy() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.timestep_policy = Some(TimestepPolicyProvenance {
+            requested: RequestedTimestepPolicy::Fixed {
+                integrator: IntegratorChoice::Heun,
+                timestep_s: 1e-15,
+            },
+            resolved: ResolvedTimestepPolicy::Fixed {
+                integrator: IntegratorChoice::Heun,
+                timestep_s: 1e-15,
+            },
+            execution_identity: fdm_cpu_timestep_identity(),
+            relaxation_controller: None,
+        });
+        provenance.dt_policy = Some(LegacyDtPolicy::User);
+
+        let value = serde_json::to_value(provenance).unwrap();
+        assert!(value.get("timestep_policy").is_some());
+        assert!(value.get("dt_policy").is_none());
+    }
+
+    #[test]
+    fn legacy_dt_policy_is_read_only_and_bounded() {
+        let mut value = serde_json::to_value(ExecutionProvenance::default()).unwrap();
+        value["dt_policy"] = serde_json::json!("adaptive");
+        let provenance: ExecutionProvenance = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(provenance.dt_policy, Some(LegacyDtPolicy::Adaptive));
+
+        value["dt_policy"] = serde_json::json!("unknown_policy");
+        assert!(serde_json::from_value::<ExecutionProvenance>(value).is_err());
+    }
+
+    #[test]
+    fn adaptive_timestep_provenance_keeps_requested_and_resolved_values() {
+        let policy = TimestepPolicyProvenance {
+            requested: RequestedTimestepPolicy::Adaptive {
+                integrator: IntegratorChoice::Rk45,
+                tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial_s: None,
+                dt_min_s: 1e-16,
+                dt_max_s: 1e-14,
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            },
+            resolved: ResolvedTimestepPolicy::Adaptive {
+                integrator: IntegratorChoice::Rk45,
+                estimator_order: 4,
+                tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial_s: 1e-16,
+                dt_initial_reason: InitialTimestepReason::DtMinDefault,
+                dt_min_s: 1e-16,
+                dt_max_s: 1e-14,
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            },
+            execution_identity: TimestepExecutionIdentity {
+                qualification_id: LlgTimestepQualificationId::ExplicitAdaptiveFdmCpuDouble,
+                ..fdm_cpu_timestep_identity()
+            },
+            relaxation_controller: None,
+        };
+
+        let value = serde_json::to_value(policy).unwrap();
+        assert_eq!(value["requested"]["dt_initial_s"], serde_json::Value::Null);
+        assert_eq!(value["resolved"]["dt_initial_s"], 1e-16);
+        assert_eq!(value["resolved"]["estimator_order"], 4);
+    }
+
+    #[test]
+    fn fem_mesh_payload_owns_v2_topology_and_fingerprint_covers_every_axis() {
+        let base = FemMeshPayload::from(&tiny_fem_plan());
+        let value = serde_json::to_value(&base).unwrap();
+        assert!(value.get("cells").is_some());
+        assert!(value.get("facets").is_some());
+        assert!(value.get("elements").is_none());
+        assert!(value.get("boundary_faces").is_none());
+
+        let baseline = fem_mesh_topology_fingerprint(&base);
+        let mutations: Vec<Box<dyn Fn(&mut FemMeshPayload)>> = vec![
+            Box::new(|mesh| mesh.cells.types[0] = fullmag_ir::FemCellTypeIR::Prism6),
+            Box::new(|mesh| mesh.cells.offsets[1] += 1),
+            Box::new(|mesh| mesh.cells.nodes[0] += 1),
+            Box::new(|mesh| mesh.cells.global_ordinals[0] += 1),
+            Box::new(|mesh| mesh.element_markers[0] += 1),
+            Box::new(|mesh| mesh.facets.types[0] = fullmag_ir::FemFacetTypeIR::Quad4),
+            Box::new(|mesh| mesh.facets.roles[0] = fullmag_ir::FemFacetRoleIR::MaterialInterface),
+            Box::new(|mesh| mesh.facets.offsets[1] += 1),
+            Box::new(|mesh| mesh.facets.nodes[0] += 1),
+            Box::new(|mesh| mesh.facets.global_ordinals[0] += 1),
+            Box::new(|mesh| mesh.boundary_markers[0] += 1),
+        ];
+        for mutate in mutations {
+            let mut changed = base.clone();
+            mutate(&mut changed);
+            assert_ne!(fem_mesh_topology_fingerprint(&changed), baseline);
+        }
+    }
+
+    #[test]
+    fn fem_mesh_payload_normalizes_legacy_topology_and_rejects_dual_encoding() {
+        let base = FemMeshPayload::from(&tiny_fem_plan());
+        let mut legacy = serde_json::to_value(&base).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("cells");
+        object.remove("facets");
+        object.insert("elements".to_string(), serde_json::json!([[0, 1, 2, 3]]));
+        object.insert("boundary_faces".to_string(), serde_json::json!([[0, 1, 2]]));
+
+        let normalized: FemMeshPayload = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(
+            normalized.cells.types,
+            vec![fullmag_ir::FemCellTypeIR::Tet4]
+        );
+        assert_eq!(
+            normalized.facets.types,
+            vec![fullmag_ir::FemFacetTypeIR::Tri3]
+        );
+        assert_eq!(normalized.cells.global_ordinals, vec![0]);
+        assert_eq!(normalized.facets.global_ordinals, vec![0]);
+        let normalized_value = serde_json::to_value(normalized).unwrap();
+        assert!(normalized_value.get("elements").is_none());
+        assert!(normalized_value.get("boundary_faces").is_none());
+
+        legacy.as_object_mut().unwrap().insert(
+            "cells".to_string(),
+            serde_json::json!({
+                "types": ["tet4"],
+                "offsets": [0, 4],
+                "nodes": [0, 1, 2, 3]
+            }),
+        );
+        assert!(serde_json::from_value::<FemMeshPayload>(legacy)
+            .unwrap_err()
+            .to_string()
+            .contains("both legacy and v2 topology"));
     }
 }

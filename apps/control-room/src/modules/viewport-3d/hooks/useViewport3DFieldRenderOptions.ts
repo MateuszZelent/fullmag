@@ -29,6 +29,35 @@ const fieldRenderOptionsCache = new WeakMap<
   Viewport3DFieldRenderOptions
 >();
 
+function targetScalarColorModeForRendering(
+  settings: VisualizationTargetSettings,
+): string | null {
+  if (!settings.visible) return null;
+  const surfaceColorMode = settings.shaderVisible
+    ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+    : null;
+  if (isNumericScalarColorMode(surfaceColorMode)) return surfaceColorMode;
+  if (
+    settings.vectorsVisible &&
+    settings.viewportColorbarVisible &&
+    isNumericScalarColorMode(settings.vectorColorMode)
+  ) {
+    return settings.vectorColorMode;
+  }
+  return surfaceColorMode;
+}
+
+function isNumericScalarColorMode(
+  colorMode: string | null | undefined,
+): colorMode is "magnitude" | "x" | "y" | "z" {
+  return (
+    colorMode === "x" ||
+    colorMode === "y" ||
+    colorMode === "z" ||
+    colorMode === "magnitude"
+  );
+}
+
 export function useViewport3DFieldRenderOptions({
   airboxSettings,
   airboxQuantityCompatible,
@@ -50,6 +79,12 @@ export function useViewport3DFieldRenderOptions({
   vectorColorMode: string;
   vectorDomain: string;
 }): Viewport3DFieldRenderOptions {
+  const airboxScalarColorMode = airboxQuantityCompatible
+    ? targetScalarColorModeForRendering(airboxSettings)
+    : null;
+  const fallbackScalarColorMode =
+    targetScalarColorModeForRendering(fallbackSettings);
+
   return useMemo(() => {
     if (!topologyRenderModel) {
       return EMPTY_FIELD_RENDER_OPTIONS;
@@ -89,16 +124,12 @@ export function useViewport3DFieldRenderOptions({
           magneticVectorsAllowed &&
           settings.visible &&
           settings.vectorsVisible;
-        if (settings.visible && settings.shaderVisible) {
-          const scalarColorMode = surfaceColorSourceToColorMode(
-            settings.surfaceColorSource,
-          );
-          if (scalarColorMode) {
-            scalarColorsVisible = true;
-            scalarColorModes.add(scalarColorMode);
-            partScalarColorModes.set(partId, scalarColorMode);
-            partScalarColorPalettes.set(partId, settings.scalarColorPalette);
-          }
+        const scalarColorMode = targetScalarColorModeForRendering(settings);
+        if (scalarColorMode) {
+          scalarColorsVisible = true;
+          scalarColorModes.add(scalarColorMode);
+          partScalarColorModes.set(partId, scalarColorMode);
+          partScalarColorPalettes.set(partId, settings.scalarColorPalette);
         }
         partVectorScopes.set(partId, settings.geometryScope);
         if (!settings.vectorCenteringEnabled) {
@@ -116,19 +147,12 @@ export function useViewport3DFieldRenderOptions({
         }
       }
     } else {
-      scalarColorsVisible =
-        fallbackSettings.visible && fallbackSettings.shaderVisible;
-      if (scalarColorsVisible) {
-        const scalarColorMode = surfaceColorSourceToColorMode(
-          fallbackSettings.surfaceColorSource,
-        );
-        if (scalarColorMode) {
-          scalarColorModes.add(scalarColorMode);
-          fullScalarColorMode = scalarColorMode;
-          fullScalarColorPalette = fallbackSettings.scalarColorPalette;
-        } else {
-          scalarColorsVisible = false;
-        }
+      const scalarColorMode = fallbackScalarColorMode;
+      scalarColorsVisible = scalarColorMode !== null;
+      if (scalarColorMode) {
+        scalarColorModes.add(scalarColorMode);
+        fullScalarColorMode = scalarColorMode;
+        fullScalarColorPalette = fallbackSettings.scalarColorPalette;
       }
       const fallbackVisible =
         magneticVectorsAllowed &&
@@ -148,20 +172,12 @@ export function useViewport3DFieldRenderOptions({
     for (const partModel of topologyRenderModel.airboxParts) {
       const partId = partModel.part.id;
       partQuantityIds.set(partId, airboxSettings.activeQuantityId);
-      if (
-        airboxQuantityCompatible &&
-        airboxSettings.visible &&
-        airboxSettings.shaderVisible
-      ) {
-        const scalarColorMode = surfaceColorSourceToColorMode(
-          airboxSettings.surfaceColorSource,
-        );
-        if (scalarColorMode) {
-          scalarColorsVisible = true;
-          scalarColorModes.add(scalarColorMode);
-          partScalarColorModes.set(partId, scalarColorMode);
-          partScalarColorPalettes.set(partId, airboxSettings.scalarColorPalette);
-        }
+      const scalarColorMode = airboxScalarColorMode;
+      if (scalarColorMode) {
+        scalarColorsVisible = true;
+        scalarColorModes.add(scalarColorMode);
+        partScalarColorModes.set(partId, scalarColorMode);
+        partScalarColorPalettes.set(partId, airboxSettings.scalarColorPalette);
       }
       partVectorScopes.set(partId, airboxSettings.geometryScope);
       if (!airboxSettings.vectorCenteringEnabled) {
@@ -228,19 +244,17 @@ export function useViewport3DFieldRenderOptions({
     airboxSettings.geometryScope,
     airboxSettings.activeQuantityId,
     airboxSettings.scalarColorPalette,
-    airboxSettings.surfaceColorSource,
-    airboxSettings.shaderVisible,
     airboxSettings.visible,
+    airboxScalarColorMode,
     airboxQuantityCompatible,
-    fallbackSettings.surfaceColorSource,
     fallbackSettings.scalarColorPalette,
-    fallbackSettings.shaderVisible,
     fallbackSettings.vectorBudget,
     fallbackSettings.vectorCenteringEnabled,
     fallbackSettings.vectorSurfaceOffsetEnabled,
     fallbackSettings.vectorSurfaceOffsetScale,
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
+    fallbackScalarColorMode,
     getPartSettings,
     maxVectorGlyphs,
     scalarColorPalette,

@@ -135,13 +135,29 @@ fullmag_fem_plan_desc valid_base_plan() {
         0.0, 0.0, 1.0,
     };
     static const uint32_t elements[] = {0u, 1u, 2u, 3u};
+    static const uint32_t cell_types[] = {FULLMAG_FEM_CELL_TET4};
+    static const uint32_t cell_offsets[] = {0u, 4u};
+    static const uint64_t cell_ordinals[] = {0u};
+    static const uint32_t cell_markers[] = {1u};
+    static const uint32_t facet_offsets[] = {0u};
 
     fullmag_fem_plan_desc plan{};
+    plan.mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    plan.mesh.struct_size = sizeof(fullmag_fem_mesh_desc);
     plan.mesh.nodes_xyz = nodes;
-    plan.mesh.n_nodes = 4;
-    plan.mesh.elements = elements;
-    plan.mesh.n_elements = 1;
-    plan.mesh.n_boundary_faces = 0;
+    plan.mesh.nodes_xyz_len = 12;
+    plan.mesh.cell_types = cell_types;
+    plan.mesh.cell_types_len = 1;
+    plan.mesh.cell_offsets = cell_offsets;
+    plan.mesh.cell_offsets_len = 2;
+    plan.mesh.cell_nodes = elements;
+    plan.mesh.cell_nodes_len = 4;
+    plan.mesh.cell_global_ordinals = cell_ordinals;
+    plan.mesh.cell_global_ordinals_len = 1;
+    plan.mesh.cell_markers = cell_markers;
+    plan.mesh.cell_markers_len = 1;
+    plan.mesh.facet_offsets = facet_offsets;
+    plan.mesh.facet_offsets_len = 1;
     plan.fe_order = 1;
     plan.hmax = 4.0e-9;
     plan.dt_seconds = 2.0e-13;

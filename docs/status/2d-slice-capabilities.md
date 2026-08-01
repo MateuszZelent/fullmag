@@ -1,20 +1,18 @@
 # 2D Slice Capabilities
 
-This status file describes implemented behavior, staged behavior, and known limits for the spatial 2D Slice viewport.
+This status file distinguishes implementation, managed execution, browser proof, and scientific validation for the canonical `field-map` surface.
 
-| Feature | FDM | FEM API Raster | FEM Exact Local | Status |
+| Feature | FDM CPU | FEM CPU | FEM GPU run | Evidence status |
 |---|---|---|---|---|
-| Heatmap | yes | yes | yes | reference_executable |
-| Quantity overlay off | yes | yes | yes | reference_executable |
-| Mesh overlay | no | backend/local fallback | yes | production_target |
-| Mesh overlay status | no | backend/local/none | local | production_target |
-| Airbox wireframe | no | local fallback | yes, FEM single with airbox part | P0_target |
-| Magnetic vectors | backend path | backend arrows | local in-plane arrows | P1_target |
-| Airbox vectors | staged | staged | staged | semantic_only |
-| Projection/all_layers | structured-grid projection | projection resource | projection renderer | production_target |
-| Contour | staged | staged | staged | semantic_only |
-| Slab | staged | staged | staged | semantic_only |
-| Primitives | staged | staged | staged | semantic_only |
+| Plane heatmap and probe | yes | yes | yes | scientifically validated |
+| Slab average | yes | yes | yes | scientifically validated |
+| Depth projection | yes | yes | yes | scientifically validated |
+| Surface projection | not applicable in fixture | yes | yes | scientifically validated for FEM |
+| Magnetic vectors | yes | yes | yes | browser verified |
+| Contours and masked holes | yes | yes | yes | focused model tested |
+| Mesh overlay | structured outline | exact FEM section | exact FEM section | browser verified |
+| PNG export | yes | yes | yes | contract tested |
+| 3D frame preview | yes | yes | yes | browser verified |
 
 ## Status Language
 
@@ -25,22 +23,15 @@ Use these messages consistently:
 - `Using local fallback` or `mesh: local fallback after backend error` when backend mesh overlay cannot be used.
 - `Not implemented E2E yet` for contour, slab, primitives, and airbox vectors.
 
-## Current Release Notes
+## Managed evidence (2026-07-18)
 
-- Added a shared 2D Slice availability model for ribbon and command gating.
-- Enabled 2D airbox wireframe controls for FEM single-slice domains with airbox parts.
-- Kept 2D airbox visibility local to the 2D toolbar path by default.
-- Routed active 2D Slice full-domain quantities through dense FEM field data so `H_demag`/`H_eff` can render in the airbox while magnetic-only quantities stay object-scoped.
-- Added backend/local/none mesh overlay source resolution and visible status.
-- Added local exact FEM arrow glyphs for magnetic vectors.
-- Added overlay-only raster rendering and mesh topology keys for stable chart updates.
-- Added segment caps for mesh and airbox overlays.
+- `fdm-cpu`: science and browser reports pass; requested/resolved `fdm/cpu`; 100 switches; 61,594,483-byte heap growth.
+- `fem-cpu`: science and browser reports pass; requested/resolved `fem/cpu`; 100 switches; 7,936,018-byte heap growth.
+- `fem-gpu`: science and browser reports pass; requested `cuda` (GPU alias), resolved `fem/gpu`; 100 switches; 7,457,770-byte heap growth.
+- Cross-backend manufactured linear-field relative RMS is about `1.19e-3` for both FEM lanes.
+
+Reports and screenshots are under `.fullmag/reports/viewport-2d-planar-monitor-smoke/`. Planar sampling is currently an explicit CPU postprocessor even when the simulation run resolves to FEM GPU; the report records this instead of implying a device-resident sampler.
 
 ## Release Policy
 
-Do not mark 2D Slice as fully production-ready until:
-
-- P0 tests pass,
-- manual QA confirms mesh and airbox behavior on small and large FEM domains with airbox,
-- staged controls remain disabled with explicit reasons,
-- live browser checks confirm pan/zoom and layer toggles remain stable.
+The implemented monitor lanes above are browser-verified and scientifically validated. Airbox-specific field availability still follows the canonical quantity catalog and is not inferred merely from visible airbox geometry. A scene without monitors intentionally creates only an uncommitted Midplane draft; it requires Apply before data is rendered.

@@ -25,7 +25,11 @@ function defaultExpandedIds(): ExpandedIdsByTab {
   const tabs: ExplorerTabId[] = ["model", "resources", "results", "jobs", "diagnostics"];
   const result = {} as ExpandedIdsByTab;
   for (const tab of tabs) {
-    result[tab] = new Set(collectExplorerNodeIds(buildExplorerTree(tab)));
+    const expandedIds = new Set(collectExplorerNodeIds(buildExplorerTree(tab)));
+    if (tab === "model") {
+      expandedIds.delete("model:mesh");
+    }
+    result[tab] = expandedIds;
   }
   return result;
 }
@@ -40,6 +44,7 @@ const INITIAL_STATE: ExplorerStoreState = {
 
 class ExplorerStore {
   private listeners = new Set<ExplorerStoreListener>();
+  private defaultExpandedModelObjectIds = new Set<string>();
   private state: ExplorerStoreState = INITIAL_STATE;
 
   getSnapshot = (): ExplorerStoreState => this.state;
@@ -55,11 +60,33 @@ class ExplorerStore {
   }
 
   reset(): void {
+    this.defaultExpandedModelObjectIds.clear();
     this.state = {
       ...INITIAL_STATE,
       expandedIds: defaultExpandedIds(),
     };
     this.notify();
+  }
+
+  ensureModelObjectDefaults(objectRootIds: readonly string[]): void {
+    const newObjectRootIds = objectRootIds.filter(
+      (nodeId) => !this.defaultExpandedModelObjectIds.has(nodeId),
+    );
+    if (newObjectRootIds.length === 0) return;
+
+    const state = this.state;
+    const expandedModelIds = new Set(state.expandedIds.model);
+    for (const nodeId of newObjectRootIds) {
+      this.defaultExpandedModelObjectIds.add(nodeId);
+      expandedModelIds.add(nodeId);
+    }
+
+    this.setState({
+      expandedIds: {
+        ...state.expandedIds,
+        model: expandedModelIds,
+      },
+    });
   }
 
   private notify(): void {
@@ -116,6 +143,12 @@ export function expandExplorerNodes(tabId: ExplorerTabId, nodeIds: readonly stri
       [tabId]: new Set([...state.expandedIds[tabId], ...nodeIds]),
     },
   });
+}
+
+export function ensureExplorerModelObjectDefaults(
+  objectRootIds: readonly string[],
+): void {
+  explorerStore.ensureModelObjectDefaults(objectRootIds);
 }
 
 export function revealExplorerNode(

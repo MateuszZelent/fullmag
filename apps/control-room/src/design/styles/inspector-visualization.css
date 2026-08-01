@@ -1,0 +1,816 @@
+/* ── Visualization toggles ── */
+.fm-visualization-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--fm-space-1);
+}
+
+/* Override ghost base: give inactive toggles a subtle chip style */
+/* Height = --fm-control-height-compact (26px), font = --fm-font-size-xs (11px) */
+.fm-visualization-toggle {
+  justify-content: center;
+  gap: var(--fm-space-1);
+  padding-inline: var(--fm-space-1);
+  height: var(--fm-control-height-compact);
+  min-height: var(--fm-control-height-compact);
+  font-size: var(--fm-font-size-xs);
+  font-family: var(--fm-font-ui);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  border-radius: var(--fm-radius-md);
+  border-color: var(--fm-border-subtle) !important;
+  background: var(--fm-bg-panel-raised) !important;
+  color: var(--fm-text-secondary) !important;
+  transition:
+    background var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    color var(--fm-transition-fast) !important;
+}
+
+.fm-visualization-toggle:hover:not(:disabled) {
+  border-color: var(--fm-border-default) !important;
+  background: var(--fm-bg-hover) !important;
+  color: var(--fm-text-primary) !important;
+}
+
+/* Active toggle: accent tint */
+.fm-visualization-toggle[data-active="true"],
+.fm-visualization-toggle[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 40%, var(--fm-border-subtle)) !important;
+  background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised)) !important;
+  color: var(--fm-accent) !important;
+  font-weight: 600;
+}
+
+.fm-visualization-toggle-grid--vectors {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* ── Frequency-domain visualization color compatibility ── */
+.fm-visualization-color-field__control {
+  display: grid;
+  grid-template-columns: var(--fm-space-8) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--fm-space-2);
+}
+
+.fm-visualization-color-field__picker {
+  width: var(--fm-control-height-regular);
+  height: var(--fm-control-height-regular);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-canvas);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.fm-visualization-color-field__value {
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+/* ── Per-part vector toggles ── */
+.fm-visualization-part-toggles {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-visualization-part-toggles__label {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  padding-bottom: var(--fm-space-1);
+}
+
+.fm-visualization-part-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  padding: 2px 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fm-visualization-part-toggle input[type="checkbox"] {
+  appearance: none;
+  width: var(--fm-space-3);
+  height: var(--fm-space-3);
+  flex-shrink: 0;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-xs);
+  background: var(--fm-bg-canvas);
+  cursor: pointer;
+  position: relative;
+  transition:
+    border-color var(--fm-transition-fast),
+    background-color var(--fm-transition-fast);
+}
+
+.fm-visualization-part-toggle input[type="checkbox"]:checked {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent-soft);
+}
+
+.fm-visualization-part-toggle input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--fm-accent);
+  border-radius: 1px;
+}
+
+.fm-visualization-part-toggle input[type="checkbox"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.fm-visualization-part-toggle span {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Viewport-only scope note ── */
+.fm-visualization-scope-note {
+  margin: 0;
+  padding: var(--fm-space-1) var(--fm-space-2) var(--fm-space-1) 10px;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid var(--fm-border-default);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  font-style: italic;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+/* ── Vector accounting stats ── */
+.fm-viz-vector-accounting {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  overflow: hidden;
+}
+
+.fm-viz-vector-accounting .fm-inspector-field-row {
+  border-radius: 0;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  min-height: var(--fm-control-height-compact);
+}
+
+.fm-viz-vector-accounting .fm-inspector-field-row:not(:last-child) {
+  border-bottom: 1px solid var(--fm-border-subtle);
+}
+
+.fm-viz-vector-accounting .fm-inspector-field-row:hover {
+  background: color-mix(in srgb, var(--fm-accent) 5%, transparent);
+}
+
+/* ── Vector section sub-groups (opacity, budget, etc.) ── */
+.fm-viz-vector-subgroup {
+  display: grid;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-3) var(--fm-space-3);
+  border-top: 1px solid var(--fm-border-subtle);
+  background: color-mix(in srgb, var(--fm-accent) 3%, var(--fm-bg-panel-raised));
+  border-radius: 0 0 var(--fm-radius-md) var(--fm-radius-md);
+  margin-inline: -1px;
+}
+
+/* ── Axis segmented tabs ── */
+.fm-inspector-axis-tabs {
+  min-width: 0;
+}
+
+.fm-inspector-axis-tabs .fm-tabs-list {
+  gap: var(--fm-space-1);
+}
+
+.fm-inspector-axis-tab {
+  position: relative;
+  min-width: var(--fm-inspector-nav-icon-size);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.fm-inspector-axis-tab[data-axis="x"][data-state="active"] {
+  box-shadow: inset 0 -2px 0 var(--fm-danger);
+}
+
+.fm-inspector-axis-tab[data-axis="y"][data-state="active"] {
+  box-shadow: inset 0 -2px 0 var(--fm-success);
+}
+
+.fm-inspector-axis-tab[data-axis="z"][data-state="active"] {
+  box-shadow: inset 0 -2px 0 var(--fm-accent);
+}
+
+/* ── Compound range slider ── */
+.fm-inspector-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: var(--fm-slider-track-height);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  margin: var(--fm-space-1) 0;
+  background: linear-gradient(
+    to right,
+    var(--fm-accent) 0%,
+    var(--fm-accent) var(--pct, 50%),
+    var(--fm-border-default) var(--pct, 50%),
+    var(--fm-border-default) 100%
+  );
+}
+
+.fm-inspector-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--fm-slider-thumb-size);
+  height: var(--fm-slider-thumb-size);
+  border-radius: 50%;
+  background: var(--fm-accent);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 2px var(--fm-bg-panel-raised),
+    var(--fm-shadow-sm);
+  transition: transform var(--fm-transition-fast);
+}
+
+.fm-inspector-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.fm-inspector-range-slider::-moz-range-thumb {
+  width: var(--fm-slider-thumb-size);
+  height: var(--fm-slider-thumb-size);
+  border: none;
+  border-radius: 50%;
+  background: var(--fm-accent);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 2px var(--fm-bg-panel-raised),
+    var(--fm-shadow-sm);
+}
+
+/* ── Render mode tile grid: single 4-column row ── */
+.fm-viz-render-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--fm-space-1);
+}
+
+.fm-viz-render-mode-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fm-space-1);
+  min-height: var(--fm-inspector-icon-size);
+  padding: var(--fm-space-2) var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
+  cursor: pointer;
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.2;
+  transition:
+    background var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    color var(--fm-transition-fast),
+    transform var(--fm-duration-normal) ease;
+  will-change: transform;
+}
+
+.fm-viz-render-mode-tile:hover:not(:disabled) {
+  border-color: var(--fm-border-default);
+  background: var(--fm-bg-hover);
+  transform: translateY(-1px);
+}
+
+.fm-viz-render-mode-tile:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.fm-viz-render-mode-tile--active {
+  border-color: color-mix(in srgb, var(--fm-accent) 50%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel-raised));
+  color: var(--fm-accent);
+  font-weight: 600;
+}
+
+.fm-viz-render-mode-tile--active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-panel-raised));
+  transform: translateY(-1px);
+}
+
+.fm-viz-render-mode-tile:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.fm-viz-render-mode-tile__icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--fm-control-height-compact);
+  height: var(--fm-control-height-compact);
+  transition: transform var(--fm-duration-moderate) ease;
+}
+
+.fm-viz-render-mode-tile:hover .fm-viz-render-mode-tile__icon {
+  transform: scale(1.1);
+}
+
+.fm-viz-render-mode-tile__label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-viz-render-mode-tile__sub-label {
+  display: block;
+  font-weight: 400;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-viz-render-mode-tile--active .fm-viz-render-mode-tile__sub-label {
+  color: color-mix(in srgb, var(--fm-accent) 70%, var(--fm-text-muted));
+}
+
+/* ── Layer chip strip: Surface / Wireframe / Vectors ── */
+.fm-viz-layer-strip {
+  display: flex;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2) 0 var(--fm-space-3);
+}
+
+.fm-viz-layer-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fm-space-1);
+  flex: 1;
+  height: var(--fm-panel-header-height);
+  padding: 0 var(--fm-space-2);
+  border: 1.5px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast),
+    transform var(--fm-duration-fast) ease-out;
+}
+
+.fm-viz-layer-chip:hover:not(:disabled) {
+  border-color: var(--fm-border-default);
+  color: var(--fm-text-secondary);
+  background: var(--fm-bg-hover);
+}
+
+.fm-viz-layer-chip:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.fm-viz-layer-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Active (on) state — accent fill */
+.fm-viz-layer-chip--on {
+  background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised));
+  border-color: color-mix(in srgb, var(--fm-accent) 40%, transparent);
+  color: var(--fm-accent);
+  box-shadow: 0 0 0 0px var(--fm-accent-soft);
+}
+
+.fm-viz-layer-chip--on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fm-accent) 18%, var(--fm-bg-panel-raised));
+  border-color: var(--fm-accent);
+  box-shadow: 0 0 0 2px var(--fm-accent-soft);
+}
+
+/* ── Inspector Group nav variant ── */
+.fm-inspector-group-nav-trigger {
+  display: flex;
+  align-items: center;
+  min-height: var(--fm-inspector-group-nav-height);
+}
+
+/* Nav row icon: circular container */
+.fm-inspector-group-nav-icon {
+  flex-shrink: 0;
+  width: var(--fm-inspector-nav-icon-size);
+  height: var(--fm-inspector-nav-icon-size);
+  border-radius: 50%;
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Display group card wrapper ── */
+.fm-viz-display-card {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-lg);
+  background: var(--fm-bg-surface);
+  padding: var(--fm-space-1) 0 var(--fm-space-3);
+  overflow: hidden;
+}
+
+/* Override InspectorGroup header inside card */
+.fm-viz-display-card [data-slot="inspector-group-trigger"] {
+  padding: var(--fm-space-3) var(--fm-inspector-padding-inline);
+  height: auto;
+  min-height: var(--fm-inspector-tab-height);
+  border-radius: var(--fm-radius-lg) var(--fm-radius-lg) 0 0;
+}
+
+.fm-viz-display-card [data-slot="inspector-group-trigger"] h3 {
+  font-size: var(--fm-font-size-lg);
+  font-weight: 650;
+}
+
+/* Icon box inside the Display group header */
+.fm-viz-display-card [data-slot="inspector-group-trigger"] .fm-inspector-group-icon-box {
+  width: var(--fm-panel-header-height);
+  height: var(--fm-panel-header-height);
+  border-radius: var(--fm-radius-md);
+  border: 1px solid var(--fm-border-subtle);
+  background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised));
+  color: var(--fm-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fm-viz-display-card [data-slot="inspector-group-content"] {
+  padding: 0 14px;
+  gap: var(--fm-space-3);
+}
+
+/* ── Nav sections container ── */
+.fm-viz-nav-sections {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-lg);
+  background: var(--fm-bg-surface);
+  overflow: hidden;
+}
+
+.fm-viz-nav-sections > [data-variant="nav"] {
+  border-radius: 0;
+}
+
+/* ── InspectorShell action bar buttons with icons ── */
+.fm-inspector__action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  flex: 1;
+  justify-content: center;
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-inspector__action-btn--apply {
+  flex: 1.4;
+  font-size: var(--fm-font-size-md);
+  font-weight: 650;
+}
+
+/* ── Inspector identity: larger icon box ── */
+.fm-inspector__identity-icon {
+  background: color-mix(in srgb, var(--fm-accent) 8%, var(--fm-bg-panel-raised)) !important;
+  border-color: color-mix(in srgb, var(--fm-accent) 24%, var(--fm-border-subtle)) !important;
+  transition:
+    background var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast);
+}
+
+.fm-inspector__identity-icon:hover {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-accent) 12%, transparent);
+}
+
+/* ── InspectorGroup icon slot (used in default variant header) ── */
+.fm-inspector-group-icon-box {
+  width: var(--fm-field-row-min-height);
+  height: var(--fm-field-row-min-height);
+  border-radius: var(--fm-radius-md);
+  border: 1px solid var(--fm-border-subtle);
+  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel-raised));
+  color: var(--fm-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
+}
+
+/* ─────────────────────────────────────────────
+   MICRO-ANIMATIONS & INTERACTION POLISH
+────────────────────────────────────────────── */
+
+/* InspectorGroup content: animate open/close */
+[data-slot="inspector-group-content"] {
+  transition: opacity var(--fm-duration-moderate) ease;
+}
+
+[data-collapsible="true"][data-open="false"] [data-slot="inspector-group-content"] {
+  opacity: 0;
+}
+
+[data-collapsible="true"][data-open="true"] [data-slot="inspector-group-content"] {
+  opacity: 1;
+}
+
+/* Nav row: subtle lift on hover */
+.fm-inspector-group-nav-trigger {
+  transition:
+    background var(--fm-transition-fast),
+    transform var(--fm-duration-normal) ease;
+}
+
+.fm-inspector-group-nav-trigger:hover {
+  transform: none; /* no lift on nav rows — they're full-width */
+}
+
+/* Nav row icon: color accent on parent hover */
+.fm-inspector-group-nav-trigger:hover .fm-inspector-group-nav-icon {
+  border-color: color-mix(in srgb, var(--fm-accent) 30%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 8%, var(--fm-bg-panel-raised));
+  color: var(--fm-accent);
+  transition: all var(--fm-transition-fast);
+}
+
+/* Nav row chevron: nudge on hover */
+.fm-inspector-group-nav-trigger:hover > svg:last-child {
+  transform: translateX(2px);
+  transition: transform var(--fm-duration-moderate) ease;
+}
+
+/* Toggle chip: scale press feedback */
+.fm-visualization-toggle:active:not(:disabled) {
+  transform: scale(0.96) !important;
+}
+
+/* Metric strip cards: fixed height, consistent label/value alignment */
+.fm-inspector-metric-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 0;
+  height: 58px;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border-radius: var(--fm-radius-md);
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel-raised);
+  overflow: hidden;
+  transition:
+    background var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast),
+    transform 120ms ease;
+}
+
+.fm-inspector-metric-card__label {
+  display: block;
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--fm-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.fm-inspector-metric-card__value {
+  display: block;
+  margin-top: var(--fm-space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.fm-inspector-metric-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--fm-shadow-sm);
+}
+
+/* Action bar buttons: crisp press feel */
+.fm-inspector__action-btn:active:not(:disabled) {
+  transform: scale(0.96) translateY(1px);
+  transition: transform var(--fm-duration-fast) ease;
+}
+
+/* InspectorGroup icon box: scale when parent trigger is hovered */
+button:hover > .fm-inspector-group-icon-box {
+  background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-panel-raised));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 14%, transparent);
+}
+
+/* Display card content: fade in when opened */
+@keyframes fm-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fm-viz-display-card [data-slot="inspector-group-content"]:not([hidden]) {
+  animation: fm-slide-down 180ms ease;
+}
+
+/* Accounting rows: fade in values */
+@keyframes fm-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.fm-viz-vector-accounting .fm-inspector-field-row__value {
+  animation: fm-fade-in var(--fm-duration-slow) ease;
+}
+
+/* Scope note: subtle slide in */
+.fm-visualization-scope-note {
+  animation: fm-slide-down var(--fm-duration-slow) ease;
+}
+
+/* Vector subgroup: fade in when visible */
+.fm-viz-vector-subgroup {
+  animation: fm-fade-in var(--fm-duration-moderate) ease;
+}
+
+/* Toggle grid: stagger children slightly (CSS only) */
+.fm-visualization-toggle-grid > :nth-child(1) { animation-delay: 0ms; }
+.fm-visualization-toggle-grid > :nth-child(2) { animation-delay: 30ms; }
+.fm-visualization-toggle-grid > :nth-child(3) { animation-delay: var(--fm-duration-instant); }
+
+/* Overview sections: fade up on mount */
+@keyframes fm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fm-object-visualization-overview > * {
+  animation: fm-rise 220ms ease both;
+}
+
+.fm-object-visualization-overview > :nth-child(1) { animation-delay: 0ms; }
+.fm-object-visualization-overview > :nth-child(2) { animation-delay: 40ms; }
+.fm-object-visualization-overview > :nth-child(3) { animation-delay: var(--fm-duration-fast); }
+
+/* Quantity source dropdown: smooth focus ring */
+.fm-viz-display-card select:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
+  border-color: var(--fm-accent);
+  outline: none;
+  transition: box-shadow var(--fm-duration-moderate) ease, border-color var(--fm-duration-moderate) ease;
+}
+
+/* Render mode label sizing */
+.fm-viz-render-mode-label {
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  color: var(--fm-text-secondary);
+  margin-bottom: var(--fm-space-1);
+  letter-spacing: 0.01em;
+}
+
+/* ── Reduced motion: disable all animations ── */
+@media (prefers-reduced-motion: reduce) {
+  .fm-object-visualization-overview > *,
+  .fm-viz-display-card [data-slot="inspector-group-content"]:not([hidden]),
+  .fm-viz-vector-accounting .fm-inspector-field-row__value,
+  .fm-visualization-scope-note,
+  .fm-viz-vector-subgroup {
+    animation: none !important;
+  }
+
+  .fm-viz-render-mode-tile,
+  .fm-viz-render-mode-tile__icon,
+  .fm-inspector-metric-card,
+  .fm-visualization-toggle {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ── Visualization-context slider polish ── */
+/* Thicker track, no border, gradient range fill, layered thumb */
+[data-slot="visualization-number-control"] ~ .fm-slider .fm-slider__track,
+.fm-viz-vector-subgroup .fm-slider .fm-slider__track,
+.fm-viz-vector-subgroup .fm-slider + .fm-slider__track {
+  height: var(--fm-space-1);
+  border: 0;
+  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-disabled));
+  border-radius: var(--fm-radius-pill);
+}
+
+/* Target sliders inside visualization number control property rows */
+[data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__track {
+  height: var(--fm-space-1);
+  border: 0;
+  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-disabled));
+}
+
+[data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__range {
+  background: linear-gradient(
+    to right,
+    var(--fm-accent),
+    color-mix(in srgb, var(--fm-accent) 80%, var(--fm-text-primary))
+  );
+}
+
+[data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__thumb {
+  width: var(--fm-space-3);
+  height: var(--fm-space-3);
+  border: 2px solid var(--fm-accent);
+  background: var(--fm-bg-panel);
+  box-shadow:
+    inset 0 0 0 2.5px var(--fm-bg-panel),
+    inset 0 0 0 5px var(--fm-accent),
+    var(--fm-shadow-sm);
+}
+
+[data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__thumb:hover {
+  box-shadow:
+    inset 0 0 0 2.5px var(--fm-bg-panel),
+    inset 0 0 0 5px var(--fm-accent),
+    0 0 0 5px color-mix(in srgb, var(--fm-accent) 14%, transparent);
+}
+
+/* ── NumberField output value badge ── */
+/* Styles the live value display (e.g. "100%" "1.8×") as a compact badge */
+[data-slot="inspector-property-row"][data-layout="stacked"] output {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel-raised));
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 20%, var(--fm-border-subtle));
+  color: var(--fm-accent);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 600;
+  font-family: var(--fm-font-mono);
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  transition: background var(--fm-transition-fast);
+}
+
+/* ── Toggle coloring grid: enforce 3-col with consistent gap ── */
+.fm-visualization-toggle-grid:not(.fm-visualization-toggle-grid--vectors) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--fm-space-1);
+}

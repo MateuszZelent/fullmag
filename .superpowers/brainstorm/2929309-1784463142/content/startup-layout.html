@@ -1,0 +1,64 @@
+<h2>Jak powinien wyglądać ekran przygotowania symulacji?</h2>
+<p class="subtitle">Oba warianty pokazują prawdziwy etap backendu, rzeczywisty procent tam, gdzie jest dostępny, oraz czasy bez wymyślonego ETA.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#11111b;color:#cdd6f4;min-height:430px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+        <div>
+          <div style="font-size:11px;color:#89b4fa;letter-spacing:.08em;text-transform:uppercase">Preparing simulation</div>
+          <div style="font-size:20px;font-weight:650;margin-top:4px">Generating finite-element mesh</div>
+          <div style="font-size:12px;color:#a6adc8;margin-top:4px">Shared domain · FEM · GPU requested</div>
+        </div>
+        <div style="font:12px monospace;color:#bac2de">00:18.7</div>
+      </div>
+      <div style="height:8px;background:#313244;border-radius:8px;overflow:hidden;margin-bottom:8px"><div style="width:63%;height:100%;background:#89b4fa"></div></div>
+      <div style="display:flex;justify-content:space-between;font:11px monospace;color:#a6adc8;margin-bottom:18px"><span>Meshing 63%</span><span>4 / 8 stages</span></div>
+      <div style="display:grid;grid-template-columns:170px 1fr;gap:16px">
+        <div style="display:grid;gap:8px;font-size:12px">
+          <div style="color:#a6e3a1">✓ Runtime startup <span style="float:right;color:#7f849c">0.8s</span></div>
+          <div style="color:#a6e3a1">✓ Materialize script <span style="float:right;color:#7f849c">1.4s</span></div>
+          <div style="color:#a6e3a1">✓ Validate & plan <span style="float:right;color:#7f849c">0.3s</span></div>
+          <div style="color:#89b4fa;font-weight:650">● Generate mesh <span style="float:right;color:#89b4fa">16.2s</span></div>
+          <div style="color:#6c7086">○ Post-process mesh</div>
+          <div style="color:#6c7086">○ Initialize solver</div>
+        </div>
+        <div style="background:#181825;border:1px solid #313244;border-radius:7px;padding:10px;font:11px/1.7 monospace;min-height:220px">
+          <div><span style="color:#7f849c">00:02.5</span> Domain bounds resolved</div>
+          <div><span style="color:#7f849c">00:03.1</span> Surface mesh: 8,412 faces</div>
+          <div><span style="color:#7f849c">00:09.8</span> Tetrahedralizing shared domain</div>
+          <div><span style="color:#7f849c">00:17.4</span> 142,580 / 226,318 elements</div>
+          <div style="color:#89b4fa"><span style="color:#7f849c">00:18.7</span> Optimizing element quality…</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#7f849c;margin-top:12px">Workspace opens automatically when solver initialization completes.</div>
+    </div>
+    <div class="card-body">
+      <h3>A — Operacyjny panel etapów</h3>
+      <p>Rekomendowany. Jednocześnie pokazuje globalny postęp, pełną oś etapów i aktualny log. Najlepszy przy długim meshowaniu i diagnozowaniu zawieszeń.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#11111b;color:#cdd6f4;min-height:430px;display:grid;place-items:center">
+      <div style="width:90%;background:#181825;border:1px solid #313244;border-radius:10px;padding:18px">
+        <div style="display:flex;justify-content:space-between"><div style="font-size:18px;font-weight:650">Generating mesh</div><div style="font:12px monospace;color:#bac2de">00:18.7</div></div>
+        <div style="font-size:12px;color:#a6adc8;margin:6px 0 14px">Optimizing element quality</div>
+        <div style="height:8px;background:#313244;border-radius:8px;overflow:hidden"><div style="width:63%;height:100%;background:#89b4fa"></div></div>
+        <div style="display:flex;justify-content:space-between;font:11px monospace;color:#a6adc8;margin-top:7px"><span>63%</span><span>142,580 / 226,318 elements</span></div>
+        <div style="margin-top:18px;border-top:1px solid #313244;padding-top:12px;font:11px/1.8 monospace">
+          <div style="color:#7f849c">✓ Runtime · 0.8s</div>
+          <div style="color:#7f849c">✓ Script & plan · 1.7s</div>
+          <div style="color:#89b4fa">● Mesh · 16.2s</div>
+        </div>
+        <button class="mock-button" style="margin-top:14px;width:100%">Show detailed log</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Kompaktowy panel</h3>
+      <p>Spokojniejszy wizualnie, ale log jest schowany i użytkownik widzi mniej informacji bez dodatkowej akcji.</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:20px">Kliknij wariant. Możesz też opisać w terminalu, co połączyć lub zmienić.</p>

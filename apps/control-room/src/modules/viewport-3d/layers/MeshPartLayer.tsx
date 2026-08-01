@@ -19,6 +19,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import type { MeshElementFamily } from "@/kernel/selection/selectionTypes";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import {
@@ -62,7 +63,6 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
-  opacityFromSettings,
   pointColorFromSettings,
   resolveMeshPartSurfaceMaterialColor,
   shaderUsesVertexColors,
@@ -70,8 +70,8 @@ import {
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
-  wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
   resolveViewport3DTargetLayerRequestedSourceIdentity,
@@ -82,8 +82,19 @@ import type {
   Viewport3DRenderAdoptionReceipt,
   Viewport3DRenderAdoptionRegistry,
 } from "../model/viewport3DRenderAdoptionRegistry";
+import {
+  buildMeshPartSurfaceGeometryUploadKey,
+  resolveMeshPartSurfaceGeometryProjection,
+} from "./meshPartGeometryPlan";
+import {
+  buildMeshPartScalarColorRetentionKey,
+  resolveMeshPartCommittedScalarColorState,
+} from "./meshPartScalarTransition";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
+const MESH_PART_SURFACE_USER_DATA = {
+  viewportMeshPartSurface: true,
+} as const;
 
 export function resolveMeshPartScalarColors({
   fieldModel,
@@ -165,6 +176,7 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
   expandedSurfaceFaces,
   faceIndex,
   part,
+  surfaceTriangleFacetIndices,
 }: {
   expandedSurfaceFaces: boolean;
   faceIndex: number | null | undefined;
@@ -172,6 +184,7 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
     Viewport3DMeshPart,
     "boundary_face_count" | "boundary_face_indices" | "boundary_face_start"
   >;
+  surfaceTriangleFacetIndices?: Uint32Array | null;
 }): number | null {
   if (faceIndex === null || faceIndex === undefined || faceIndex < 0) {
     return null;
@@ -184,10 +197,128 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
     return null;
   }
   const localFaceIndex = Math.floor(faceIndex);
+  const mappedFacetIndex = surfaceTriangleFacetIndices?.[localFaceIndex];
+  if (expandedSurfaceFaces) return mappedFacetIndex ?? null;
+  if (mappedFacetIndex !== undefined) return mappedFacetIndex;
   const explicitFaceIndex = part.boundary_face_indices?.[localFaceIndex];
   if (explicitFaceIndex !== undefined) return explicitFaceIndex;
   if (localFaceIndex >= part.boundary_face_count) return null;
   return part.boundary_face_start + localFaceIndex;
+}
+
+export function resolveMeshPartSurfacePickIdentity({
+  expandedSurfaceFaces,
+  faceIndex,
+  part,
+  surfaceHit,
+  surfaceTriangleCellTypes,
+  surfaceTriangleFacetIndices,
+  surfaceTriangleGlobalCellOrdinals,
+}: {
+  expandedSurfaceFaces: boolean;
+  faceIndex: number | null | undefined;
+  part: Pick<
+    Viewport3DMeshPart,
+    "boundary_face_count" | "boundary_face_indices" | "boundary_face_start"
+  >;
+  surfaceHit: boolean;
+  surfaceTriangleCellTypes?: Uint32Array | null;
+  surfaceTriangleFacetIndices?: Uint32Array | null;
+  surfaceTriangleGlobalCellOrdinals?: BigUint64Array | null;
+}): {
+  boundaryFaceIndex: number | null;
+  elementFamily: MeshElementFamily | null;
+  globalCellOrdinal: string | null;
+} {
+  if (
+    !surfaceHit ||
+    faceIndex === null ||
+    faceIndex === undefined ||
+    faceIndex < 0
+  ) {
+    return {
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  const localTriangleIndex = Math.floor(faceIndex);
+  const hasCellTypes = surfaceTriangleCellTypes != null;
+  const hasFacetIndices = surfaceTriangleFacetIndices != null;
+  const hasGlobalCellOrdinals = surfaceTriangleGlobalCellOrdinals != null;
+  const identityMapCount = Number(hasCellTypes) +
+    Number(hasFacetIndices) +
+    Number(hasGlobalCellOrdinals);
+  if (identityMapCount === 0) {
+    return {
+      boundaryFaceIndex: resolveMeshPartBoundaryFaceIndexForPick({
+        expandedSurfaceFaces,
+        faceIndex: localTriangleIndex,
+        part,
+      }),
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  if (
+    identityMapCount !== 3 ||
+    !surfaceTriangleCellTypes ||
+    !surfaceTriangleFacetIndices ||
+    !surfaceTriangleGlobalCellOrdinals ||
+    surfaceTriangleCellTypes.length !== surfaceTriangleFacetIndices.length ||
+    surfaceTriangleGlobalCellOrdinals.length !== surfaceTriangleFacetIndices.length ||
+    localTriangleIndex >= surfaceTriangleFacetIndices.length
+  ) {
+    return {
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  const boundaryFaceIndex = resolveMeshPartBoundaryFaceIndexForPick({
+    expandedSurfaceFaces,
+    faceIndex: localTriangleIndex,
+    part,
+    surfaceTriangleFacetIndices,
+  });
+  const globalCellOrdinal =
+    surfaceTriangleGlobalCellOrdinals?.[localTriangleIndex];
+  const elementFamily = meshElementFamilyFromCellType(
+    surfaceTriangleCellTypes?.[localTriangleIndex],
+  );
+  if (
+    boundaryFaceIndex === null ||
+    globalCellOrdinal === undefined ||
+    !elementFamily
+  ) {
+    return {
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  return {
+    boundaryFaceIndex,
+    elementFamily,
+    globalCellOrdinal: globalCellOrdinal.toString(10),
+  };
+}
+
+function meshElementFamilyFromCellType(
+  cellType: number | undefined,
+): MeshElementFamily | null {
+  switch (cellType) {
+    case 1:
+      return "tet4";
+    case 2:
+      return "prism6";
+    case 3:
+      return "pyramid5";
+    case 4:
+      return "hex8";
+    default:
+      return null;
+  }
 }
 
 export function resolveRetainedMeshPartScalarColors({
@@ -299,14 +430,7 @@ function scalarColorBufferMatchesRetainedSettings(
   vertexCount: number,
 ): buffer is ScalarColorBuffer {
   if (!buffer) return false;
-  if (
-    buffer.topologyRevision &&
-    topologyRevision !== undefined &&
-    topologyRevision !== null &&
-    buffer.topologyRevision !== String(topologyRevision)
-  ) {
-    return false;
-  }
+  if (buffer.colorMode && buffer.colorMode !== scalarColorMode) return false;
   if (
     buffer.colorPalette &&
     settings.scalarColorPalette &&
@@ -318,6 +442,14 @@ function scalarColorBufferMatchesRetainedSettings(
     buffer.quantityId &&
     resolveCanonicalQuantityId(buffer.quantityId) !==
       resolveCanonicalQuantityId(settings.activeQuantityId)
+  ) {
+    return false;
+  }
+  if (
+    buffer.topologyRevision &&
+    topologyRevision !== undefined &&
+    topologyRevision !== null &&
+    buffer.topologyRevision !== String(topologyRevision)
   ) {
     return false;
   }
@@ -379,12 +511,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const part = partModel.part;
   const topologyRevision = topologyModel?.meshRevision ?? null;
   const surfaceIndices = partModel.surfaceIndices;
-  const expandSurfaceFaces =
-    renderSettings.surfaceProjectionMode !== "raw_nodal" &&
-    renderSettings.surfaceColorSource !== "solid";
-  const surfaceGeometryProjection = expandSurfaceFaces
-    ? renderSettings.surfaceProjectionMode
-    : "indexed";
+  const surfaceGeometryProjection = resolveMeshPartSurfaceGeometryProjection(
+    renderSettings,
+  );
+  const expandSurfaceFaces = surfaceGeometryProjection !== "indexed";
   const surfaceVertexCount = expandSurfaceFaces
     ? surfaceIndices?.length ?? 0
     : topologyModel?.nodeCount ?? 0;
@@ -406,7 +536,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       (surfaceIndices?.byteLength ?? 0),
     invalidate,
     itemCount: surfaceIndices?.length ?? 0,
-    key: `mesh-part-surface:${part.id}:projection=${surfaceGeometryProjection}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${surfaceIndices?.byteLength ?? 0}`,
+    key: buildMeshPartSurfaceGeometryUploadKey({
+      indicesByteLength: surfaceIndices?.byteLength ?? 0,
+      partId: part.id,
+      positionsByteLength: topologyModel?.positions.byteLength ?? 0,
+      projection: surfaceGeometryProjection,
+      topologyRevision,
+    }),
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -486,16 +622,15 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       ].join("|");
     }
     if (!fieldColorLayersEnabled || !scalarColorMode) return null;
-    return [
-      "field",
-      `part=${part.id}`,
-      `mode=${scalarColorMode}`,
-      `quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`,
-      `palette=${renderSettings.scalarColorPalette ?? "default"}`,
-      `projection=${surfaceGeometryProjection}`,
-      `topology=${topologyRevision ?? "none"}`,
-      `vertices=${surfaceVertexCount}`,
-    ].join("|");
+    return buildMeshPartScalarColorRetentionKey({
+      mode: scalarColorMode,
+      partId: part.id,
+      projection: surfaceGeometryProjection,
+      quantityId: renderSettings.activeQuantityId,
+      scalarColorPalette: renderSettings.scalarColorPalette,
+      topologyRevision,
+      vertexCount: surfaceVertexCount,
+    });
   }, [
     fieldColorLayersEnabled,
     meshQualityColors,
@@ -610,7 +745,12 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     vertexColorsEnabled,
     vertexCount: surfaceVertexCount,
   });
-  const adoptedScalarColors = visibleShaderScalarColors ?? visibleScalarColors;
+  const committedScalarColorState = resolveMeshPartCommittedScalarColorState({
+    requestedPipeline: shaderScalarColorsEnabled ? "shader" : "vertex",
+    visibleShaderColors: visibleShaderScalarColors,
+    visibleVertexColors: visibleScalarColors,
+  });
+  const adoptedScalarColors = committedScalarColorState.buffer;
   const requestedFieldBufferId = resolveViewport3DTargetLayerRequestedSourceIdentity({
     fieldModel,
     partId: part.id,
@@ -645,24 +785,35 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   ]);
 
   const materialRef = useRef<MeshBasicMaterial>(null);
-  const { hasScalarColors } = resolveMeshPartVisibleScalarColorState({
+  const { hasScalarColors: hasUploadedVertexScalarColors } =
+    resolveMeshPartVisibleScalarColorState({
     effectiveScalarColors,
     meshQualityColors,
     surfaceVertexCount,
     vertexColorsEnabled,
-    visibleScalarColors,
+    visibleScalarColors:
+      committedScalarColorState.pipeline === "vertex"
+        ? committedScalarColorState.buffer
+        : null,
   });
-  const surfaceOpacity = opacityFromSettings(renderSettings);
+  const renderPlan = resolveViewport3DTargetRenderPlan(
+    renderSettings,
+    materialProfile,
+  );
+  const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),
     [surfaceOpacity],
   );
   const scalarShaderMaterial = useMemo(() => {
     if (!fieldColorLayersEnabled && !meshQualityColors) return null;
-    if (!shaderScalarColorsEnabled || !visibleShaderScalarColors) return null;
+    if (
+      committedScalarColorState.pipeline !== "shader" ||
+      !committedScalarColorState.buffer
+    ) return null;
     return tracker.track(
       "material",
-      createScalarSurfaceShaderMaterial(visibleShaderScalarColors, {
+      createScalarSurfaceShaderMaterial(committedScalarColorState.buffer, {
         ...surfacePolicy,
         opacity: surfaceOpacity,
         toneMapped: materialProfile.magneticSurface.toneMapped,
@@ -672,11 +823,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
     meshQualityColors,
-    shaderScalarColorsEnabled,
+    committedScalarColorState.buffer,
+    committedScalarColorState.pipeline,
     surfaceOpacity,
     surfacePolicy,
     tracker,
-    visibleShaderScalarColors,
   ]);
 
   useEffect(
@@ -684,30 +835,39 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [scalarShaderMaterial, tracker],
   );
   useEffect(() => {
-    if (!scalarShaderMaterial || !visibleShaderScalarColors) return;
+    if (
+      !scalarShaderMaterial ||
+      committedScalarColorState.pipeline !== "shader" ||
+      !committedScalarColorState.buffer
+    ) return;
     updateScalarSurfaceShaderMaterial(
       scalarShaderMaterial,
-      visibleShaderScalarColors,
+      committedScalarColorState.buffer,
       surfaceOpacity,
     );
-  }, [scalarShaderMaterial, surfaceOpacity, visibleShaderScalarColors]);
+  }, [
+    committedScalarColorState.buffer,
+    committedScalarColorState.pipeline,
+    scalarShaderMaterial,
+    surfaceOpacity,
+  ]);
 
   useEffect(() => {
     if (materialRef.current) {
       materialRef.current.needsUpdate = true;
     }
-  }, [hasScalarColors]);
+  }, [hasUploadedVertexScalarColors]);
 
   const vectorLayerInput = resolveMeshPartVectorLayerInput({
     fieldModel,
     partId: part.id,
   });
   const hasAnyVisibleRenderableSubLayer =
-    (renderSettings.shaderVisible && Boolean(geometry)) ||
-    (renderSettings.wireframeVisible && Boolean(edgeGeometry)) ||
-    (renderSettings.pointsVisible && Boolean(pointGeometry)) ||
-    renderSettings.boundsVisible ||
-    (renderSettings.vectorsVisible &&
+    (renderPlan.surface.visible && Boolean(geometry)) ||
+    (renderPlan.wireframe.visible && Boolean(edgeGeometry)) ||
+    (renderPlan.points.visible && Boolean(pointGeometry)) ||
+    renderPlan.bounds.visible ||
+    (renderPlan.vectors.visible &&
       viewport3DVectorLayersEnabledFromBrowserConfig() &&
       Boolean(vectorLayerInput.segments));
 
@@ -716,19 +876,27 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     renderSettings,
     colors.mesh,
     magnetizationTexturePreview?.color ?? null,
-    hasScalarColors,
+    Boolean(committedScalarColorState.buffer),
   );
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
+    const identity = resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: expandSurfaceFaces,
+      faceIndex: event.faceIndex,
+      part,
+      surfaceHit: event.object.userData.viewportMeshPartSurface === true,
+      surfaceTriangleCellTypes: partModel.surfaceTriangleCellTypes,
+      surfaceTriangleFacetIndices: partModel.surfaceTriangleFacetIndices,
+      surfaceTriangleGlobalCellOrdinals:
+        partModel.surfaceTriangleGlobalCellOrdinals,
+    });
     onSelectPart(
       selectionForMeshPart(
         part,
-        resolveMeshPartBoundaryFaceIndexForPick({
-          expandedSurfaceFaces: expandSurfaceFaces,
-          faceIndex: event.faceIndex,
-          part,
-        }),
+        identity.boundaryFaceIndex,
+        identity.globalCellOrdinal,
+        identity.elementFamily,
       ),
     );
   };
@@ -738,12 +906,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       onPointerDown={handlePointerDown}
       userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.meshPart }}
     >
-      {renderSettings.shaderVisible && geometry ? (
+      {renderPlan.surface.visible && geometry ? (
         <mesh
           geometry={geometry}
           renderOrder={surfacePolicy.transparent
             ? RENDER_POLICIES.contextSurface.renderOrder
             : RENDER_POLICIES.solidSurface.renderOrder}
+          userData={MESH_PART_SURFACE_USER_DATA}
         >
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />
@@ -753,42 +922,39 @@ export const MeshPartLayer = memo(function MeshPartLayer({
               color={meshColor}
               opacity={surfaceOpacity}
               {...materialProfile.magneticSurface}
-              vertexColors={hasScalarColors}
+              vertexColors={hasUploadedVertexScalarColors}
               {...surfacePolicy}
             />
           )}
         </mesh>
       ) : null}
-      {renderSettings.wireframeVisible && edgeGeometry ? (
+      {renderPlan.wireframe.visible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(
-              renderSettings,
-              materialProfile.featureEdges,
-            )}
+            opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>
       ) : null}
-      {renderSettings.boundsVisible ? (
+      {renderPlan.bounds.visible ? (
         <BoundsBox
           bounds={resolveMeshPartBounds(part)}
           color={colors.accent}
-          opacity={Math.max(opacityFromSettings(renderSettings), 0.35)}
+          opacity={renderPlan.bounds.opacity}
         />
       ) : null}
-      {renderSettings.pointsVisible && pointGeometry ? (
+      {renderPlan.points.visible && pointGeometry ? (
         <points
           geometry={pointGeometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
             color={pointColorFromSettings(renderSettings, colors.wire)}
-            opacity={surfaceOpacity}
+            opacity={renderPlan.points.opacity}
             sizeAttenuation={false}
             size={3}
             {...materialPolicyProps("points")}
@@ -796,7 +962,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      renderSettings.vectorsVisible ? (
+      renderPlan.vectors.visible ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
           buildReference={vectorLayerInput.buildReference}
@@ -804,7 +970,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
-          opacity={surfaceOpacity}
+          opacity={renderPlan.vectors.opacity}
           segments={vectorLayerInput.segments}
           fieldBufferId={requestedFieldBufferId}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}

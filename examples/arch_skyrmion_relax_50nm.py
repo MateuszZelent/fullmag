@@ -37,6 +37,7 @@ SKYRMION_WALL_WIDTH = float(os.environ.get("FULLMAG_ARCH_SKYRMION_WALL_WIDTH", "
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-4
 ADAPTIVE_DT_MIN = float(os.environ.get("FULLMAG_ARCH_ADAPTIVE_DT_MIN", "1e-17"))
+ADAPTIVE_DT_MAX = 1e-14
 
 study = fm.study("arch_skyrmion_relax_50nm")
 
@@ -84,9 +85,14 @@ waveguide.mesh(
     minimum_element_size=1.8e-9,
     transition_distance=80e-9,
     mesh_strategy="swept_prism",
+    topology="prismatic",
     through_thickness_elements=1,
     through_thickness_distribution="fixed",
     sweep_face_meshing="triangular",
+    sweep_direction="auto",
+    element_family="prism",
+    transition_policy="pyramid_to_tetrahedra",
+    exact_layer_count=True,
     order=1,
     algorithm_2d=6,
     algorithm_3d=1,
@@ -122,6 +128,7 @@ study.solver(
     integrator="rk45",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
+    dt_max=ADAPTIVE_DT_MAX,
     gamma=GAMMA,
 )
 
@@ -133,6 +140,7 @@ study.stages.add_relax(
     solver="rk45",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
-    tol=RELAX_TORQUE_TOLERANCE_APM,
+    dt_max=ADAPTIVE_DT_MAX,
+    tolA=RELAX_TORQUE_TOLERANCE_APM,
     max_steps=5000,
 )

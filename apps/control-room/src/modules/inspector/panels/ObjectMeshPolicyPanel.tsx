@@ -12,6 +12,7 @@ import {
   resolveObjectMeshPolicyResourceKey,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshReportResourceKey,
+  useMeshCapabilitiesResource,
   useObjectMeshPolicyResource,
   useObjectMeshQualityResource,
   useObjectMeshReportResource,
@@ -19,14 +20,16 @@ import {
   useObjectTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
-import { Accordion } from "@/shared/ui/Accordion";
+import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { useInspectorActiveTab } from "../InspectorTabState";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField, type FormFieldHelp } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   asRecord,
   formatCount,
@@ -50,6 +53,9 @@ import {
   draftIdentityKeyForObjectMeshPolicyResource,
   draftKeyForObjectMeshPolicyResource,
   objectMeshPolicyDraftDirty,
+  nodePlaneCount,
+  resolveObjectMeshTopologyCapabilities,
+  validateObjectMeshTopologyCapabilities,
   type ObjectMeshPolicyDraft,
 } from "./ObjectMeshPolicyPanelModel";
 
@@ -227,13 +233,13 @@ function ObjectMeshPolicySummarySection({
   reportStatus: string;
 }) {
   return (
-    <InspectorSection value="summary" title="Object Mesh Policy" badge={policyStatus} collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Object Mesh Policy" badge={policyStatus} collapsible defaultOpen>
       <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
       <FieldRow label="Revision" value={String(policyRevision)} />
       <FieldRow label="Policy" value={hasConfig ? "object override" : "inherited"} />
       <FieldRow label="Report state" value={reportStatus} />
       <FieldRow label="Quality state" value={qualityStatus} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -245,14 +251,14 @@ function ObjectMeshOverrideSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="override" title="Override">
+    <InspectorGroup title="Override">
       <FormField
         checked={draft.present}
         label="Use object policy"
         type="checkbox"
         onChange={(event) => updateDraft({ present: event.target.checked })}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -287,7 +293,7 @@ function ObjectMeshPresetSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="preset" title="Mesh Size Presets" collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Mesh Size Presets" collapsible defaultOpen={false}>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.calibrateFor} label="Calibrate for" type="select" value={draft.calibrateFor} onChange={(event) => updateDraft({ calibrateFor: event.target.value })}>
         {MESH_SIZE_CALIBRATIONS.map((cal) => (
           <option key={cal} value={cal}>
@@ -303,11 +309,11 @@ function ObjectMeshPresetSection({
         ))}
       </FormField>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFactor} label="Size factor" type="number" value={draft.sizeFactor} onChange={(event) => updateDraft({ sizeFactor: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
-function ObjectMeshSizeSemanticsSection({
+export function ObjectMeshSizeSemanticsSection({
   draft,
   updateDraft,
 }: {
@@ -315,7 +321,7 @@ function ObjectMeshSizeSemanticsSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="semantics" title="Element Size Parameters" badge="solver policy">
+    <InspectorGroup title="Element Size Parameters" badge="solver policy">
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementSize} label="Maximum element size" type="number" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.minimumElementSize} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementGrowthRate} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
@@ -323,50 +329,119 @@ function ObjectMeshSizeSemanticsSection({
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFromCurvature} label="Size from curvature" type="number" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegions} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegionResolution} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.order} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
+      <FormField disabled={!draft.present || draft.meshStrategy === "swept_prism"} help={OBJECT_MESH_HELP.order} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.source} label="Mesh source" type="text" value={draft.source} onChange={(event) => updateDraft({ source: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
-function ObjectMeshSweepStrategySection({
+export function ObjectMeshSweepStrategySection({
+  capabilities,
   draft,
   updateDraft,
 }: {
+  capabilities: ReturnType<typeof resolveObjectMeshTopologyCapabilities>;
   draft: ObjectMeshPolicyDraft;
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
+  const layeredPrismSelected = draft.meshStrategy === "swept_prism";
+  const layeredControlsDisabled =
+    !draft.present || !layeredPrismSelected || !capabilities.layeredPrism.enabled;
+  const nodePlanes = nodePlaneCount(draft.throughThicknessElements);
   return (
-    <InspectorSection value="strategy" title="Thin-Film Sweep Strategy" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.meshStrategy} label="Mesh strategy" type="select" value={draft.meshStrategy} onChange={(event) => updateDraft({ meshStrategy: event.target.value })}>
+    <InspectorGroup title="Thin-Film Sweep Strategy" collapsible defaultOpen={false}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.meshStrategy} label="Mesh strategy" type="select" value={draft.meshStrategy} onChange={(event) => {
+        const meshStrategy = event.target.value;
+        updateDraft(
+          meshStrategy === "swept_prism"
+            ? {
+                exactLayerCount: "true",
+                meshStrategy,
+                order: "1",
+                sweepFaceMeshing: "triangular",
+                throughThicknessDistribution: "fixed",
+                throughThicknessElementRatio: "1",
+                throughThicknessElements: "1",
+                throughThicknessSymmetric: "false",
+                topology: "prismatic",
+                transitionPolicy: "pyramid_to_tetrahedra",
+              }
+            : {
+                exactLayerCount: "",
+                meshStrategy,
+                sweepDestination: "",
+                sweepFaceMeshing: "",
+                sweepSource: "",
+                throughThicknessDistribution: "",
+                throughThicknessElementRatio: "",
+                throughThicknessElements: "",
+                throughThicknessSymmetric: "",
+                topology: "",
+                transitionPolicy: "",
+              },
+        );
+      }}>
         <option value="">Inherited</option>
-        <option value="auto">Auto</option>
         <option value="free_tetrahedral">Free tetrahedral</option>
-        <option value="swept_prism">Swept prism</option>
-        <option value="swept_hex">Swept hex</option>
-        <option value="thin_film_tetrahedral">Thin-film tetrahedral</option>
+        <option
+          disabled={!capabilities.layeredPrism.enabled}
+          title={capabilities.layeredPrism.reason}
+          value="swept_prism"
+        >
+          Layered prism (exact)
+        </option>
+        <option disabled title={capabilities.sweptHex.reason} value="swept_hex">
+          Swept hex — unsupported
+        </option>
       </FormField>
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Through-thickness elements" type="number" value={draft.throughThicknessElements} onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
+      <MeshResourceFields fields={[
+        { label: "Requested topology", value: draft.topology || "inherited" },
+        { label: "Element layers", value: draft.throughThicknessElements || "unset" },
+        { label: "Resulting node planes", value: String(nodePlanes ?? "unset") },
+        { label: "Transition policy", value: draft.transitionPolicy || "none" },
+        { label: "Fallback policy", value: layeredPrismSelected ? "strict: none" : "not applicable" },
+        { label: "Layered prism capability", value: capabilities.layeredPrism.status },
+      ]} />
+      {layeredPrismSelected ? (
+        <FeedbackBanner
+          kind="warning"
+          message="One exact prism layer requires layer-convergence evidence (for example 1/2/3 layers) before scientific qualification."
+        />
+      ) : null}
+      <FormField
+        disabled={layeredControlsDisabled}
+        help={OBJECT_MESH_HELP.sweep}
+        hint={capabilities.layeredPrism.enabled
+          ? `Qualified values: ${capabilities.layeredPrism.supportedLayerCounts.join(", ")}`
+          : capabilities.layeredPrism.reason}
+        label="Element layers"
+        max={capabilities.layeredPrism.supportedLayerCounts.at(-1)}
+        min={capabilities.layeredPrism.supportedLayerCounts[0]}
+        step={1}
+        type="number"
+        value={draft.throughThicknessElements}
+        onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })}
+      />
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
         <option value="">Inherited</option>
         <option value="fixed">Fixed</option>
         <option value="linear">Linear</option>
         <option value="exponential">Exponential</option>
       </FormField>
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Thickness element ratio" type="number" value={draft.throughThicknessElementRatio} onChange={(event) => updateDraft({ throughThicknessElementRatio: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Symmetric thickness" type="select" value={draft.throughThicknessSymmetric} onChange={(event) => updateDraft({ throughThicknessSymmetric: event.target.value })}>
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Thickness element ratio" type="number" value={draft.throughThicknessElementRatio} onChange={(event) => updateDraft({ throughThicknessElementRatio: event.target.value })} />
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Symmetric thickness" type="select" value={draft.throughThicknessSymmetric} onChange={(event) => updateDraft({ throughThicknessSymmetric: event.target.value })}>
         <option value="">Inherited</option>
         <option value="true">Enabled</option>
         <option value="false">Disabled</option>
       </FormField>
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Sweep face meshing" type="select" value={draft.sweepFaceMeshing} onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}>
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Sweep face meshing" type="select" value={draft.sweepFaceMeshing} onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}>
         <option value="">Inherited</option>
         <option value="triangular">Triangular</option>
         <option value="quadrilateral">Quadrilateral</option>
       </FormField>
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
-    </InspectorSection>
+      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
+      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
+    </InspectorGroup>
   );
 }
 
@@ -378,12 +453,12 @@ function ObjectMeshInterfaceTransitionSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="interface" title="Interface And Transition Refinement" collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Interface And Transition Refinement" collapsible defaultOpen={false}>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.interfaceMaximumElementSize} label="Interface max. element size" type="number" unit="m" value={draft.interfaceMaximumElementSize} onChange={(event) => updateDraft({ interfaceMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.interfaceThickness} label="Interface thickness" type="number" unit="m" value={draft.interfaceThickness} onChange={(event) => updateDraft({ interfaceThickness: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.transitionDistance} hint="Positive meters or airbox_boundary" label="Transition distance" mono={false} type="text" value={draft.transitionDistance} onChange={(event) => updateDraft({ transitionDistance: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.transitionGrowth} label="Transition growth" type="number" value={draft.transitionGrowth} onChange={(event) => updateDraft({ transitionGrowth: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -399,7 +474,7 @@ function ObjectMeshBackendParametersSection({
   sizeFieldsLength: number;
 }) {
   return (
-    <InspectorSection value="backend" title="Backend Mesh Parameters" badge="structured">
+    <InspectorGroup title="Backend Mesh Parameters" badge="structured">
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.algorithm2d} label="Gmsh 2D algorithm" type="number" value={draft.algorithm2d} onChange={(event) => updateDraft({ algorithm2d: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.algorithm3d} label="Gmsh 3D algorithm" type="number" value={draft.algorithm3d} onChange={(event) => updateDraft({ algorithm3d: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.smoothingSteps} label="Smoothing steps" type="number" value={draft.smoothingSteps} onChange={(event) => updateDraft({ smoothingSteps: event.target.value })} />
@@ -433,7 +508,7 @@ function ObjectMeshBackendParametersSection({
           { label: "Size-field kinds", value: sizeFieldKinds.length ? sizeFieldKinds.join(", ") : "none" },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -446,7 +521,7 @@ function ObjectMeshCoreRelaxationSection({
 }) {
   const disabled = !draft.present || !draft.coreRelaxationEnabled;
   return (
-    <InspectorSection value="core-relaxation" title="Object Core Relaxation" badge="size field">
+    <InspectorGroup title="Object Core Relaxation" badge="size field">
       <FormField
         checked={draft.coreRelaxationEnabled}
         disabled={!draft.present}
@@ -464,7 +539,7 @@ function ObjectMeshCoreRelaxationSection({
       <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Edge distance" type="number" unit="m" value={draft.coreRelaxationEdgeDistance} onChange={(event) => updateDraft({ coreRelaxationEdgeDistance: event.target.value })} />
       <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Surface sampling" type="number" value={draft.coreRelaxationSamplingSurface} onChange={(event) => updateDraft({ coreRelaxationSamplingSurface: event.target.value })} />
       <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Edge sampling" type="number" value={draft.coreRelaxationSamplingEdge} onChange={(event) => updateDraft({ coreRelaxationSamplingEdge: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -477,7 +552,7 @@ function ObjectMeshManualSizeFieldSection({
 }) {
   const disabled = !draft.present || !draft.manualBoxSizeFieldEnabled;
   return (
-    <InspectorSection value="manual-size-field" title="Manual Size Field" badge="Box">
+    <InspectorGroup title="Manual Size Field" badge="Box">
       <FormField
         checked={draft.manualBoxSizeFieldEnabled}
         disabled={!draft.present}
@@ -495,7 +570,7 @@ function ObjectMeshManualSizeFieldSection({
       <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Y max" type="number" unit="m" value={draft.manualBoxSizeFieldYMax} onChange={(event) => updateDraft({ manualBoxSizeFieldYMax: event.target.value })} />
       <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Z min" type="number" unit="m" value={draft.manualBoxSizeFieldZMin} onChange={(event) => updateDraft({ manualBoxSizeFieldZMin: event.target.value })} />
       <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Z max" type="number" unit="m" value={draft.manualBoxSizeFieldZMax} onChange={(event) => updateDraft({ manualBoxSizeFieldZMax: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -507,35 +582,41 @@ function ObjectMeshEdgeCornerSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="edge" title="Edge And Corner Refinement" collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Edge And Corner Refinement" collapsible defaultOpen={false}>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.edgeMaximumElementSize} label="Edge max. element size" type="number" unit="m" value={draft.edgeMaximumElementSize} onChange={(event) => updateDraft({ edgeMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.edgeThickness} label="Edge thickness" type="number" unit="m" value={draft.edgeThickness} onChange={(event) => updateDraft({ edgeThickness: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.edgeTransitionDistance} hint="Positive meters or airbox_boundary" label="Edge transition distance" mono={false} type="text" value={draft.edgeTransitionDistance} onChange={(event) => updateDraft({ edgeTransitionDistance: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.cornerMaximumElementSize} label="Corner max. element size" type="number" unit="m" value={draft.cornerMaximumElementSize} onChange={(event) => updateDraft({ cornerMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.cornerExtent} label="Corner extent" type="number" unit="m" value={draft.cornerExtent} onChange={(event) => updateDraft({ cornerExtent: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.cornerTransitionDistance} hint="Positive meters or airbox_boundary" label="Corner transition distance" mono={false} type="text" value={draft.cornerTransitionDistance} onChange={(event) => updateDraft({ cornerTransitionDistance: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
 function ObjectMeshEffectiveTargetSection({
   effectiveTarget,
+  report,
   reportStatus,
 }: {
   effectiveTarget: Record<string, unknown> | null;
+  report: Record<string, unknown> | null;
   reportStatus: string;
 }) {
+  const requestedPolicy = asRecord(recordField(report, "requested_policy"));
+  const resolvedPolicy = asRecord(recordField(report, "resolved_policy"));
   return (
-    <InspectorSection value="target" title="Effective Target" badge={reportStatus}>
+    <InspectorGroup title="Effective Target" badge={reportStatus}>
       <MeshResourceFields
         fields={[
           { label: "Maximum element", value: String(recordField(effectiveTarget, "maximum_element_size") ?? "unset") },
           { label: "Minimum element", value: String(recordField(effectiveTarget, "minimum_element_size") ?? "unset") },
           { label: "Source", value: String(recordField(effectiveTarget, "source") ?? "not resolved") },
+          { label: "Requested topology", value: String(recordField(requestedPolicy, "topology") ?? recordField(report, "requested_topology") ?? "not published") },
+          { label: "Resolved topology", value: String(recordField(resolvedPolicy, "topology") ?? recordField(report, "resolved_topology") ?? "not published") },
           { label: "Transition realization", value: String(recordField(effectiveTarget, "transition_realization") ?? "none") },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -551,7 +632,7 @@ function ObjectMeshTopologyQualitySection({
   topology: ReturnType<typeof useObjectTopologyResource>;
 }) {
   return (
-    <InspectorSection value="topology" title="Topology And Quality" badge={topology.status}>
+    <InspectorGroup title="Topology And Quality" badge={topology.status}>
       <MeshResourceFields
         fields={[
           { label: "Topology fetch", value: topology.status },
@@ -562,7 +643,7 @@ function ObjectMeshTopologyQualitySection({
           { label: "Quality status", value: String(recordField(qualityRecord, "status") ?? qualityStatus) },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -574,18 +655,17 @@ function ObjectMeshQualityStatisticsSection({
   statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
 }) {
   return (
-    <InspectorSection
-      value="object-quality-statistics"
+    <InspectorGroup
       title="Object Quality Distributions"
       badge={statistics ? formatCount(statistics.elementCount) : "missing"}
       collapsible
-      defaultCollapsed={false}
+      defaultOpen
     >
       <MeshQualityStatisticsView
         statistics={statistics}
         onHoverSizeDistributionBin={onHoverSizeDistributionBin}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -597,9 +677,9 @@ function ObjectMeshAdvancedJsonSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="advanced" title="Advanced JSON" collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Advanced JSON" collapsible defaultOpen={false}>
       <FormField disabled={!draft.present} label="Policy JSON" rows={8} type="textarea" value={draft.configText} onChange={(event) => updateDraft({ configText: event.target.value })} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -623,7 +703,7 @@ export function ObjectMeshTransactionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection value="transactions" title="Transactions">
+    <InspectorGroup title="Transactions">
       {isDirty ? (
         <FeedbackBanner
           kind="warning"
@@ -642,7 +722,7 @@ export function ObjectMeshTransactionsSection({
         </Button>
       </div>
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -655,6 +735,11 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const quality = useObjectMeshQualityResource(objectId);
   const sizeField = useObjectMeshSizeFieldResource(objectId);
   const topology = useObjectTopologyResource(objectId);
+  const meshCapabilities = useMeshCapabilitiesResource();
+  const topologyCapabilities = useMemo(
+    () => resolveObjectMeshTopologyCapabilities(meshCapabilities.data),
+    [meshCapabilities.data],
+  );
   const resource = policy.data ?? defaultObjectMeshPolicyResource(objectId ?? "");
   const reportRecord = asRecord(report.data?.report);
   const effectiveTarget = asRecord(recordField(reportRecord, "effective_target")) as JsonObject | null;
@@ -731,13 +816,22 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     );
   }
 
-  async function applyPolicy({
+  const applyPolicy = useCallback(async ({
     silentSuccess = false,
   }: {
     silentSuccess?: boolean;
-  } = {}): Promise<{ ok: boolean }> {
+  } = {}): Promise<{ ok: boolean }> => {
     if (!objectId) {
       setFeedback({ kind: "error", message: "No selected scene object." });
+      return { ok: false };
+    }
+
+    const topologyCapabilityError = validateObjectMeshTopologyCapabilities(
+      draft,
+      topologyCapabilities,
+    );
+    if (topologyCapabilityError) {
+      setFeedback({ kind: "error", message: topologyCapabilityError });
       return { ok: false };
     }
 
@@ -773,11 +867,20 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     } finally {
       setPending(false);
     }
-  }
+  }, [api, draft, objectId, resources, topologyCapabilities]);
 
   async function buildMesh(): Promise<void> {
     if (!objectId) {
       setFeedback({ kind: "error", message: "No selected scene object." });
+      return;
+    }
+
+    const topologyCapabilityError = validateObjectMeshTopologyCapabilities(
+      draft,
+      topologyCapabilities,
+    );
+    if (topologyCapabilityError) {
+      setFeedback({ kind: "error", message: topologyCapabilityError });
       return;
     }
 
@@ -799,72 +902,116 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     }
   }
 
-  return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={["summary", "override", "preset", "semantics", "backend", "core-relaxation", "manual-size-field", "target", "topology", "object-quality-statistics", "transactions"]}
-    >
-      <ObjectMeshPolicySummarySection
-        hasConfig={Boolean(resource.config)}
-        objectId={objectId}
-        policyRevision={resource.revision}
-        policyStatus={policy.status}
-        qualityStatus={quality.status}
-        reportStatus={report.status}
-      />
-      <ObjectMeshOverrideSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshSizeSemanticsSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshSweepStrategySection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshInterfaceTransitionSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshBackendParametersSection
-        draft={draft}
-        updateDraft={updateDraft}
-        sizeFieldKinds={sizeFieldKinds}
-        sizeFieldsLength={sizeFields.length}
-      />
-      <ObjectMeshCoreRelaxationSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshManualSizeFieldSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshEdgeCornerSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshEffectiveTargetSection
-        effectiveTarget={effectiveTarget}
-        reportStatus={report.status}
-      />
-      <ObjectMeshTopologyQualitySection
-        qualityRecord={qualityRecord}
-        qualityRevision={quality.data?.revision}
-        qualityStatus={quality.status}
-        topology={topology}
-      />
-      <ObjectMeshQualityStatisticsSection
-        statistics={qualityStatistics}
-        onHoverSizeDistributionBin={hoverSizeDistributionBin}
-      />
-      <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
-      <ObjectMeshTransactionsSection
-        buildLabel={isDirty ? "Apply & Build Mesh" : "Build Mesh"}
-        feedback={feedback}
-        isDirty={isDirty}
-        objectId={objectId}
-        onApply={() => void applyPolicy()}
-        onBuild={() => void buildMesh()}
-        onRevert={() => {
-          setDraftState(
-            initialInspectorDraftState({
-              baseDraft,
-              baseKey: draftKey,
-              identityKey: draftIdentityKey,
-            }),
-          );
-          setFeedback(null);
-        }}
-        pending={pending}
-      />
+  const validation = buildObjectMeshPolicyReplaceRequest(draft);
+  const topologyCapabilityError = validateObjectMeshTopologyCapabilities(
+    draft,
+    topologyCapabilities,
+  );
+  const applyInspectorDraft = useCallback(
+    async () => (await applyPolicy()).ok,
+    [applyPolicy],
+  );
+  const resetInspectorDraft = useCallback(() => {
+    setDraftState(
+      initialInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        identityKey: draftIdentityKey,
+      }),
+    );
+    setFeedback(null);
+  }, [baseDraft, draftIdentityKey, draftKey]);
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    isDirty,
+    !("error" in validation) && topologyCapabilityError === null,
+    undefined,
+    applyInspectorDraft,
+    resetInspectorDraft,
+  );
+  const activeTab = useInspectorActiveTab();
 
-      <JsonResourceSection sectionValue="json-report" title="Object Mesh Report JSON" value={report.data} />
-      <JsonResourceSection sectionValue="json-quality" title="Object Mesh Quality JSON" value={quality.data} />
-      <JsonResourceSection sectionValue="json-size-field" title="Object Size Field JSON" value={sizeField.data} />
-    </Accordion>
+  return (
+    <div className="fm-inspector-panel">
+      <Tabs value={activeTab} className="fm-inspector-tabs">
+
+        <TabsContent value="policy" className="fm-tabs-content">
+          <ObjectMeshPolicySummarySection
+            hasConfig={Boolean(resource.config)}
+            objectId={objectId}
+            policyRevision={resource.revision}
+            policyStatus={policy.status}
+            qualityStatus={quality.status}
+            reportStatus={report.status}
+          />
+          <ObjectMeshEffectiveTargetSection
+            effectiveTarget={effectiveTarget}
+            report={reportRecord}
+            reportStatus={report.status}
+          />
+          <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshSizeSemanticsSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshSweepStrategySection
+            capabilities={topologyCapabilities}
+            draft={draft}
+            updateDraft={updateDraft}
+          />
+          <ObjectMeshInterfaceTransitionSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshBackendParametersSection
+            draft={draft}
+            updateDraft={updateDraft}
+            sizeFieldKinds={sizeFieldKinds}
+            sizeFieldsLength={sizeFields.length}
+          />
+          <ObjectMeshCoreRelaxationSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshManualSizeFieldSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshEdgeCornerSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshOverrideSection draft={draft} updateDraft={updateDraft} />
+          <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
+        </TabsContent>
+
+        <TabsContent value="quality" className="fm-tabs-content">
+          <ObjectMeshTopologyQualitySection
+            qualityRecord={qualityRecord}
+            qualityRevision={quality.data?.revision}
+            qualityStatus={quality.status}
+            topology={topology}
+          />
+          <ObjectMeshQualityStatisticsSection
+            statistics={qualityStatistics}
+            onHoverSizeDistributionBin={hoverSizeDistributionBin}
+          />
+        </TabsContent>
+
+        <TabsContent value="history" className="fm-tabs-content">
+          <ObjectMeshTransactionsSection
+            buildLabel={isDirty ? "Apply & Build Mesh" : "Build Mesh"}
+            feedback={feedback}
+            isDirty={isDirty}
+            objectId={objectId}
+            onApply={() => void applyPolicy()}
+            onBuild={() => void buildMesh()}
+            onRevert={() => {
+              setDraftState(
+                initialInspectorDraftState({
+                  baseDraft,
+                  baseKey: draftKey,
+                  identityKey: draftIdentityKey,
+                }),
+              );
+              setFeedback(null);
+            }}
+            pending={pending}
+          />
+
+          <div className="grid min-w-0 gap-fm-inspector-group">
+            <JsonResourceSection sectionValue="json-report" title="Object Mesh Report JSON" value={report.data} />
+            <JsonResourceSection sectionValue="json-quality" title="Object Mesh Quality JSON" value={quality.data} />
+            <JsonResourceSection sectionValue="json-size-field" title="Object Size Field JSON" value={sizeField.data} />
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }

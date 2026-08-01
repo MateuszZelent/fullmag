@@ -5,6 +5,7 @@ import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import type { SelectionController } from "../selection/SelectionController";
 import type { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+import type { ChartViewportHandoffController } from "../visualization/ChartViewportHandoffController";
 import type { CameraRegistryController } from "../visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
@@ -29,6 +30,7 @@ export interface CommandContext {
   api?: ControlRoomApi;
   analysisFieldOverlay?: AnalysisFieldOverlayController;
   bus?: EventBus<KernelEventMap>;
+  chartViewportHandoff?: ChartViewportHandoffController;
   cameraRegistry?: CameraRegistryController;
   input?: unknown;
   layout?: LayoutController;

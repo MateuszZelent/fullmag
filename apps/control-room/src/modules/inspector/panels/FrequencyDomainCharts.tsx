@@ -1,9 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Eye } from "lucide-react";
 
-import type { ECharts, EChartsOption } from "echarts";
+import { EChartsCanvasSurface } from "@/shared/analysis-charts/EChartsCanvasSurface";
+import { ChartExportControls } from "@/shared/analysis-charts/ChartExportControls";
+import type { ChartRendererOwner, ChartRenderModel } from "@/shared/analysis-charts/chartRenderer";
+import {
+  frequencySeriesRenderModel,
+  frequencySpectrumRenderModel,
+} from "@/shared/analysis-charts/frequencyRenderModels";
 
 import type {
   EigenDispersionPoint,
@@ -14,16 +20,6 @@ import type {
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
-
-const CHART_COLORS = [
-  "var(--fm-chart-blue)",
-  "var(--fm-chart-green)",
-  "var(--fm-chart-yellow)",
-  "var(--fm-chart-red)",
-  "var(--fm-chart-mauve)",
-] as const;
-
-const activeCharts: ECharts[] = [];
 
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return "n/a";
@@ -79,25 +75,20 @@ export function FrequencyDomainSpectrumChart({
         const point = resolvePoint(event);
         if (point) onSelectMode?.(point);
       }}
-      onChartDoubleClick={(event) => {
-        const point = resolvePoint(event);
-        if (point) onPlotMode?.(point);
-      }}
-      option={buildSpectrumOption(data, frequencyUnit)}
+      model={frequencySpectrumRenderModel(data, frequencyUnit)}
       pointCount={data.length}
       title="FMR / eigen modal spectrum"
     >
       {data.map((point) => (
+        <div className="fm-frequency-domain-chart__point-actions" key={`:`}>
         <Button
           aria-label={`Select mode ${point.mode} at ${point.frequencyLabel}, ${point.hasField ? "3D field available" : "3D field missing"}`}
           className="fm-frequency-domain-chart__mode"
           data-selected={point.selected ? "true" : undefined}
-          key={`${point.sample}:${point.mode}`}
           size="sm"
           type="button"
           variant={point.selected ? "primary" : "secondary"}
           onClick={() => onSelectMode?.(model.points[point.rowIndex]!)}
-          onDoubleClick={() => onPlotMode?.(model.points[point.rowIndex]!)}
         >
           <Eye aria-hidden="true" size={13} />
           <span>
@@ -116,6 +107,18 @@ export function FrequencyDomainSpectrumChart({
               : ""}
           </small>
         </Button>
+        <Button
+          aria-label={`Load mode ${point.mode} in 3D`}
+          className="fm-frequency-domain-chart__mode"
+          disabled={!point.hasField}
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() => onPlotMode?.(model.points[point.rowIndex]!)}
+        >
+          Load in 3D
+        </Button>
+        </div>
       ))}
     </FrequencyDomainEChartsFrame>
   );
@@ -300,16 +303,16 @@ export function FrequencyDomainResponseChart({
               <small>{point.fieldId ? "field ready" : "field missing"}</small>
             </Button>
             <Button
-              aria-label={`Plot response field ${pointIndex} at ${frequencyLabel}`}
+              aria-label={`Load response field ${pointIndex} at ${frequencyLabel}`}
               className="fm-frequency-domain-chart__mode"
               disabled={!point.fieldId}
               size="sm"
-              title={point.fieldId ? "Plot response field in 3D" : "Response field missing"}
+              title={point.fieldId ? "Load response field in 3D" : "Response field missing"}
               type="button"
               variant="secondary"
               onClick={() => onPlotPoint?.(point)}
             >
-              Plot field
+              Load in 3D
             </Button>
           </div>
         );
@@ -454,7 +457,7 @@ function FrequencyDomainSeriesChart({
       droppedPointCount={droppedPointCount}
       onChartClick={onChartClick}
       onChartDoubleClick={onChartDoubleClick}
-      option={buildFrequencyDomainSeriesOption(chartSeries, xLabel)}
+      model={frequencySeriesRenderModel(chartSeries, title, xLabel)}
       pointCount={pointCount}
       title={title}
     >
@@ -469,104 +472,19 @@ function FrequencyDomainSeriesChart({
 }
 
 function FrequencyDomainEChartsFrame({
-  children,
-  droppedPointCount,
-  onChartClick,
-  onChartDoubleClick,
-  option,
-  pointCount,
-  title,
+  children, droppedPointCount, model, onChartClick, onChartDoubleClick, pointCount, title,
 }: {
   children: ReactNode;
   droppedPointCount: number;
+  model: ChartRenderModel;
   onChartClick?: (event: unknown) => void;
   onChartDoubleClick?: (event: unknown) => void;
-  option: EChartsOption;
   pointCount: number;
   title: string;
 }) {
-  const elementRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<ECharts | null>(null);
-  const clickRef = useRef(onChartClick);
-  const doubleClickRef = useRef(onChartDoubleClick);
-  const optionRef = useRef(option);
-
-  useEffect(() => {
-    optionRef.current = option;
-  }, [option]);
-  useEffect(() => {
-    clickRef.current = onChartClick;
-    doubleClickRef.current = onChartDoubleClick;
-  }, [onChartClick, onChartDoubleClick]);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    if (!element) return;
-    let disposed = false;
-    let resizeObserver: ResizeObserver | null = null;
-    const selectChartPoint = (event: unknown) => clickRef.current?.(event);
-    const inspectChartPoint = (event: unknown) =>
-      doubleClickRef.current?.(event);
-
-    void import("echarts")
-      .then((echarts) => {
-        if (disposed) return;
-        const chart = echarts.init(element, undefined, { renderer: "canvas" });
-        chartRef.current = chart;
-
-        // Enforce 4 concurrent ECharts instances budget
-        if (activeCharts.length >= 4) {
-          const oldestChart = activeCharts.shift();
-          if (oldestChart) {
-            try {
-              oldestChart.dispose();
-            } catch {
-              // ignore already disposed
-            }
-          }
-        }
-        activeCharts.push(chart);
-
-        chart.on("click", selectChartPoint);
-        chart.on("dblclick", inspectChartPoint);
-        chart.setOption(optionRef.current, true);
-        resizeObserver = new ResizeObserver(() => {
-          requestAnimationFrame(() => {
-            if (!disposed) chart.resize();
-          });
-        });
-        resizeObserver.observe(element);
-      })
-      .catch(() => {
-        if (!disposed) chartRef.current = null;
-      });
-
-    return () => {
-      disposed = true;
-      resizeObserver?.disconnect();
-      if (chartRef.current) {
-        const idx = activeCharts.indexOf(chartRef.current);
-        if (idx !== -1) {
-          activeCharts.splice(idx, 1);
-        }
-        chartRef.current.off("click", selectChartPoint);
-        chartRef.current.off("dblclick", inspectChartPoint);
-        chartRef.current.dispose();
-        chartRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    chartRef.current?.setOption(option, true);
-  }, [option]);
-
+  const exportRef = useRef<ChartRendererOwner | null>(null);
   return (
-    <div
-      aria-label={title}
-      className="fm-frequency-domain-chart"
-      data-renderer="echarts"
-    >
+    <div aria-label={title} className="fm-frequency-domain-chart" data-renderer="echarts">
       <div className="fm-frequency-domain-chart__header">
         <span>{title}</span>
         <small>
@@ -575,15 +493,19 @@ function FrequencyDomainEChartsFrame({
         </small>
       </div>
       {pointCount > 0 ? (
-        <>
-          <div ref={elementRef} className="fm-frequency-domain-chart__canvas" />
+        <EChartsCanvasSurface
+          className="fm-frequency-domain-chart__canvas"
+          exportRef={exportRef}
+          model={model}
+          onClick={onChartClick}
+          onDoubleClick={onChartDoubleClick}
+        >
           <div className="fm-frequency-domain-chart__summary">{children}</div>
-        </>
+        </EChartsCanvasSurface>
       ) : (
-        <div className="fm-frequency-domain-chart__empty">
-          No chartable frequency-domain samples.
-        </div>
+        <div className="fm-frequency-domain-chart__empty">No chartable frequency-domain samples.</div>
       )}
+      <ChartExportControls model={model} rendererRef={exportRef} />
     </div>
   );
 }
@@ -616,258 +538,4 @@ export function frequencyDomainSeriesPointIndexFromChartEvent(
   return typeof rowIndex === "number" && Number.isInteger(rowIndex)
     ? rowIndex
     : null;
-}
-
-export function buildSpectrumOption(
-  data: {
-    dampingRateHz?: number | null;
-    frequencyValue: number;
-    leakage?: number | null;
-    mode: number;
-    name: string;
-    rowIndex: number;
-    residualNorm?: number | null;
-    sample: number;
-    selected: boolean;
-  }[],
-  frequencyUnit: string,
-): EChartsOption {
-  const frequencyLabel = `frequency [${frequencyUnit}]`;
-  const hasDamping = data.some(
-    (point) =>
-      point.dampingRateHz != null &&
-      Number.isFinite(point.dampingRateHz) &&
-      point.dampingRateHz > 0,
-  );
-
-  // Build Lorentzian envelope when damping rates are available
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const envelopeSeries: any[] = [];
-  if (hasDamping && data.length > 0) {
-    const fMin = Math.min(...data.map((p) => p.frequencyValue));
-    const fMax = Math.max(...data.map((p) => p.frequencyValue));
-    const fRange = fMax - fMin || fMax * 0.1 || 1;
-    const nSamples = 500;
-    const fStart = fMin - fRange * 0.15;
-    const fEnd = fMax + fRange * 0.15;
-    const step = (fEnd - fStart) / nSamples;
-    const envelopeData: [number, number][] = [];
-    for (let i = 0; i <= nSamples; i++) {
-      const f = fStart + step * i;
-      let intensity = 0;
-      for (const point of data) {
-        const gamma = point.dampingRateHz ?? 0;
-        if (gamma <= 0) continue;
-        const halfGamma = gamma / 2;
-        intensity += 1.0 / ((f - point.frequencyValue) ** 2 + halfGamma ** 2);
-      }
-      envelopeData.push([f, intensity]);
-    }
-    // Normalize envelope to [0, 1]
-    let peakIntensity = 0;
-    for (const [, y] of envelopeData) {
-      if (y > peakIntensity) peakIntensity = y;
-    }
-    if (peakIntensity > 0) {
-      for (const entry of envelopeData) {
-        entry[1] /= peakIntensity;
-      }
-    }
-    envelopeSeries.push({
-      data: envelopeData,
-      lineStyle: { width: 2 },
-      name: "Spectral envelope",
-      showSymbol: false,
-      smooth: true,
-      type: "line",
-      areaStyle: {
-        color: "var(--fm-chart-blue)",
-        opacity: 0.15,
-      },
-      z: 0,
-    });
-  }
-
-  return {
-    animation: false,
-    color: [CHART_COLORS[0], CHART_COLORS[3]],
-    grid: chartGrid(),
-    legend: {
-      icon: "circle",
-      textStyle: { color: "var(--fm-text-primary)" },
-      top: 0,
-    },
-    series: [
-      ...envelopeSeries,
-      {
-        data: data.map((point) => ({
-          itemStyle: point.selected
-            ? {
-                borderColor: "var(--fm-accent)",
-                borderWidth: 2,
-                color: "var(--fm-chart-yellow)",
-              }
-            : { color: CHART_COLORS[0] },
-          name: point.name,
-          value: [point.frequencyValue, hasDamping ? 1.0 : 1.0, point.rowIndex],
-        })),
-        name: "Modes",
-        symbolSize: (value: number[]) => {
-          const rowIndex = value[2];
-          const point = data.find((d) => d.rowIndex === rowIndex);
-          return point?.selected ? 14 : 10;
-        },
-        type: "scatter",
-        z: 1,
-      },
-    ],
-    tooltip: chartTooltip(frequencyLabel),
-    xAxis: xValueAxis(frequencyLabel),
-    yAxis: hasDamping
-      ? yValueAxis("intensity [a.u.]")
-      : {
-          axisLabel: { show: false },
-          axisLine: { show: false },
-          axisTick: { show: false },
-          max: 2,
-          min: 0,
-          splitLine: { show: false },
-          type: "value" as const,
-        },
-  };
-}
-
-export function buildFrequencyDomainSeriesOption(
-  chartSeries: readonly FrequencyDomainChartSeries[],
-  xLabel: string,
-): EChartsOption {
-  const renderSeries = compatibleChartSeries(chartSeries);
-  const resolvedXLabel = resolveSeriesXLabel(renderSeries, xLabel);
-  return {
-    animation: false,
-    color: [...CHART_COLORS],
-    grid: chartGrid(),
-    legend: {
-      icon: "circle",
-      textStyle: { color: "var(--fm-text-primary)" },
-      top: 0,
-      type: "scroll",
-    },
-    series: renderSeries.map((entry) => ({
-      data: entry.points.map((point) => ({
-        value: [point.x, point.y, point.rowIndex],
-      })),
-      lineStyle: { width: 2 },
-      name: `${entry.label} [${entry.unit}]`,
-      showSymbol: false,
-      type: "line",
-    })),
-    tooltip: chartTooltip(resolvedXLabel),
-    xAxis: xValueAxis(resolvedXLabel),
-    yAxis: yValueAxis(seriesYAxisLabel(renderSeries)),
-  };
-}
-
-function compatibleChartSeries(
-  chartSeries: readonly FrequencyDomainChartSeries[],
-): readonly FrequencyDomainChartSeries[] {
-  const first = chartSeries.find((entry) => entry.points.length > 0);
-  if (!first) return [];
-  return chartSeries.filter(
-    (entry) =>
-      entry.points.length > 0 &&
-      entry.quantity === first.quantity &&
-      entry.unit === first.unit &&
-      entry.xUnit === first.xUnit,
-  );
-}
-
-function seriesYAxisLabel(
-  chartSeries: readonly FrequencyDomainChartSeries[],
-): string {
-  const first = chartSeries[0];
-  if (!first) return "response";
-  return first.unit ? `${first.label} [${first.unit}]` : first.label;
-}
-
-function resolveSeriesXLabel(
-  chartSeries: readonly FrequencyDomainChartSeries[],
-  xLabel: string,
-): string {
-  if (xLabel.includes("[")) return xLabel;
-  const unit = chartSeries.find((entry) => entry.xUnit)?.xUnit;
-  return unit ? `${xLabel} [${unit}]` : xLabel;
-}
-
-function chartGrid(): EChartsOption["grid"] {
-  return {
-    bottom: 42,
-    containLabel: true,
-    left: 8,
-    right: 12,
-    top: 36,
-  };
-}
-
-function xValueAxis(name: string): EChartsOption["xAxis"] {
-  return {
-    axisLabel: {
-      color: "var(--fm-text-muted)",
-      formatter: (value: number | string) =>
-        typeof value === "number" ? formatNumber(value) : String(value),
-    },
-    axisLine: { lineStyle: { color: "var(--fm-border-strong)" } },
-    axisTick: { show: false },
-    name,
-    nameTextStyle: { color: "var(--fm-text-secondary)" },
-    splitLine: { lineStyle: { color: "var(--fm-border-subtle)" } },
-    type: "value",
-  };
-}
-
-function yValueAxis(name: string): EChartsOption["yAxis"] {
-  return {
-    axisLabel: {
-      color: "var(--fm-text-muted)",
-      formatter: (value: number | string) =>
-        typeof value === "number" ? formatNumber(value) : String(value),
-    },
-    axisLine: { lineStyle: { color: "var(--fm-border-strong)" } },
-    axisTick: { show: false },
-    name,
-    nameTextStyle: { color: "var(--fm-text-secondary)" },
-    splitLine: { lineStyle: { color: "var(--fm-border-subtle)" } },
-    type: "value",
-  };
-}
-
-function chartTooltip(axisLabel: string): EChartsOption["tooltip"] {
-  return {
-    axisPointer: {
-      crossStyle: { color: "var(--fm-border-strong)", type: "dashed" },
-      type: "cross",
-    },
-    backgroundColor: "var(--fm-bg-panel-raised)",
-    borderColor: "var(--fm-border-default)",
-    textStyle: { color: "var(--fm-text-primary)" },
-    trigger: "axis",
-    valueFormatter: (value) =>
-      typeof value === "number" ? formatNumber(value) : String(value),
-    formatter: (params) => {
-      const items = Array.isArray(params) ? params : [params];
-      const xValue = Array.isArray(items[0]?.value)
-        ? formatNumber(items[0]!.value[0] as number)
-        : String(items[0]?.value ?? "");
-      const lines = [`<strong>${axisLabel}: ${xValue}</strong>`];
-      for (const item of items) {
-        const yValue = Array.isArray(item.value)
-          ? formatNumber(item.value[1] as number)
-          : typeof item.value === "number"
-            ? formatNumber(item.value)
-            : String(item.value);
-        lines.push(`${item.marker ?? ""}${item.seriesName}: ${yValue}`);
-      }
-      return lines.join("<br/>");
-    },
-  };
 }

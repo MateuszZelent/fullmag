@@ -90,7 +90,7 @@
 
 .fm-viewport-tabs__root {
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: var(--fm-ribbon-tabs-height) minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -104,7 +104,7 @@
 
 .fm-viewport-tabs__list {
   display: inline-flex;
-  height: 26px;
+  height: var(--fm-control-height-compact);
   min-width: 0;
 }
 
@@ -147,15 +147,15 @@
 
 .fm-status-bar__sep {
   width: 1px;
-  height: 12px;
+  height: var(--fm-slider-thumb-size);
   margin-inline: var(--fm-space-2);
   background: var(--fm-border-subtle);
   flex-shrink: 0;
 }
 
 .fm-status-bar__dot {
-  width: 6px;
-  height: 6px;
+  width: var(--fm-space-1);
+  height: var(--fm-space-1);
   border-radius: 50%;
   background: var(--fm-text-muted);
   flex-shrink: 0;
@@ -228,4 +228,20 @@
   overflow: hidden;
   color: var(--fm-text-muted);
   text-overflow: ellipsis;
+}
+
+.fm-status-bar__item--clickable {
+  cursor: pointer;
+  transition: color var(--fm-transition-fast);
+}
+.fm-status-bar__item--clickable:hover {
+  color: var(--fm-text-primary);
+}
+.fm-status-bar__engine--clickable {
+  cursor: pointer;
+  transition: background var(--fm-transition-fast), border-color var(--fm-transition-fast);
+}
+.fm-status-bar__engine--clickable:hover {
+  background: color-mix(in srgb, var(--fm-text-muted) 8%, var(--fm-bg-panel-raised));
+  border-color: var(--fm-border-strong);
 }

@@ -5,12 +5,12 @@ use crate::{
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR,
     FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR,
-    FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, IntegratorChoice,
-    GeometryEntryIR, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
+    IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
-    RegionalFieldDriveIR, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
-    ResolvedPeriodicImagesIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, RegionalFieldDriveIR, RelaxStopIR,
+    RelaxationAlgorithmIR, ResolvedPeriodicImagesIR, SeedPolicy, SpinWaveBoundaryConditionIR,
+    ThermalSeedConfig, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -80,6 +80,9 @@ pub struct FdmGridCertificateIR {
     /// Deterministic legend for numeric region IDs in `FdmPlanIR.region_mask`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_legend: Vec<FdmRegionLegendEntryIR>,
+    /// Canonical object identities represented by this single-grid realization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_ids: Vec<String>,
     /// SHA-256 of the canonical region legend, when a realized region mask exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_legend_fingerprint: Option<String>,
@@ -102,7 +105,15 @@ impl FdmGridCertificateIR {
         active_cells: u64,
         estimated_bytes: u64,
     ) -> Result<Self, String> {
-        Self::new_with_masks(origin_m, counts, cell_m, active_cells, estimated_bytes, None, &[])
+        Self::new_with_masks(
+            origin_m,
+            counts,
+            cell_m,
+            active_cells,
+            estimated_bytes,
+            None,
+            &[],
+        )
     }
 
     /// Build a certificate including the resolved active/region topology.
@@ -158,8 +169,7 @@ impl FdmGridCertificateIR {
         active_mask: Option<&[bool]>,
         payload: &[u32],
     ) -> Result<Self, String> {
-        let extent_m: [f64; 3] =
-            std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
+        let extent_m: [f64; 3] = std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
         let grid_fingerprint = Self::fingerprint_for(
             origin_m,
             counts,
@@ -177,6 +187,7 @@ impl FdmGridCertificateIR {
             estimated_bytes,
             grid_fingerprint,
             region_legend: Vec::new(),
+            object_ids: Vec::new(),
             region_legend_fingerprint: None,
         };
         certificate.validate()?;
@@ -190,6 +201,14 @@ impl FdmGridCertificateIR {
         let payload = serde_json::to_vec(&legend).unwrap_or_default();
         self.region_legend_fingerprint = Some(format!("sha256:{:x}", Sha256::digest(payload)));
         self.region_legend = legend;
+        self
+    }
+
+    /// Attach the canonical object aliases represented by the active-cell mask.
+    pub fn with_object_ids(mut self, mut object_ids: Vec<String>) -> Self {
+        object_ids.sort();
+        object_ids.dedup();
+        self.object_ids = object_ids;
         self
     }
 
@@ -294,10 +313,9 @@ impl FdmGridCertificateIR {
                     entry.numeric_id
                 ));
             }
-            if self.region_legend[..index]
-                .iter()
-                .any(|previous| previous.object_id == entry.object_id && previous.region_id == entry.region_id)
-            {
+            if self.region_legend[..index].iter().any(|previous| {
+                previous.object_id == entry.object_id && previous.region_id == entry.region_id
+            }) {
                 return Err(format!(
                     "FDM region legend contains duplicate authored region {}:{}",
                     entry.object_id, entry.region_id
@@ -371,8 +389,9 @@ impl FdmGridCertificateIR {
             "active_mask": active_mask,
             "region_mask": region_mask,
         });
-        let encoded = serde_json::to_vec(&payload)
-            .map_err(|error| format!("FDM grid certificate fingerprint serialization failed: {error}"))?;
+        let encoded = serde_json::to_vec(&payload).map_err(|error| {
+            format!("FDM grid certificate fingerprint serialization failed: {error}")
+        })?;
         Ok(Sha256::digest(encoded)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -575,6 +594,13 @@ pub struct FdmPlanIR {
     /// Temperature in Kelvin for Brown thermal field (sLLG). None or 0 = no thermal noise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    /// Resolved stochastic seed policy for Brown thermal noise.
+    ///
+    /// A missing value means thermal noise is disabled.  When temperature is
+    /// enabled without an explicit `ThermalNoise` term, the planner records
+    /// `SystemEntropy` here so the requested policy remains observable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_seed_config: Option<ThermalSeedConfig>,
 
     // ── Dzyaloshinskii-Moriya interaction ──
     /// Interfacial DMI constant D [J/m²]. None = disabled.
@@ -712,7 +738,7 @@ pub struct FemMeshPartIR {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_indices: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_faces: Vec<[u32; 3]>,
+    pub facet_global_ordinals: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_min: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -863,6 +889,39 @@ impl ResolvedFemDemagIR {
             Self::Fmm => "fmm",
         }
     }
+}
+
+/// Canonical FEM mesh-topology family preserved in plan provenance.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMeshTopologyFamilyIR {
+    MixedP1,
+}
+
+/// Capability status of a requested mixed-P1 FEM execution lane.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMixedTopologyCapabilityStatusIR {
+    Unsupported,
+    SourceVisible,
+    SemanticOnly,
+    ReferenceExecutable,
+    DevelopmentExecutable,
+    PartialProductionExecutable,
+    Implemented,
+    ProductionExecutable,
+    Validated,
+}
+
+/// Requested and resolved execution identity bound to an accepted mixed-mesh certificate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemMixedTopologyProvenanceIR {
+    pub requested_topology: FemMeshTopologyFamilyIR,
+    pub resolved_topology: FemMeshTopologyFamilyIR,
+    pub accepted_certificate_fingerprint: String,
+    pub requested_device: crate::ExecutionDevice,
+    pub precision: ExecutionPrecision,
+    pub capability_status: FemMixedTopologyCapabilityStatusIR,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1400,17 +1459,99 @@ pub struct OutputPlanIR {
     pub outputs: Vec<OutputIR>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestedIntegratorIR {
+    Auto,
+    Heun,
+    Rk4,
+    Rk23,
+    Rk45,
+    Abm3,
+}
+
+impl RequestedIntegratorIR {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Heun => "heun",
+            Self::Rk4 => "rk4",
+            Self::Rk23 => "rk23",
+            Self::Rk45 => "rk45",
+            Self::Abm3 => "abm3",
+        }
+    }
+}
+
+impl From<IntegratorChoice> for RequestedIntegratorIR {
+    fn from(value: IntegratorChoice) -> Self {
+        match value {
+            IntegratorChoice::Heun => Self::Heun,
+            IntegratorChoice::Rk4 => Self::Rk4,
+            IntegratorChoice::Rk23 => Self::Rk23,
+            IntegratorChoice::Rk45 => Self::Rk45,
+            IntegratorChoice::Abm3 => Self::Abm3,
+        }
+    }
+}
+
+/// Canonical record of the authored time-integrator choice and planner result.
+///
+/// `requested_integrator` retains `auto`; `resolved_integrator` is the concrete
+/// choice consumed by an execution backend. Neither field describes a backend
+/// implementation detail.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IntegratorResolutionProvenanceIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_integrator: Option<RequestedIntegratorIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_integrator: Option<IntegratorChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ProvenancePlanIR {
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator_resolution: Option<IntegratorResolutionProvenanceIR>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        FdmGridCertificateIR, FdmRegionLegendEntryIR, RequestedFemDemagIR, ResolvedFemDemagIR,
+        FdmGridCertificateIR, FdmRegionLegendEntryIR, FemMeshTopologyFamilyIR,
+        FemMixedTopologyCapabilityStatusIR, FemMixedTopologyProvenanceIR, RequestedFemDemagIR,
+        ResolvedFemDemagIR,
     };
-    use crate::{validate_fdm_region_lut_indices, MAX_FDM_REGION_IDS};
+    use crate::{
+        validate_fdm_region_lut_indices, ExecutionDevice, ExecutionPrecision, MAX_FDM_REGION_IDS,
+    };
+
+    #[test]
+    fn fem_mixed_topology_provenance_round_trips_typed_execution_contract() {
+        let provenance = FemMixedTopologyProvenanceIR {
+            requested_topology: FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            requested_device: ExecutionDevice::Auto,
+            precision: ExecutionPrecision::Double,
+            capability_status: FemMixedTopologyCapabilityStatusIR::Unsupported,
+        };
+
+        let encoded = serde_json::to_value(&provenance).expect("provenance serializes");
+        assert_eq!(encoded["requested_topology"], "mixed_p1");
+        assert_eq!(encoded["resolved_topology"], "mixed_p1");
+        assert_eq!(encoded["requested_device"], "auto");
+        assert_eq!(encoded["precision"], "double");
+        assert_eq!(encoded["capability_status"], "unsupported");
+        assert_eq!(
+            encoded["accepted_certificate_fingerprint"],
+            format!("sha256:{}", "a".repeat(64))
+        );
+
+        let decoded: FemMixedTopologyProvenanceIR =
+            serde_json::from_value(encoded.clone()).expect("provenance deserializes");
+        assert_eq!(decoded, provenance);
+    }
 
     #[test]
     fn fredkin_koehler_demag_is_body_only_and_executable() {
@@ -1455,14 +1596,8 @@ mod tests {
 
     #[test]
     fn fdm_grid_certificate_rejects_active_count_and_fingerprint_tampering() {
-        let certificate = FdmGridCertificateIR::new(
-            [0.0; 3],
-            [2, 2, 1],
-            [1.0e-9; 3],
-            3,
-            1_024,
-        )
-        .expect("resolved grid certificate should validate");
+        let certificate = FdmGridCertificateIR::new([0.0; 3], [2, 2, 1], [1.0e-9; 3], 3, 1_024)
+            .expect("resolved grid certificate should validate");
         let mut active_invalid = certificate.clone();
         active_invalid.active_cells = 5;
         assert!(active_invalid
@@ -1509,33 +1644,27 @@ mod tests {
 
     #[test]
     fn fdm_grid_certificate_binds_deterministic_region_legend() {
-        let certificate = FdmGridCertificateIR::new(
-            [0.0; 3],
-            [2, 2, 1],
-            [1.0e-9; 3],
-            2,
-            1_024,
-        )
-        .expect("resolved grid certificate should validate")
-        .with_region_legend(vec![FdmRegionLegendEntryIR {
-            numeric_id: 1,
-            object_id: "magnet".to_string(),
-            region_id: "magnet:core".to_string(),
-            priority: 0,
-        }]);
+        let certificate = FdmGridCertificateIR::new([0.0; 3], [2, 2, 1], [1.0e-9; 3], 2, 1_024)
+            .expect("resolved grid certificate should validate")
+            .with_region_legend(vec![FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "magnet".to_string(),
+                region_id: "magnet:core".to_string(),
+                priority: 0,
+            }]);
         assert_eq!(certificate.region_legend.len(), 1);
         assert!(certificate
             .region_legend_fingerprint
             .as_deref()
             .is_some_and(|value| value.starts_with("sha256:")));
-        let changed = certificate.clone().with_region_legend(vec![
-            FdmRegionLegendEntryIR {
+        let changed = certificate
+            .clone()
+            .with_region_legend(vec![FdmRegionLegendEntryIR {
                 numeric_id: 1,
                 object_id: "magnet".to_string(),
                 region_id: "magnet:shell".to_string(),
                 priority: 0,
-            },
-        ]);
+            }]);
         assert_ne!(
             certificate.region_legend_fingerprint,
             changed.region_legend_fingerprint
@@ -1596,11 +1725,8 @@ mod tests {
 
     #[test]
     fn fdm_region_lut_rejects_out_of_range_exchange_pair() {
-        let error = validate_fdm_region_lut_indices(
-            &[1, 2],
-            &[(1, MAX_FDM_REGION_IDS + 1, 1.0)],
-        )
-        .expect_err("exchange pair ids must use the same LUT bound");
+        let error = validate_fdm_region_lut_indices(&[1, 2], &[(1, MAX_FDM_REGION_IDS + 1, 1.0)])
+            .expect_err("exchange pair ids must use the same LUT bound");
         assert!(error.contains("exchange_pair_index=0"));
         assert!(error.contains("supported_region_ids=255"));
     }

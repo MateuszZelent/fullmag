@@ -1,0 +1,91 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/geometry/primitives.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Box",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Box.size_or_x",
+        "type": "three floats, scalar, or `None`",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Positional size input; when size= is supplied, the implementation uses size and ignores positional size values.",
+        "meaning": "Positional size input; when size= is supplied, the implementation uses size and ignores positional size values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "geometry.entries[].shape.size"
+      },
+      {
+        "python": "Box.y",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Positional $L_y$ when scalar `size_or_x` is used.",
+        "meaning": "Positional $L_y$ when scalar `size_or_x` is used.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "geometry.entries[].shape.size"
+      },
+      {
+        "python": "Box.z",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Positional $L_z$ when scalar `size_or_x` is used.",
+        "meaning": "Positional $L_z$ when scalar `size_or_x` is used.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "geometry.entries[].shape.size"
+      },
+      {
+        "python": "Box.size",
+        "type": "three positive floats",
+        "default": "required in keyword form",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Keyword size; when supplied, it takes precedence and positional size values are ignored.",
+        "meaning": "Keyword size; when supplied, it takes precedence and positional size values are ignored.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "geometry.entries[].shape.size"
+      },
+      {
+        "python": "Box.name",
+        "type": "str",
+        "default": "\"box\"",
+        "si_unit": "1",
+        "validation": "Non-empty geometry identity.",
+        "meaning": "Non-empty geometry identity.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "geometry.entries[].name"
+      }
+    ]
+  }
+}

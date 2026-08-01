@@ -7,11 +7,53 @@ use crate::scene::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ScriptBuilderAdaptiveTimestepState {
+    #[serde(default = "default_adaptive_tolerance_mode")]
+    pub tolerance_mode: String,
+    #[serde(default)]
+    pub atol: String,
+    #[serde(default)]
+    pub rtol: String,
+    #[serde(default)]
+    pub dt_initial: String,
+    #[serde(default)]
+    pub dt_min: String,
+    #[serde(default)]
+    pub dt_max: String,
+    #[serde(default)]
+    pub safety: String,
+    #[serde(default)]
+    pub growth_limit: String,
+    #[serde(default)]
+    pub shrink_limit: String,
+    #[serde(default)]
+    pub max_spin_rotation: String,
+    #[serde(default)]
+    pub norm_tolerance: String,
+}
+
+fn default_adaptive_tolerance_mode() -> String {
+    "advanced".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderSolverState {
     #[serde(default = "default_solver_integrator")]
     pub integrator: String,
     #[serde(default = "default_solver_timestep")]
     pub fixed_timestep: String,
+    #[serde(default)]
+    pub dt_initial: String,
+    #[serde(default)]
+    pub dt_min: String,
+    #[serde(default)]
+    pub dt_max: String,
+    #[serde(default)]
+    pub max_err: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<ScriptBuilderAdaptiveTimestepState>,
+    #[serde(default)]
+    pub demag_interval_s: String,
     #[serde(default = "default_solver_relax_algorithm")]
     pub relax_algorithm: String,
     #[serde(default = "default_solver_torque_tol")]
@@ -27,6 +69,12 @@ impl Default for ScriptBuilderSolverState {
         Self {
             integrator: default_solver_integrator(),
             fixed_timestep: default_solver_timestep(),
+            dt_initial: String::new(),
+            dt_min: String::new(),
+            dt_max: String::new(),
+            max_err: String::new(),
+            adaptive_timestep: None,
+            demag_interval_s: String::new(),
             relax_algorithm: default_solver_relax_algorithm(),
             torque_tolerance: default_solver_torque_tol(),
             energy_tolerance: default_solver_energy_tol(),
@@ -235,9 +283,11 @@ pub struct ScriptBuilderStageState {
     pub integrator: String,
     #[serde(default)]
     pub fixed_timestep: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<ScriptBuilderAdaptiveTimestepState>,
     #[serde(default)]
     pub until_seconds: String,
-    #[serde(default)]
+    #[serde(default, rename = "algorithm", alias = "relax_algorithm")]
     pub relax_algorithm: String,
     #[serde(default)]
     pub torque_tolerance: String,
@@ -280,11 +330,36 @@ pub enum StudyPrimitiveStageKind {
     Hysteresis,
     ChangeDevice,
     AddFieldDrive,
+    RemoveFieldDrive,
+    TableAutosave,
+    Autosave,
+    FftResponse,
     SetField,
     SetCurrent,
     SaveState,
     LoadState,
     Export,
+}
+
+impl StudyPrimitiveStageKind {
+    pub const ALL: &'static [Self] = &[
+        Self::Relax,
+        Self::Run,
+        Self::Eigenmodes,
+        Self::FrequencyResponse,
+        Self::Hysteresis,
+        Self::ChangeDevice,
+        Self::AddFieldDrive,
+        Self::RemoveFieldDrive,
+        Self::TableAutosave,
+        Self::Autosave,
+        Self::FftResponse,
+        Self::SetField,
+        Self::SetCurrent,
+        Self::SaveState,
+        Self::LoadState,
+        Self::Export,
+    ];
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -486,6 +561,16 @@ pub struct ScriptBuilderPerGeometryMeshState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_face_meshing: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_layer_count: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub algorithm_2d: Option<i64>,
@@ -539,6 +624,8 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub edge_hmax: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_thickness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_transition_distance: Option<String>,
     #[serde(
         default,
         rename = "corner_maximum_element_size",
@@ -548,6 +635,8 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub corner_hmax: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner_extent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_transition_distance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_distance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -578,6 +667,11 @@ impl Default for ScriptBuilderPerGeometryMeshState {
             through_thickness_element_ratio: None,
             through_thickness_symmetric: None,
             sweep_face_meshing: None,
+            topology: None,
+            sweep_direction: None,
+            element_family: None,
+            transition_policy: None,
+            exact_layer_count: None,
             source: None,
             algorithm_2d: None,
             algorithm_3d: None,
@@ -602,8 +696,10 @@ impl Default for ScriptBuilderPerGeometryMeshState {
             interface_thickness: None,
             edge_hmax: None,
             edge_thickness: None,
+            edge_transition_distance: None,
             corner_hmax: None,
             corner_extent: None,
+            corner_transition_distance: None,
             transition_distance: None,
             transition_growth: None,
             size_fields: Vec::new(),
@@ -687,6 +783,8 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_threads: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
@@ -716,6 +814,8 @@ pub struct ScriptBuilderState {
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planar_monitors: Vec<fullmag_ir::PlanarMonitorIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<ScriptBuilderCurrentModuleState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -775,8 +875,39 @@ fn default_solver_max_steps() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScriptBuilderSolverState, StudyPipelineDocument, StudyPipelineNode, StudyPrimitiveStageKind,
+        ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, StudyPipelineDocument,
+        StudyPipelineNode, StudyPrimitiveStageKind,
     };
+
+    #[test]
+    fn legacy_swept_ir_defaults_do_not_claim_exact_mixed_topology() {
+        let hints: fullmag_ir::SweptMeshHintsIR = serde_json::from_value(serde_json::json!({
+            "sweep_direction": "auto",
+            "distribution": {"kind": "uniform", "num_layers": 1}
+        }))
+        .expect("legacy swept hints should remain readable");
+
+        assert_eq!(hints.element_family, "prism");
+        assert_eq!(hints.transition_policy, "reject");
+        assert!(!hints.exact_layer_count);
+    }
+
+    #[test]
+    fn legacy_authoring_mesh_defaults_new_layered_fields_to_absent() {
+        let mesh: ScriptBuilderPerGeometryMeshState = serde_json::from_value(serde_json::json!({
+            "mesh_strategy": "thin_film_tetrahedral",
+            "through_thickness_elements": 1,
+            "through_thickness_distribution": "fixed",
+            "sweep_face_meshing": "triangular"
+        }))
+        .expect("legacy authored mesh should remain readable");
+
+        assert_eq!(mesh.topology, None);
+        assert_eq!(mesh.sweep_direction, None);
+        assert_eq!(mesh.element_family, None);
+        assert_eq!(mesh.transition_policy, None);
+        assert_eq!(mesh.exact_layer_count, None);
+    }
 
     #[test]
     fn solver_defaults_match_canonical_relax_defaults() {
@@ -900,6 +1031,116 @@ mod tests {
                 .and_then(|value| value.get("id"))
                 .and_then(|value| value.as_str()),
             Some("k0-sinc")
+        );
+    }
+
+    #[test]
+    fn study_pipeline_accepts_remove_field_drive_primitive_stage() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "id": "remove-k0-antenna",
+                "label": "Remove antenna",
+                "enabled": true,
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "remove_field_drive",
+                "payload": {
+                    "kind": "remove_field_drive",
+                    "entrypoint_kind": "flat_remove_field_drive",
+                    "drive_id": "k0-sinc"
+                }
+            }]
+        }))
+        .expect("remove_field_drive primitive stage should deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive remove_field_drive stage");
+        };
+        assert_eq!(node.stage_kind, StudyPrimitiveStageKind::RemoveFieldDrive);
+        assert_eq!(
+            node.payload
+                .get("drive_id")
+                .and_then(|value| value.as_str()),
+            Some("k0-sinc")
+        );
+    }
+
+    #[test]
+    fn study_pipeline_accepts_visible_autosave_and_fft_configuration_stages() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "id": "table-on",
+                    "label": "Table autosave ON",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "table_autosave",
+                    "payload": {
+                        "kind": "table_autosave",
+                        "enabled": true,
+                        "table_autosave": {
+                            "kind": "table_autosave",
+                            "table_id": "default",
+                            "sample_period_s": 5e-13,
+                            "quantities": ["t", "mx", "my", "mz"]
+                        }
+                    }
+                },
+                {
+                    "id": "autosave-m",
+                    "label": "Autosave m ON",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "autosave",
+                    "payload": {
+                        "kind": "autosave",
+                        "enabled": true,
+                        "quantity": "m",
+                        "output": {"kind": "field", "name": "m", "every_seconds": 2e-12}
+                    }
+                },
+                {
+                    "id": "fft-on",
+                    "label": "FFT response ON",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "fft_response",
+                    "payload": {
+                        "kind": "fft_response",
+                        "enabled": true,
+                        "request": {
+                            "schema_version": "spin_wave_response.request.v1",
+                            "analysis": "gamma",
+                            "response_component": "my"
+                        }
+                    }
+                }
+            ]
+        }))
+        .expect("configuration primitive stages should deserialize");
+
+        let kinds = document
+            .nodes
+            .iter()
+            .map(|node| match node {
+                StudyPipelineNode::Primitive(node) => node.stage_kind,
+                StudyPipelineNode::Macro(_) | StudyPipelineNode::Group(_) => {
+                    panic!("expected primitive stage")
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                StudyPrimitiveStageKind::TableAutosave,
+                StudyPrimitiveStageKind::Autosave,
+                StudyPrimitiveStageKind::FftResponse,
+            ]
         );
     }
 }

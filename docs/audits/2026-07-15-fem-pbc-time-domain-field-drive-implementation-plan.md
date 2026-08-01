@@ -1388,7 +1388,7 @@ nie należy stage'ować cudzych zmian ze wspólnego worktree.
 - [ ] Capability/diagnostics pokazują source-visible/executable/validated bez fałszywego success.
 - [ ] Legacy mask renderuje migration banner i po Apply zapisuje canonical drive.
 
-### Task 15a — Jawny etap `Add antenna` i stage-local sampling
+### Task 15a — Jawny etap `Add antenna` i niezależne komendy próbkowania
 
 **Pliki:**
 
@@ -1401,15 +1401,20 @@ nie należy stage'ować cudzych zmian ze wspólnego worktree.
 - Add: `apps/control-room/src/modules/inspector/panels/stages/AddFieldDriveStageInspector.tsx`
 - Modify: `apps/control-room/src/modules/inspector/panels/stages/RunStageInspector.tsx`
 
-- [ ] Test RED: snapshot `Relax` ma pustą listę `field_drives`, akcja zawiera pełny drive, a następny
+- [x] Test RED: snapshot `Relax` ma pustą listę `field_drives`, akcja zawiera pełny drive, a następny
       `Run` ma drive i zachowuje stan magnetyzacji.
-- [ ] Dodać typed zero-duration `add_field_drive` / `Add antenna`; nie modelować go jako `Relax` ani
+- [x] Dodać typed zero-duration `add_field_drive` / `Add antenna`; nie modelować go jako `Relax` ani
       jako frontend-only payload.
-- [ ] Dodać stage-local table autosave, field autosave i Gamma request z jawnym dziedziczeniem starych
-      ustawień globalnych.
-- [ ] Eksport Python zachowuje dokładną kolejność `add_minimize -> add_field_drive -> add_run`.
-- [ ] Dedykowany Inspector edytuje cały `RegionalFieldDrive`; `Run` pokazuje sampling/output/analysis.
-- [ ] Podgląd sinc używa `tau=t-t0`, rzeczywistego okna stage i półotwartego zegara próbek.
+- [x] Zachować MuMaxowy kontrakt: `tableautosave`, `save` i `fft_response` są
+      niezależnymi komendami konfiguracji, a `add_run` wyłącznie uruchamia
+      solver czasowy.
+- [x] Eksport Python zachowuje dokładną kolejność `add_minimize -> add_field_drive ->
+      tableautosave -> autosave -> fft_response -> add_run`.
+- [x] Dedykowany Inspector edytuje cały `RegionalFieldDrive`; globalny Study
+      Inspector pokazuje ordered workflow, osobne Inspectory etapów pokazują
+      sampling/output/analysis, a `Run` pokazuje integrację, progressbar, aktywny
+      stan odziedziczony z poprzednich instrukcji i wyniki.
+- [x] Podgląd sinc używa `tau=t-t0`, rzeczywistego okna stage i półotwartego zegara próbek.
 - [ ] Planned FFT pokazuje `dt`, `t_sampling`, `N`, `T`, `df`, Nyquist i cutoff; actual artifact ma
       pierwszeństwo, a nieregularne czasy kończą się jawnym `uncertified` bez resamplingu.
 
@@ -1596,7 +1601,8 @@ Po wdrożeniu użytkownik może:
 3. po relaksacji dodać jawny etap `Add antenna` z globalnym `RegionalFieldDrive`, 1 mT w y,
    `SincPulse(20 GHz, 100 ps)`;
 4. zobaczyć i edytować pełny drive oraz podgląd `sinc(t-t0)`/FFT w Inspectorze tego etapu;
-5. dodać `Run` do 4 ns, ustawić stage-local autosave/`t_sampling` i zobaczyć planned FFT;
+5. dodać osobne etapy `Table autosave`, `Autosave(m)` i `FFT response`, a następnie prosty
+   `Run` do 4 ns; zobaczyć odziedziczone `t_sampling` i planned FFT bez ukrytych ustawień Run;
 6. wykonać FEM CPU/GPU double z jawnym resolved capability;
 7. zobaczyć `H_drive(t)`, `delta m(t)`, PSD Γ i profile peaków;
 8. wyeksportować ten sam canonical Python;
@@ -1605,16 +1611,17 @@ Po wdrożeniu użytkownik może:
 
 ## 18. Status wykonania na `master`
 
-Na `master` istnieją globalny/regionalny napęd czasowy, realizacje solverowe, publikacja `H_drive`,
-podstawowy authoring Python/UI oraz analiza Γ. Status nie jest jednak kompletny względem jawnego
-przepływu użytkownika: brak typed etapu `Add antenna`, stage-local autosave w Inspectorze `Run` i
-pełnego round-trip kolejności `Relax -> Add antenna -> Run`. Istniejący podgląd sinc/FFT korzysta z
-globalnego kontekstu i wymaga związania z wybranym etapem oraz półotwartym zegarem próbek.
+Po wdrożeniu tej korekty `master` ma jawne typed etapy `Add antenna`, `Table autosave`, `Autosave`
+i `FFT response`. Każdy z nich jest zeroczasową instrukcją zmieniającą stan kolejnych etapów,
+natomiast `Run` przyjmuje wyłącznie czas końcowy i uruchamia pełne LLG. Podgląd sinc/FFT jest
+związany z wybranym etapem anteny, następnym aktywowanym Run i ostatnim poprzedzającym etapem
+`Table autosave`, który definiuje półotwarty zegar próbek.
 
 Końcowe poprawki obejmują także pominięcie materializacji fizycznego harmonogramu zdarzeń dla
 direct minimizer, canonical units dla artefaktu `H_drive`, fail-closed guard okresowej redukcji
 Poissona oraz różnicową walidację liniowości względem biegu zero-amplitude.
 
-Wcześniejsze bramki regionalnego pola i Γ nie są dowodem dla Task 15a. Ten etap pozostaje otwarty
-do czasu zielonych testów Python/IR/runner/UI, round-trip skryptu, browser smoke oraz ponownej
-weryfikacji managed runtime dla przykładu antidot.
+Testy Python/IR/runner/UI, round-trip skryptu i browser smoke dla Task 15a są zielone. Etap
+pozostaje otwarty wyłącznie w zakresie pierwszeństwa rzeczywistego artefaktu FFT, jawnego statusu
+`uncertified` dla nieregularnych czasów oraz ponownej weryfikacji managed runtime dla pełnego
+przykładu antidot.

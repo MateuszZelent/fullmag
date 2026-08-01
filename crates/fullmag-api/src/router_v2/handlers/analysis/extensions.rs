@@ -1,25 +1,26 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::analysis::topological_charge::{
-    BoundaryQualification, OrientedChargeInput, OrientedChargeQuality,
-    SupportTopologyQualification, TopologicalChargeWarningCode, compute_oriented_charge,
-    fdm_weighted_mean, fem_midpoint_weights, qualify_boundary, qualify_support_topology,
+    compute_oriented_charge, fdm_weighted_mean, fem_midpoint_weights, qualify_boundary,
+    qualify_support_topology, BoundaryQualification, OrientedChargeInput, OrientedChargeQuality,
+    SupportTopologyQualification, TopologicalChargeWarningCode,
 };
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{
-    FemSliceOverlayInput, SliceOverlayPoint, collect_fem_slice_overlay,
+    collect_fem_slice_overlay, FemSliceOverlayInput, SliceOverlayPoint,
 };
-use crate::field_slice::{FemField, FieldSliceQuery, SlicePlane, resolve_slice_query};
+use crate::field_slice::{resolve_slice_query, FemField, FieldSliceQuery, SlicePlane};
 use crate::router_v2::handlers::data::resolved_vector_field::{
-    ResolvedFieldSourceKind, ResolvedObjectVectorField, expand_compact_fem_node_values,
-    resolve_topological_charge_magnetization,
+    expand_compact_fem_node_values, resolve_topological_charge_magnetization,
+    ResolvedFieldSourceKind, ResolvedObjectVectorField,
 };
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, field_quantity_revision};
 use crate::schemas::analysis_extensions::{
@@ -297,7 +298,7 @@ async fn get_object_topological_charge_legacy(
         domain_generation_id: Some(domain_generation_id(&snapshot).to_string()),
         mesh_generation_id: mesh.and_then(|mesh| mesh.generation_id.clone()),
         mesh_revision: mesh.map(|_| snapshot.mesh_revision.max(1)),
-        computed_at_unix_ms: 0,
+        computed_at_unix_ms: unix_ms_now(),
         warnings,
         certification: sampled_result.and_then(|result| result.certification),
     };
@@ -333,6 +334,19 @@ pub async fn get_object_topological_charge(
         .await
         .clone()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let scene = snapshot
+        .scene_document
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no authoring scene"))?;
+    if !scene
+        .objects
+        .iter()
+        .any(|object| object.id == object_id || object.name == object_id)
+    {
+        return Err(ApiError::not_found(format!(
+            "object not found: {object_id}"
+        )));
+    }
     let resolved_field = resolve_topological_charge_magnetization(
         &state,
         &snapshot,
@@ -344,6 +358,46 @@ pub async fn get_object_topological_charge(
         .as_ref()
         .map(|field| field_summary_from_resolved_field(field, snapshot.fem_mesh.as_ref()))
         .transpose()?;
+    let requested_plane = match query.plane {
+        TopologicalChargePlaneV2::Auto => "auto",
+        TopologicalChargePlaneV2::Xy => "xy",
+        TopologicalChargePlaneV2::Xz => "xz",
+        TopologicalChargePlaneV2::Yz => "yz",
+    };
+    let cache_key = crate::quantity_data_plane::topological_charge_cache_key(
+        &object_id,
+        "m",
+        resolved_field.as_ref().map_or_else(
+            || field_quantity_revision(&snapshot, "m"),
+            |field| field.field_revision,
+        ),
+        snapshot
+            .fem_mesh
+            .as_ref()
+            .map_or(0, |_| snapshot.mesh_revision.max(1)),
+        snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|mesh| mesh.generation_id.as_deref()),
+        scene.revision,
+        requested_plane,
+        &format!(
+            "support={:?}:profile={:?}:snapshot={:?}:stage={:?}",
+            query.support, query.profile_samples, query.snapshot_id, query.stage_id
+        ),
+        "berg_luescher_oriented_triangles_v2",
+    );
+    if let Some(cached) = state
+        .quantity_data_plane
+        .topological_charge_cache
+        .lock()
+        .await
+        .get(&cache_key)
+    {
+        if let Ok(resource) = serde_json::from_value::<TopologicalChargeResourceV2>(cached) {
+            return Ok(Json(resource));
+        }
+    }
     let fdm_qualification = (snapshot.fem_mesh.is_none()
         && query.support
             == crate::schemas::analysis_extensions::TopologicalChargeSupportMode::Midplane)
@@ -387,7 +441,7 @@ pub async fn get_object_topological_charge(
         profile_samples: query.resolved_profile_sample_count(),
     };
     let legacy = get_object_topological_charge_legacy(
-        State(state),
+        State(state.clone()),
         Path(object_id.clone()),
         Query(legacy_query),
         field_summary,
@@ -426,23 +480,6 @@ pub async fn get_object_topological_charge(
     };
     let requested_plane = query.plane;
     let resolved_plane = topological_charge_plane_from_legacy(&legacy.plane);
-    let cache_key = crate::quantity_data_plane::topological_charge_cache_key(
-        &object_id,
-        "m",
-        resolved_field.as_ref().map_or_else(
-            || legacy.field_revision.unwrap_or_default(),
-            |field| field.field_revision,
-        ),
-        legacy.mesh_revision.unwrap_or_default(),
-        legacy.mesh_generation_id.as_deref(),
-        legacy.revision,
-        &legacy.plane,
-        &format!(
-            "support={:?}:profile={:?}:snapshot={:?}:stage={:?}",
-            query.support, query.profile_samples, query.snapshot_id, query.stage_id
-        ),
-        "berg_luescher_oriented_triangles_v2",
-    );
     let profile = if unsupported_fem_order || unsupported_fdm_scope {
         Vec::new()
     } else {
@@ -486,7 +523,7 @@ pub async fn get_object_topological_charge(
         TopologicalChargeTrustV2::DiagnosticTopology
     };
     let integer_interpretation_is_qualified = matches!(trust, TopologicalChargeTrustV2::Qualified);
-    Ok(Json(TopologicalChargeResourceV2 {
+    let resource = TopologicalChargeResourceV2 {
         schema_version: "topological_charge.v2".to_string(),
         resource_revision: topological_charge_cache_digest(&cache_key),
         object_id,
@@ -632,7 +669,23 @@ pub async fn get_object_topological_charge(
                 }
             }))
             .collect(),
-    }))
+    };
+    if let Ok(value) = serde_json::to_value(&resource) {
+        state
+            .quantity_data_plane
+            .topological_charge_cache
+            .lock()
+            .await
+            .insert(cache_key, value);
+    }
+    Ok(Json(resource))
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn fem_fe_order_from_session(snapshot: &crate::types::SessionStateResponse) -> Option<u8> {
@@ -1560,6 +1613,7 @@ fn object_scoped_fem_field(
     if summary.values.len() / 3 != mesh.nodes.len() {
         return None;
     }
+    let tet_elements = mesh.require_tet4_elements().ok()?;
     let (node_indices, element_indices) = object_mesh_scope(mesh, object_id)?;
     let mut selected_nodes = BTreeSet::new();
     for index in node_indices {
@@ -1568,7 +1622,7 @@ fn object_scoped_fem_field(
         }
     }
     for element_index in &element_indices {
-        if let Some(element) = mesh.elements.get(*element_index) {
+        if let Some(element) = tet_elements.get(*element_index) {
             for node_index in element {
                 selected_nodes.insert(*node_index as usize);
             }
@@ -1592,7 +1646,7 @@ fn object_scoped_fem_field(
     let mut elements = Vec::new();
     let mut element_markers = Vec::new();
     for element_index in element_indices {
-        let element = *mesh.elements.get(element_index)?;
+        let element = *tet_elements.get(element_index)?;
         let Some(remapped) = remap_tetra(element, &node_map) else {
             continue;
         };
@@ -1638,7 +1692,7 @@ fn object_mesh_scope(
         let elements = range_indices(
             part.element_start as usize,
             part.element_count as usize,
-            mesh.elements.len(),
+            mesh.cell_count(),
         );
         return Some((nodes, elements));
     }
@@ -1655,7 +1709,7 @@ fn object_mesh_scope(
         range_indices(
             segment.element_start as usize,
             segment.element_count as usize,
-            mesh.elements.len(),
+            mesh.cell_count(),
         ),
     ))
 }
@@ -1894,12 +1948,12 @@ mod tests {
     use crate::fem_slice_overlay::SliceOverlayPointKind;
 
     use super::{
-        ComputedTopologicalCharge, FdmProfileGeometry, FieldSampleSummary, SliceOverlayPoint,
-        TopologicalChargeLayerSample, TopologicalChargeResource, TopologicalChargeStatus,
-        TopologicalChargeTrustV2, cut_point_key, deduplicate_oriented_triangles,
-        fdm_requires_object_mask, fdm_result_warnings, fem_fe_order_from_plan_summary,
-        fem_profile_bin_weight_m, qualify_regular_fdm_midplane, topological_charge_cache_digest,
-        topological_charge_profile_response,
+        cut_point_key, deduplicate_oriented_triangles, fdm_requires_object_mask,
+        fdm_result_warnings, fem_fe_order_from_plan_summary, fem_profile_bin_weight_m,
+        qualify_regular_fdm_midplane, topological_charge_cache_digest,
+        topological_charge_profile_response, ComputedTopologicalCharge, FdmProfileGeometry,
+        FieldSampleSummary, SliceOverlayPoint, TopologicalChargeLayerSample,
+        TopologicalChargeResource, TopologicalChargeStatus, TopologicalChargeTrustV2,
     };
 
     #[test]

@@ -1,4 +1,4 @@
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { MeshResourceFields } from "../MeshResourceView";
 
 export function MeshViewportDeliverySection({
@@ -11,12 +11,11 @@ export function MeshViewportDeliverySection({
   meshRevision: unknown;
 }) {
   return (
-    <InspectorSection
-      value="viewport-delivery"
+    <InspectorGroup
       title="Viewport Delivery"
       badge={manifestStatus}
       collapsible
-      defaultCollapsed={false}
+      defaultOpen
     >
       <MeshResourceFields
         fields={[
@@ -34,6 +33,6 @@ export function MeshViewportDeliverySection({
           },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

@@ -12,7 +12,7 @@ import {
   Square,
   Upload,
 } from "lucide-react";
-import { useEffect, useReducer, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
@@ -72,7 +72,6 @@ import {
   SESSION_STATUS_RESOURCE_KEY,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
-import { Accordion } from "@/shared/ui/Accordion";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -85,10 +84,11 @@ import {
 } from "@/shared/ui/Dialog";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 
 import {
   buildStudyGlobalMergePatch,
@@ -99,7 +99,7 @@ import {
 import {
   buildStudyStagesMergePatch,
   createDefaultStudyStageDraft,
-  createStudyStageDraft,
+  createStudyStageDrafts,
   validateStudyStageDraft,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -110,8 +110,12 @@ import {
   type StudyInspectorModel,
   type StudyInspectorSnapshot,
 } from "./StudyInspectorPanelModel";
-import { StudyPipelineSection } from "./StudyPipelineSection";
+import {
+  StudyPipelineSection,
+  StudySolverPolicyFields,
+} from "./StudyPipelineSection";
 import type { K0ModalExecutionReadiness } from "./StudyStageAuthoringModel";
+import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 import { StudyProgressBar } from "./StudyProgressBar";
 
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -124,6 +128,8 @@ interface StudyInspectorPanelState {
     message: string;
   } | null;
   authoringFeedbackScope: "global" | "stages" | null;
+  baselineGlobalDraft: StudyGlobalDraft;
+  baselineStageDrafts: StudyStageDraft[];
   draftSceneRevision: number | string | null;
   draftSceneSignature: string;
   globalDraft: StudyGlobalDraft;
@@ -150,6 +156,10 @@ type StudyInspectorPanelAction =
       selectedIndex: number;
       signature: string;
     }
+  | { type: "acceptGlobalDraft" }
+  | { type: "acceptStageDrafts" }
+  | { type: "revertGlobalDraft" }
+  | { type: "revertStageDrafts" }
   | {
       type: "updateGlobalDraft";
       patch: Partial<StudyGlobalDraft>;
@@ -188,6 +198,8 @@ const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
   authoringDraftsInitialized: false,
   authoringFeedback: null,
   authoringFeedbackScope: null,
+  baselineGlobalDraft: createStudyGlobalDraft(null),
+  baselineStageDrafts: [],
   draftSceneRevision: null,
   draftSceneSignature: "",
   globalDraft: createStudyGlobalDraft(null),
@@ -224,11 +236,35 @@ function studyInspectorPanelReducer(
         authoringDraftsInitialized: true,
         authoringFeedback: null,
         authoringFeedbackScope: null,
+        baselineGlobalDraft: action.globalDraft,
+        baselineStageDrafts: action.drafts,
         draftSceneRevision: action.revision,
         draftSceneSignature: action.signature,
         globalDraft: action.globalDraft,
         selectedDraftIndex: action.selectedIndex,
         stageDrafts: action.drafts,
+      };
+    case "acceptGlobalDraft":
+      return { ...state, baselineGlobalDraft: state.globalDraft };
+    case "acceptStageDrafts":
+      return { ...state, baselineStageDrafts: state.stageDrafts };
+    case "revertGlobalDraft":
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        globalDraft: state.baselineGlobalDraft,
+      };
+    case "revertStageDrafts":
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        selectedDraftIndex: clampIndex(
+          state.selectedDraftIndex,
+          state.baselineStageDrafts,
+        ),
+        stageDrafts: state.baselineStageDrafts,
       };
     case "updateGlobalDraft":
       return {
@@ -671,15 +707,16 @@ export function useStudyInspectorPanelController(
     if (!scene.data) return;
     if (!sceneHasAuthoringPayload(scene.data)) return;
     const rawStages = rawStudyStages(scene.data);
+    const stageDrafts = createStudyStageDrafts(rawStages);
     dispatch({
       type: "resetStageDrafts",
-      drafts: rawStages.map(createStudyStageDraft),
+      drafts: stageDrafts,
       globalDraft: createStudyGlobalDraft(scene.data),
       revision: sceneRevision,
       selectedIndex:
-        rawStages.length === 0
+        stageDrafts.length === 0
           ? 0
-          : Math.min(selectedStageIndex, rawStages.length - 1),
+          : Math.min(selectedStageIndex, stageDrafts.length - 1),
       signature: studySignature,
     });
   }, [scene.data, sceneRevision, selectedStageIndex, studySignature]);
@@ -738,7 +775,7 @@ export function useStudyInspectorPanelController(
       : kernel.commands.get(commandId)?.disabledReason?.(commandContext) ??
         "Command is unavailable.";
   const commitStageDrafts = async () => {
-    const issues = state.stageDrafts.flatMap((draft, index) =>
+    const localIssues = state.stageDrafts.flatMap((draft, index) =>
       validateStudyStageDraft(draft, {
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
@@ -746,11 +783,19 @@ export function useStudyInspectorPanelController(
         device: model.requested.device,
         ...k0ModalReadinessFor(draft),
         mode: model.requested.mode,
+        precision: state.globalDraft.requestedPrecision,
       }).map((issue) => ({
         ...issue,
         message: `Stage ${index + 1}: ${issue.message}`,
       })),
     );
+    const workflowIssues = validateStudyWorkflow(state.stageDrafts).map(
+      (issue) => ({
+        ...issue,
+        message: `Stage ${issue.index + 1}: ${issue.message}`,
+      }),
+    );
+    const issues = [...localIssues, ...workflowIssues];
     const errors = issues.filter((issue) => issue.severity === "error");
     if (errors.length > 0) {
       dispatch({
@@ -761,7 +806,7 @@ export function useStudyInspectorPanelController(
           message: errors.map((issue) => issue.message).join(" "),
         },
       });
-      return;
+      return false;
     }
 
     dispatch({ type: "setAuthoringBusy", busy: true });
@@ -783,6 +828,8 @@ export function useStudyInspectorPanelController(
           message: `Committed ${state.stageDrafts.length} study stage${state.stageDrafts.length === 1 ? "" : "s"}.`,
         },
       });
+      dispatch({ type: "acceptStageDrafts" });
+      return true;
     } catch (error) {
       dispatch({
         type: "setAuthoringFeedback",
@@ -795,12 +842,15 @@ export function useStudyInspectorPanelController(
               : "Failed to commit study stages.",
         },
       });
+      return false;
     } finally {
       dispatch({ type: "setAuthoringBusy", busy: false });
     }
   };
   const commitGlobalDraft = async () => {
-    const errors = validateStudyGlobalDraft(state.globalDraft).filter(
+    const errors = validateStudyGlobalDraft(state.globalDraft, {
+      algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+    }).filter(
       (issue) => issue.severity === "error",
     );
     if (errors.length > 0) {
@@ -812,7 +862,7 @@ export function useStudyInspectorPanelController(
           message: errors.map((issue) => issue.message).join(" "),
         },
       });
-      return;
+      return false;
     }
 
     dispatch({ type: "setAuthoringBusy", busy: true });
@@ -834,6 +884,8 @@ export function useStudyInspectorPanelController(
           message: "Committed global study settings.",
         },
       });
+      dispatch({ type: "acceptGlobalDraft" });
+      return true;
     } catch (error) {
       dispatch({
         type: "setAuthoringFeedback",
@@ -846,6 +898,7 @@ export function useStudyInspectorPanelController(
               : "Failed to commit global study settings.",
         },
       });
+      return false;
     } finally {
       dispatch({ type: "setAuthoringBusy", busy: false });
     }
@@ -910,25 +963,57 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
+  const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
+    algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+  });
+  const workflowValidation = validateStudyWorkflow(state.stageDrafts);
+  const stageValidation = state.stageDrafts.flatMap((draft, index) => [
+    ...validateStudyStageDraft(draft, {
+      algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+      backend: model.requested.backend,
+      demagEnabled: state.globalDraft.demagEnabled,
+      device: model.requested.device,
+      mode: model.requested.mode,
+      precision: state.globalDraft.requestedPrecision,
+    }),
+    ...workflowValidation.flatMap(({ index: issueIndex, message, severity }) =>
+      issueIndex === index ? [{ message, severity }] : [],
+    ),
+  ]);
+  const globalDirty =
+    JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft);
+  const stagesDirty =
+    JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
+  const applyInspectorDraft = useCallback(async () => {
+    if (globalDirty && !(await commitGlobalDraft())) return false;
+    if (stagesDirty && !(await commitStageDrafts())) return false;
+    return true;
+  }, [commitGlobalDraft, commitStageDrafts, globalDirty, stagesDirty]);
+  const resetInspectorDraft = useCallback(() => {
+    dispatch({ type: "revertGlobalDraft" });
+    dispatch({ type: "revertStageDrafts" });
+  }, [dispatch]);
+  useRegisterInspectorEditSession(
+    "staged",
+    state.authoringBusy,
+    globalDirty || stagesDirty,
+    ![...globalValidation, ...stageValidation].some(
+      (issue) => issue.severity === "error",
+    ),
+    state.authoringBusy ? "Study changes are being saved." : undefined,
+    applyInspectorDraft,
+    resetInspectorDraft,
+  );
 
   return (
     <>
-      <Accordion
-        className="fm-inspector-panel"
+      <div
+        className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
         data-scene-has-payload={sceneHasPayload}
         data-scene-revision={sceneRevision ?? ""}
         data-scene-stage-count={sceneStageCount}
         data-scene-status={scene.status}
         data-stage-draft-count={state.stageDrafts.length}
-        type="multiple"
-        defaultValue={[
-          "runtime",
-          "selected-stage",
-          "boundary",
-          "pipeline",
-          "recovery",
-          "history",
-        ]}
       >
         <StudyRuntimeSection
           commandDisabledReason={commandDisabledReason}
@@ -948,6 +1033,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         />
 
         <StudyBoundarySection
+          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
           authoringBusy={state.authoringBusy}
           authoringFeedback={
             state.authoringFeedbackScope === "global"
@@ -1021,7 +1107,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
           totalRows={energyHistory.data?.total_rows ?? "not available"}
         />
-      </Accordion>
+      </div>
       <CommandDetailDialog
         commandId={state.selectedCommandId}
         detail={commandDetail}
@@ -1099,7 +1185,7 @@ function StudyRuntimeSection({
   stepValue: ReactNode;
 }) {
   return (
-    <InspectorSection value="runtime" title="Runtime" badge={model.runtime.state}>
+    <InspectorGroup title="Runtime" badge={model.runtime.state}>
       <FieldRow label="Run" value={model.runtime.runId} />
       <FieldRow label="Active stage" value={model.runtime.activeStageLabel} />
       <FieldRow
@@ -1235,7 +1321,7 @@ function StudyRuntimeSection({
           variant="danger"
         />
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1267,8 +1353,7 @@ export function StudySelectedStageSection({
     (eigenmodeSolving ? "waiting for solver progress telemetry" : undefined);
 
   return (
-    <InspectorSection
-      value="selected-stage"
+    <InspectorGroup
       title="Selected Stage"
       badge={selectedStage?.status ?? "none"}
     >
@@ -1378,11 +1463,12 @@ export function StudySelectedStageSection({
         statusLabel={selectedStage?.progressLabel ?? undefined}
         value={selectedStageProgressValue}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
 export function StudyBoundarySection({
+  algorithmsAvailable,
   authoringBusy,
   authoringFeedback,
   draft,
@@ -1391,6 +1477,7 @@ export function StudyBoundarySection({
   onUpdate,
   snapshot,
 }: {
+  algorithmsAvailable?: readonly string[];
   authoringBusy: boolean;
   authoringFeedback: {
     kind: "error" | "success" | "warning";
@@ -1402,11 +1489,10 @@ export function StudyBoundarySection({
   onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
   snapshot: StudyInspectorSnapshot;
 }) {
-  const validation = validateStudyGlobalDraft(draft);
+  const validation = validateStudyGlobalDraft(draft, { algorithmsAvailable });
   const hasErrors = validation.some((issue) => issue.severity === "error");
   return (
-    <InspectorSection
-      value="boundary"
+    <InspectorGroup
       title="Global Study Settings"
       badge={snapshot.requested.backend}
     >
@@ -1505,13 +1591,15 @@ export function StudyBoundarySection({
         value={draft.externalField}
         onChange={(event) => onUpdate({ externalField: event.target.value })}
       />
-      <FormField
-        label="Solver"
-        hint="Study solver override JSON object."
-        rows={4}
-        type="textarea"
-        value={draft.solver}
-        onChange={(event) => onUpdate({ solver: event.target.value })}
+      <StudySolverPolicyFields
+        algorithmsAvailable={algorithmsAvailable}
+        draft={draft.solver}
+        onUpdate={(patch) =>
+          onUpdate({ solver: { ...draft.solver, ...patch } })
+        }
+        requestedBackend={draft.requestedBackend}
+        requestedDevice={draft.requestedDevice}
+        requestedPrecision={draft.requestedPrecision}
       />
       <FormField
         label="FEM demag policy"
@@ -1555,7 +1643,7 @@ export function StudyBoundarySection({
           {authoringBusy ? "Saving" : "Save globals"}
         </Button>
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1575,8 +1663,7 @@ function StudyRecoverySection({
   runCommand: StudyCommandRunner;
 }) {
   return (
-    <InspectorSection
-      value="recovery"
+    <InspectorGroup
       title="Recovery"
       badge={`${checkpointCount}`}
     >
@@ -1634,7 +1721,7 @@ function StudyRecoverySection({
           variant="danger"
         />
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1650,8 +1737,7 @@ function StudyHistorySection({
   totalRows: ReactNode;
 }) {
   return (
-    <InspectorSection
-      value="history"
+    <InspectorGroup
       title="Run History"
       badge={`${returnedRows}`}
     >
@@ -1659,7 +1745,7 @@ function StudyHistorySection({
       <FieldRow label="Total energy" value={totalEnergy} unit="J" />
       <FieldRow label="Returned rows" value={returnedRows} />
       <FieldRow label="Total rows" value={totalRows} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

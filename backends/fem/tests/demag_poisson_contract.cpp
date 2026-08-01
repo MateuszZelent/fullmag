@@ -7,24 +7,40 @@
  */
 
 #include "context.hpp"
+#include "core/demag_linear_solve_validation.hpp"
+#include "core/demag_solver_policy.hpp"
 #include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
+#include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
+#include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
+#include "gpu/cuda/demag_poisson/stage_compute.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #endif
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
 
 #include <cmath>
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <numeric>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -50,6 +66,192 @@ void check(bool condition, const char *msg) {
         std::exit(1);
     }
 }
+
+void check_result(bool condition, const std::string &error, const char *msg) {
+    if (!condition) {
+        std::fprintf(stderr, "FAIL: %s: %s\n", msg, error.c_str());
+        std::exit(1);
+    }
+}
+
+void demag_amg_policy_resolves_defaults_overrides_and_invalid_values() {
+    constexpr const char *names[] = {
+        "FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE",
+        "FULLMAG_FEM_DEMAG_AMG_COARSENING",
+        "FULLMAG_FEM_DEMAG_AMG_INTERPOLATION",
+        "FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING",
+        "FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD",
+        "FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS",
+    };
+    for (const char *name : names) unsetenv(name);
+
+    auto policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.relax_type == 18, "central AMG relax default");
+    check(policy.coarsening == 8, "central AMG coarsening default");
+    check(policy.interpolation == 6, "central AMG interpolation default");
+    check(policy.aggressive_coarsening == 1, "central AMG aggressive coarsening default");
+    check(policy.strength_threshold == 0.0, "central AMG strength sentinel");
+    check(!policy.strength_threshold_is_set, "central AMG strength default is unset");
+    check(policy.max_levels == 0, "central AMG max-levels sentinel");
+    check(!policy.max_levels_is_set, "central AMG max-levels default is unset");
+
+    setenv(names[0], "6", 1);
+    setenv(names[1], "10", 1);
+    setenv(names[2], "7", 1);
+    setenv(names[3], "2", 1);
+    setenv(names[4], "0.25", 1);
+    setenv(names[5], "42", 1);
+    policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.relax_type == 6, "central AMG relax override");
+    check(policy.coarsening == 10, "central AMG coarsening override");
+    check(policy.interpolation == 7, "central AMG interpolation override");
+    check(policy.aggressive_coarsening == 2, "central AMG aggressive override");
+    check(policy.strength_threshold == 0.25, "central AMG strength override");
+    check(policy.strength_threshold_is_set, "central AMG strength override presence");
+    check(policy.max_levels == 42, "central AMG max-levels override");
+    check(policy.max_levels_is_set, "central AMG max-levels override presence");
+
+    setenv(names[4], "0", 1);
+    setenv(names[5], "0", 1);
+    policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.strength_threshold == 0.0, "explicit zero AMG strength override");
+    check(policy.strength_threshold_is_set, "explicit zero AMG strength presence");
+    check(policy.max_levels == 0, "explicit zero AMG max-levels override");
+    check(policy.max_levels_is_set, "explicit zero AMG max-levels presence");
+
+    setenv(names[0], "-1", 1);
+    setenv(names[1], "invalid", 1);
+    setenv(names[2], "2147483648", 1);
+    setenv(names[3], "-2", 1);
+    setenv(names[4], "nan", 1);
+    setenv(names[5], "-1", 1);
+    policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.relax_type == 18, "invalid AMG relax falls back centrally");
+    check(policy.coarsening == 8, "invalid AMG coarsening falls back centrally");
+    check(policy.interpolation == 6, "overflow AMG interpolation falls back centrally");
+    check(policy.aggressive_coarsening == 1, "invalid AMG aggressive falls back centrally");
+    check(policy.strength_threshold == 0.0, "non-finite AMG strength falls back centrally");
+    check(!policy.strength_threshold_is_set, "invalid AMG strength is unset");
+    check(policy.max_levels == 0, "invalid AMG max-levels falls back centrally");
+    check(!policy.max_levels_is_set, "invalid AMG max-levels is unset");
+
+    for (const char *name : names) unsetenv(name);
+}
+
+void demag_linear_solve_validation_rejects_invalid_results() {
+    fullmag::fem::DemagLinearSolveResult result;
+    result.solver_kind = "contract/cg";
+    result.solver_reported_converged = true;
+    result.iterations = 4;
+    result.relative_residual = 1.0e-8;
+    result.relative_tolerance = 1.0e-6;
+    result.max_iterations = 100;
+    std::string error;
+    check(fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "valid converged demag solve result is accepted");
+
+    result.solver_reported_converged = false;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "false convergence is rejected even with a small residual");
+    result.residual_independently_certified = true;
+    check(fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "independently certified residual accepts a Hypre zero-iteration solution");
+    result.residual_independently_certified = false;
+    result.solver_reported_converged = true;
+    result.relative_residual = 1.0e-3;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "residual above requested tolerance is rejected");
+    result.relative_residual = std::nan("");
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "non-finite residual is rejected");
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+mfem::SparseMatrix nontrivial_spd_matrix(int size) {
+    mfem::SparseMatrix op(size, size);
+    for (int i = 0; i < size; ++i) {
+        op.Add(i, i, 3.0 + static_cast<double>(i));
+        if (i + 1 < size) {
+            op.Add(i, i + 1, -1.0);
+            op.Add(i + 1, i, -1.0);
+        }
+    }
+    op.Finalize();
+    return op;
+}
+
+void configure_one_iteration_demag_solver(fullmag::fem::Context &ctx) {
+    ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+    ctx.demag.solver.relative_tolerance = 1.0e-14;
+    ctx.demag.solver.has_absolute_tolerance = 0;
+    ctx.demag.solver.absolute_tolerance = 0.0;
+    ctx.demag.solver.max_iterations = 1;
+    ctx.demag.solver.print_level = 0;
+}
+
+void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+
+    mfem::Vector rhs(8);
+    mfem::Vector warm_start(8);
+    warm_start = 0.0;
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    const mfem::Vector *solved = reinterpret_cast<const mfem::Vector *>(0x1);
+    std::string error;
+    const bool ok = fullmag::fem::solve_demag_poisson_hypre(
+        ctx, rhs, warm_start, solved, error);
+    check(!ok, "non-periodic Hypre demag must reject a nonconverged one-iteration solve");
+    check(solved == nullptr, "failed non-periodic Hypre demag must not publish a solution");
+    check(error.find("solver_kind=") != std::string::npos, "failure includes solver kind");
+    check(error.find("iterations=1") != std::string::npos, "failure includes iterations");
+    check(error.find("residual=") != std::string::npos, "failure includes residual");
+    check(error.find("relative_tolerance=") != std::string::npos, "failure includes tolerance");
+    check(error.find("max_iterations=1") != std::string::npos, "failure includes maximum iterations");
+    check(!fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
+          "failed non-periodic Hypre candidate must not become a warm start");
+    fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
+
+void periodic_demag_rejects_one_iteration_candidate() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    ctx.demag.enabled = true;
+    ctx.mesh.n_nodes = 8;
+    ctx.mesh.periodic_node_pairs = {0u, 7u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+    ctx.mesh.periodic_reduced_node_count = 7;
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+    std::string error;
+    check(fullmag::fem::initialize_demag_periodic_poisson_reduction(ctx, error),
+          "periodic test reduction initializes");
+
+    mfem::Vector rhs(8);
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    mfem::Vector *solved = reinterpret_cast<mfem::Vector *>(0x1);
+    uint64_t solve_wall_time_ns = 0;
+    error.clear();
+    const bool ok = fullmag::fem::solve_demag_periodic_poisson_reduced(
+        ctx, rhs, solved, solve_wall_time_ns, error);
+    check(!ok, "periodic demag must reject a nonconverged one-iteration solve");
+    check(solved == nullptr, "failed periodic demag must not publish a lifted solution");
+    check(error.find("solver_kind=") != std::string::npos, "periodic failure includes solver kind");
+    check(error.find("max_iterations=1") != std::string::npos,
+          "periodic failure includes maximum iterations");
+    fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
+#endif
 
 std::string read_text_file(const std::filesystem::path &path) {
     std::ifstream in(path);
@@ -587,7 +789,10 @@ fullmag::fem::Context sharp_ms_demag_context() {
         0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
         0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 2.0,
     };
-    ctx.mesh.elements = {0u, 1u, 2u, 3u, 0u, 1u, 3u, 4u, 0u, 2u, 4u, 5u};
+    ctx.mesh.cell_nodes = {0u, 1u, 2u, 3u, 0u, 1u, 3u, 4u, 0u, 2u, 4u, 5u};
+    ctx.mesh.cell_types = {
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0u, 4u, 8u, 12u};
     ctx.mesh.magnetic_element_mask = {1u, 1u, 0u};
     ctx.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u, 1u, 0u};
     ctx.material_fields.material.saturation_magnetisation = 800e3;
@@ -791,6 +996,993 @@ void sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle() {
     }
     fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
 }
+
+mfem::Mesh mixed_prism_pyramid_tet_poisson_mesh(bool mark_periodic_seam = false) {
+    mfem::Mesh mesh(3, 8, 3, 0, 3);
+    const double vertices[][3] = {
+        {0,0,0}, {1,0,0}, {0,1,0}, {0,0,1},
+        {1,0,1}, {0,1,1}, {0.5,-1,0.5}, {1.5,-1,0.5},
+    };
+    for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+    int prism[] = {0,1,2,3,4,5};
+    int pyramid[] = {0,1,4,3,6};
+    int tet[] = {1,4,6,7};
+    mesh.AddWedge(prism, 7);
+    mesh.AddPyramid(pyramid, 8);
+    mesh.AddTet(tet, 8);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        mesh.GetBdrElement(boundary)->SetAttribute(9);
+        mfem::Array<int> nodes;
+        mesh.GetBdrElementVertices(boundary, nodes);
+        std::vector<int> sorted(nodes.begin(), nodes.end());
+        std::sort(sorted.begin(), sorted.end());
+        if (mark_periodic_seam && sorted == std::vector<int>{0,1,2}) {
+            mesh.GetBdrElement(boundary)->SetAttribute(8);
+        }
+    }
+    mesh.SetAttributes();
+    return mesh;
+}
+
+mfem::Mesh independent_all_tet_poisson_mesh() {
+    mfem::Mesh mesh(3, 8, 6, 0, 3);
+    const double vertices[][3] = {
+        {0,0,0}, {1,0,0}, {0,1,0}, {0,0,1},
+        {1,0,1}, {0,1,1}, {0.5,-1,0.5}, {1.5,-1,0.5},
+    };
+    for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+    int cells[][4] = {
+        {0,1,2,3}, {1,2,3,4}, {2,3,4,5},
+        {0,1,3,6}, {1,4,3,6}, {1,4,6,7},
+    };
+    for (int cell = 0; cell < 6; ++cell) mesh.AddTet(cells[cell], cell < 3 ? 7 : 8);
+    mesh.FinalizeTetMesh(1, 0, true);
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        mesh.GetBdrElement(boundary)->SetAttribute(9);
+    }
+    mesh.SetAttributes();
+    return mesh;
+}
+
+std::vector<uint8_t> element_mask_for_attribute(mfem::Mesh &mesh, int attribute) {
+    std::vector<uint8_t> mask(static_cast<size_t>(mesh.GetNE()), 0u);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mask[static_cast<size_t>(element)] = mesh.GetAttribute(element) == attribute ? 1u : 0u;
+    }
+    return mask;
+}
+
+std::vector<uint8_t> node_mask_from_elements(
+    mfem::Mesh &mesh,
+    mfem::FiniteElementSpace &fes,
+    const std::vector<uint8_t> &elements) {
+    std::vector<uint8_t> mask(static_cast<size_t>(fes.GetNDofs()), 0u);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        if (elements[static_cast<size_t>(element)] == 0u) continue;
+        mfem::Array<int> dofs;
+        fes.GetElementDofs(element, dofs);
+        for (int dof : dofs) mask[static_cast<size_t>(dof >= 0 ? dof : -1-dof)] = 1u;
+    }
+    return mask;
+}
+
+std::vector<double> magnetic_mass_row_sums(
+    mfem::Mesh &mesh,
+    mfem::FiniteElementSpace &fes,
+    int magnetic_attribute) {
+    mfem::Array<int> marker(mesh.attributes.Max());
+    marker = 0;
+    marker[magnetic_attribute - 1] = 1;
+    mfem::BilinearForm mass(&fes);
+    mass.AddDomainIntegrator(new mfem::MassIntegrator(), marker);
+    mass.Assemble();
+    mass.Finalize();
+    mfem::Vector ones(fes.GetNDofs());
+    mfem::Vector weights(fes.GetNDofs());
+    ones = 1.0;
+    mass.SpMat().Mult(ones, weights);
+    weights.HostRead();
+    return std::vector<double>(weights.GetData(), weights.GetData() + weights.Size());
+}
+
+fullmag::fem::Context mixed_poisson_context(
+    mfem::Mesh &mesh,
+    mfem::FiniteElementSpace &fes,
+    const std::vector<uint8_t> &magnetic_elements) {
+    fullmag::fem::Context ctx;
+    ctx.base_plan.fe_order = 1u;
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
+    ctx.mesh.nodes_xyz.reserve(3u * static_cast<size_t>(mesh.GetNV()));
+    for (int node = 0; node < mesh.GetNV(); ++node) {
+        const double *vertex = mesh.GetVertex(node);
+        ctx.mesh.nodes_xyz.insert(
+            ctx.mesh.nodes_xyz.end(), vertex, vertex + mesh.SpaceDimension());
+    }
+    ctx.mesh.cell_offsets.push_back(0u);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        switch (mesh.GetElementGeometry(element)) {
+        case mfem::Geometry::TETRAHEDRON:
+            ctx.mesh.cell_types.push_back(FULLMAG_FEM_CELL_TET4);
+            break;
+        case mfem::Geometry::PRISM:
+            ctx.mesh.cell_types.push_back(FULLMAG_FEM_CELL_PRISM6);
+            break;
+        case mfem::Geometry::PYRAMID:
+            ctx.mesh.cell_types.push_back(FULLMAG_FEM_CELL_PYRAMID5);
+            break;
+        default:
+            check(false, "mixed Poisson fixture has an unsupported cell family");
+        }
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        for (int vertex : vertices) {
+            ctx.mesh.cell_nodes.push_back(static_cast<uint32_t>(vertex));
+        }
+        ctx.mesh.cell_offsets.push_back(static_cast<uint32_t>(ctx.mesh.cell_nodes.size()));
+    }
+    ctx.mesh.magnetic_element_mask = magnetic_elements;
+    ctx.mesh.cell_markers.reserve(static_cast<size_t>(mesh.GetNE()));
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        ctx.mesh.cell_markers.push_back(
+            mesh.GetAttribute(element) == 7 ? 7u : 0u);
+    }
+    ctx.mesh.magnetic_node_mask = node_mask_from_elements(mesh, fes, magnetic_elements);
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+    ctx.demag.enabled = true;
+    ctx.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+    ctx.demag.solver.relative_tolerance = 1.0e-12;
+    ctx.demag.solver.max_iterations = 500;
+    ctx.poisson_demag.boundary_marker = 9;
+    ctx.cpu_threads.effective_omp_threads = 1;
+    ctx.integration_weights.mfem_lumped_mass =
+        magnetic_mass_row_sums(mesh, fes, 7);
+    return ctx;
+}
+
+std::vector<double> apply_demag_rhs_csr(
+    const fullmag::fem::DeviceCsrTriple &op,
+    const std::vector<double> &m_xyz) {
+    std::vector<double> result(static_cast<size_t>(op.rows), 0.0);
+    for (uint64_t row = 0; row < op.rows; ++row) {
+        for (uint32_t entry = op.row_offsets[static_cast<size_t>(row)];
+             entry < op.row_offsets[static_cast<size_t>(row) + 1u]; ++entry) {
+            const size_t col = static_cast<size_t>(op.col_indices[entry]);
+            result[static_cast<size_t>(row)] +=
+                op.values_x[entry] * m_xyz[3u * col] +
+                op.values_y[entry] * m_xyz[3u * col + 1u] +
+                op.values_z[entry] * m_xyz[3u * col + 2u];
+        }
+    }
+    return result;
+}
+
+std::vector<double> apply_demag_recovery_csr(
+    const fullmag::fem::DeviceCsrScalar &op,
+    const mfem::Vector &potential) {
+    std::vector<double> result(static_cast<size_t>(op.rows), 0.0);
+    for (uint64_t row = 0; row < op.rows; ++row) {
+        for (uint32_t entry = op.row_offsets[static_cast<size_t>(row)];
+             entry < op.row_offsets[static_cast<size_t>(row) + 1u]; ++entry) {
+            result[static_cast<size_t>(row)] +=
+                op.values[entry] * potential[op.col_indices[entry]];
+        }
+    }
+    return result;
+}
+
+void mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection fixture_fec(1, 3);
+    mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u, 0u, 0u});
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "mixed CUDA/Hypre Poisson CPU workspace initialization");
+    auto &fes = *static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+
+    fullmag::fem::GpuDemagPoissonWorkspace workspace;
+    const bool operators_built =
+        fullmag::fem::build_p1_demag_operators(ctx, workspace, error);
+    check(operators_built, error.c_str());
+    check(workspace.operator_build_count == 1u,
+          "mixed GPU operator builder must record one build per workspace generation");
+    check(workspace.operator_fingerprint.rfind("fnv1a64:", 0) == 0,
+          "mixed GPU operator fingerprint must name its stable hash algorithm");
+    check(ctx.mesh.cell_markers == std::vector<uint32_t>({7u, 0u, 0u}),
+          "mixed GPU operator fixture must cover canonical air marker remapping");
+    fullmag::fem::GpuDemagPoissonWorkspace repeated_workspace;
+    check(fullmag::fem::build_p1_demag_operators(ctx, repeated_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint == repeated_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must be stable for identical operator input");
+    check(workspace.rhs.row_offsets == repeated_workspace.rhs.row_offsets &&
+              workspace.rhs.col_indices == repeated_workspace.rhs.col_indices &&
+              workspace.rhs.values_x == repeated_workspace.rhs.values_x &&
+              workspace.rhs.values_y == repeated_workspace.rhs.values_y &&
+              workspace.rhs.values_z == repeated_workspace.rhs.values_z,
+          "mixed GPU RHS host CSR must be byte-deterministic for identical input");
+    std::swap(ctx.mesh.cell_nodes[0], ctx.mesh.cell_nodes[1]);
+    fullmag::fem::GpuDemagPoissonWorkspace changed_topology_workspace;
+    error.clear();
+    check(!fullmag::fem::build_p1_demag_operators(ctx, changed_topology_workspace, error),
+          "mixed GPU operator builder must reject ctx/MFEM connectivity divergence");
+    check(error.find("ctx/MFEM") != std::string::npos,
+          "mixed GPU connectivity divergence rejection must identify both sources");
+    std::swap(ctx.mesh.cell_nodes[0], ctx.mesh.cell_nodes[1]);
+
+    const double original_x = ctx.mesh.nodes_xyz[0];
+    ctx.mesh.nodes_xyz[0] = original_x + 0.125;
+    fullmag::fem::GpuDemagPoissonWorkspace divergent_geometry_workspace;
+    error.clear();
+    check(!fullmag::fem::build_p1_demag_operators(
+              ctx, divergent_geometry_workspace, error),
+          "mixed GPU operator builder must reject ctx/MFEM coordinate divergence");
+    check(error.find("ctx/MFEM") != std::string::npos,
+          "mixed GPU coordinate divergence rejection must identify both sources");
+    ctx.mesh.nodes_xyz[0] = original_x;
+
+    double *vertex0 = mesh.GetVertex(0);
+    vertex0[0] += 0.125;
+    ctx.mesh.nodes_xyz[0] += 0.125;
+    fullmag::fem::GpuDemagPoissonWorkspace changed_geometry_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, changed_geometry_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint != changed_geometry_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must cover geometry-only changes");
+    vertex0[0] -= 0.125;
+    ctx.mesh.nodes_xyz[0] -= 0.125;
+
+    ctx.material_fields.material.saturation_magnetisation = 1.25;
+    fullmag::fem::GpuDemagPoissonWorkspace changed_uniform_ms_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, changed_uniform_ms_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint != changed_uniform_ms_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must cover uniform-Ms-only changes");
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+
+    ctx.material_fields.material.saturation_magnetisation = 0.0;
+    fullmag::fem::GpuDemagPoissonWorkspace positive_zero_ms_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, positive_zero_ms_workspace, error), error.c_str());
+    ctx.material_fields.material.saturation_magnetisation =
+        std::copysign(0.0, -1.0);
+    fullmag::fem::GpuDemagPoissonWorkspace negative_zero_ms_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, negative_zero_ms_workspace, error), error.c_str());
+    check(positive_zero_ms_workspace.operator_fingerprint ==
+              negative_zero_ms_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must canonicalize signed zero");
+    ctx.material_fields.material.saturation_magnetisation =
+        std::numeric_limits<double>::quiet_NaN();
+    fullmag::fem::GpuDemagPoissonWorkspace non_finite_ms_workspace;
+    error.clear();
+    check(!fullmag::fem::build_p1_demag_operators(
+              ctx, non_finite_ms_workspace, error),
+          "mixed GPU operator fingerprint must reject non-finite material values");
+    check(error.find("non-finite") != std::string::npos,
+          "mixed GPU non-finite fingerprint rejection must identify the cause");
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+
+    ctx.material_fields.Ms_field.assign(static_cast<size_t>(ctx.mesh.n_nodes), 1.0);
+    ctx.material_fields.Ms_field[0] = 1.5;
+    fullmag::fem::GpuDemagPoissonWorkspace changed_nodal_ms_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, changed_nodal_ms_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint != changed_nodal_ms_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must cover nodal-Ms representation and values");
+    ctx.material_fields.Ms_field.clear();
+
+    ctx.mesh.periodic_reduced_node.resize(static_cast<size_t>(ctx.mesh.n_nodes));
+    std::iota(ctx.mesh.periodic_reduced_node.begin(),
+              ctx.mesh.periodic_reduced_node.end(), 0u);
+    ctx.mesh.periodic_reduced_node_count = ctx.mesh.n_nodes;
+    fullmag::fem::GpuDemagPoissonWorkspace changed_periodic_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, changed_periodic_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint != changed_periodic_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must cover periodic-map-only changes");
+    ctx.mesh.periodic_reduced_node.clear();
+    ctx.mesh.periodic_reduced_node_count = 0u;
+
+    ctx.poisson_demag.robin_effective_beta *= 1.25;
+    fullmag::fem::GpuDemagPoissonWorkspace changed_robin_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, changed_robin_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint != changed_robin_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must cover Robin-beta-only changes");
+    ctx.poisson_demag.robin_effective_beta /= 1.25;
+
+    ctx.poisson_demag.ess_tdof_list = {0};
+    fullmag::fem::GpuDemagPoissonWorkspace changed_essential_workspace;
+    error.clear();
+    check(fullmag::fem::build_p1_demag_operators(
+              ctx, changed_essential_workspace, error), error.c_str());
+    check(workspace.operator_fingerprint != changed_essential_workspace.operator_fingerprint,
+          "mixed GPU operator fingerprint must cover essential-DOF-only changes");
+    ctx.poisson_demag.ess_tdof_list.clear();
+    ctx.material_fields.Ms_element_field = {1.0, 0.0, 0.0};
+    fullmag::fem::GpuDemagPoissonWorkspace dg0_workspace;
+    error.clear();
+    check(!fullmag::fem::build_p1_demag_operators(ctx, dg0_workspace, error),
+          "mixed GPU operator builder must reject elementwise-DG0 Ms");
+    check(error.find("elementwise-DG0 Ms") != std::string::npos,
+          "mixed GPU elementwise-DG0 rejection must identify unsupported material scope");
+    ctx.material_fields.Ms_element_field.clear();
+
+    repeated_workspace.operator_upload_count = 1u;
+    repeated_workspace.device_bytes = 128u;
+    repeated_workspace.ready = true;
+    fullmag::fem::destroy_demag_poisson_operators(repeated_workspace);
+    check(repeated_workspace.operator_fingerprint.empty() &&
+              repeated_workspace.operator_build_count == 0u &&
+              repeated_workspace.operator_upload_count == 0u &&
+              repeated_workspace.device_bytes == 0u &&
+              !repeated_workspace.ready,
+          "mixed GPU operator destroy must reset fingerprint, counters, bytes, and readiness");
+
+    std::vector<double> m_xyz(3u * static_cast<size_t>(fes.GetNDofs()), 0.0);
+    for (int node = 0; node < fes.GetNDofs(); ++node) {
+        const double *x = mesh.GetVertex(node);
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 0.5 + 0.3 * x[0] - 0.2 * x[2];
+        m_xyz[base + 1u] = -0.25 + 0.4 * x[1];
+        m_xyz[base + 2u] = 0.75 - 0.1 * x[0] + 0.2 * x[1];
+    }
+    mfem::Vector *cpu_rhs = nullptr;
+    check(fullmag::fem::assemble_demag_poisson_rhs(ctx, m_xyz, cpu_rhs, error), error.c_str());
+    const auto gpu_rhs = apply_demag_rhs_csr(workspace.rhs, m_xyz);
+    check(gpu_rhs.size() == static_cast<size_t>(cpu_rhs->Size()),
+          "mixed GPU RHS CSR row count must match CPU true DOFs");
+    for (int row = 0; row < cpu_rhs->Size(); ++row) {
+        const double scale = std::max(1.0, std::fabs((*cpu_rhs)[row]));
+        check_near(gpu_rhs[static_cast<size_t>(row)], (*cpu_rhs)[row],
+                   64.0 * std::numeric_limits<double>::epsilon() * scale,
+                   "mixed GPU RHS CSR must match production CPU/MFEM RHS");
+    }
+
+    ctx.material_fields.Ms_field.resize(static_cast<size_t>(fes.GetNDofs()));
+    for (int node = 0; node < fes.GetNDofs(); ++node) {
+        const double *x = mesh.GetVertex(node);
+        ctx.material_fields.Ms_field[static_cast<size_t>(node)] =
+            0.8 + 0.1 * x[0] - 0.05 * x[2];
+    }
+    fullmag::fem::GpuDemagPoissonWorkspace nodal_ms_workspace;
+    error.clear();
+    const bool nodal_ms_built = fullmag::fem::build_p1_demag_operators(
+        ctx, nodal_ms_workspace, error);
+    check(nodal_ms_built, error.c_str());
+    check(fullmag::fem::assemble_demag_poisson_rhs(ctx, m_xyz, cpu_rhs, error), error.c_str());
+    const auto nodal_ms_rhs = apply_demag_rhs_csr(nodal_ms_workspace.rhs, m_xyz);
+    for (int row = 0; row < cpu_rhs->Size(); ++row) {
+        const double scale = std::max(1.0, std::fabs((*cpu_rhs)[row]));
+        check_near(nodal_ms_rhs[static_cast<size_t>(row)], (*cpu_rhs)[row],
+                   64.0 * std::numeric_limits<double>::epsilon() * scale,
+                   "mixed GPU nodal-Ms RHS CSR must match production CPU/MFEM RHS");
+    }
+
+    mfem::GridFunction potential(&fes);
+    double *u = potential.HostWrite();
+    for (int node = 0; node < fes.GetNDofs(); ++node) {
+        const double *x = mesh.GetVertex(node);
+        u[node] = x[0] * x[1] + 0.2 * x[2] * x[2] - 0.3 * x[0] * x[2];
+    }
+    mfem::Vector u_true;
+    potential.GetTrueDofs(u_true);
+    std::vector<double> cpu_field;
+    double energy = 0.0;
+    uint64_t energy_ns = 0;
+    check(fullmag::fem::recover_demag_poisson_field(
+              ctx, u_true, cpu_field, energy, m_xyz, &energy_ns, error),
+          error.c_str());
+    const auto hx = apply_demag_recovery_csr(workspace.recovery_x, u_true);
+    const auto hy = apply_demag_recovery_csr(workspace.recovery_y, u_true);
+    const auto hz = apply_demag_recovery_csr(workspace.recovery_z, u_true);
+    const auto visual_hx = apply_demag_recovery_csr(workspace.visual_recovery_x, u_true);
+    const auto visual_hy = apply_demag_recovery_csr(workspace.visual_recovery_y, u_true);
+    const auto visual_hz = apply_demag_recovery_csr(workspace.visual_recovery_z, u_true);
+    for (int node = 0; node < fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        check_near(hx[static_cast<size_t>(node)], cpu_field[base], 2.0e-12,
+                   "mixed GPU magnetic recovery Hx must match CPU/MFEM");
+        check_near(hy[static_cast<size_t>(node)], cpu_field[base + 1u], 2.0e-12,
+                   "mixed GPU magnetic recovery Hy must match CPU/MFEM");
+        check_near(hz[static_cast<size_t>(node)], cpu_field[base + 2u], 2.0e-12,
+                   "mixed GPU magnetic recovery Hz must match CPU/MFEM");
+        check_near(visual_hx[static_cast<size_t>(node)], ctx.demag.h_visual_xyz[base], 2.0e-12,
+                   "mixed GPU visual recovery Hx must match full-domain CPU/MFEM");
+        check_near(visual_hy[static_cast<size_t>(node)], ctx.demag.h_visual_xyz[base + 1u], 2.0e-12,
+                   "mixed GPU visual recovery Hy must match full-domain CPU/MFEM");
+        check_near(visual_hz[static_cast<size_t>(node)], ctx.demag.h_visual_xyz[base + 2u], 2.0e-12,
+                   "mixed GPU visual recovery Hz must match full-domain CPU/MFEM");
+    }
+    check(std::fabs(ctx.demag.h_visual_xyz[1] - cpu_field[1]) > 1.0e-6,
+          "mixed fixture must distinguish full-domain visual and magnetic recovery at interface");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+#if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
+std::vector<double> smooth_magnetization(mfem::Mesh &mesh, double direction_scale);
+
+void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
+    int device_count = 0;
+    check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
+          "managed mixed-P1 GPU Poisson contract requires a CUDA device");
+
+    for (const int realization : {
+             FULLMAG_FEM_DEMAG_AIRBOX_ROBIN,
+             FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET}) {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection fixture_fec(1, 3);
+    mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u, 0u, 0u});
+    ctx.demag.realization = realization;
+    const std::vector<double> m_xyz = smooth_magnetization(mesh, 0.2);
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "mixed CUDA/Hypre Poisson runtime workspace initialization");
+
+    std::vector<double> cpu_field;
+    double cpu_energy = 0.0;
+    check_result(fullmag::fem::context_compute_demag_poisson(
+              ctx, m_xyz, cpu_field, cpu_energy, false, nullptr, error),
+          error, "mixed CUDA/Hypre CPU oracle solve");
+
+    check_result(fullmag::fem::gpu_state_initialize(
+              ctx.gpu_state.device,
+              ctx.mesh.n_nodes,
+              FULLMAG_FEM_INTEGRATOR_HEUN,
+              true,
+              true,
+              m_xyz.data(),
+              m_xyz.size(),
+              ctx.transfer_audit.audit,
+              error),
+          error, "mixed CUDA/Hypre GPU state initialization");
+    ctx.mesh.node_volumes = ctx.integration_weights.mfem_lumped_mass;
+    check_result(fullmag::fem::gpu_state_upload_runtime_coefficients(
+              ctx.gpu_state.device,
+              ctx.mesh.node_volumes.data(), ctx.mesh.node_volumes.size(),
+              nullptr, 0u, ctx.material_fields.material.saturation_magnetisation,
+              nullptr, 0u, 0.0,
+              nullptr, 0u, 0.02,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u, 1.0,
+              nullptr, 0u, 0.0,
+              nullptr, 0u, 0.0,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u,
+              ctx.mesh.magnetic_node_mask.data(), ctx.mesh.magnetic_node_mask.size(),
+              nullptr, 0u,
+              nullptr, 0u,
+              ctx.transfer_audit.audit,
+              error),
+          error, "mixed CUDA/Hypre runtime coefficient upload");
+    ctx.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+    check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx, error), error,
+                 "mixed CUDA/Hypre Poisson operator initialization");
+    check(fullmag::fem::gpu_demag_poisson_ready(ctx),
+          "mixed-P1 Robin GPU Poisson workspace must be ready");
+    check(std::string(fullmag::fem::gpu_demag_poisson_operator_mode(ctx)) ==
+              "device_hypre_poisson",
+          "mixed-P1 Robin GPU Poisson must report the device operator mode");
+    check(std::string(fullmag::fem::gpu_demag_poisson_hypre_policy(ctx)) == "device",
+          "mixed-P1 Robin GPU Poisson must report Hypre device policy");
+
+    ctx.transfer_audit.audit.assert_no_hot_loop_host_sync = true;
+    ctx.transfer_audit.audit.assert_no_hot_loop_compute_sync = true;
+    const auto before = fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    {
+        fullmag::fem::TransferAuditScope hot_loop(
+            ctx.transfer_audit.audit,
+            fullmag::fem::TransferAuditScopeKind::HotLoop);
+        check_result(fullmag::fem::compute_device_demag_for_device_stage_fresh(
+                  ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
+              error, "mixed CUDA/Hypre Poisson device step");
+        check_result(fullmag::fem::compute_device_demag_for_device_stage(
+                  ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
+              error, "mixed CUDA/Hypre Poisson warm-start device step");
+    }
+    check(cudaDeviceSynchronize() == cudaSuccess,
+          "mixed-P1 Robin device Hypre step must synchronize for test readback");
+    const auto after = fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
+              after.hot_loop_d2h_bytes == before.hot_loop_d2h_bytes &&
+              after.hot_loop_host_sync_count == before.hot_loop_host_sync_count &&
+              after.hot_loop_compute_h2d_bytes == before.hot_loop_compute_h2d_bytes &&
+              after.hot_loop_compute_d2h_bytes == before.hot_loop_compute_d2h_bytes &&
+              after.hot_loop_compute_host_sync_count == before.hot_loop_compute_host_sync_count,
+          "mixed-P1 device Hypre field step must have zero bulk hot-loop transfer/sync delta");
+
+    std::vector<double> gpu_field;
+    check_result(fullmag::fem::gpu_state_download_component_aos(
+              ctx.gpu_state.device,
+              ctx.gpu_state.device.fields.h_demag,
+              gpu_field,
+              ctx.transfer_audit.audit,
+              "mixed-P1 GPU demag parity field",
+              error),
+          error, "mixed CUDA/Hypre H_demag readback");
+    double gpu_energy = 0.0;
+    check(cudaMemcpy(
+              &gpu_energy,
+              ctx.gpu_state.device.reductions.scalar_result,
+              sizeof(double),
+              cudaMemcpyDeviceToHost) == cudaSuccess,
+          "mixed-P1 GPU demag parity energy readback");
+    check(gpu_field.size() == cpu_field.size(),
+          "mixed-P1 CPU/GPU demag field extents must match");
+    double cpu_max_torque = 0.0;
+    double gpu_max_torque = 0.0;
+    for (size_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        const size_t base = 3u * node;
+        for (size_t component = 0; component < 3u; ++component) {
+            const double scale = std::max(1.0, std::fabs(cpu_field[base + component]));
+            check_near(gpu_field[base + component], cpu_field[base + component],
+                       2.0e-9 * scale,
+                       "mixed-P1 Robin GPU H_demag must match CPU/MFEM");
+        }
+        auto torque_norm = [&](const std::vector<double> &field) {
+            const double tx = m_xyz[base + 1u] * field[base + 2u] -
+                m_xyz[base + 2u] * field[base + 1u];
+            const double ty = m_xyz[base + 2u] * field[base] -
+                m_xyz[base] * field[base + 2u];
+            const double tz = m_xyz[base] * field[base + 1u] -
+                m_xyz[base + 1u] * field[base];
+            return std::sqrt(tx * tx + ty * ty + tz * tz);
+        };
+        cpu_max_torque = std::max(cpu_max_torque, torque_norm(cpu_field));
+        gpu_max_torque = std::max(gpu_max_torque, torque_norm(gpu_field));
+    }
+    check_near(gpu_energy, cpu_energy,
+               2.0e-9 * std::max(1.0e-30, std::fabs(cpu_energy)),
+               "mixed-P1 Robin GPU demag energy must match CPU/MFEM");
+    check_near(gpu_max_torque, cpu_max_torque,
+               2.0e-9 * std::max(1.0, cpu_max_torque),
+               "mixed-P1 Robin GPU max torque must match CPU/MFEM");
+
+    auto *gpu_workspace = fullmag::fem::workspace_ptr(ctx);
+    check(gpu_workspace != nullptr &&
+              gpu_workspace->operator_build_count == 1u &&
+              gpu_workspace->operator_upload_count == 1u &&
+              gpu_workspace->solver_setup_count == 1u &&
+              gpu_workspace->fresh_zero_guess_count == 1u &&
+              gpu_workspace->warm_start_count == 1u,
+          "mixed-P1 GPU Poisson build/upload/setup/fresh/warm counters must each be one");
+    fullmag::fem::gpu_demag_poisson_destroy(ctx);
+    fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
+    fullmag::fem::context_destroy_poisson(ctx);
+    }
+}
+#endif
+
+void mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mesh.GetElement(element)->SetAttribute(7);
+    }
+    mesh.SetAttributes();
+    mfem::H1_FECollection fixture_fec(1, 3);
+    mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+    auto ctx = mixed_poisson_context(
+        mesh, fixture_fes, std::vector<uint8_t>(static_cast<size_t>(mesh.GetNE()), 1u));
+    std::string error;
+    check(fullmag::fem::context_initialize_poisson(ctx, error), error.c_str());
+    auto &fes = *static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+    auto &stiffness = *static_cast<mfem::BilinearForm *>(ctx.poisson_demag.poisson_bilinear);
+
+    mfem::GridFunction u(&fes);
+    mfem::FunctionCoefficient exact_u(
+        [](const mfem::Vector &x) { return x[0] + 2.0*x[1] - 3.0*x[2]; });
+    u.ProjectCoefficient(exact_u);
+    mfem::Vector u_true;
+    u.GetTrueDofs(u_true);
+    mfem::Vector ku(u_true.Size());
+    stiffness.SpMat().Mult(u_true, ku);
+    std::vector<double> magnetization(3u * static_cast<size_t>(fes.GetNDofs()));
+    for (int dof = 0; dof < fes.GetNDofs(); ++dof) {
+        magnetization[3u*static_cast<size_t>(dof)] = 1.0;
+        magnetization[3u*static_cast<size_t>(dof)+1u] = 2.0;
+        magnetization[3u*static_cast<size_t>(dof)+2u] = -3.0;
+    }
+    mfem::Vector *rhs = nullptr;
+    check(fullmag::fem::assemble_demag_poisson_rhs(ctx, magnetization, rhs, error), error.c_str());
+    check(rhs != nullptr && rhs->Size() == ku.Size(), "mixed Poisson manufactured RHS extent");
+    for (int dof = 0; dof < ku.Size(); ++dof) {
+        check_near((*rhs)[dof], ku[dof], 2.0e-12,
+                   "mixed production-helper RHS must equal K*u for M=grad(u)");
+    }
+
+    std::vector<double> recovered;
+    double energy = 0.0;
+    uint64_t energy_ns = 0;
+    check(fullmag::fem::recover_demag_poisson_field(
+              ctx, u_true, recovered, energy, magnetization, &energy_ns, error),
+          error.c_str());
+    for (int dof = 0; dof < fes.GetNDofs(); ++dof) {
+        const size_t base = 3u * static_cast<size_t>(dof);
+        check_near(recovered[base], -1.0, 2.0e-12, "mixed recovered Hx=-du/dx");
+        check_near(recovered[base+1u], -2.0, 2.0e-12, "mixed recovered Hy=-du/dy");
+        check_near(recovered[base+2u], 3.0, 2.0e-12, "mixed recovered Hz=-du/dz");
+    }
+    for (const std::pair<int,int> interface : {std::pair{0,1}, std::pair{1,2}}) {
+        mfem::Array<int> first;
+        mfem::Array<int> second;
+        fes.GetElementDofs(interface.first, first);
+        fes.GetElementDofs(interface.second, second);
+        int shared = 0;
+        for (int a : first) for (int b : second) if (a == b) {
+            check_near(u[a], u[b], 0.0, "mixed H1 potential trace uses one shared DOF");
+            ++shared;
+        }
+        check(shared == (interface.first == 0 ? 4 : 3),
+              "mixed Poisson trace must preserve quad4 and tri3 shared DOFs");
+    }
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void mixed_poisson_rhs_is_magnetic_only_with_air_present() {
+    mfem::Mesh mixed = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::Mesh prism(3, 6, 1, 0, 3);
+    for (int vertex = 0; vertex < 6; ++vertex) prism.AddVertex(mixed.GetVertex(vertex));
+    int wedge[] = {0,1,2,3,4,5};
+    prism.AddWedge(wedge, 7);
+    prism.FinalizeTopology();
+    prism.Finalize(false, true);
+    mfem::H1_FECollection mixed_fec(1, 3);
+    mfem::H1_FECollection prism_fec(1, 3);
+    mfem::FiniteElementSpace mixed_fes(&mixed, &mixed_fec);
+    mfem::FiniteElementSpace prism_fes(&prism, &prism_fec);
+    fullmag::fem::Context mixed_ctx;
+    mixed_ctx.mesh.n_nodes = static_cast<uint32_t>(mixed_fes.GetNDofs());
+    mixed_ctx.mesh.n_elements = 3;
+    mixed_ctx.mesh.magnetic_element_mask = {1u,0u,0u};
+    mixed_ctx.material_fields.material.saturation_magnetisation = 2.0;
+    fullmag::fem::Context prism_ctx;
+    prism_ctx.mesh.n_nodes = static_cast<uint32_t>(prism_fes.GetNDofs());
+    prism_ctx.mesh.n_elements = 1;
+    prism_ctx.mesh.magnetic_element_mask = {1u};
+    prism_ctx.material_fields.material.saturation_magnetisation = 2.0;
+    std::string error;
+    check(fullmag::fem::initialize_demag_poisson_rhs_workspace(mixed_ctx, mixed_fes, error), error.c_str());
+    check(fullmag::fem::initialize_demag_poisson_rhs_workspace(prism_ctx, prism_fes, error), error.c_str());
+    std::vector<double> mixed_m(3u*static_cast<size_t>(mixed_fes.GetNDofs()), 0.0);
+    std::vector<double> prism_m(3u*static_cast<size_t>(prism_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < mixed_fes.GetNDofs(); ++node) {
+        mixed_m[3u*static_cast<size_t>(node)] = node < 6 ? 0.75 : 1.0e6;
+        mixed_m[3u*static_cast<size_t>(node)+1u] = node < 6 ? -0.25 : -1.0e6;
+        mixed_m[3u*static_cast<size_t>(node)+2u] = node < 6 ? 0.5 : 1.0e6;
+    }
+    std::copy_n(mixed_m.begin(), prism_m.size(), prism_m.begin());
+    mfem::Vector *mixed_rhs = nullptr;
+    mfem::Vector *prism_rhs = nullptr;
+    check(fullmag::fem::assemble_demag_poisson_rhs(mixed_ctx, mixed_m, mixed_rhs, error), error.c_str());
+    check(fullmag::fem::assemble_demag_poisson_rhs(prism_ctx, prism_m, prism_rhs, error), error.c_str());
+    for (int node = 0; node < prism_rhs->Size(); ++node) {
+        check_near((*mixed_rhs)[node], (*prism_rhs)[node], 1.0e-12,
+                   "air transition/far-air cells must not contribute to magnetic RHS");
+    }
+    for (int node = prism_rhs->Size(); node < mixed_rhs->Size(); ++node) {
+        check_near((*mixed_rhs)[node], 0.0, 1.0e-12,
+                   "air-only Poisson nodes must have zero magnetic RHS");
+    }
+    fullmag::fem::destroy_demag_poisson_rhs_workspace(prism_ctx);
+    fullmag::fem::destroy_demag_poisson_rhs_workspace(mixed_ctx);
+}
+
+int find_face(mfem::Mesh &mesh, std::vector<int> expected) {
+    std::sort(expected.begin(), expected.end());
+    for (int face = 0; face < mesh.GetNFaces(); ++face) {
+        mfem::Array<int> nodes;
+        mesh.GetFaceVertices(face, nodes);
+        std::vector<int> actual(nodes.begin(), nodes.end());
+        std::sort(actual.begin(), actual.end());
+        if (actual == expected) return face;
+    }
+    return -1;
+}
+
+void mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    const int magnetic_air_face = find_face(mesh, {0,1,3,4});
+    const int air_air_face = find_face(mesh, {1,4,6});
+    check(magnetic_air_face >= 0 && air_air_face >= 0,
+          "mixed weak-flux fixture must contain both interior interfaces");
+    int first = -1;
+    int second = -1;
+    mesh.GetFaceElements(magnetic_air_face, &first, &second);
+    check(first == 0 && second == 1,
+          "quad4 interface must be owned by magnetic prism and air pyramid");
+    mesh.GetFaceElements(air_air_face, &first, &second);
+    check(first == 1 && second == 2,
+          "tri3 interface must be owned by air pyramid and far-air tetrahedron");
+
+    // On the y=0 magnet/air interface, u_m=x+2y-3z and
+    // u_a=x-3y-3z have one H1 trace. With M=(0,5,0) in the magnet,
+    // q=grad(u)-M is the same in every cell although H=-grad(u) has the
+    // required jump. Therefore the production residual K*u-b must equal only
+    // the independently integrated exterior weak flux; both interior-face
+    // contributions must cancel.
+    const std::array<double,3> n_m{0.0,-1.0,0.0};
+    const std::array<double,3> grad_m{1.0,2.0,-3.0};
+    const std::array<double,3> grad_a{1.0,-3.0,-3.0};
+    const std::array<double,3> magnetic_M{0.0,5.0,0.0};
+    std::array<double,3> q_m{};
+    for (size_t d = 0; d < 3u; ++d) q_m[d] = grad_m[d] - magnetic_M[d];
+    const auto dot = [](const auto &a, const auto &b) {
+        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    };
+    for (size_t d = 0; d < 3u; ++d) {
+        check_near(q_m[d], grad_a[d], 0.0,
+                   "manufactured weak flux must be continuous before assembly");
+    }
+
+    mfem::H1_FECollection fixture_fec(1, 3);
+    mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u,0u,0u});
+    std::string error;
+    check(fullmag::fem::context_initialize_poisson(ctx, error), error.c_str());
+    auto &fes = *static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+    auto &stiffness = *static_cast<mfem::BilinearForm *>(ctx.poisson_demag.poisson_bilinear);
+    mfem::GridFunction potential(&fes);
+    double *potential_host = potential.HostWrite();
+    std::vector<double> m_source(3u*static_cast<size_t>(fes.GetNDofs()), 0.0);
+    for (int node = 0; node < fes.GetNDofs(); ++node) {
+        const double *x = mesh.GetVertex(node);
+        potential_host[node] = x[0] + (x[1] > 0.0 ? 2.0 : -3.0)*x[1] - 3.0*x[2];
+        m_source[3u*static_cast<size_t>(node)+1u] = 5.0;
+    }
+    mfem::Vector u_true;
+    potential.GetTrueDofs(u_true);
+    mfem::Vector residual(u_true.Size());
+    stiffness.SpMat().Mult(u_true, residual);
+    mfem::Vector *rhs = nullptr;
+    check(fullmag::fem::assemble_demag_poisson_rhs(ctx, m_source, rhs, error), error.c_str());
+    residual -= *rhs;
+    residual.HostRead();
+
+    mfem::Vector exterior_flux(fes.GetNDofs());
+    exterior_flux = 0.0;
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        const mfem::FiniteElement &trace = *fes.GetBE(boundary);
+        mfem::ElementTransformation &transformation =
+            *mesh.GetBdrElementTransformation(boundary);
+        const mfem::IntegrationRule &rule =
+            mfem::IntRules.Get(trace.GetGeomType(), 2*trace.GetOrder());
+        mfem::Array<int> dofs;
+        fes.GetBdrElementDofs(boundary, dofs);
+        mfem::Vector shape(trace.GetDof());
+        mfem::Vector scaled_normal(3);
+        for (int point = 0; point < rule.GetNPoints(); ++point) {
+            const mfem::IntegrationPoint &ip = rule.IntPoint(point);
+            transformation.SetIntPoint(&ip);
+            trace.CalcShape(ip, shape);
+            mfem::CalcOrtho(transformation.Jacobian(), scaled_normal);
+            const double normal_flux = ip.weight *
+                (q_m[0]*scaled_normal[0] + q_m[1]*scaled_normal[1] +
+                 q_m[2]*scaled_normal[2]);
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const int dof = dofs[local] >= 0 ? dofs[local] : -1-dofs[local];
+                const double sign = dofs[local] >= 0 ? 1.0 : -1.0;
+                exterior_flux[dof] += sign*shape[local]*normal_flux;
+            }
+        }
+    }
+    exterior_flux.HostRead();
+    for (int dof = 0; dof < residual.Size(); ++dof) {
+        check_near(residual[dof], exterior_flux[dof], 3.0e-12,
+                   "production-helper residual must contain exterior flux only after interior cancellation");
+    }
+    fullmag::fem::context_destroy_poisson(ctx);
+
+    std::array<double,3> h_m{-grad_m[0],-grad_m[1],-grad_m[2]};
+    std::array<double,3> h_a{-grad_a[0],-grad_a[1],-grad_a[2]};
+    check(std::fabs(dot(h_m, n_m) - dot(h_a, n_m)) > 1.0,
+          "physical H_n must not be incorrectly constrained continuous when M_n is nonzero");
+    std::array<double,3> h_jump{h_a[0]-h_m[0], h_a[1]-h_m[1], h_a[2]-h_m[2]};
+    check_near(dot(h_jump, n_m), dot(magnetic_M, n_m), 1.0e-14,
+               "magnet-air H_n jump must equal M_n for the selected normal");
+}
+
+double triangle_area(const double *a, const double *b, const double *c) {
+    const double ux = b[0]-a[0];
+    const double uy = b[1]-a[1];
+    const double uz = b[2]-a[2];
+    const double vx = c[0]-a[0];
+    const double vy = c[1]-a[1];
+    const double vz = c[2]-a[2];
+    const double cx = uy*vz-uz*vy;
+    const double cy = uz*vx-ux*vz;
+    const double cz = ux*vy-uy*vx;
+    return 0.5 * std::sqrt(cx*cx + cy*cy + cz*cz);
+}
+
+double boundary_element_area(mfem::Mesh &mesh, int boundary) {
+    mfem::Array<int> nodes;
+    mesh.GetBdrElementVertices(boundary, nodes);
+    if (nodes.Size() == 3) {
+        return triangle_area(mesh.GetVertex(nodes[0]), mesh.GetVertex(nodes[1]), mesh.GetVertex(nodes[2]));
+    }
+    check(nodes.Size() == 4, "mixed Robin boundary supports only tri3 or quad4 fixture facets");
+    return triangle_area(mesh.GetVertex(nodes[0]), mesh.GetVertex(nodes[1]), mesh.GetVertex(nodes[2])) +
+        triangle_area(mesh.GetVertex(nodes[0]), mesh.GetVertex(nodes[2]), mesh.GetVertex(nodes[3]));
+}
+
+void mixed_poisson_robin_mass_uses_outer_tri_and_quad_only() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh(true);
+    check(mesh.GetNFaces() == 12 && mesh.GetNBE() == 10,
+          "two material interfaces must remain interior rather than Robin boundary facets");
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    mfem::BilinearForm stiffness(&fes);
+    stiffness.AddDomainIntegrator(new mfem::DiffusionIntegrator());
+    stiffness.Assemble();
+    stiffness.Finalize();
+    fullmag::fem::Context ctx;
+    ctx.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    ctx.poisson_demag.boundary_marker = 9;
+    ctx.mesh.periodic_boundary_marker_set = {8u};
+    std::string error;
+    check(fullmag::fem::initialize_demag_poisson_boundary_operator(
+              ctx, mesh, fes, stiffness, error), error.c_str());
+    auto &boundary_mass = *static_cast<mfem::BilinearForm *>(ctx.poisson_demag.robin_boundary_mass);
+    mfem::Vector ones(fes.GetNDofs());
+    mfem::Vector product(fes.GetNDofs());
+    ones = 1.0;
+    boundary_mass.SpMat().Mult(ones, product);
+    product.HostRead();
+    double mass_sum = 0.0;
+    for (int dof = 0; dof < product.Size(); ++dof) mass_sum += product[dof];
+    double expected_area = 0.0;
+    int open_triangles = 0;
+    int open_quads = 0;
+    int seam_faces = 0;
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        const int attribute = mesh.GetBdrAttribute(boundary);
+        if (attribute == 9) {
+            expected_area += boundary_element_area(mesh, boundary);
+            if (mesh.GetBdrElementGeometry(boundary) == mfem::Geometry::TRIANGLE) ++open_triangles;
+            if (mesh.GetBdrElementGeometry(boundary) == mfem::Geometry::SQUARE) ++open_quads;
+        } else if (attribute == 8) {
+            ++seam_faces;
+        }
+    }
+    check(open_triangles > 0 && open_quads > 0,
+          "Robin fixture must exercise exterior tri3 and quad4 mass together");
+    check(seam_faces == 1, "Robin fixture must contain one excluded periodic seam");
+    check_near(mass_sum, expected_area, 2.0e-12,
+               "Robin mass must equal open exterior tri3+quad4 area only");
+    delete static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.poisson_bc_op);
+    delete static_cast<mfem::BilinearForm *>(ctx.poisson_demag.robin_boundary_mass);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+    ctx.poisson_demag.robin_boundary_mass = nullptr;
+}
+
+struct MixedPoissonSolveResult {
+    double energy = 0.0;
+    std::vector<double> field;
+    std::vector<double> weights;
+};
+
+MixedPoissonSolveResult solve_mixed_poisson(
+    mfem::Mesh &mesh,
+    const std::vector<double> &magnetization) {
+    mfem::H1_FECollection fixture_fec(1, 3);
+    mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+    const auto magnetic_elements = element_mask_for_attribute(mesh, 7);
+    auto ctx = mixed_poisson_context(mesh, fixture_fes, magnetic_elements);
+    check(magnetization.size() == 3u * static_cast<size_t>(fixture_fes.GetNDofs()),
+          "mixed Poisson solve magnetization extent");
+    std::string error;
+    check(fullmag::fem::context_initialize_poisson(ctx, error), error.c_str());
+    MixedPoissonSolveResult result;
+    result.weights = ctx.integration_weights.mfem_lumped_mass;
+    check(fullmag::fem::context_compute_demag_poisson(
+              ctx, magnetization, result.field, result.energy, false, nullptr, error),
+          error.c_str());
+    check(ctx.poisson_demag.last_iterations >= 0 && std::isfinite(ctx.poisson_demag.last_residual),
+          "mixed production-helper solve must preserve finite iteration/residual telemetry");
+    fullmag::fem::context_destroy_poisson(ctx);
+    return result;
+}
+
+std::vector<double> smooth_magnetization(mfem::Mesh &mesh, double direction_scale = 0.0) {
+    std::vector<double> m(3u * static_cast<size_t>(mesh.GetNV()), 0.0);
+    for (int node = 0; node < mesh.GetNV(); ++node) {
+        const double *x = mesh.GetVertex(node);
+        const size_t base = 3u * static_cast<size_t>(node);
+        m[base] = 1.0 + 0.1*x[0] + direction_scale*(0.2 - 0.1*x[2]);
+        m[base+1u] = 0.15*x[1] + direction_scale*(0.3 + 0.05*x[0]);
+        m[base+2u] = -0.1*x[2] + direction_scale*(-0.2 + 0.07*x[1]);
+    }
+    return m;
+}
+
+void mixed_poisson_energy_sign_and_directional_derivative() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    const auto current = smooth_magnetization(mesh);
+    const auto solved = solve_mixed_poisson(mesh, current);
+    check(std::isfinite(solved.energy) && solved.energy > 0.0,
+          "mixed Poisson self-demag energy must be finite and positive");
+    constexpr double epsilon = 1.0e-5;
+    const auto plus = smooth_magnetization(mesh, epsilon);
+    const auto minus = smooth_magnetization(mesh, -epsilon);
+    const double finite_difference =
+        (solve_mixed_poisson(mesh, plus).energy - solve_mixed_poisson(mesh, minus).energy) /
+        (2.0*epsilon);
+    const auto unit_direction = smooth_magnetization(mesh, 1.0);
+    double field_derivative = 0.0;
+    for (size_t node = 0; node < solved.weights.size(); ++node) {
+        if (solved.weights[node] == 0.0) continue;
+        const size_t base = 3u*node;
+        for (size_t component = 0; component < 3u; ++component) {
+            const double direction = unit_direction[base+component] - current[base+component];
+            field_derivative -= kMu0Test * solved.weights[node] *
+                solved.field[base+component] * direction;
+        }
+    }
+    const double derivative_scale = std::max({1.0e-20, std::fabs(finite_difference), std::fabs(field_derivative)});
+    check_near(finite_difference, field_derivative, 2.0e-6*derivative_scale,
+               "mixed Poisson energy derivative must equal -mu0 integral M_s H.demag delta_m");
+}
+
+void mixed_poisson_matches_independently_refined_all_tet_reference() {
+    mfem::Mesh mixed = mixed_prism_pyramid_tet_poisson_mesh();
+    const double coarse_mixed_energy =
+        solve_mixed_poisson(mixed, smooth_magnetization(mixed)).energy;
+    mixed.UniformRefinement();
+    const double refined_mixed_energy =
+        solve_mixed_poisson(mixed, smooth_magnetization(mixed)).energy;
+    mixed.UniformRefinement();
+    const double finest_mixed_energy =
+        solve_mixed_poisson(mixed, smooth_magnetization(mixed)).energy;
+    mfem::Mesh all_tet = independent_all_tet_poisson_mesh();
+    double coarse_tet_energy = solve_mixed_poisson(all_tet, smooth_magnetization(all_tet)).energy;
+    all_tet.UniformRefinement();
+    double refined_tet_energy = solve_mixed_poisson(all_tet, smooth_magnetization(all_tet)).energy;
+    all_tet.UniformRefinement();
+    const double finest_tet_energy = solve_mixed_poisson(all_tet, smooth_magnetization(all_tet)).energy;
+    check(std::fabs(finest_tet_energy-refined_tet_energy) <
+              std::fabs(refined_tet_energy-coarse_tet_energy),
+          "independently authored all-tet Poisson reference must converge under refinement");
+    check(std::fabs(finest_mixed_energy-refined_mixed_energy) <
+              std::fabs(refined_mixed_energy-coarse_mixed_energy),
+          "mixed Poisson result must converge under refinement");
+    const double relative_difference = std::fabs(finest_mixed_energy-finest_tet_energy) /
+        std::max(std::fabs(finest_mixed_energy), std::fabs(finest_tet_energy));
+    if (relative_difference >= 0.03) {
+        std::fprintf(
+            stderr,
+            "mixed/all-tet Poisson diagnostic: coarse_mixed=%.17g refined_mixed=%.17g "
+            "finest_mixed=%.17g coarse_tet=%.17g refined_tet=%.17g "
+            "finest_tet=%.17g relative_difference=%.17g\n",
+            coarse_mixed_energy,
+            refined_mixed_energy,
+            finest_mixed_energy,
+            coarse_tet_energy,
+            refined_tet_energy,
+            finest_tet_energy,
+            relative_difference);
+    }
+    check(relative_difference < 0.03,
+          "mixed Poisson result must agree with the independently refined all-tet reference");
+}
 #endif
 
 void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
@@ -885,8 +2077,11 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
         periodic.find("periodic_workspace->solver.GetNumIterations()") != std::string::npos,
         "Poisson periodic reduced solve must publish actual CG iteration telemetry");
     check(
-        periodic.find("periodic_workspace->solver.GetFinalNorm()") != std::string::npos,
-        "Poisson periodic reduced solve must publish actual CG residual telemetry");
+        periodic.find("periodic_workspace->solver.GetConverged()") != std::string::npos &&
+            periodic.find("validate_demag_linear_solve_result(result, error)") !=
+                std::string::npos &&
+            periodic.find("residual_vector.Norml2()") != std::string::npos,
+        "Poisson periodic reduced solve must validate convergence with a recomputed true residual");
     check(
         periodic.find("*x_p = 0.0;\n    const auto solver_apply_wall_start") !=
             std::string::npos,
@@ -947,6 +2142,10 @@ void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string gpu_stage_header =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.hpp");
+    const std::string gpu_hypre_solver =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
+    const std::string gpu_hypre_stream_interop =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string tangent_plane =
         read_text_file(root / "cpu" / "mfem" / "relaxation" / "tangent_plane_implicit.cpp");
 
@@ -987,10 +2186,42 @@ void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
         "frequency-domain device demag tangent-with-potential must use the fresh GPU Poisson apply");
     check(
         gpu_stage_compute.find("reset_initial_solution") != std::string::npos &&
-            gpu_stage_compute.find("cudaMemset(") != std::string::npos &&
+            gpu_stage_compute.find("cudaMemsetAsync(") != std::string::npos &&
             gpu_stage_compute.find("gpu.demag_poisson.poisson_solution") !=
                 std::string::npos,
         "fresh GPU Poisson apply must reset the persistent solution buffer before Hypre Mult");
+    check(
+        gpu_hypre_solver.find(
+            "workspace.solver->Setup(*workspace.b_par, *workspace.x_par)") !=
+                std::string::npos &&
+            gpu_hypre_solver.find("ctx.poisson_demag.last_setup_wall_time_ns =") !=
+                std::string::npos &&
+            gpu_hypre_solver.find("workspace.solver_setup_complete = true") !=
+                std::string::npos &&
+            gpu_hypre_solver.find("workspace.solver.reset()") ==
+                std::string::npos &&
+            gpu_hypre_solver.find("workspace.preconditioner.reset()") ==
+                std::string::npos,
+        "strict GPU demag must preserve one compatible Hypre solver and AMG setup across fresh RHS applies");
+    check(
+        gpu_stage_compute.find(
+            "workspace->solver_setup_complete &&\n        workspace->solver_setup_count == 1u") !=
+                std::string::npos &&
+            gpu_stage_compute.find("last_solver_setup_reused = true") ==
+                std::string::npos,
+        "strict GPU demag setup-reuse telemetry must derive from the persistent workspace instead of a hardcoded value");
+    check(
+        gpu_stage_compute.find("hypre_wait_for_fullmag(") <
+                gpu_stage_compute.find("workspace->solver->Mult(") &&
+            gpu_stage_compute.find("fullmag_wait_for_hypre(") >
+                gpu_stage_compute.find("workspace->solver->Mult(") &&
+            gpu_stage_compute.find("cudaDeviceSynchronize()") ==
+                std::string::npos &&
+            gpu_stage_compute.find("cudaStreamSynchronize(hypre_stream)") ==
+                std::string::npos &&
+            gpu_hypre_stream_interop.find("hypre_HandleComputeStream(hypre_handle())") !=
+                std::string::npos,
+        "strict GPU demag must order the exact Hypre compute stream with events instead of host-blocking synchronization");
 }
 
 void demag_robin_boundary_mass_excludes_periodic_seam_markers() {
@@ -1129,6 +2360,14 @@ void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
         "uint64_t step_solver_apply_wall_time_ns",
         "bool last_solver_setup_reused",
         "uint32_t solves_current_step",
+        "uint32_t setup_count_current_step",
+        "uint32_t fresh_zero_guess_count_current_step",
+        "uint32_t event_wait_count_current_step",
+        "uint32_t global_sync_count_current_step",
+        "uint64_t setup_count",
+        "uint64_t fresh_zero_guess_count",
+        "uint64_t event_wait_count",
+        "uint64_t global_sync_count",
         "mfem::HypreParMatrix *cached_hypre_par",
         "mfem::HypreSolver *cached_hypre_preconditioner",
         "mfem::HypreSolver *cached_hypre_solver",
@@ -1197,7 +2436,7 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
         "void destroy_demag_poisson_recovery_workspace(",
         "bool recover_demag_poisson_field(",
         "fe->CalcPhysDShape",
-        "ctx.demag.h_visual_xyz = h_demag_xyz;",
+        "ctx.demag.h_visual_xyz.assign(field_len, 0.0);",
         "finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);",
         "ctx.demag.cached_robin_boundary_energy =",
     };
@@ -1295,20 +2534,20 @@ void demag_recovery_finalizes_periodic_field_before_energy() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
 
     const size_t visual_pos =
-        recovery.find("ctx.demag.h_visual_xyz = h_demag_xyz;");
+        recovery.find("ctx.demag.h_visual_xyz.assign(field_len, 0.0);");
     const size_t zero_pos =
         recovery.find("zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);");
     const size_t finalize_pos =
         recovery.find("finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);");
     const size_t energy_pos =
         recovery.find("demag_energy = demag_poisson_energy_from_field(");
-    check(visual_pos != std::string::npos, "recovery must preserve visual demag before zeroing");
+    check(visual_pos != std::string::npos, "recovery must accumulate visual demag separately");
     check(zero_pos != std::string::npos, "recovery must zero nonmagnetic LLG demag field");
     check(finalize_pos != std::string::npos, "recovery must finalize periodic demag field");
     check(energy_pos != std::string::npos, "recovery must compute demag energy");
     check(
         visual_pos < zero_pos && zero_pos < finalize_pos && finalize_pos < energy_pos,
-        "periodic demag projection must happen after visual preservation/zeroing and before energy");
+        "periodic demag projection must happen after visual accumulation/zeroing and before energy");
 }
 
 void demag_solver_stats_are_filled_by_poisson_module() {
@@ -1569,6 +2808,8 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
 } // namespace
 
 int main() {
+    demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
+    demag_linear_solve_validation_rejects_invalid_results();
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();
     poisson_source_files_document_module_boundaries();
@@ -1586,6 +2827,18 @@ int main() {
     sharp_ms_demag_rhs_uses_typed_element_accessor();
 #if FULLMAG_HAS_MFEM_STACK
     sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
+    mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
+    mixed_poisson_rhs_is_magnetic_only_with_air_present();
+    mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
+#if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
+    mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step();
+#endif
+    mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn();
+    mixed_poisson_robin_mass_uses_outer_tri_and_quad_only();
+    mixed_poisson_energy_sign_and_directional_derivative();
+    mixed_poisson_matches_independently_refined_all_tet_reference();
+    nonperiodic_hypre_demag_rejects_one_iteration_candidate();
+    periodic_demag_rejects_one_iteration_candidate();
 #endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();

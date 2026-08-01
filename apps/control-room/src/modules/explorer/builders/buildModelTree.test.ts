@@ -311,6 +311,21 @@ const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressRe
 };
 
 describe("buildModelTree", () => {
+  it("uses manifest ownership to mark a meshed object ready without a mesh-ready tag", () => {
+    const snapshot = modelTreeSnapshotFromScene(
+      {
+        objects: [{ id: "film", name: "Film", role: "magnet" }],
+      } as SceneResource,
+      {
+        meshManifest: {
+          object_segments: [{ object_id: "film" }],
+        } as never,
+      },
+    );
+
+    expect(snapshot.objects?.[0]?.meshStatus).toBe("mesh-ready");
+  });
+
   it("removes synthetic air-role scene objects before they can become Explorer nodes", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [
@@ -1283,6 +1298,9 @@ describe("buildModelTree", () => {
       expect.arrayContaining([
         "study.add-relax-stage",
         "study.add-field-drive-stage",
+        "study.add-table-autosave-stage",
+        "study.add-autosave-stage",
+        "study.add-fft-response-stage",
         "study.add-run-stage",
         "study.add-hysteresis-stage",
         "study.add-eigenmodes-stage",
@@ -1446,6 +1464,39 @@ describe("buildModelTree", () => {
       label: "Add Antenna 1",
       stageId: "add-k0-antenna",
       stageIndex: 0,
+    });
+  });
+
+  it("builds explicit workflow nodes for table autosave, autosave, and response FFT", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          { kind: "table_autosave", stage_id: "table-on" },
+          { kind: "autosave", stage_id: "autosave-m" },
+          { kind: "fft_response", stage_id: "fft-on" },
+        ],
+      },
+    });
+
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+    expect(
+      nodes.find((node) => node.id === "model:study:stages:stage:table-on"),
+    ).toMatchObject({
+      kind: "study.stage.table_autosave",
+      label: "Table Autosave 1",
+    });
+    expect(
+      nodes.find((node) => node.id === "model:study:stages:stage:autosave-m"),
+    ).toMatchObject({
+      kind: "study.stage.autosave",
+      label: "Autosave 2",
+    });
+    expect(
+      nodes.find((node) => node.id === "model:study:stages:stage:fft-on"),
+    ).toMatchObject({
+      kind: "study.stage.fft_response",
+      label: "FFT Response 3",
     });
   });
 
@@ -4074,6 +4125,36 @@ describe("buildModelTree", () => {
       kind: "visualizations-2d.parameter",
       label: "Render",
       status: "warning",
+    });
+  });
+
+  it("shows an uncommitted planar monitor draft under Definitions/Planar Monitors", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree(
+        modelTreeSnapshotFromScene({ objects: [] }),
+        {
+          planarMonitorDraft: {
+            frameExtent: "universe",
+            id: "draft",
+            name: "Midplane",
+            plane: "xy",
+            positionPercent: 50,
+            rotationDegrees: 0,
+          },
+          planarMonitors: null,
+        },
+      ),
+    );
+
+    expect(
+      flattened.find(
+        (node) => node.id === "model:definitions:planar-monitors:draft",
+      ),
+    ).toMatchObject({
+      kind: "model.planar.monitor.draft",
+      label: "Midplane",
+      parentId: "model:definitions:planar-monitors",
+      status: "queued",
     });
   });
 

@@ -53,6 +53,12 @@ pub(crate) trait InteractiveBackend {
     /// execution plan.
     fn matches_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError>;
 
+    /// Check whether a stage can continue on this backend without replacing
+    /// its physical solver context. Unlike `matches_plan`, this ignores
+    /// stage-local execution controls such as relaxation algorithm and
+    /// timestep policy.
+    fn can_continue_with_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError>;
+
     /// The geometry of the backend (grid for FDM, mesh for FEM).
     fn geometry(&self) -> BackendGeometry;
 

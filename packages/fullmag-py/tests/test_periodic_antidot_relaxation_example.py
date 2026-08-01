@@ -5,6 +5,8 @@ import contextlib
 import io
 import json
 import math
+import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -172,7 +174,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["kind"], "relaxation")
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
-        self.assertEqual(study["stop"]["max_steps"], 4000)
+        self.assertEqual(study["stop"]["max_steps"], 500)
         self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e2)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
@@ -307,15 +309,17 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             payload["ir"]["problem_meta"]["name"],
             "fem_periodic_antidot_relax_exchange_coupled_time_domain_k0",
         )
-        self.assertEqual(len(payload["stages"]), 3)
+        self.assertEqual(len(payload["stages"]), 6)
         self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
         self.assertEqual(
             payload["stages"][1]["entrypoint_kind"],
             "flat_add_field_drive",
         )
-        self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_run")
+        self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_table_autosave")
+        self.assertEqual(payload["stages"][4]["entrypoint_kind"], "flat_fft_response")
+        self.assertEqual(payload["stages"][5]["entrypoint_kind"], "flat_run")
         self.assertEqual(payload["stages"][0]["ir"]["study"]["kind"], "relaxation")
-        self.assertEqual(payload["stages"][2]["ir"]["study"]["kind"], "time_evolution")
+        self.assertEqual(payload["stages"][5]["ir"]["study"]["kind"], "time_evolution")
         self.assertEqual(
             payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
             "relax",
@@ -325,8 +329,8 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             "add-k0-antenna",
         )
         self.assertEqual(
-            payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
-            "excite",
+            payload["stages"][5]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
+            "run-1",
         )
 
         self.assertEqual(payload["ir"]["field_drives"], [])
@@ -338,24 +342,89 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(drive["waveform"]["kind"], "sinc_pulse")
         self.assertEqual(
             drive["activation"],
-            {"kind": "stage_ids", "stage_ids": ["excite"]},
+            {"kind": "all_time_evolution"},
         )
         self.assertEqual(
-            [drive["id"] for drive in payload["stages"][2]["ir"]["field_drives"]],
+            [drive["id"] for drive in payload["stages"][5]["ir"]["field_drives"]],
             ["k0-sinc-antenna"],
         )
 
-        sampling = payload["stages"][2]["ir"]["study"]["sampling"]
-        self.assertAlmostEqual(sampling["table_autosave"]["sample_period_s"], 5e-13)
-        self.assertIn(
-            "H_drive",
-            [output["name"] for output in sampling["outputs"] if output["kind"] == "field"],
+        self.assertEqual(
+            [payload["stages"][index]["action"]["kind"] for index in range(2, 5)],
+            [
+                "table_autosave",
+                "autosave",
+                "fft_response",
+            ],
         )
-        response = payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"][
+        sampling = payload["stages"][5]["ir"]["study"]["sampling"]
+        table_autosave = sampling["table_autosave"]
+        if "sample_period_policy" in table_autosave:
+            self.assertEqual(
+                table_autosave["sample_period_policy"],
+                {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+            )
+        else:
+            self.assertAlmostEqual(table_autosave["sample_period_s"], 5e-13)
+        self.assertEqual(sampling["table_autosave"]["quantities"], ["t", "mx", "my", "mz"])
+        output = sampling["outputs"][0]
+        self.assertEqual(output["name"], "m")
+        if output["kind"] == "field_auto":
+            self.assertEqual(
+                output["sample_period_policy"],
+                {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+            )
+        else:
+            self.assertEqual(output, {"kind": "field", "name": "m", "every_seconds": 5e-13})
+        response = payload["stages"][5]["ir"]["problem_meta"]["runtime_metadata"][
             "spin_wave_response"
         ]
         self.assertEqual(response["analysis"], "gamma")
         self.assertEqual(response["schema_version"], "spin_wave_response.request.v1")
+
+    def test_time_domain_k0_example_exports_automatic_sampling_from_a_temp_copy(self) -> None:
+        source = EXAMPLES["exchange_coupled_time_domain_k0"].read_text(encoding="utf-8")
+        automatic_source, replacements = re.subn(
+            r"(?m)^t_sampling\s*=.*$",
+            't_sampling = "auto"',
+            source,
+            count=1,
+        )
+        self.assertEqual(replacements, 1)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / EXAMPLES["exchange_coupled_time_domain_k0"].name
+            script_path.write_text(automatic_source, encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = runtime_helper.main(
+                    [
+                        "export-run-config",
+                        "--script",
+                        str(script_path),
+                        "--backend",
+                        "fem",
+                        "--mode",
+                        "strict",
+                        "--precision",
+                        "double",
+                        "--skip-geometry-assets",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        table_action = payload["stages"][2]["action"]["table_autosave"]
+        field_action = payload["stages"][3]["action"]["output"]
+        self.assertEqual(
+            table_action["sample_period_policy"],
+            {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+        )
+        self.assertEqual(field_action["kind"], "field_auto")
+        self.assertEqual(
+            field_action["sample_period_policy"],
+            {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+        )
 
     def test_air_gap_scenario_relaxes_centered_periodic_antidot_without_exchange_coupling(self) -> None:
         self.assert_example_is_plain_python("air_gap")

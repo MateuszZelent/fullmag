@@ -57,6 +57,57 @@ export type FieldStateInspectResponse =
 export type FieldStateTargetRef =
   components["schemas"]["FieldStateTargetRef"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+export type PlanarFieldMetaResource =
+  components["schemas"]["PlanarFieldMetaResource"];
+export type PlanarFieldProbeResource =
+  components["schemas"]["PlanarFieldProbeResource"];
+export type PlanarMonitorCollectionResource =
+  components["schemas"]["PlanarMonitorCollectionResource"];
+export type PlanarMonitorCreateRequest =
+  components["schemas"]["PlanarMonitorCreateRequest"];
+export type PlanarMonitorDeleteRequest =
+  components["schemas"]["PlanarMonitorDeleteRequest"];
+export type PlanarMonitorDuplicateRequest =
+  components["schemas"]["PlanarMonitorDuplicateRequest"];
+export type PlanarMonitorPatchRequest =
+  components["schemas"]["PlanarMonitorPatchRequest"];
+export type PlanarMonitorResource =
+  components["schemas"]["PlanarMonitorResource"];
+export type PlanarViewScopeState =
+  components["schemas"]["PlanarViewScopeState"];
+export interface PlanarFieldQuery {
+  [key: string]: boolean | number | string | undefined;
+  component?: string;
+  expected_field_revision?: number;
+  expected_mesh_revision?: number;
+  expected_monitor_revision?: number;
+  include_mesh?: boolean;
+  quality?: string;
+  resolution_x?: number;
+  resolution_y?: number;
+  scope_id?: string;
+  scope_kind?: string;
+  snapshot_id?: string;
+  stage_id?: string;
+  vector_budget?: number;
+}
+export interface PlanarFieldProbeQuery
+  extends Pick<
+    PlanarFieldQuery,
+    | "component"
+    | "expected_field_revision"
+    | "expected_mesh_revision"
+    | "expected_monitor_revision"
+    | "resolution_x"
+    | "resolution_y"
+    | "scope_id"
+    | "scope_kind"
+    | "snapshot_id"
+    | "stage_id"
+  > {
+  u_m: number;
+  v_m: number;
+}
 export type CrossSectionPlane = "xy" | "xz" | "yz";
 export type CrossSectionQualityMetric =
   components["schemas"]["CrossSectionQualityMetric"];
@@ -125,6 +176,7 @@ export type FrequencyDomainJsonArtifactResource =
   components["schemas"]["FrequencyDomainJsonArtifactResource"];
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
+export type ArtifactResource = components["schemas"]["ArtifactResource"];
 export type FrequencyDomainKPathMetadataResource =
   components["schemas"]["FrequencyDomainKPathMetadataResource"];
 export type FrequencyDomainKPathSamplingResource =
@@ -160,6 +212,10 @@ export type MeshBuildHistoryResource =
   components["schemas"]["MeshBuildHistoryResource"];
 export type MeshCapabilitiesResource =
   components["schemas"]["MeshCapabilitiesResource"];
+export type MeshCapabilityMatrixResource =
+  components["schemas"]["MeshCapabilityMatrixResource"];
+export type MeshFeatureCapabilityResource =
+  components["schemas"]["MeshFeatureCapabilityResource"];
 export type MeshHistogramBinElementsResource =
   components["schemas"]["MeshHistogramBinElementsResource"];
 export type MeshHistogramBinMetric =
@@ -254,6 +310,8 @@ export type SolverEnergyCurrentResource =
   components["schemas"]["SolverEnergyCurrentResource"];
 export type SolverEnergyHistoryResource =
   components["schemas"]["SolverEnergyHistoryResource"];
+export type SimulationPreparationResource =
+  components["schemas"]["SimulationPreparationResource"];
 export type SolverStatusResource = components["schemas"]["SolverStatusResource"];
 export type StageExecutionResource =
   components["schemas"]["StageExecutionResource"];
@@ -489,6 +547,7 @@ export type SessionExportRequest =
   components["schemas"]["SessionExportRequest"];
 export type ScriptSyncRequest = components["schemas"]["ScriptSyncRequest"];
 export type ScriptSyncResponse = components["schemas"]["ScriptSyncResponse"];
+export type ScriptSourceResponse = components["schemas"]["ScriptSourceResponse"];
 export type SessionExportResponse =
   components["schemas"]["SessionExportResponse"];
 export type SessionImportCommitRequest =

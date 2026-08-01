@@ -83,6 +83,7 @@ void stepper_workspace_allocate(StepperWorkspace &ws, std::size_t dof_len, int s
         ws.k[i].resize(dof_len, 0.0);
     }
     ws.m_stage.resize(dof_len, 0.0);
+    ws.m_candidate.resize(dof_len, 0.0);
     ws.h_ex_tmp.resize(dof_len, 0.0);
     ws.h_demag_tmp.resize(dof_len, 0.0);
     ws.h_eff_tmp.resize(dof_len, 0.0);

@@ -114,6 +114,7 @@
           "mesh_build_revision",
           "commands_revision",
           "stages_revision",
+          "simulation_preparation_revision",
           "visualization_state_revision"
         ],
         "properties": {
@@ -140,6 +141,7 @@
           "mesh_build_revision": { "type": "integer", "minimum": 0 },
           "commands_revision": { "type": "integer", "minimum": 0 },
           "stages_revision": { "type": "integer", "minimum": 0 },
+          "simulation_preparation_revision": { "type": "integer", "minimum": 0 },
           "scene_revision": { "type": ["integer", "null"], "minimum": 0 },
           "visualization_state_revision": { "type": "integer", "minimum": 0 }
         }
@@ -163,6 +165,7 @@
               "mesh_builds",
               "commands",
               "stages",
+              "simulation",
               "scene_document",
               "visualization_state",
               "visualization_client_acks"

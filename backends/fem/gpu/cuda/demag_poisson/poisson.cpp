@@ -11,6 +11,7 @@
 
 #include "context.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -63,21 +64,22 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     }
     workspace->device_bytes = device_bytes;
 
-    if (!cuda_ok(cudaEventCreateWithFlags(&workspace->compute_ready_event, cudaEventDisableTiming),
-            "cudaEventCreate demag compute_ready_event", error) ||
-        !cuda_ok(cudaEventCreateWithFlags(&workspace->hypre_done_event, cudaEventDisableTiming),
-            "cudaEventCreate demag hypre_done_event", error) ||
-        !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_rhs, 0,
+    if (!cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_rhs, 0,
                 static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
             "cudaMemset demag poisson_rhs", error) ||
         !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_solution, 0,
                 static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
             "cudaMemset demag poisson_solution", error)) {
-        gpu_demag_poisson_destroy(ctx);
+        destroy_demag_poisson_operators(*workspace);
         return false;
     }
 
     if (!initialize_demag_poisson_hypre_device_solver(ctx, *workspace, error)) {
+        destroy_demag_poisson_operators(*workspace);
+        return false;
+    }
+    if (!initialize_hypre_stream_interop(workspace->stream_interop, error)) {
+        destroy_demag_poisson_operators(*workspace);
         return false;
     }
 
@@ -102,19 +104,12 @@ void gpu_demag_poisson_destroy(Context &ctx)
         return;
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    const uint64_t workspace_device_bytes = workspace->device_bytes;
     destroy_demag_poisson_operators(*workspace);
-    if (workspace->compute_ready_event != nullptr) {
-        cudaEventDestroy(workspace->compute_ready_event);
-        workspace->compute_ready_event = nullptr;
-    }
-    if (workspace->hypre_done_event != nullptr) {
-        cudaEventDestroy(workspace->hypre_done_event);
-        workspace->hypre_done_event = nullptr;
+    if (workspace_device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
+        ctx.gpu_state.device.lifecycle.device_bytes -= workspace_device_bytes;
     }
 #endif
-    if (workspace->device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
-        ctx.gpu_state.device.lifecycle.device_bytes -= workspace->device_bytes;
-    }
     delete workspace;
     ctx.poisson_demag.gpu_workspace = nullptr;
     ctx.poisson_demag.gpu_workspace_ready = false;

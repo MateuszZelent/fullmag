@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from fullmag._validation import require_non_empty, require_positive
+from fullmag._validation import (
+    SamplingPeriod,
+    auto_sinc_sampling_policy_ir,
+    normalize_sampling_period,
+    require_non_empty,
+    require_positive,
+)
 
 _SUPPORTED_RESPONSE_OBSERVABLES = {
     "m_complex",
@@ -47,30 +53,42 @@ _KNOWN_SCALARS = {
 @dataclass(frozen=True, slots=True)
 class SaveField:
     field: str
-    every: float
+    every: SamplingPeriod
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "field", require_non_empty(self.field, "field"))
         if self.field not in _KNOWN_FIELDS:
             raise ValueError(f"unsupported field quantity '{self.field}'")
-        require_positive(self.every, "every")
+        object.__setattr__(self, "every", normalize_sampling_period(self.every, "every"))
 
     def to_ir(self) -> dict[str, object]:
+        if self.every == "auto":
+            return {
+                "kind": "field_auto",
+                "name": self.field,
+                "sample_period_policy": auto_sinc_sampling_policy_ir(),
+            }
         return {"kind": "field", "name": self.field, "every_seconds": self.every}
 
 
 @dataclass(frozen=True, slots=True)
 class SaveScalar:
     scalar: str
-    every: float
+    every: SamplingPeriod
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "scalar", require_non_empty(self.scalar, "scalar"))
         if self.scalar not in _KNOWN_SCALARS:
             raise ValueError(f"unsupported scalar quantity '{self.scalar}'")
-        require_positive(self.every, "every")
+        object.__setattr__(self, "every", normalize_sampling_period(self.every, "every"))
 
     def to_ir(self) -> dict[str, object]:
+        if self.every == "auto":
+            return {
+                "kind": "scalar_auto",
+                "name": self.scalar,
+                "sample_period_policy": auto_sinc_sampling_policy_ir(),
+            }
         return {"kind": "scalar", "name": self.scalar, "every_seconds": self.every}
 
 

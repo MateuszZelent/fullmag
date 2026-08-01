@@ -12,21 +12,23 @@ use crate::schemas::display::DisplayPatch;
 use crate::schemas::realtime::{RealtimeResourceChange, RealtimeResourceName};
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::schemas::visualization_state::{
-    AirboxLayerPatch, AirboxLayerState, BasicLayerPatch, BasicLayerState, ClipAxis,
-    ClipVisualizationState, DomainVisualizationState, FdmVisualizationState, FemTopologyMode,
-    FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile, SamplingVisualizationState,
-    SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
-    SurfaceColorSource, SurfaceFieldProjectionMode, TrimAxisVisualizationAxes,
-    TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch, TrimAxisVisualizationState,
-    TrimVisualizationState, VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
-    VectorStyleVisualizationState, VisualizationCameraPatch, VisualizationCameraProjection,
-    VisualizationCameraState, VisualizationClientAckEntry, VisualizationClientAckRequest,
-    VisualizationClientAckResource, VisualizationDiagnostics, VisualizationLayerPatch,
-    VisualizationLayerState, VisualizationOverrideState, VisualizationResolvedTargetSettings,
-    VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
-    VisualizationTargetDisplayOverride, VisualizationTargetGeometryScope,
-    VisualizationTargetRegistryEntry, VisualizationTargetRegistryState,
-    VisualizationTargetRenderMode, VisualizationTargetSource, DEFAULT_AIRBOX_VECTOR_BUDGET,
+    default_planar_visualization_state, AirboxLayerPatch, AirboxLayerState, BasicLayerPatch,
+    BasicLayerState, ClipAxis, ClipVisualizationState, DomainVisualizationState,
+    FdmVisualizationState, FemTopologyMode, FemVisualizationState, FerromagnetVisibilityMode,
+    PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
+    SamplingVisualizationState, SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode,
+    SliceVisualizationState, SurfaceColorSource, SurfaceFieldProjectionMode,
+    TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
+    TrimAxisVisualizationState, TrimVisualizationState, VectorColorMode, VectorLayerDomain,
+    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationCameraPatch,
+    VisualizationCameraProjection, VisualizationCameraState, VisualizationClientAckEntry,
+    VisualizationClientAckRequest, VisualizationClientAckResource, VisualizationDiagnostics,
+    VisualizationLayerPatch, VisualizationLayerState, VisualizationOverrideState,
+    VisualizationResolvedTargetSettings, VisualizationScopeKind, VisualizationStatePatch,
+    VisualizationStateResource, VisualizationTargetDisplayOverride,
+    VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
+    VisualizationTargetRegistryState, VisualizationTargetRenderMode, VisualizationTargetSource,
+    DEFAULT_AIRBOX_VECTOR_BUDGET,
 };
 use crate::types::{
     AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
@@ -175,13 +177,13 @@ pub async fn replace_visualization_state(
         presentation.visualization_sampling = Some(replacement.sampling);
         presentation.visualization_fem = Some(replacement.fem);
         presentation.visualization_slice = Some(replacement.slice);
+        presentation.visualization_planar = Some(replacement.planar);
         presentation.visualization_trim = Some(replacement.trim.clone());
         presentation.visualization_camera = Some(replacement.camera);
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
-        presentation.visualization_overrides = Some(canonicalize_visualization_overrides(
-            &replacement.overrides,
-        ));
+        presentation.visualization_overrides =
+            Some(canonicalize_visualization_overrides(&replacement.overrides));
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
@@ -402,6 +404,9 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
             ));
         }
     }
+    if let Some(planar) = &update.planar {
+        validate_planar_visualization_patch(planar)?;
+    }
     if let Some(camera) = &update.camera {
         validate_camera_patch(camera)?;
     }
@@ -498,6 +503,90 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
     Ok(())
 }
 
+fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Result<(), ApiError> {
+    if let Some(resolution) = &patch.resolution {
+        if !(16..=2048).contains(&resolution.width) || !(16..=2048).contains(&resolution.height) {
+            return Err(ApiError::bad_request(
+                "planar.resolution width and height must be between 16 and 2048",
+            ));
+        }
+        if resolution.vector_budget > 10_000 {
+            return Err(ApiError::bad_request(
+                "planar.resolution.vector_budget must not exceed 10000",
+            ));
+        }
+    }
+    if matches!(
+        (&patch.contrast_min, &patch.contrast_max),
+        (Some(Some(min)), Some(Some(max))) if min >= max
+    ) {
+        return Err(ApiError::bad_request(
+            "planar contrast_min must be less than contrast_max",
+        ));
+    }
+    if matches!(
+        patch.interaction.as_ref(),
+        Some(interaction)
+            if !interaction.zoom.is_finite()
+                || interaction.zoom <= 0.0
+                || !interaction.pan_u_m.is_finite()
+                || !interaction.pan_v_m.is_finite()
+    ) {
+        return Err(ApiError::bad_request(
+            "planar interaction must contain finite values and positive zoom",
+        ));
+    }
+    Ok(())
+}
+
+fn apply_planar_visualization_patch(
+    state: &mut PlanarVisualizationState,
+    patch: &PlanarVisualizationPatch,
+) {
+    if let Some(active_monitor_id) = &patch.active_monitor_id {
+        state.active_monitor_id = active_monitor_id.clone();
+    }
+    if let Some(view_scope) = &patch.view_scope {
+        state.view_scope = view_scope.clone();
+    }
+    if let Some(quantity_id) = &patch.quantity_id {
+        state.quantity_id = quantity_id.clone();
+    }
+    if let Some(component) = patch.component {
+        state.component = component;
+    }
+    if let Some(colormap) = &patch.colormap {
+        state.colormap = colormap.clone();
+    }
+    if let Some(auto_contrast) = patch.auto_contrast {
+        state.auto_contrast = auto_contrast;
+    }
+    if let Some(contrast_min) = patch.contrast_min {
+        state.contrast_min = contrast_min;
+    }
+    if let Some(contrast_max) = patch.contrast_max {
+        state.contrast_max = contrast_max;
+    }
+    if let Some(display_unit) = &patch.display_unit {
+        state.display_unit = display_unit.clone();
+    }
+    if let Some(resolution) = &patch.resolution {
+        state.resolution = resolution.clone();
+    }
+    if let Some(quality) = patch.quality {
+        state.quality = quality;
+    }
+    if let Some(layers) = &patch.layers {
+        state.layers = layers.clone();
+    }
+    if let Some(vector_style) = &patch.vector_style {
+        state.vector_style = vector_style.clone();
+    }
+    if let Some(interaction) = &patch.interaction {
+        state.interaction = interaction.clone();
+    }
+}
+
 fn validate_camera_patch(camera: &VisualizationCameraPatch) -> Result<(), ApiError> {
     if let Some(position) = camera.position {
         validate_camera_vector("camera.position", position)?;
@@ -569,27 +658,27 @@ fn vector_length_squared(vector: [f64; 3]) -> f64 {
 }
 
 fn default_visualization_layers(
-    presentation: &DisplayPresentationState,
+    _presentation: &DisplayPresentationState,
     vector_density: u32,
 ) -> VisualizationLayerState {
     VisualizationLayerState {
         bounds: basic_layer(false, 1.0),
         surface: basic_layer(true, 1.0),
-        quantity_overlay: basic_layer(true, 1.0),
+        quantity_overlay: basic_layer(false, 1.0),
         wireframe: basic_layer(false, 1.0),
         volume_mesh: basic_layer(false, 1.0),
         points: basic_layer(false, 1.0),
         vectors: VectorLayerState {
-            visible: presentation.vector_glyphs,
+            visible: false,
             density: vector_density,
             domain: VectorLayerDomain::Auto,
         },
         primitives: basic_layer(false, 1.0),
         airbox: AirboxLayerState {
-            visible: false,
+            visible: true,
             bounds: basic_layer(false, 1.0),
             surface: basic_layer(false, 0.18),
-            wireframe: basic_layer(true, 1.0),
+            wireframe: basic_layer(false, 1.0),
             points: basic_layer(false, 1.0),
             vectors: VectorLayerState {
                 visible: false,
@@ -874,6 +963,9 @@ fn apply_airbox_layer_patch(state: &mut AirboxLayerState, patch: &AirboxLayerPat
     }
     if let Some(surface) = &patch.surface {
         apply_basic_layer_patch(&mut state.surface, surface);
+        if let Some(opacity) = surface.opacity {
+            state.opacity = opacity;
+        }
     }
     if let Some(wireframe) = &patch.wireframe {
         apply_basic_layer_patch(&mut state.wireframe, wireframe);
@@ -886,6 +978,14 @@ fn apply_airbox_layer_patch(state: &mut AirboxLayerState, patch: &AirboxLayerPat
     }
     if let Some(opacity) = patch.opacity {
         state.opacity = opacity;
+        if patch
+            .surface
+            .as_ref()
+            .and_then(|surface| surface.opacity)
+            .is_none()
+        {
+            state.surface.opacity = opacity;
+        }
     }
 }
 
@@ -1074,6 +1174,15 @@ fn apply_visualization_presentation_patch(
         }
         presentation.visualization_slice = Some(slice);
     }
+    if let Some(planar_patch) = &update.planar {
+        let mut planar = presentation
+            .visualization_planar
+            .take()
+            .unwrap_or_else(default_planar_visualization_state);
+        apply_planar_visualization_patch(&mut planar, planar_patch);
+        presentation.visualization_planar = Some(planar);
+        project_planar_patch_to_compatibility_slice(presentation, planar_patch);
+    }
     if let Some(trim_patch) = &update.trim {
         let mut trim = presentation
             .visualization_trim
@@ -1167,6 +1276,63 @@ fn apply_visualization_presentation_patch(
         sync_airbox_override_with_layer_patch(presentation, airbox_patch);
     }
     Ok(())
+}
+
+fn project_planar_patch_to_compatibility_slice(
+    presentation: &mut crate::types::DisplayPresentationState,
+    patch: &PlanarVisualizationPatch,
+) {
+    let has_shared_fields = patch.quantity_id.is_some()
+        || patch.component.is_some()
+        || patch.colormap.is_some()
+        || patch.auto_contrast.is_some()
+        || patch.resolution.is_some()
+        || patch.layers.is_some();
+    if !has_shared_fields {
+        return;
+    }
+
+    let layers = presentation
+        .visualization_layers
+        .clone()
+        .unwrap_or_else(|| default_visualization_layers(presentation, 1));
+    let mut slice = presentation
+        .visualization_slice
+        .take()
+        .unwrap_or_else(|| default_slice_visualization_for_presentation(presentation, &layers));
+    if let Some(quantity_id) = &patch.quantity_id {
+        slice.quantity_id = quantity_id.clone();
+    }
+    if let Some(component) = patch.component {
+        slice.component = match component {
+            crate::schemas::visualization_state::PlanarFieldComponent::X => FieldComponent::X,
+            crate::schemas::visualization_state::PlanarFieldComponent::Y => FieldComponent::Y,
+            crate::schemas::visualization_state::PlanarFieldComponent::Z => FieldComponent::Z,
+            crate::schemas::visualization_state::PlanarFieldComponent::Magnitude
+            | crate::schemas::visualization_state::PlanarFieldComponent::U
+            | crate::schemas::visualization_state::PlanarFieldComponent::V
+            | crate::schemas::visualization_state::PlanarFieldComponent::Normal
+            | crate::schemas::visualization_state::PlanarFieldComponent::InPlaneMagnitude
+            | crate::schemas::visualization_state::PlanarFieldComponent::Orientation => {
+                FieldComponent::Magnitude
+            }
+        };
+    }
+    if let Some(colormap) = &patch.colormap {
+        slice.colormap = colormap.clone();
+    }
+    if let Some(auto_contrast) = patch.auto_contrast {
+        slice.auto_contrast = auto_contrast;
+    }
+    if let Some(resolution) = &patch.resolution {
+        slice.projection_resolution = resolution.width.max(resolution.height).clamp(1, 512);
+    }
+    if let Some(planar_layers) = &patch.layers {
+        slice.show_quantity = planar_layers.raster;
+        slice.show_mesh = planar_layers.mesh;
+        slice.show_vectors = planar_layers.vectors;
+    }
+    presentation.visualization_slice = Some(slice);
 }
 
 fn sync_airbox_override_with_layer_patch(
@@ -1587,6 +1753,10 @@ pub(crate) fn build_visualization_state_response(
         .visualization_slice
         .clone()
         .unwrap_or_else(|| default_slice_visualization(selection, presentation, &layers));
+    let planar = presentation
+        .visualization_planar
+        .clone()
+        .unwrap_or_else(default_planar_visualization_state);
     let trim = presentation
         .visualization_trim
         .clone()
@@ -1620,7 +1790,7 @@ pub(crate) fn build_visualization_state_response(
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 5,
+        schema_version: 6,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -1638,6 +1808,7 @@ pub(crate) fn build_visualization_state_response(
         },
         fem,
         slice,
+        planar,
         trim,
         camera,
         clip,
@@ -1677,9 +1848,7 @@ fn canonicalize_visualization_overrides(
 ) -> Vec<VisualizationOverrideState> {
     let canonical = overrides
         .iter()
-        .find(|entry| {
-            entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox"
-        })
+        .find(|entry| entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox")
         .or_else(|| {
             overrides.iter().find(|entry| {
                 entry.scope == VisualizationScopeKind::Part
@@ -1753,24 +1922,24 @@ fn build_visualization_target_registry(
             Vec::new()
         } else {
             scene_objects
-                    .iter()
-                    .filter(|object| !is_airbox_scene_object(object))
-                    .map(|object| {
-                        visualization_target_registry_entry(
-                            VisualizationScopeKind::Object,
-                            &object.id,
-                            &object.name,
-                            VisualizationTargetSource::SceneObject,
-                            object_target_settings(
-                                active_quantity_id,
-                                scalar_color_palette,
-                                layers,
-                                vector_style,
-                            ),
-                            overrides,
-                        )
-                    })
-                    .collect()
+                .iter()
+                .filter(|object| !is_airbox_scene_object(object))
+                .map(|object| {
+                    visualization_target_registry_entry(
+                        VisualizationScopeKind::Object,
+                        &object.id,
+                        &object.name,
+                        VisualizationTargetSource::SceneObject,
+                        object_target_settings(
+                            active_quantity_id,
+                            scalar_color_palette,
+                            layers,
+                            vector_style,
+                        ),
+                        overrides,
+                    )
+                })
+                .collect()
         },
         parts: live_snapshot
             .and_then(|snapshot| snapshot.fem_mesh.as_ref())
@@ -1889,14 +2058,17 @@ fn object_target_settings(
         active_quantity_id: active_quantity_id.to_string(),
         visible: true,
         bounds_visible: layers.bounds.visible,
+        bounds_opacity: layers.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
         opacity: layers.surface.opacity,
         point_color: "var(--fm-border-strong)".to_string(),
+        point_opacity: layers.points.opacity,
         points_visible: layers.points.visible,
         render_mode: VisualizationTargetRenderMode::Surface,
         scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
         surface_mono_color: vector_style.mono_color.clone(),
+        surface_opacity: layers.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
         surface_visible: layers.surface.visible,
         viewport_colorbar_visible: false,
@@ -1925,14 +2097,17 @@ fn airbox_target_settings(
         active_quantity_id: active_quantity_id.to_string(),
         visible: layers.airbox.visible,
         bounds_visible: layers.airbox.bounds.visible,
+        bounds_opacity: layers.airbox.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
-        opacity: layers.airbox.opacity,
+        opacity: layers.airbox.surface.opacity,
         point_color: "var(--fm-info)".to_string(),
+        point_opacity: layers.airbox.points.opacity,
         points_visible: layers.airbox.points.visible,
         render_mode: VisualizationTargetRenderMode::Wireframe,
         scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: SurfaceColorSource::Solid,
         surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+        surface_opacity: layers.airbox.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
         surface_visible: layers.airbox.surface.visible,
         viewport_colorbar_visible: false,
@@ -1966,13 +2141,18 @@ fn apply_visualization_target_override(
             if let Some(visible) = bounds.visible {
                 settings.bounds_visible = visible;
             }
+            if let Some(opacity) = bounds.opacity {
+                settings.bounds_opacity = opacity;
+            }
         }
+        let nested_surface_opacity = display.surface.as_ref().and_then(|surface| surface.opacity);
         if let Some(surface) = &display.surface {
             if let Some(visible) = surface.visible {
                 settings.surface_visible = visible;
             }
             if let Some(opacity) = surface.opacity {
                 settings.opacity = opacity;
+                settings.surface_opacity = opacity;
             }
         }
         if let Some(wireframe) = &display.wireframe {
@@ -1987,14 +2167,20 @@ fn apply_visualization_target_override(
             if let Some(visible) = points.visible {
                 settings.points_visible = visible;
             }
+            if let Some(opacity) = points.opacity {
+                settings.point_opacity = opacity;
+            }
         }
         if let Some(vectors) = &display.vectors {
             if let Some(visible) = vectors.visible {
                 settings.vectors_visible = visible;
             }
         }
-        if let Some(opacity) = display.opacity {
-            settings.opacity = opacity;
+        if nested_surface_opacity.is_none() {
+            if let Some(opacity) = display.opacity {
+                settings.surface_opacity = opacity;
+                settings.opacity = opacity;
+            }
         }
         if let Some(geometry_scope) = display.geometry_scope {
             settings.geometry_scope = geometry_scope;
@@ -2060,7 +2246,7 @@ fn visualization_target_render_mode(
     if settings.surface_visible {
         return VisualizationTargetRenderMode::Surface;
     }
-    VisualizationTargetRenderMode::Wireframe
+    VisualizationTargetRenderMode::Off
 }
 
 fn surface_color_source_from_vector_color_mode(color_mode: VectorColorMode) -> SurfaceColorSource {

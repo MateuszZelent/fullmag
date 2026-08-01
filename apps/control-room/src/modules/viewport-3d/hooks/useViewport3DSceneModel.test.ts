@@ -249,7 +249,10 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
     expect(source).toContain("Boolean(fieldCompatibleTopologyRenderModel) &&");
     expect(source).toContain(
-      "useViewport3DMeshQualityData(\n    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),\n  )",
+      "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
+    );
+    expect(source).toContain(
+      "useViewport3DMeshQualityData(\n    Boolean(\n      fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
     );
   });
 
@@ -1977,6 +1980,28 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it.each(["stale_complete", "pending"] as const)(
+    "keeps topology-compatible %s field payloads in the render frame",
+    (materializationState) => {
+      expect(
+        resolveViewport3DResourceFrameState({
+          dataAvailable: true,
+          error: null,
+          id: "field-vector",
+          materializationState,
+          payloadRevision: "etag-step-40",
+          revision: "freshness-step-50",
+          status: "ready",
+        }),
+      ).toEqual({
+        error: null,
+        id: "field-vector",
+        revision: "etag-step-40",
+        status: "ready",
+      });
+    },
+  );
+
   it("builds immediate region overlays from the committed scene while the region resource refreshes", () => {
     expect(
       resolveViewport3DRegionOverlays({
@@ -2476,7 +2501,7 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual(["film:core", "film:edge"]);
   });
 
-  it("keeps mesh-backed region parts hidden until the region is explicitly enabled", () => {
+  it("inherits owner passes for mesh-backed regions except sparse overrides", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2502,11 +2527,12 @@ describe("useViewport3DSceneModel", () => {
         objectVisualizationSnapshot: visualization.getSnapshot(),
         part,
         regionTarget,
+        sceneObjectIds: new Set(["film"]),
       }),
     ).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: false,
-      visible: false,
+      vectorsVisible: true,
+      visible: true,
       wireframeVisible: false,
     });
   });
@@ -2621,7 +2647,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("keeps an explicitly visible region hidden when its owner object is hidden", () => {
+  it("allows an explicit region visibility override when its owner is hidden", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       geometry_id: "periodic_antidot_film:r1",
@@ -2640,7 +2666,7 @@ describe("useViewport3DSceneModel", () => {
     visualization.patchTarget(regionTarget, {
       shaderVisible: true,
       visible: true,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
 
     expect(
@@ -2651,8 +2677,8 @@ describe("useViewport3DSceneModel", () => {
         sceneObjectIds: new Set(["periodic_antidot_film"]),
       }),
     ).toMatchObject({
-      shaderVisible: false,
-      visible: false,
+      shaderVisible: true,
+      visible: true,
       wireframeVisible: false,
     });
   });
@@ -2714,7 +2740,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("keeps an unconfigured mesh-backed region part hidden", () => {
+  it("inherits owner visualization for an unconfigured mesh-backed region", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2732,8 +2758,8 @@ describe("useViewport3DSceneModel", () => {
         },
       }),
     ).toMatchObject({
-      shaderVisible: false,
-      visible: false,
+      shaderVisible: true,
+      visible: true,
       wireframeVisible: false,
     });
   });

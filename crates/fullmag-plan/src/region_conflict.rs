@@ -103,10 +103,7 @@ mod tests {
         .expect("unique maximum priority must resolve");
 
         assert_eq!(result.winner_region_id, "region:a");
-        assert_eq!(
-            result.candidates,
-            vec!["region:a", "region:m", "region:z"]
-        );
+        assert_eq!(result.candidates, vec!["region:a", "region:m", "region:z"]);
     }
 
     #[test]

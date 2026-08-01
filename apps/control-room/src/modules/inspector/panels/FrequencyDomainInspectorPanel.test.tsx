@@ -3270,7 +3270,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("FMR Response Sweep Chart");
     expect(html).toContain("Driven FMR frequency response");
     expect(html).toContain('data-renderer="echarts"');
-    expect(html).toContain("Plot field");
+    expect(html).toContain("Load in 3D");
     expect(html).toContain("FMR Response Point Browser");
     expect(html).toContain("mx, frequency point 0");
     expect(html).toContain("Amplitude");
@@ -3401,10 +3401,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Select active peak");
     expect(html).toContain("Plot active peak 3D");
     expect(html).toMatch(
-      /<button class="fm-button fm-button--secondary fm-button--sm"[^>]*>Select active peak<\/button>/,
+      /<button class="[^"]*fm-button--secondary[^"]*fm-button--sm[^"]*"[^>]*>Select active peak<\/button>/,
     );
     expect(html).toMatch(
-      /<button class="fm-button fm-button--primary fm-button--sm"[^>]*>Plot active peak 3D<\/button>/,
+      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*"[^>]*>Plot active peak 3D<\/button>/,
     );
   });
 
@@ -3479,7 +3479,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Plot selected eigen mode phase");
     expect(html).toContain("Animate selected eigen mode phase in 3D");
     expect(html).toMatch(
-      /<button class="fm-button fm-button--primary fm-button--sm fm-inspector-action-button" aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
+      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*fm-inspector-action-button[^"]*"[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
     expect(html).toMatch(
       /aria-label="Plot this response field with phase-rotated real display at 9.5 GHz" title="Plot this response field with phase-rotated real display"/,
@@ -4163,30 +4163,6 @@ describe("FrequencyDomainInspectorPanel", () => {
         "Canonical stage draft",
       ],
     ],
-    [
-      "study.stage.frequency_response.excitation",
-      [
-        "Frequency Response excitation authoring",
-        "Drive vector hx",
-        "Drive vector hy",
-        "Drive vector hz",
-        "Drive phase",
-        "Phasor convention",
-        "Canonical stage draft",
-      ],
-    ],
-    [
-      "study.stage.frequency_response.sweep",
-      [
-        "Frequency Response sweep authoring",
-        "Explicit frequency list",
-        "Start frequency",
-        "Stop frequency",
-        "Frequency samples",
-        "Stored values_hz",
-        "Canonical stage draft",
-      ],
-    ],
   ] as const)("renders a canonical authoring panel for %s", (kind, expectedLabels) => {
     const selection: Selection = {
       kind,
@@ -4256,31 +4232,6 @@ describe("FrequencyDomainInspectorPanel", () => {
         "Status",
       ],
     ],
-    [
-      "study.stage.frequency_response.excitation",
-      [
-        "Excitation Workflow",
-        "Drive type",
-        "Drive amplitude",
-        "Drive phase",
-        "Drive axis",
-        "Drive projection",
-        "Canonical stage draft",
-      ],
-    ],
-    [
-      "study.stage.frequency_response.sweep",
-      [
-        "Frequency Sweep Workflow",
-        "Sweep type",
-        "Start frequency",
-        "Stop frequency",
-        "Frequency samples",
-        "Spacing",
-        "Partial artifact policy",
-        "Canonical stage draft",
-      ],
-    ],
   ] as const)("renders authoring controls for %s", (kind, expectedLabels) => {
     const selection: Selection = {
       kind,
@@ -4304,6 +4255,39 @@ describe("FrequencyDomainInspectorPanel", () => {
     for (const label of expectedLabels) {
       expect(html).toContain(label);
     }
+  });
+
+  it.each([
+    "study.stage.frequency_response.excitation",
+    "study.stage.frequency_response.sweep",
+  ] as const)("keeps %s as metadata-only fallback outside the canonical Study router", (kind) => {
+    const selection: Selection = {
+      kind,
+      label: kind,
+      moduleSource: "explorer",
+      nodeId: `test:${kind}`,
+      objectId: null,
+      ref: {
+        kind,
+        nodeId: `test:${kind}`,
+        stageId: "stage-frequency-domain",
+        stageIndex: 0,
+        type: "study-stage",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Node focus");
+    expect(html).toContain("Node resource");
+    expect(html).toContain("Visualization contract");
+    expect(html).not.toContain("Use the Study stage inspector draft editor");
+    expect(html).not.toContain("Frequency Response excitation authoring");
+    expect(html).not.toContain("Frequency Response sweep authoring");
+    expect(html).not.toContain("Excitation Workflow");
+    expect(html).not.toContain("Frequency Sweep Workflow");
   });
 
   it.each([
@@ -4499,7 +4483,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Open selected eigen mode data preview");
     expect(html).toContain("Mode data preview");
     expect(html).toMatch(
-      /<button class="fm-button fm-button--primary fm-button--sm fm-inspector-action-button" aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
+      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*fm-inspector-action-button[^"]*"[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
     expect(html).not.toMatch(
       /<button[^>]*disabled=""[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"/,
@@ -4531,10 +4515,10 @@ describe("FrequencyDomainInspectorPanel", () => {
   });
 
   it("wires Plot in 3D to the user-entered phase value", () => {
-    const source = readFileSync(
-      resolve(__dirname, "FrequencyDomainInspectorPanel.tsx"),
-      "utf8",
-    );
+    const source =
+      readFileSync(resolve(__dirname, "FrequencyDomainInspectorPanel.tsx"), "utf8") +
+      readFileSync(resolve(__dirname, "FrequencyDomainEigenSection.tsx"), "utf8") +
+      readFileSync(resolve(__dirname, "FrequencyDomainResponseSection.tsx"), "utf8");
     const dataPreviewSource = readFileSync(
       resolve(__dirname, "FrequencyDomainModeDataPreviewDialog.tsx"),
       "utf8",

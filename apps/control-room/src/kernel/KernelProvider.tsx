@@ -49,6 +49,7 @@ import { startBrowserActivityDiagnostics } from "./performance/browserActivityDi
 import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
 import { installPerformanceMeasureGuard } from "./performance/performanceMeasureGuard";
 import { RealtimeClient } from "./realtime/RealtimeClient";
+import { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
@@ -64,6 +65,7 @@ import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeRe
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
+import { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "./visualization/CameraRegistryController";
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
@@ -111,6 +113,12 @@ function createKernel(): KernelApi {
   const resources = new ResourceInvalidationController(bus);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
+  const chartViewportHandoff = new ChartViewportHandoffController();
+  bus.on("session:status-changed", ({ status }) => {
+    if (status !== "connected") {
+      chartViewportHandoff.cancel("Session changed while loading a chart field.");
+    }
+  });
   const cameraRegistry = new CameraRegistryController({
     api: api.visualization,
   });
@@ -127,6 +135,7 @@ function createKernel(): KernelApi {
       visualizationSync.shouldSuppressInvalidation(resourceKey, revision) ||
       cameraRegistry.shouldSuppressInvalidation(resourceKey, revision),
   });
+  const realtimeConnection = new RealtimeConnectionController();
 
   for (const cmd of SHELL_COMMANDS) {
     commands.register(cmd);
@@ -164,6 +173,7 @@ function createKernel(): KernelApi {
     api,
     analysisFieldOverlay,
     bus,
+    chartViewportHandoff,
     cameraRegistry,
     commandDiagnostics,
     commands,
@@ -172,6 +182,7 @@ function createKernel(): KernelApi {
     layout,
     modules,
     realtime,
+    realtimeConnection,
     resources,
     selection,
     visualization,
@@ -269,6 +280,10 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     const client = new RealtimeClient({
       bridge: kernel.realtime,
       diagnostics: kernel.diagnostics,
+      onStatusChange: (status) => {
+        kernel.realtimeConnection.update(status);
+        kernel.bus.emit("session:status-changed", { status });
+      },
       url,
     });
     client.connect();

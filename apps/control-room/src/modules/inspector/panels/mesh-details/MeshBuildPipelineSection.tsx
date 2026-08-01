@@ -1,6 +1,6 @@
 import { Button } from "@/shared/ui/Button";
 
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { formatValue, MeshResourceFields } from "../MeshResourceView";
 
 export function MeshBuildPipelineSection({
@@ -25,7 +25,7 @@ export function MeshBuildPipelineSection({
   sizeFieldKinds: readonly string[] | null | undefined;
 }) {
   return (
-    <InspectorSection value="pipeline" title="Build Pipeline" badge={activeBuildStatus} collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Build Pipeline" badge={activeBuildStatus} collapsible defaultOpen>
       <MeshResourceFields
         fields={[
           { label: "Active build", value: buildStatus },
@@ -43,7 +43,12 @@ export function MeshBuildPipelineSection({
           },
           {
             label: "Fallbacks",
-            value: fallbacks?.join(", ") ?? "none",
+            value:
+              fallbacks == null
+                ? "not published"
+                : fallbacks.length
+                  ? fallbacks.join(", ")
+                  : "none (strict)",
           },
           {
             label: "Size field kinds",
@@ -69,6 +74,6 @@ export function MeshBuildPipelineSection({
           Open Build Details
         </Button>
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

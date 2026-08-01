@@ -1,0 +1,28 @@
+[
+  {
+    "kind": "fixed",
+    "integrator": "rk45",
+    "fix_dt": 2e-15
+  },
+  {
+    "kind": "adaptive_max_error",
+    "integrator": "rk23",
+    "dt_min": 1e-16,
+    "dt_max": 1e-13,
+    "max_err": 1e-6
+  },
+  {
+    "kind": "adaptive_advanced",
+    "integrator": "rk45",
+    "dt_initial": 2e-15,
+    "dt_min": 1e-16,
+    "dt_max": 1e-13,
+    "atol": 3e-8,
+    "rtol": 4e-5,
+    "safety": 0.75,
+    "growth_limit": 1.6,
+    "shrink_limit": 0.35,
+    "max_spin_rotation": 0.15,
+    "norm_tolerance": 2e-6
+  }
+]

@@ -2,22 +2,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const panelSource = readFileSync(
-  join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"),
-  "utf8",
-);
+const panelSource =
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"), "utf8") +
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts"), "utf8") +
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"), "utf8");
 
 describe("ObjectVisualizationPanel performance contracts", () => {
   it("stages range-field commits until interaction boundaries", () => {
-    expect(panelSource).toContain("pendingValueRef");
-    expect(panelSource).toContain("queuedDraftValueRef");
-    expect(panelSource).toContain("window.requestAnimationFrame");
-    expect(panelSource).toContain("window.cancelAnimationFrame");
+    expect(panelSource).toContain("draftOverride");
+    expect(panelSource).toContain("onValueChange");
+    expect(panelSource).toContain("onValueCommit");
     expect(panelSource).not.toContain("window.setTimeout(");
-    expect(panelSource).toContain("onPointerUp={flushDraft}");
-    expect(panelSource).toContain("onPointerCancel={flushDraft}");
-    expect(panelSource).toContain("onKeyUp={flushDraft}");
-    expect(panelSource).toContain("onBlur={flushDraft}");
   });
 
   it("uses the field catalog resource instead of session status field revisions", () => {
@@ -60,12 +55,14 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {
     expect(panelSource).toContain("visualization.patchViewportPreferences(");
     expect(panelSource).toContain("viewportPreferencesPatch");
-    expect(panelSource).toContain("This viewport only");
+    expect(panelSource).toContain("Viewport-only settings");
   });
 
-  it("disables every pass control while a target is hidden but preserves Visible and reset", () => {
-    expect(panelSource).toContain("const passControlsDisabled = pending || !settings?.visible;");
-    expect(panelSource).toContain("label=\"Visible\"");
+  it("disables dependent pass controls while preserving recovery controls and reset", () => {
+    expect(panelSource).toContain("renderResolution?.degradedReasons.length");
+    expect(panelSource).toContain('aria-label="Toggle target visibility"');
+    expect(panelSource).not.toContain('aria-label="Toggle surface shading"');
+    expect(panelSource).not.toContain('aria-label="Toggle wireframe overlay"');
     expect(panelSource).toContain("disabled={pending}");
     expect(panelSource).toContain("resetLabel={visualizationResetActionLabel(target.kind)}");
     expect(panelSource).toContain("disabled={pending}");
@@ -73,7 +70,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
-    expect(panelSource).toContain('label="Quantity source"');
+    expect(panelSource).toContain('label="Quantity Source"');
     expect(panelSource).toContain("quantitySourcePatch(settings, event.target.value)");
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
@@ -93,10 +90,17 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("resetChildRegionTargets");
   });
 
-  it("renders the airbox synthetic vector developer toggle locally", () => {
-    expect(panelSource).toContain('label="Dev fallback +Z"');
-    expect(panelSource).toContain("airboxSyntheticVectorsEnabled");
+  it("keeps the synthetic Airbox vector fallback out of the production inspector", () => {
+    expect(panelSource).not.toContain('label="Dev fallback +Z"');
     expect(panelSource).toContain("visualization.patchViewportPreferences(resolvedTarget, localPatch)");
+  });
+
+  it("uses target capabilities and one geometry extent control", () => {
+    expect(panelSource).toContain("visualizationTargetCapabilities(targetKind)");
+    expect(panelSource).toContain("targetKind={target.kind}");
+    expect(panelSource.match(/<VisualizationGeometryScopeSection/g)).toHaveLength(1);
+    expect(panelSource).not.toContain('label="Arrow extent"');
+    expect(panelSource).not.toContain('aria-label="Vectors geometry scope"');
   });
 
   it("does not promise per-part persistence for object-owned surface vector toggles", () => {

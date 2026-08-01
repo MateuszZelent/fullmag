@@ -1,0 +1,90 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/dmi/bulk.md",
+    "title": "Bulk Dzyaloshinskii–Moriya interaction",
+    "interaction": "isotropic bulk DMI"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Centered cell-curl reference field and active-cell energy path are implemented; non-periodic natural-boundary execution is planner-rejected."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64/FP32 CUDA bulk-curl field and DMI reduction source paths are present; executed-device qualification is separate evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM bulk weak residual, lumped projection, periodic input projection, and quadrature energy paths are present."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "CUDA bulk residual/energy kernel, RK field dispatch, and final energy reduction paths are present; executed-device parity is separate evidence."}
+  ],
+  "sources": [
+    {"id": "python-term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "Explicit finite bulk-DMI constructor and bulk_dmi IR serialization."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Dbulk and Dbulk_field validation and material IR serialization."},
+    {"id": "python-pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "FDM periodic-axis and demagnetization-policy validation."},
+    {"id": "ir-explicit", "path": "crates/fullmag-ir/src/validation.rs", "symbol": "validate_dmi_energy_terms", "responsibility": "Explicit DMI finite-value validation."},
+    {"id": "ir-material", "path": "crates/fullmag-ir/src/validation.rs", "symbol": "validate_material_dmi_values", "responsibility": "Material bulk-DMI scalar and field validation."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM Bulk DMI lowering and all-axis periodic legality gate."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM explicit/material bulk-DMI coefficient resolution."},
+    {"id": "fdm-density", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "dmi_energy_density_from_vectors", "responsibility": "Centered bulk curl energy density."},
+    {"id": "fdm-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "bulk_dmi_field", "responsibility": "Centered negative-curl FDM CPU field."},
+    {"id": "fdm-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "dmi_energy_from_soa", "responsibility": "FDM structure-of-arrays energy reduction."},
+    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "FDM CUDA FP64 effective-field bulk-curl contribution."},
+    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "MFEM quadrature residual, projection, periodic input, and energy."},
+    {"id": "fem-weak", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_bulk_residual", "responsibility": "Bulk weak-residual component algebra."},
+    {"id": "fem-project", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_project_lumped_field", "responsibility": "Residual-to-field lumped projection and positivity checks."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "FEM CUDA bulk residual and energy element kernel."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu", "symbol": "gpu_rk_compute_dmi_field_contributions", "responsibility": "FEM CUDA resident-resource field dispatch."},
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_dmi_energy_terms", "responsibility": "FEM CUDA final Bulk DMI energy slot reduction."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "physical magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "v", "latex": "$\\mathbf v$", "meaning": "admissible variation or test field", "si_unit": "$1$"},
+    {"id": "D", "latex": "$D_b$", "meaning": "bulk DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "A", "latex": "$A$", "meaning": "exchange stiffness in the coupled boundary law", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "boundary", "latex": "$\\partial\\Omega_m$", "meaning": "magnetic boundary", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward unit normal", "si_unit": "$1$"},
+    {"id": "wb", "latex": "$w_b$", "meaning": "bulk DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Eb", "latex": "$E_b$", "meaning": "total bulk DMI energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Hb", "latex": "$\\mathbf H_b$", "meaning": "bulk DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "alpha", "latex": "$m_\\alpha$", "meaning": "Cartesian magnetization component", "si_unit": "$1$"},
+    {"id": "delta", "latex": "$\\delta_\\alpha$", "meaning": "centered FDM derivative", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "curlh", "latex": "$\\nabla_h\\times$", "meaning": "centered discrete curl operator", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "dx", "latex": "$\\Delta x$", "meaning": "FDM x cell dimension", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dy", "latex": "$\\Delta y$", "meaning": "FDM y cell dimension", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dz", "latex": "$\\Delta z$", "meaning": "FDM z cell dimension", "si_unit": "$\\mathrm{m}$"},
+    {"id": "i", "latex": "$i$", "meaning": "FDM cell index", "si_unit": "$1$"},
+    {"id": "active", "latex": "$\\mathcal A$", "meaning": "active FDM cell set", "si_unit": "$1$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "mh", "latex": "$\\mathbf m_h$", "meaning": "FEM finite-element magnetization", "si_unit": "$1$"},
+    {"id": "vh", "latex": "$\\mathbf v_h$", "meaning": "FEM finite-element test field", "si_unit": "$1$"},
+    {"id": "Omegae", "latex": "$\\Omega_e$", "meaning": "FEM element domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Dbe", "latex": "$D_{b,e}$", "meaning": "element bulk DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "q", "latex": "$q$", "meaning": "quadrature point index", "si_unit": "$1$"},
+    {"id": "mq", "latex": "$\\mathbf m_q$", "meaning": "quadrature-point magnetization", "si_unit": "$1$"},
+    {"id": "wq", "latex": "$w_q$", "meaning": "quadrature weight including element Jacobian", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "gb", "latex": "$g_{b,a}$", "meaning": "assembled bulk-DMI residual at node a", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Msa", "latex": "$M_{s,a}$", "meaning": "nodal saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Mlump", "latex": "$M_a^{\\mathrm{lump}}$", "meaning": "nodal lumped mass", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Ha", "latex": "$H_{b,a}$", "meaning": "projected nodal bulk-DMI field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "equations": [
+    {"id": "eq-bulk-dmi-density", "symbols": ["wb", "D", "m"], "sources": ["fdm-density", "fem-cpu"]},
+    {"id": "eq-bulk-dmi-energy", "symbols": ["Eb", "Omega", "wb"], "sources": ["fdm-energy", "fem-cpu"]},
+    {"id": "eq-bulk-dmi-cartesian", "symbols": ["m"], "sources": ["fdm-density"]},
+    {"id": "eq-bulk-dmi-first-variation", "symbols": ["Eb", "D", "Omega", "v", "m"], "sources": ["fem-weak"]},
+    {"id": "eq-bulk-dmi-variation-separated", "symbols": ["Eb", "D", "Omega", "boundary", "nu", "v", "m"], "sources": ["fem-weak"]},
+    {"id": "eq-bulk-dmi-effective-field", "symbols": ["Hb", "D", "mu0", "Ms", "m"], "sources": ["fdm-field", "fem-project"]},
+    {"id": "eq-bulk-dmi-boundary-term", "symbols": ["D", "boundary", "nu", "v", "m"], "sources": ["fem-weak"]},
+    {"id": "eq-bulk-dmi-exchange-boundary", "symbols": ["A", "D", "nu", "m"], "sources": ["fem-weak"]},
+    {"id": "eq-bulk-dmi-fdm-derivative", "symbols": ["delta", "alpha", "i", "dx", "dy", "dz"], "sources": ["fdm-density"]},
+    {"id": "eq-bulk-dmi-fdm-field", "symbols": ["curlh", "m", "delta", "Hb", "D", "mu0", "Ms", "i"], "sources": ["fdm-field", "fdm-gpu"]},
+    {"id": "eq-bulk-dmi-fdm-energy", "symbols": ["Eb", "D", "m", "curlh", "i", "active", "Vi"], "sources": ["fdm-energy"]},
+    {"id": "eq-bulk-dmi-fem-weak-residual", "symbols": ["Dbe", "Omegae", "vh", "mh"], "sources": ["fem-weak", "fem-cpu"]},
+    {"id": "eq-bulk-dmi-fem-energy", "symbols": ["Eb", "Dbe", "q", "mq", "wq"], "sources": ["fem-cpu", "fem-gpu-kernel"]},
+    {"id": "eq-bulk-dmi-fem-projection", "symbols": ["Ha", "gb", "mu0", "Msa", "Mlump"], "sources": ["fem-project"]}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "BulkDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite; either sign", "meaning": "explicit bulk-DMI coefficient and chirality sign", "backend_support": "FDM/FEM CPU/GPU subject to planner and qualification gates", "problem_ir": "energy_terms[].D"},
+      {"python": "Material.Dbulk", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied", "meaning": "material-owned scalar bulk-DMI coefficient", "backend_support": "FEM CPU/GPU; FDM planner-dependent", "problem_ir": "materials[].bulk_dmi"},
+      {"python": "Material.Dbulk_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite values; resolved mesh cardinality", "meaning": "spatial nodal bulk-DMI coefficient", "backend_support": "FEM CPU/GPU", "problem_ir": "materials[].dbulk_field"}
+    ]
+  }
+}

@@ -346,6 +346,45 @@ P1TetrahedralMaterialRealization::ms_weighted_aos3_mass_bilinear_termwise(
     return result;
 }
 
+MsWeightedAos3AverageReduction
+P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction(
+    const std::vector<double> &aos3_nodal_values) const
+{
+    if (ms_.location != MaterialCoefficientLocation::element_dg0) {
+        throw std::logic_error(
+            "Ms-weighted average reduction is available only for element_dg0 Ms");
+    }
+    const std::size_t expected = node_count_ * 3u;
+    if (aos3_nodal_values.size() != expected) {
+        throw std::invalid_argument(
+            "AOS-3 nodal values have length " +
+            std::to_string(aos3_nodal_values.size()) +
+            " but expected 3 * node_count=" + std::to_string(expected));
+    }
+
+    MsWeightedAos3AverageReduction result;
+    for (const std::size_t element : active_element_ordinals_) {
+        const double element_weight =
+            ms_.values[element] * elements_[element].volume_m3;
+        result.denominator += element_weight;
+        const double nodal_weight = element_weight / 4.0;
+        for (const std::uint64_t node : elements_[element].node_ids) {
+            const std::size_t base = static_cast<std::size_t>(node) * 3u;
+            for (std::size_t component = 0; component < 3u; ++component) {
+                const double value = aos3_nodal_values[base + component];
+                if (!std::isfinite(value)) {
+                    throw std::invalid_argument(
+                        "AOS-3 nodal values contain NaN/Inf at value " +
+                        std::to_string(base + component));
+                }
+                result.weighted_component_integrals[component] +=
+                    nodal_weight * value;
+            }
+        }
+    }
+    return result;
+}
+
 std::uint64_t P1TetrahedralMaterialRealization::material_realization_hash() const noexcept {
     return material_realization_hash_;
 }

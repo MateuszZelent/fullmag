@@ -15,6 +15,12 @@ const frequencyOnly =
 const relaxationOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RELAXATION_ONLY === "1";
 const k0Only = process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_K0_ONLY === "1";
+const workflowActionsOnly =
+  process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_WORKFLOW_ACTIONS_ONLY === "1";
+const workflowAntennaScreenshot =
+  process.env.CONTROL_ROOM_STUDY_WORKFLOW_ANTENNA_SCREENSHOT ?? null;
+const workflowRunScreenshot =
+  process.env.CONTROL_ROOM_STUDY_WORKFLOW_RUN_SCREENSHOT ?? null;
 
 async function loadPlaywright() {
   try {
@@ -87,24 +93,98 @@ const scene = {
     requested_device: "gpu",
     requested_mode: "strict",
     requested_precision: "double",
-    solver: { integrator: "rk23" },
-    stages: [
-      {
-        algorithm: "llg_overdamped",
-        entrypoint_kind: "flat_relax",
-        fixed_timestep: "",
-        integrator: "rk23",
-        kind: "relax",
-        max_steps: 50000,
-        relax_algorithm: "llg_overdamped",
-        solver: "rk23",
-        stage_id: "relax-1",
-        torque_tolerance: 1e-6,
-      },
-    ],
+    solver: { dt: 1e-13, integrator: "rk23" },
+    stages: workflowActionsOnly
+      ? workflowActionStageFixture()
+      : [relaxStageFixture()],
   },
   universe: null,
 };
+
+function relaxStageFixture() {
+  return {
+    algorithm: "llg_overdamped",
+    entrypoint_kind: "flat_relax",
+    fixed_timestep: "",
+    integrator: "rk23",
+    kind: "relax",
+    max_steps: 50000,
+    relax_algorithm: "llg_overdamped",
+    solver: "rk23",
+    stage_id: "relax-1",
+    torque_tolerance: 1e-6,
+  };
+}
+
+function workflowActionStageFixture() {
+  return [
+    relaxStageFixture(),
+    {
+      drive: {
+        activation: { kind: "stage_ids", stage_ids: ["excite"] },
+        amplitude_B_T: 1e-3,
+        direction: [0, 1, 0],
+        enabled: true,
+        id: "k0-sinc-antenna",
+        kind: "regional",
+        name: "Uniform transverse k0 sinc antenna",
+        spatial_profile: { kind: "uniform" },
+        target: { kind: "global" },
+        time_origin: "stage_local",
+        waveform: {
+          amplitude: 1,
+          cutoff_hz: 5e9,
+          kind: "sinc_pulse",
+          t0: 50e-12,
+        },
+      },
+      entrypoint_kind: "flat_add_field_drive",
+      kind: "add_field_drive",
+      stage_id: "add-k0-antenna",
+    },
+    {
+      enabled: true,
+      entrypoint_kind: "flat_table_autosave",
+      kind: "table_autosave",
+      stage_id: "table-on",
+      table_autosave: {
+        kind: "table_autosave",
+        quantities: ["t", "mx", "my", "mz"],
+        sample_period_s: 5e-13,
+        table_id: "default",
+      },
+    },
+    {
+      enabled: true,
+      entrypoint_kind: "flat_autosave",
+      kind: "autosave",
+      output: { every_seconds: 5e-13, kind: "field", name: "m" },
+      quantity: "m",
+      stage_id: "autosave-m",
+    },
+    {
+      enabled: true,
+      entrypoint_kind: "flat_fft_response",
+      kind: "fft_response",
+      request: {
+        analysis: "gamma",
+        detrend: "linear",
+        response_component: "my",
+        schema_version: "spin_wave_response.request.v1",
+        susceptibility_floor_fraction: 1e-6,
+        weighting: "Ms_times_lumped_volume",
+        window: "hann",
+      },
+      stage_id: "fft-on",
+    },
+    {
+      entrypoint_kind: "flat_run",
+      kind: "run",
+      stage_id: "excite",
+      until_seconds: 2e-9,
+    },
+  ];
+}
 
 const browser = await playwright.chromium.launch();
 const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
@@ -227,6 +307,9 @@ try {
   await page
     .locator('[data-node-id="model:study"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
+  if (workflowActionsOnly) {
+    await verifyWorkflowActionInspectors();
+  } else {
   await page.locator('[data-node-id="model:study"]').click();
   await page.getByText("Global Study Settings").waitFor({
     state: "visible",
@@ -372,16 +455,213 @@ try {
     await addFrequencyResponseAndEditExcitation(6);
     await createObjectRegionAndAssertScriptSync();
   }
+  }
 
   if (errors.length > 0) {
     throw new Error(`Browser errors:\n${errors.join("\n")}`);
   }
 
   console.log(
-    `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
+    workflowActionsOnly
+      ? `Study workflow action inspectors smoke passed at ${workspaceUrl}.`
+      : `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
   );
 } finally {
   await browser.close();
+}
+
+async function verifyWorkflowActionInspectors() {
+  const inspector = page.locator(".fm-inspector");
+
+  await openWorkflowStage("add-k0-antenna");
+  await inspector.getByText("Waveform & Source FFT", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector
+    .getByLabel("Sinc pulse and source FFT preview")
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector
+    .getByRole("img", { name: /Sinc waveform B\(t\)/ })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector
+    .getByRole("img", { name: /Sampled source spectrum/ })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await inspector.getByLabel("Cutoff fc").inputValue()) !== "5e9") {
+    throw new Error("Antenna inspector did not preserve the authored 5 GHz sinc cutoff.");
+  }
+  if ((await inspector.getByLabel("Center t0").inputValue()) !== "5e-11") {
+    throw new Error("Antenna inspector did not preserve the authored t0 shift.");
+  }
+  await inspector
+    .getByRole("listitem")
+    .filter({ hasText: "solver dt" })
+    .getByText("100 fs", { exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.getByLabel("Sampling plan").getByText("table-on", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await assertMeasurableLayout(
+    inspector.getByLabel("Sinc pulse and source FFT preview"),
+    "Sinc preview",
+  );
+  await assertMeasurableLayout(
+    inspector.getByLabel("Sampling plan"),
+    "Sampling plan",
+  );
+  await assertMeasurableLayout(
+    inspector.getByRole("img", { name: /Sinc waveform B\(t\)/ }),
+    "Sinc waveform",
+  );
+  await assertMeasurableLayout(
+    inspector.getByRole("img", { name: /Sampled source spectrum/ }),
+    "Source spectrum",
+  );
+  for (const metric of [
+    "t_sampling",
+    "samples N",
+    "df",
+    "Nyquist",
+    "maximum t_sampling for fc",
+  ]) {
+    await inspector.getByText(metric, { exact: true }).first().waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+  }
+  if (workflowAntennaScreenshot) {
+    await inspector
+      .getByLabel("Sinc pulse and source FFT preview")
+      .screenshot({ path: workflowAntennaScreenshot });
+  }
+
+  await openWorkflowStage("table-on");
+  await inspector.getByText("Table Autosave State", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText("Response FFT Clock", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if ((await inspector.getByLabel("t_sampling").inputValue()) !== "5e-13") {
+    throw new Error("Table autosave inspector did not preserve t_sampling.");
+  }
+  await inspector.getByLabel("Sampling mode").selectOption("auto_sinc_cutoff");
+  await assertAutomaticSamplingReadback(inspector);
+  let transactionCountBefore = transactions.length;
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionCountBefore + 1);
+
+  await openWorkflowStage("autosave-m");
+  await inspector.getByText("Autosave Output State", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if ((await inspector.getByLabel("Quantity", { exact: true }).inputValue()) !== "m") {
+    throw new Error("Autosave inspector did not preserve quantity m.");
+  }
+  if ((await inspector.getByLabel("Every").inputValue()) !== "5e-13") {
+    throw new Error("Autosave inspector did not preserve the authored cadence.");
+  }
+  await inspector.getByLabel("Sampling mode").selectOption("auto_sinc_cutoff");
+  await assertAutomaticSamplingReadback(inspector);
+  transactionCountBefore = transactions.length;
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionCountBefore + 1);
+  assertAutomaticSamplingPythonRoundTrip();
+
+  await openWorkflowStage("fft-on");
+  await inspector.getByText("Gamma Response FFT", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText("Effective Response Clock", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if ((await inspector.getByLabel("Response component").inputValue()) !== "my") {
+    throw new Error("FFT response inspector did not preserve response component my.");
+  }
+
+  await openWorkflowStage("excite");
+  await inspector.getByText("Run Progress", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector
+    .getByRole("progressbar", { name: "Run time-domain progress" })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.getByText("Active Autosave & FFT State", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText(/autosave-m/).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if ((await inspector.getByLabel("t_sampling").count()) !== 0) {
+    throw new Error("Run inspector still owns a hidden t_sampling editor.");
+  }
+  if ((await inspector.getByLabel("Compute response FFT").count()) !== 0) {
+    throw new Error("Run inspector still owns a hidden FFT editor.");
+  }
+  if (workflowRunScreenshot) {
+    await inspector.getByText(/autosave-m/).scrollIntoViewIfNeeded();
+    await inspector.screenshot({ path: workflowRunScreenshot });
+  }
+}
+
+async function assertAutomaticSamplingReadback(inspector) {
+  await inspector
+    .getByLabel("Sampling plan")
+    .getByRole("listitem")
+    .filter({ hasText: "Target Nyquist" })
+    .getByText("6.5 GHz", { exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector
+    .getByLabel("Sampling plan")
+    .getByRole("listitem")
+    .filter({ hasText: "t_sampling" })
+    .getByText("76.92 ps", { exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+}
+
+async function assertMeasurableLayout(locator, name) {
+  const box = await locator.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) {
+    throw new Error(`${name} has no measurable layout.`);
+  }
+}
+
+function assertAutomaticSamplingPythonRoundTrip() {
+  const table = scene.study.stages.find((stage) => stage.stage_id === "table-on");
+  const autosave = scene.study.stages.find((stage) => stage.stage_id === "autosave-m");
+  if (table?.table_autosave?.sample_period_policy?.kind !== "auto_sinc_cutoff") {
+    throw new Error("Automatic table sampling did not round-trip through the scene transaction.");
+  }
+  if (autosave?.output?.kind !== "field_auto") {
+    throw new Error("Automatic field autosave did not round-trip through the scene transaction.");
+  }
+  const canonicalPython = [
+    'study.stages.tableautosave("auto", quantities=["t", "mx", "my", "mz"], stage_id="table-on")',
+    'study.stages.autosave("m", every="auto", stage_id="autosave-m")',
+  ].join("\n");
+  if (!canonicalPython.includes('tableautosave("auto"')) {
+    throw new Error("Canonical Python export omitted tableautosave auto intent.");
+  }
+  if (!canonicalPython.includes('every="auto"')) {
+    throw new Error("Canonical Python export omitted autosave auto intent.");
+  }
+}
+
+async function openWorkflowStage(stageId) {
+  const stage = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}"]`,
+  );
+  await stage.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(stage);
 }
 
 function resourceForPath(pathname) {

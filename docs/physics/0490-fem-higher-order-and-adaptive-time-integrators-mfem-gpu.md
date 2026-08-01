@@ -409,3 +409,23 @@ Internal references:
 
 - `docs/physics/0410-fem-exchange-demag-zeeman-mfem-gpu.md`
 - `docs/physics/0480-fdm-higher-order-and-adaptive-time-integrators.md`
+- `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
+
+## 9. Canonical time-policy reconciliation
+
+Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`,
+`LLG-TD-FIRST-DT-V1`, `LLG-TD-MAX-ERR-V1`, `LLG-TD-ATOMIC-V1`.
+
+Note 0960 governs public and runtime semantics. The convenience adaptive mode
+uses absolute `max_err`, not `atol` with an undisclosed relative tolerance.
+The advanced `atol`/`rtol` mode remains available separately. Omitted
+`dt_initial` resolves to `dt_min`; equality with `dt_min` is explicit and is
+not a sentinel.
+
+Every FEM RK attempt is an attempted-step transaction. Magnetization, time,
+fields, caches, controller history, statistics, and telemetry commit together
+only after error, geometry, demag convergence, and final-refresh checks pass.
+Rejection at the minimum timestep is typed `dt_min_exhausted`, never forced
+acceptance. The future stiff time-domain lane is a separately selected and
+qualified physical-time integrator; the tangent-plane relaxation minimizer is
+not that lane.

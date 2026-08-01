@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import { isRecord, parseJsonArray, parseJsonRecord } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
@@ -70,8 +70,7 @@ export function HysteresisPlanInspector({
       : "not configured";
 
   return (
-    <InspectorSection
-      value="hysteresis-plan"
+    <InspectorGroup
       title="Measurement Plan"
       badge={stagePlan?.branch_mode ?? draft?.protocolKind ?? "major_loop"}
     >
@@ -118,7 +117,7 @@ export function HysteresisPlanInspector({
         <FieldRow label="Storage warnings" value={storageWarnings.join("; ")} />
       )}
       <FieldRow label="Adaptive refinement" value={adaptiveStatus} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

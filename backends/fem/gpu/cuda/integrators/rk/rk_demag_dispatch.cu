@@ -90,6 +90,17 @@ bool gpu_rk_compute_demag_for_device_stage(
     if (!ctx.demag.enabled) {
         return true;
     }
+    if (ctx.poisson_demag.fresh_initial_guess_required) {
+        const bool refreshed =
+            ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON
+                ? gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
+                      ctx, m, stream, reason, true)
+                : compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason);
+        if (refreshed) {
+            ctx.poisson_demag.fresh_initial_guess_required = false;
+        }
+        return refreshed;
+    }
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
         return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
             ctx, m, stream, reason, false);

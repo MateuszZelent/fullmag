@@ -4,7 +4,7 @@ import copy
 import json
 import os
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
@@ -45,6 +45,7 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
+from fullmag.model.planar_monitor import PlanarMonitor
 from fullmag.model.structure import (
     Ferromagnet,
     Material,
@@ -54,9 +55,9 @@ from fullmag.model.structure import (
 )
 from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
 
-IR_VERSION = "0.2.0"
-API_VERSION = "0.2.0"
-SERIALIZER_VERSION = "0.2.0"
+IR_VERSION = "0.3.0"
+API_VERSION = "0.3.0"
+SERIALIZER_VERSION = "0.3.0"
 
 _FEM_MESH_CACHE_VERSION = "v5"
 
@@ -369,6 +370,7 @@ def build_geometry_assets_for_request(
     mesh_workflow: dict[str, object] | None = None,
     object_regions: Sequence[dict[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
+    _copy_cached_assets: bool = True,
 ) -> dict[str, Any] | None:
     if discretization is None:
         return None
@@ -389,7 +391,7 @@ def build_geometry_assets_for_request(
     )
     if asset_cache is not None and asset_cache_key in asset_cache:
         cached = asset_cache[asset_cache_key]
-        return copy.deepcopy(cached)
+        return copy.deepcopy(cached) if _copy_cached_assets else cached
 
     assets: dict[str, Any] = {
         "fdm_grid_assets": [],
@@ -594,12 +596,48 @@ def build_geometry_assets_for_request(
                     )
 
         if explicit_domain_mesh_source is not None:
-            assets["fem_domain_mesh_asset"] = {
-                "mesh_source": explicit_domain_mesh_source,
-                "mesh": None,
-                "region_markers": explicit_domain_region_markers,
-                "object_region_markers": explicit_domain_object_region_markers or [],
-            }
+            source_suffix = Path(explicit_domain_mesh_source).suffix.lower()
+            if source_suffix in {".fullmag-mesh", ".msh", ".mphtxt"}:
+                from fullmag.meshing.persistence import (
+                    import_comsol_mesh,
+                    import_gmsh_mesh,
+                    load_mesh_artifact,
+                )
+
+                if source_suffix == ".fullmag-mesh":
+                    artifact = load_mesh_artifact(explicit_domain_mesh_source)
+                elif source_suffix == ".mphtxt":
+                    artifact = import_comsol_mesh(explicit_domain_mesh_source)
+                else:
+                    artifact = import_gmsh_mesh(explicit_domain_mesh_source)
+                if artifact.region_markers != explicit_domain_region_markers:
+                    raise ValueError(
+                        "explicit shared-domain mesh region markers do not match the persisted artifact"
+                    )
+                if (
+                    explicit_domain_object_region_markers is not None
+                    and artifact.object_region_markers
+                    != explicit_domain_object_region_markers
+                ):
+                    raise ValueError(
+                        "explicit shared-domain object-region markers do not match the persisted artifact"
+                    )
+                persisted_domain_asset = {
+                    "mesh_source": explicit_domain_mesh_source,
+                    "mesh": artifact.mesh.to_ir(artifact.mesh_name),
+                    "region_markers": artifact.region_markers,
+                    "object_region_markers": artifact.object_region_markers,
+                }
+                if artifact.build_report is not None:
+                    persisted_domain_asset["build_report"] = artifact.build_report
+                assets["fem_domain_mesh_asset"] = persisted_domain_asset
+            else:
+                assets["fem_domain_mesh_asset"] = {
+                    "mesh_source": explicit_domain_mesh_source,
+                    "mesh": None,
+                    "region_markers": explicit_domain_region_markers,
+                    "object_region_markers": explicit_domain_object_region_markers or [],
+                }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
             domain_mesh, region_markers, build_report = (
@@ -641,7 +679,9 @@ def build_geometry_assets_for_request(
         result = assets
 
     if asset_cache is not None:
-        asset_cache[asset_cache_key] = copy.deepcopy(result)
+        asset_cache[asset_cache_key] = (
+            copy.deepcopy(result) if _copy_cached_assets else result
+        )
 
     return result
 
@@ -716,6 +756,10 @@ class RuntimeSelection:
         object.__setattr__(self, "execution_precision", ExecutionPrecision(self.execution_precision))
         if self.gpu_count < 0:
             raise ValueError("gpu_count must be >= 0")
+        if self.gpu_count > 1:
+            raise ValueError(
+                "gpu_count > 1 requests multi-GPU execution, but multi-GPU execution is not implemented"
+            )
         if self.device_index is not None and self.device_index < 0:
             raise ValueError("device_index must be >= 0")
         if self.cpu_threads is not None and self.cpu_threads <= 0:
@@ -865,6 +909,101 @@ EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | Magnetoelast
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
 OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
+
+
+def _material_has_anisotropy(material: Material) -> bool:
+    return any(
+        value is not None
+        for value in (
+            material.Ku1,
+            material.Ku2,
+            material.Kc1,
+            material.Kc2,
+            material.Kc3,
+            material.Ku_field,
+            material.Ku2_field,
+            material.Kc1_field,
+            material.Kc2_field,
+            material.Kc3_field,
+        )
+    )
+
+
+def _merged_legacy_material_value(
+    existing: object,
+    requested: object,
+    *,
+    name: str,
+) -> object:
+    if existing is not None and existing != requested:
+        raise ValueError(
+            f"legacy anisotropy energy term conflicts with Material.{name}; "
+            "author anisotropy only on the Material"
+        )
+    return requested
+
+
+def _migrate_legacy_anisotropy_energy_terms(
+    magnets: Sequence[Ferromagnet],
+    energy: Sequence[EnergyTerm],
+) -> tuple[Sequence[Ferromagnet], Sequence[EnergyTerm]]:
+    legacy_terms = [
+        term
+        for term in energy
+        if isinstance(term, (UniaxialAnisotropy, CubicAnisotropy))
+    ]
+    if not legacy_terms:
+        return magnets, energy
+
+    materials_by_name: dict[str, Material] = {}
+    for magnet in magnets:
+        existing = materials_by_name.get(magnet.material.name)
+        if existing is not None and existing != magnet.material:
+            raise ValueError(
+                f"material '{magnet.material.name}' is defined multiple times with different values"
+            )
+        materials_by_name[magnet.material.name] = magnet.material
+    if len(materials_by_name) != 1:
+        raise ValueError(
+            "legacy anisotropy energy terms require a single material target; "
+            "set Ku1/Ku2/anisU or Kc1/Kc2/Kc3/anisC1/anisC2 on each Material instead"
+        )
+
+    material = next(iter(materials_by_name.values()))
+    updates: dict[str, object] = {}
+    for term in legacy_terms:
+        if isinstance(term, UniaxialAnisotropy):
+            updates["Ku1"] = _merged_legacy_material_value(
+                updates.get("Ku1", material.Ku1), term.ku1, name="Ku1"
+            )
+            updates["Ku2"] = _merged_legacy_material_value(
+                updates.get("Ku2", material.Ku2), term.ku2, name="Ku2"
+            )
+            updates["anisU"] = _merged_legacy_material_value(
+                updates.get("anisU", material.anisU), term.axis, name="anisU"
+            )
+        else:
+            updates["Kc1"] = _merged_legacy_material_value(
+                updates.get("Kc1", material.Kc1), term.kc1, name="Kc1"
+            )
+            updates["Kc2"] = _merged_legacy_material_value(
+                updates.get("Kc2", material.Kc2), term.kc2, name="Kc2"
+            )
+            updates["Kc3"] = _merged_legacy_material_value(
+                updates.get("Kc3", material.Kc3), term.kc3, name="Kc3"
+            )
+            updates["anisC1"] = _merged_legacy_material_value(
+                updates.get("anisC1", material.anisC1), term.axis1, name="anisC1"
+            )
+            updates["anisC2"] = _merged_legacy_material_value(
+                updates.get("anisC2", material.anisC2), term.axis2, name="anisC2"
+            )
+
+    migrated_material = replace(material, **updates)
+    return (
+        [replace(magnet, material=migrated_material) for magnet in magnets],
+        [term for term in energy if not isinstance(term, (UniaxialAnisotropy, CubicAnisotropy))],
+    )
 
 
 def _is_spin_torque_module(value: object) -> bool:
@@ -1086,6 +1225,7 @@ def build_problem_builder_manifest(
             "energy_terms": [term.to_ir() for term in problem.energy],
             "current_modules": [module.to_ir() for module in problem.current_modules],
             "field_drives": [drive.to_ir() for drive in problem.field_drives],
+            "planar_monitors": [monitor.to_ir() for monitor in problem.monitors],
             "excitation_analysis": problem.excitation_analysis.to_ir()
             if problem.excitation_analysis is not None
             else None,
@@ -1153,6 +1293,7 @@ class Problem:
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
     couplings: Sequence[Coupling] = ()
+    monitors: Sequence[PlanarMonitor] = ()
     excitation_analysis: SpinWaveExcitationAnalysis | None = None
     geometry_asset_cache: dict[str, dict[str, Any] | None] = field(
         default_factory=dict,
@@ -1179,8 +1320,19 @@ class Problem:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
         if not self.magnets:
             raise ValueError("Problem requires at least one magnet")
-        if not self.energy:
-            raise ValueError("Problem requires at least one energy term")
+        if not self.energy and not any(
+            _material_has_anisotropy(magnet.material) for magnet in self.magnets
+        ):
+            raise ValueError(
+                "Problem requires at least one interaction or material anisotropy"
+            )
+
+        migrated_magnets, migrated_energy = _migrate_legacy_anisotropy_energy_terms(
+            self.magnets,
+            self.energy,
+        )
+        object.__setattr__(self, "magnets", migrated_magnets)
+        object.__setattr__(self, "energy", migrated_energy)
 
         normalized_current_modules, normalized_field_drives = (
             _migrate_legacy_prescribed_field_sources(
@@ -1197,6 +1349,7 @@ class Problem:
             self.spin_torque,
             self.spin_torques,
         )
+        object.__setattr__(self, "spin_torque", None)
         object.__setattr__(self, "spin_torques", normalized_spin_torques)
 
         if self.temperature is not None and self.temperature < 0.0:
@@ -1250,6 +1403,13 @@ class Problem:
         ensure_unique_names(
             (coupling.coupling_id for coupling in self.couplings), "coupling ids"
         )
+        if any(not isinstance(monitor, PlanarMonitor) for monitor in self.monitors):
+            raise TypeError("Problem.monitors must contain PlanarMonitor objects")
+        ensure_unique_names((monitor.id for monitor in self.monitors), "planar monitor ids")
+        ensure_unique_names(
+            (monitor.name for monitor in self.monitors),
+            "planar monitor names",
+        )
         current_modules_by_name = _current_module_name_map(self.current_modules)
         if self.excitation_analysis is not None:
             source_module = current_modules_by_name.get(self.excitation_analysis.source)
@@ -1302,6 +1462,7 @@ class Problem:
         asset_cache: dict[str, dict[str, Any] | None] | None = None,
         include_geometry_assets: bool = True,
         study_pipeline: dict[str, object] | None = None,
+        _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         runtime = self.runtime.resolved(
             backend=requested_backend,
@@ -1316,6 +1477,16 @@ class Problem:
             for geometry in self._collect_geometries()
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
+        pbc_ir = _pbc_to_ir(self.pbc)
+        if (
+            runtime.backend_target == BackendTarget.FDM
+            and pbc_ir is not None
+            and pbc_ir.get("demag") == "periodic_airbox_k0"
+        ):
+            raise ValueError(
+                "pbc.demag='periodic_airbox_k0' is FEM-only; FDM supports "
+                "'open' and 'truncated_images' demag policies"
+            )
         source_hash = sha256(script_source.encode("utf-8")).hexdigest() if script_source else None
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)
@@ -1382,6 +1553,7 @@ class Problem:
                 mesh_workflow=mesh_workflow,
                 object_regions=object_region_mesh_specs,
                 asset_cache=effective_asset_cache,
+                _copy_cached_assets=_copy_cached_geometry_assets,
             )
         magnets_ir = [magnet.to_ir() for magnet in self.magnets]
         magnets_ir = _materialize_preset_texture_initial_conditions(
@@ -1422,6 +1594,7 @@ class Problem:
                 for assignment in self._collect_material_parameter_fields()
             ],
             "couplings": [coupling.to_ir() for coupling in self.couplings],
+            "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
@@ -1449,7 +1622,7 @@ class Problem:
             "mechanical_bcs": [bc.to_ir() for bc in self.mechanical_bcs],
             "mechanical_loads": [ml.to_ir() for ml in self.mechanical_loads],
             # Periodic boundary conditions
-            **({"pbc": pbc_ir} if (pbc_ir := _pbc_to_ir(self.pbc)) is not None else {}),
+            **({"pbc": pbc_ir} if pbc_ir is not None else {}),
         }
 
     def _resolve_discretization(

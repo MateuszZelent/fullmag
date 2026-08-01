@@ -2,6 +2,20 @@ use super::*;
 
 pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
     let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    let timestep_policy = if crate::relaxation::direct_minimizer::direct_minimizer_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?)
+    };
 
     Ok(ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -21,12 +35,13 @@ pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProv
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: None,
+        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
+        timestep_policy,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -72,15 +87,22 @@ pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProv
 pub(crate) fn cuda_execution_provenance(
     plan: &FdmPlanIR,
     device_info: &crate::fdm::gpu::cuda::native::DeviceInfo,
-) -> ExecutionProvenance {
-    let dt_policy = if plan.adaptive_timestep.is_some() {
-        Some("adaptive".to_string())
-    } else if plan.fixed_timestep.is_some() {
-        Some("user".to_string())
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
     } else {
-        Some("fallback".to_string())
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?)
     };
-    ExecutionProvenance {
+    Ok(ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -104,14 +126,15 @@ pub(crate) fn cuda_execution_provenance(
         resolved_fallback: None,
         ignored_terms: Vec::new(),
         random_seed: None,
-        requested_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
-        resolved_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
+        requested_integrator: None,
+        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
-        dt_policy,
+        timestep_policy,
+        dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
                 "pure_damping"
@@ -156,20 +179,31 @@ pub(crate) fn cuda_execution_provenance(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
-    }
+    })
 }
 
 #[cfg(feature = "fem-gpu")]
 pub(crate) fn fem_gpu_execution_provenance(
     plan: &FemPlanIR,
     device_info: &FemDeviceInfo,
-) -> ExecutionProvenance {
-    let dt_policy = if plan.adaptive_timestep.is_some() {
-        Some("adaptive".to_string())
-    } else if plan.fixed_timestep.is_some() {
-        Some("user".to_string())
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
     } else {
-        Some("fallback".to_string())
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+            } else {
+                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+            },
+        )?)
     };
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
@@ -200,7 +234,8 @@ pub(crate) fn fem_gpu_execution_provenance(
             .map(|r| r.provenance_name().to_string()),
         resolved_demag_realization: resolved_demag_realization
             .map(|realization| realization.provenance_name().to_string()),
-        dt_policy,
+        timestep_policy,
+        dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
                 "pure_damping"
@@ -294,7 +329,7 @@ pub(crate) fn fem_gpu_execution_provenance(
         fem_poisson_demag: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    provenance
+    Ok(provenance)
 }
 
 #[cfg(feature = "fem-gpu")]

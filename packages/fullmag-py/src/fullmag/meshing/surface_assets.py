@@ -263,12 +263,17 @@ def build_surface_preview_payload(geometry: Geometry) -> dict[str, object] | Non
     if vertices is None or faces is None or len(vertices) == 0 or len(faces) == 0:
         return None
 
+    flat_faces = [int(node) for face in faces.tolist() for node in face]
+    face_count = len(faces)
     return {
         "nodes": [[float(x), float(y), float(z)] for x, y, z in vertices.tolist()],
-        "elements": [],
-        "boundary_faces": [
-            [int(face[0]), int(face[1]), int(face[2])] for face in faces.tolist()
-        ],
+        "cell_types": [],
+        "cell_offsets": [0],
+        "cell_nodes": [],
+        "facet_types": ["tri3"] * face_count,
+        "facet_roles": ["exterior"] * face_count,
+        "facet_offsets": list(range(0, face_count * 3 + 1, 3)),
+        "facet_nodes": flat_faces,
     }
 
 

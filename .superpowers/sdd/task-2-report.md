@@ -1,125 +1,429 @@
-# Task 2 report: field-vector response contract and ETag
+# Task 2 report: canonical typed topology v2
 
-## Outcome
+## Status
 
-Implemented the contract hardening on the existing `GET /v2/sessions/current/data/fields/{quantity_id}/samples/vector` route. No route, query semantic, JSON resource, websocket state transport, or component-owned transport was added.
+DONE_WITH_CONCERNS. Canonical variable-arity FEM topology is implemented through Python meshing data, Rust IR, planner transformations, CLI ingestion, runner payloads, artifacts, and mechanically affected API consumers. Review remediation completed complete family-aware Jacobian sampling, immutable global ordinals, canonical facet references, exact fingerprint-domain ownership, ingress facet roles, and fail-closed legacy FMMT v1 consumers. All applicable focused gates pass. The exact CLI command in the brief cannot run because `fullmag-cli` is a binary-only package; the equivalent binary-target filter passes 13 tests.
 
-HTTP v2 remains authoritative. `ControlRoomApi` parses response headers centrally after FMVP decode, publishes typed `identityIssues`, and returns typed response metadata. The viewport resource owner stores that metadata beside decoded field data and the ETag; a `304` reuses the complete prior cache entry.
+The controller-owned `.superpowers/sdd/progress.md` and `.superpowers/sdd/task-1-report.md` remain unstaged; their independent dirty contents were not changed by this slice. No SP4 scenario, C ABI, native FEM implementation, FMMT v2 redesign, OpenAPI redesign, or Control Room behavior was changed. Existing FMMT v1 API callers were migrated only enough to reject mixed cells/facets with HTTP conflict before fixed-width serialization. The checked-in Control Room OpenAPI JSON and TypeScript response types were regenerated from the canonical backend schema in the final re-review follow-up.
 
-## Files changed
+## Contract implemented
 
-- `crates/fullmag-api/src/router_v2/handlers/data/fields.rs`
-- `crates/fullmag-api/src/router_v2/middleware/cors.rs`
-- `crates/fullmag-api/src/router_v2/tests.rs`
-- `apps/control-room/src/kernel/api/apiTypes.ts`
-- `apps/control-room/src/kernel/api/ControlRoomApi.ts`
-- `apps/control-room/src/kernel/api/ControlRoomApi.test.ts`
-- `apps/control-room/src/kernel/resources/ResourceCache.ts`
-- `apps/control-room/src/kernel/resources/ResourceCache.test.ts`
-- `apps/control-room/src/modules/viewport-3d/viewport3dResources.ts`
-- `apps/control-room/src/modules/viewport-3d/viewport3dResources.test.ts`
-- generated: `apps/control-room/src/kernel/api/generated/openapi-v2.json`
-- generated: `apps/control-room/src/kernel/api/generated/openapi-v2-types.ts`
+- Added the exact canonical wire vocabularies:
+  - cells: `tet4`, `prism6`, `pyramid5`, `hex8`;
+  - facets: `tri3`, `quad4`;
+  - roles: `exterior`, `material_interface`, `periodic_seam`.
+- Python `MeshData` now owns only typed flat connectivity and CSR offsets. Rust `MeshIR` and `FemMeshPayload` own only `FemConnectivityIR` / `FemFacetConnectivityIR` plus marker arrays.
+- Added typed cell/facet iterators and views carrying canonical type, connectivity, marker/role association, local CSR ordinal, and immutable global ordinal.
+- Added strict validation for unknown family strings, CSR start/monotonicity/end/length, family arity, node indices, duplicate local nodes, cell/facet marker drift, role drift, and family-aware positive orientation/Jacobian.
+- Preserved tetra SICN/gamma behavior only for tet4. Other supported families expose family-aware scaled-Jacobian validation and are not mislabeled as tetra quality.
+- Added explicit legacy tet4/tri3 normalization boundaries for JSON, NPZ, and Rust serde. Legacy inputs are accepted only as a complete `elements` + `boundary_faces` pair when v2 topology is absent; dual truth and partial legacy payloads reject.
+- All new writers emit v2 only. Python IR emits nested `cells` / `facets`; saved NPZ uses typed flat arrays; Rust serialization emits canonical fields. Tests assert legacy keys are absent after both v2 construction and legacy normalization.
+- Mixed VTK/VTU output uses native VTK codes 10/12/13/14 for tet/hex/wedge/pyramid and does not triangulate scientific cells.
+- Planner analysis, grouping, packing, merge, mesh-part slicing, summaries, and artifact payloads carry variable-arity type/connectivity/markers/roles together. Cell face tables dispatch by family instead of taking the first four nodes.
+- PBC and tetra-only engine/native consumers fail closed with actionable tet4/tri3 requirements for mixed topology. Existing tet4 periodic behavior remains covered.
+- Runner topology fingerprint begins with the exact domain bytes `fullmag:fem-mesh-topology-fingerprint:v2` and includes cell types/offsets/nodes/markers plus facet types/roles/offsets/nodes/markers. Focused tests mutate every required axis independently.
+- Planner packing and mesh-part slicing preserve global ordinals. Multi-mesh merge deliberately creates a new canonical namespace with new unique sequential ordinals; `docs/specs/mesh-roundtrip-semantics-v1.md` now records that merged topology is a new realization and identity.
+- Canonical interface ownership no longer retains triangle-only face shadows. `SharedInterfaceFace` carries the canonical facet global ordinal, facet type, and adjacent markers; mesh parts and runner/API payloads reference facets by `facet_global_ordinals`, so magnetic/magnetic and air/magnetic quads remain intact.
+- The Python Gmsh ingress derives `exterior`, `material_interface`, and `periodic_seam` from adjacency and periodic metadata. Imported-mesh translation changes coordinates only and preserves types, roles, immutable ordinals, periodic metadata, and quality metadata.
 
-`openapi-v2-client.ts` was regenerated by the required command but had no content diff.
+## Changed files
 
-## RED evidence
+Python canonical topology and direct construction sites:
 
-Command:
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_infra.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_remesh.py`
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`
+- `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`
+- `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py`
+- `packages/fullmag-py/src/fullmag/meshing/surface_assets.py`
+- `packages/fullmag-py/tests/test_meshing.py`
+- `packages/fullmag-py/tests/test_mixed_element_meshing.py`
 
-```text
-pnpm --dir apps/control-room exec vitest run src/kernel/resources/ResourceCache.test.ts src/modules/viewport-3d/viewport3dResources.test.ts src/kernel/api/ControlRoomApi.test.ts
-```
+Rust canonical IR/planner/CLI/runner files and directly affected construction/test sites:
 
-Result: expected RED. `ControlRoomApi.test.ts` had 2 failures (`parseFieldVectorResponseMetadata is not a function` and `collectFieldVectorIdentityIssues is not a function`); 114 tests passed.
+- `crates/fullmag-ir/src/{mesh_hints.rs,mesh_assets.rs}` and `crates/fullmag-ir/tests/ir_tests.rs`
+- `crates/fullmag-plan/src/{fem.rs,mesh.rs,oersted.rs,surface_selectors.rs,tests.rs}`
+- `crates/fullmag-cli/src/{diagnostics.rs,formatting.rs,live_workspace.rs,main.rs,orchestrator.rs,python_bridge.rs,step_utils.rs}`
+- `crates/fullmag-runner/src/{antenna_fields.rs,artifacts.rs,dispatch.rs,fem_eigen.rs,fem_reference.rs,frequency_response.rs,hysteresis.rs,lib.rs,native_fem.rs,preview.rs,quantities.rs,spin_wave_response.rs,spin_wave_sampling.rs,types.rs}`
+- `crates/fullmag-runner/src/eigen/orchestrator.rs`
+- `crates/fullmag-runner/src/fem/{eigen_operator.rs,runtime_contract.rs}`
+- directly affected runner test modules under `src/fem_reference/`, `src/lib/`, and `src/native_fem/`
+- `crates/fullmag-engine/src/{fem.rs,fem_error_estimator.rs,fem_goal_estimator.rs,fem_hcurl_estimator.rs,fem_pbc_benchmark.rs,fem_size_field.rs,studies.rs}`
 
-Backend topology test first RED result:
+The additional Python generator and Rust engine/runner call sites contain only the constructor migration or explicit tetra guard needed to keep one canonical topology truth; production Gmsh algorithms and the native ABI were not changed.
 
-```text
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target cargo test -p fullmag-api field_vector_topology_change_invalidates_etag_without_field_revision_change -- --nocapture
-```
+Review remediation additionally changes mechanically affected files under
+`crates/fullmag-api/src/` (payload construction, typed counts/iteration,
+facet-ID resolution, fail-closed FMMT v1/cross-section consumers, schemas, and
+tests) plus `docs/specs/mesh-roundtrip-semantics-v1.md`. These changes do not
+introduce a new API schema or binary format; they keep the already published
+v1 fixed-width lanes honest until their separately scoped v2 redesign.
 
-Result: expected RED, 0 passed / 1 failed because the initial route ETag did not yet include topology identity. During fixture refinement the first draft returned `204`; the fixture was corrected to provide an eight-node FEM field, after which it exercised the intended ETag behavior.
+The final re-review follow-up additionally changes only the generated Control
+Room artifacts `apps/control-room/src/kernel/api/generated/openapi-v2.json`
+and `openapi-v2-types.ts`. The generated client and path wrapper were rerun and
+remained bit-for-bit unchanged.
 
-## GREEN evidence
+## TDD evidence
 
-```text
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target cargo test -p fullmag-api field_vector_topology_change_invalidates_etag_without_field_revision_change
-```
-
-Result: 1 passed, 0 failed (606 filtered out).
-
-```text
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target cargo test -p fullmag-api openapi_contains_field_slice_contract
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target cargo test -p fullmag-api contract_version_header_is_exposed_to_browser_clients
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target cargo test -p fullmag-api field_vector_component_etag_304
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target cargo test -p fullmag-api v2_field_vector_object_scope_prefers_mesh_part_node_indices
-```
-
-Result: each command ran 1 test; all passed, 0 failed. These cover OpenAPI response headers, CORS exposure, legacy FMVP v2 optional-header absence and `304`, and complete FMVP v3 headers.
-
-```text
-CARGO_TARGET_DIR=/tmp/fullmag-airbox-debug-api-target pnpm --dir apps/control-room generate:api
-```
-
-Result: passed. OpenAPI JSON and TypeScript types regenerated; generated client content was unchanged. The first run without `CARGO_TARGET_DIR` failed because repo `target/debug` is not writable; the corrected required generation command above succeeded.
-
-```text
-pnpm --dir apps/control-room typecheck
-```
-
-Result: passed (`Types generated successfully`, no TypeScript errors).
-
-```text
-pnpm --dir apps/control-room exec vitest run src/kernel/resources/ResourceCache.test.ts src/modules/viewport-3d/viewport3dResources.test.ts src/kernel/api/ControlRoomApi.test.ts src/kernel/api/openapiV2GeneratedContract.test.ts
-```
-
-Result: 4 files passed, 119 tests passed, 0 failed.
+Python RED command:
 
 ```text
-git diff --check -- <Task 2 backend/frontend files>
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_mixed_element_meshing.py packages/fullmag-py/tests/test_meshing.py -vv
 ```
 
-Result: passed with no whitespace errors.
+Initial result: exit code `1`; `29 failed, 1 deselected`. Failures were the expected missing canonical constructor, validation, typed-view, v2 persistence, and mixed VTK capabilities.
 
-## Contract details
-
-- OpenAPI documents field/domain/quantity/component/encoding/count/scope/snapshot/topology/indexing headers on the existing binary response.
-- CORS exposes snapshot ID, mesh topology hash, field indexing, and node-index count in addition to the prior headers.
-- ETag identity now includes mesh topology revision and fingerprint when a FEM topology exists.
-- Invalid or absent numeric headers parse as `null`; missing legacy headers do not reject valid FMVP v2 payloads.
-- Header/payload comparisons cover quantity, counts, scope, topology hash, indexing, node indices, and domain generation.
-- Generic caches retain their existing no-metadata behavior; field cache metadata survives replacement, eviction policy, oversized-entry policy, and `304` reuse.
-
-## Self-review and concerns
-
-- Changes are confined to Task 2 files plus this report; no staging or commit was performed.
-- Existing dirty changes in `router_v2/tests.rs` and viewport files were preserved.
-- Generated transport remains the only low-level frontend transport; no React component reads `Response.headers`.
-- The Rust build emits one pre-existing dead-code warning for `FrequencyResponseProgressMetadata`; it is unrelated to this task.
-- No transitional legacy transport was added. FMVP v2 decode remains intentionally supported.
-
-## Important review remediation
-
-Two review findings were addressed with an additional RED/GREEN cycle.
-
-### RED
-
-Added type-contract tests requiring `responseMetadata` on `ready` `BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>` and requiring `identityIssues` inside that metadata. Added exhaustive table tests covering all fourteen absent headers independently and all four numeric headers independently with `NaN`, fractional, negative, empty, and unsafe-integer values. Added a generated OpenAPI test asserting the exact fourteen field-vector response-header names and their string/integer schema types.
+Rust IR RED command:
 
 ```text
-pnpm --dir apps/control-room typecheck
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target cargo test -p fullmag-ir --test ir_tests fem_topology_enum_wire_strings_are_canonical --no-run
 ```
 
-Result: expected RED. TypeScript reported that ready `responseMetadata` could be undefined and consequently `identityIssues` was not guaranteed.
+Initial result: exit code `101`; compilation failed with 37 expected missing-type/field errors before the canonical enums and CSR structures existed.
 
-### GREEN
+Focused Python GREEN before the combined gate: `29 passed, 1 deselected`.
 
-`ReadyBinaryResourceResult` now conditionally requires metadata whenever a concrete metadata type is declared, while the default `unknown` metadata type keeps existing non-field binary callers backward compatible. `FieldVectorResponseMetadata.identityIssues` is required, the parser initializes it, and the field request replaces it with the comparison result. The cache write stores the type-guaranteed field metadata directly without a defensive absence branch.
+## Final verification
+
+Python combined gate:
 
 ```text
-pnpm --dir apps/control-room typecheck
-pnpm --dir apps/control-room exec vitest run src/kernel/api/ControlRoomApi.test.ts src/kernel/api/openapiV2GeneratedContract.test.ts src/kernel/resources/ResourceCache.test.ts src/modules/viewport-3d/viewport3dResources.test.ts
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_mixed_element_meshing.py packages/fullmag-py/tests/test_meshing.py -vv
 ```
 
-Result: typecheck passed; 4 test files passed, 123 tests passed, 0 failed.
+Result: exit code `0`; `280 passed, 1 skipped` in 177.58 seconds.
+
+The same command was repeated with `PYTHONFAULTHANDLER=1`: exit code `0`; `280 passed, 1 skipped` in 177.62 seconds.
+
+Rust IR gate:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target cargo test -p fullmag-ir --lib --tests
+```
+
+Result: exit code `0`; 49 unit tests and 146 integration tests passed, 195 total.
+
+Rust planner gate:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target cargo test -p fullmag-plan --lib
+```
+
+Result: exit code `0`; `245 passed, 0 failed`.
+
+Rust runner gate:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --lib fem_mesh
+```
+
+Result: exit code `0`; `10 passed, 0 failed, 597 filtered out`. Cargo emitted one pre-existing dead-code warning for `ArtifactRecorder::update_provenance`.
+
+Exact CLI command from the brief:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target cargo test -p fullmag-cli --lib python_bridge
+```
+
+Result: exit code `101`; Cargo reports `error: no library targets found in package fullmag-cli`. No library target was invented to satisfy a mismatched command.
+
+Equivalent binary-target CLI gate:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target cargo test -p fullmag-cli --bin fullmag python_bridge
+```
+
+Result: exit code `0`; `13 passed, 0 failed, 224 filtered out`.
+
+Auxiliary engine compile gate for directly affected tetra guards:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p fullmag-engine --lib --no-run
+```
+
+Result: exit code `0`.
+
+Whitespace gate:
+
+```text
+git diff --check
+```
+
+Result: exit code `0`, no output.
+
+## Fixed-arity and writer audit
+
+Canonical access scan:
+
+```text
+rg -n '\bmesh\.(elements|boundary_faces)|\.mesh\.(elements|boundary_faces)' crates/fullmag-{ir,plan,runner,cli,engine}/src --glob '*.rs'
+```
+
+Result: no matches.
+
+No `pub elements: Vec<[u32; 4]>` or `pub boundary_faces: Vec<[u32; 3]>` remains on `MeshIR` or `FemMeshPayload`. Remaining fixed-array signatures are deliberately confined to:
+
+- private legacy input DTOs in IR, runner, and CLI;
+- tetra-specific engine topology and sparse/transfer kernels;
+- explicitly guarded native FEM and spin-wave adapters;
+- unrelated frequency-response DMI element records.
+
+There is no compiling internal call site that treats a prism, pyramid, or hex as the first four nodes of a tetrahedron. Serialization tests prove all new writers omit `elements` and `boundary_faces`.
+
+## Review remediation verification (2026-07-27)
+
+The following results supersede the lower pre-review counts where the same package is listed.
+All Rust commands used `CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target`,
+`CARGO_INCREMENTAL=0`, and `CARGO_PROFILE_DEV_DEBUG=0` unless noted.
+
+- Python combined Gmsh/periodic/mixed gate with `python3 -X faulthandler`:
+  `43 passed, 0 failed`.
+- `cargo test -p fullmag-ir --no-fail-fast`: `52` unit plus `147` integration
+  tests passed; doc tests passed.
+- `cargo test -p fullmag-plan --no-fail-fast`: `247 passed`; doc tests passed.
+- `cargo test -p fullmag-runner --lib fem_mesh --no-fail-fast`: `10 passed`.
+- Runner quad-interface artifact regression:
+  `artifact_node_selection_resolves_quad_interface_by_global_ordinal` passed.
+- `cargo test -p fullmag-cli --bin fullmag python_bridge --no-fail-fast`:
+  `13 passed`.
+- `cargo test -p fullmag-engine --lib --no-run`: compiled the engine test target.
+- `cargo check -p fullmag-api`: passed with zero errors after the mechanical
+  canonical-topology cutover (the review baseline had 93 errors).
+- `cargo test -p fullmag-api --no-run`: compiled all `687` API tests.
+- API topology breadth filter: `15 passed`, including canonical hash headers,
+  ETag invalidation, scoped topology, and periodic artifact identity.
+- Mixed FMMT v1 route regression:
+  `mesh_shared_domain_topology_rejects_mixed_cells_for_fmmt_v1` passed and
+  asserts HTTP `409` plus an explicit tet4 requirement for `Prism6` input.
+- Shared-node scoped-mesh regression:
+  `v2_mesh_histogram_bin_elements_preserves_shared_node_indices` passed.
+- `git diff --check`: passed.
+
+The first remediation runner gate exposed one stale assertion that equated
+`topology_fingerprint` with `mesh_generation_id`. Production already emitted
+the correct separate contracts: the former is the exact-domain canonical
+`sha256:` v2 topology identity, while the latter is a raw 64-hex solver-mesh
+generation signature including periodic realization. The corrected test now
+asserts the canonical fingerprint directly and asserts the identities differ;
+the existing non-topological mesh-part mutation regression still proves that
+partition metadata does not change topology identity.
+
+The first API topology breadth run exposed two real migration defects: API hash
+byte decoding still expected unprefixed hex, and two test fixtures associated
+facet index `1` with canonical global ordinal `0`. The decoder now requires and
+strips the exact `sha256:` prefix, fixture IDs match canonical topology, and the
+final breadth rerun is green. The only earlier zero-test invocation used an
+incorrect `--exact` filter; it is not counted as evidence and was replaced by
+the one-test focused run above.
+
+Final scans show no canonical `mesh.elements` / `mesh.boundary_faces`, no
+persistent `surface_faces: Vec<[u32; 3]>`, and no triangle-connectivity field on
+`SharedInterfaceFace`. Remaining fixed arrays are explicitly tetra-only API
+sampling and engine/native adapter structures reached only through
+`require_tet4_elements` / `require_tri3_boundary_faces` guards. The sole FMMT
+v1 serializer runs both guards before allocating or flattening fixed-width
+records; no FMMT v2 or OpenAPI redesign was added.
+
+A repository-wide workspace test build was not attempted after package gates:
+`/tmp` had only about 1.4 GiB free while the task-specific Cargo target already
+used about 1.7 GiB. Expanding the feature matrix risked `ENOSPC`; no other
+task's cache was deleted. The package gates above cover every changed Rust
+crate and the API compatibility surface.
+
+## Re-review compatibility remediation (2026-07-27)
+
+This separate remediation restores the published API projection without
+reintroducing a second internal topology truth:
+
+- `MeshPartResource.surface_faces` is again the public
+  `Vec<Vec<u32>>` compatibility field. The internal
+  `facet_global_ordinals` field is not part of the API schema or manifest JSON.
+- The sole manifest construction site that owns both the mesh and part resolves
+  each part global facet ID through `mesh.facets.global_ordinals`, then copies
+  the corresponding CSR `item_nodes`. Triangle and quad arity are therefore
+  preserved without storing duplicate face connectivity in the runner payload.
+- `FemConnectivityIR::require_tet4` and
+  `FemFacetConnectivityIR::require_tri3` validate the complete CSR first and
+  then iterate every ordinal exactly. They no longer inherit the lossy
+  `filter_map` / `zip` behavior of the convenience view iterators.
+- `MeshIR` and `FemMeshPayload` fixed-family adapters also require exactly one
+  element marker per cell and one boundary marker per facet.
+- All four FMMT v1 topology route families document HTTP `409`, and the
+  table-driven route regression proves mixed topology conflicts for domain,
+  shared-domain, object, and part topology. Malformed CSR is also rejected with
+  `409` rather than serialized as a shortened `200` payload.
+
+Focused RED evidence was obtained before implementation:
+
+- `fixed_family_extractors_reject_malformed_csr_instead_of_shortening_output`
+  received `Ok([])` after removal of `cells.global_ordinals`, proving the old
+  iterator silently shortened malformed CSR.
+- The quad manifest regression received `surface_faces: null` instead of
+  `[[0, 1, 2, 3]]`.
+- The OpenAPI schema regression found no `surface_faces` property.
+- The malformed-CSR FMMT v1 regression received HTTP `200` instead of `409`.
+
+All four focused regressions are green after the implementation. Additional
+coverage rejects a missing cell global ordinal, missing facet role, incomplete
+facet offsets, missing element markers, and missing boundary markers.
+
+The first full API run reported `684 passed, 7 failed`. Two failures were
+fixture defects exposed directly by the stricter marker contract: the canonical
+interface fixture had a facet but no marker, and the authoring
+missing-boundary-marker scenario had removed the facet geometry as well as the
+markers. The interface fixture now has marker-per-facet. The authoring fixture
+keeps its canonical facet, clears only boundary markers, resolves face index
+`0`, and still ends in the intended controlled `missing_boundary_markers`
+state. Both focused tests pass without weakening validation.
+
+The other five failures were stale expectations or fixtures, not parallel test
+interference and not product-code regressions:
+
+- `display_patch_accepts_partial_update` expected `vector_glyphs=true` while
+  the canonical default has been `false` since pre-slice commit `9bbddd40`.
+  Slice 2 did not change that default; the baseline test was already
+  inconsistent. The test now proves a partial patch preserves the actual false
+  default instead of masking it with an obsolete expectation.
+- `hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes` expected
+  `[0, 1, 0]` but obtained the all-node fallback `[0, 0.5, 0]` because its mesh
+  remained in transitional `latest_step.fem_mesh`. The fixture now publishes
+  the mesh through canonical `snapshot.fem_mesh`.
+- `hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_average`
+  expected `x=1/28` but obtained the flat all-node fallback `x=0.5` for the
+  same stale step-mesh placement. It now uses the canonical snapshot mesh and
+  exercises the intended element-volume weighting.
+- `object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_nodes`
+  expected `mx=3` but obtained the global six-node average `mx=11.5` because
+  mesh-part membership was present only on transitional step state. The test
+  promotes that fixture mesh to the canonical snapshot resource and again
+  verifies the explicit part node indices.
+- `fem_mesh_identity_changes_for_same_count_part_order_change` expected a
+  revision increase while the canonical v2 topology fingerprint intentionally
+  excludes non-topological `mesh_parts`; the existing runner contract test
+  already proves this. The session test now asserts stable mesh and build
+  revisions when only part ordering changes. Connectivity changes still have a
+  separate revision-bump regression.
+
+These five tests all failed individually before correction, so they were not
+classified as concurrency flakes. All five then passed individually. No
+product semantics were changed to satisfy them.
+
+Final remediation gates, using
+`CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target`,
+`CARGO_INCREMENTAL=0`, and `CARGO_PROFILE_DEV_DEBUG=0`:
+
+- `cargo test -p fullmag-ir --no-fail-fast`: `52` unit plus `148`
+  integration tests passed; doc tests passed.
+- `cargo test -p fullmag-runner --lib fem_mesh --no-fail-fast`: `10 passed`,
+  `598 filtered out`.
+- `cargo check -p fullmag-api`: passed.
+- `cargo test -p fullmag-api --no-fail-fast -- --test-threads=1`:
+  `691 passed, 0 failed`.
+- `cargo test -p fullmag-api --no-fail-fast`: `691 passed, 0 failed` with
+  default parallelism.
+- `git diff --check`: passed.
+
+At that remediation checkpoint the API/OpenAPI source annotations and Rust
+schema were updated, while generated OpenAPI artifacts and
+`apps/control-room` remained unchanged. The follow-up below closes that stale
+generated-contract gap. Final scans found no public `facet_global_ordinals` in
+API schemas/OpenAPI registration, confirmed `surface_faces` in
+`MeshPartResource`, and confirmed explicit `409` responses for all four FMMT
+v1 route families. This remediation does not add FMMT v2, change the C ABI, or
+modify UI behavior.
+
+## Final re-review: generated contract, projection complexity, and scoped errors (2026-07-27)
+
+The manifest projection previously resolved each part facet global ordinal by
+linearly scanning `mesh.facets.global_ordinals`. Across many parts this was
+quadratic in the number of referenced facets. `FacetGlobalOrdinalIndex` now
+builds one `global_ordinal -> facet index` map per mesh before manifest part
+projection. Each part projects `surface_faces` once through that shared map,
+and `surface_node_indices` is derived from the projected faces instead of
+performing a second lookup pass. The focused reordered-ID test proves the map
+returns the canonical CSR ordinal and fails closed for an absent ID.
+
+Scoped object/part topology extraction previously collapsed malformed source
+topology and a genuinely missing resource into the same `Option::None`, so the
+handlers returned HTTP `404` despite the published `409` contract.
+`subset_object_mesh`, `subset_part_mesh`, `subset_part_payload`, and their
+source-node collection now propagate `Result<Option<_>, String>` semantics:
+an absent object or part remains `404`, while missing global ordinals, invalid
+CSR ranges, out-of-range nodes, missing roles/types, or unmapped references
+become `409 Conflict`. Focused RED received `404` for a selected object whose
+cell global ordinals were removed; the final table-driven route test receives
+`409` for malformed object and part topology and `404` for absent object and
+part resources.
+
+Canonical generated API command, run twice:
+
+```text
+env PATH=/tmp/fullmag-corepack-shims.Ky64TQ:$PATH pnpm --dir apps/control-room generate:api
+```
+
+Because `pnpm` was not initially available as a shell command in this worktree,
+a temporary Corepack shim was created under `/tmp`, followed by an offline
+frozen-lockfile install. No dependency or lockfile source changed. Both
+generator runs succeeded. Their SHA-256 values were identical:
+
+- `openapi-v2.json`: `6ef80ea2637a296304c82cd31a4838f75a00d65758c1d69fbf635d2158518232`
+- `openapi-v2-types.ts`: `fa08860890c069f12d06ed9269927ec214e9ae708a370d6d75b836b32ed86d1e`
+- `openapi-v2-client.ts`: `76f8ce6163c912d27a005d039ebae9b098d708ef4ffead3d0ec6f6f598967641`
+- `openapi-v2-paths.ts`: `3ae0b2d1fdf77dba2feaedf61914e0d73ac8fab0643bd800610b627f10e54974`
+
+The generated diff is limited to four `409` responses in OpenAPI JSON and the
+matching four `409` response types for domain, shared-domain, object, and part
+FMMT v1 topology. The generated client and path wrapper are unchanged.
+
+Final backend gates used `CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target`,
+`CARGO_INCREMENTAL=0`, and `CARGO_PROFILE_DEV_DEBUG=0`:
+
+- `cargo fmt --package fullmag-api --check`: passed.
+- `cargo check -p fullmag-api`: passed.
+- API `topology_routes` filter: `4 passed`, covering all-route mixed rejection,
+  malformed CSR rejection, OpenAPI `409` declarations, and scoped
+  `404`/`409` distinction.
+- `facet_global_ordinal_index_resolves_reordered_ids`: passed.
+- `mesh_shared_domain_manifest_projects_quad_surface_faces_without_internal_ids`:
+  passed.
+
+Control Room/generated-contract gates, with `TMPDIR=/tmp` where Vitest needed a
+Linux-writable temporary root:
+
+- `pnpm --dir apps/control-room typecheck`: passed.
+- `pnpm --dir apps/control-room lint`: passed with zero warnings.
+- targeted generated API contracts: `2` files passed, `1` skipped; `6` tests
+  passed, `1` skipped.
+- full `pnpm --dir apps/control-room test`: `400` files passed, `1` skipped;
+  `3808` tests passed, `1` skipped.
+- `./scripts/ci-resource-first-gates.sh --strict`: passed.
+- `./scripts/ci/contract_guard.sh --strict`: passed.
+
+`pnpm --dir apps/control-room check:api-hygiene` reports one existing endpoint
+literal at `src/shared/domain/analysis/chartContracts.test.ts:19`. The exact
+`git diff --exit-code cf2d0b3c --` check for that file is empty, proving this
+slice did not introduce it; the unrelated Analysis test was not changed.
+
+The available runtime is Node `v22.8.0`, while the repository declares
+`>=24.18.0 <25`. The generator, typecheck, lint, tests, and strict static gates
+above are factual results under that limited environment. They are not a
+Control Room runtime or browser qualification claim. A full workspace
+`cargo fmt --check` also reports pre-existing formatting drift outside
+`fullmag-api`; the package-scoped formatter gate for every Rust file changed in
+this follow-up passes.
+
+## Runtime observations and concerns
+
+- Two earlier combined Python runs terminated with signal 139 around native Gmsh lifecycle transitions. Per repository instructions, five remedies were evaluated: explicit `gmsh.clear()`, centralized initialization ownership, model removal, subprocess isolation, and ABI/package rebuild. No speculative lifecycle change was made because the exact suspected periodic test then passed, the full 64-test `FieldStack` passed, and two complete 281-case combined runs passed. This is recorded as environment/native-library instability, not hidden as a green-only history.
+- The final runner rerun initially failed while writing Cargo incremental cache because `/tmp` was full. Only the recoverable 1.3 GB task-specific directory `/tmp/fullmag-mixed-topology-target/debug/incremental` was removed; the gate then passed with incremental compilation disabled.
+- Rust commands are contract/build evidence only. This slice intentionally does not claim native FEM runtime, device, mixed-element solver, or C ABI qualification.
+
+## Commit
+
+The implementation and this report are committed together. The authoritative hash is the Slice 2 commit reported by the agent after commit creation.

@@ -12,6 +12,15 @@ pub struct FieldCatalog {
     pub quantities: Vec<FieldDescriptor>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldMaterializationState {
+    Complete,
+    StaleComplete,
+    Pending,
+    Error,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldDescriptor {
     pub quantity_id: String,
@@ -25,6 +34,14 @@ pub struct FieldDescriptor {
     #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub available: bool,
+    pub source_step: u64,
+    pub source_revision: u64,
+    pub materialized_at_unix_ms: u64,
+    pub stale_by_steps: u64,
+    pub materialization_wall_time_ns: u64,
+    pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -40,6 +57,14 @@ pub struct FieldMeta {
     #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub stats: Option<FieldStats>,
+    pub source_step: u64,
+    pub source_revision: u64,
+    pub materialized_at_unix_ms: u64,
+    pub stale_by_steps: u64,
+    pub materialization_wall_time_ns: u64,
+    pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -80,9 +105,10 @@ pub struct FieldVectorQuery {
     /// Optional hard cap for vector samples returned by the binary payload.
     ///
     /// FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-    /// Sampled responses are valid for vector glyph placement only; surface
-    /// shader coloring requires either full-domain data or an explicit complete
-    /// node-index mapping for the target surface.
+    /// Sampled responses with a complete `node_indices` mapping and matching
+    /// mesh topology are valid for vector glyph placement and surface projection
+    /// modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
+    /// requires complete field coverage.
     pub max_samples: Option<u32>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.

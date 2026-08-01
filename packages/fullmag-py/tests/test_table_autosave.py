@@ -15,8 +15,75 @@ from fullmag.runtime.script_builder import export_builder_draft
 from fullmag.runtime.script_builder import rewrite_loaded_problem_script
 
 
-def test_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
-    study = fm.Relaxation(
+def test_stage_autosave_defaults_to_continuous_zarr() -> None:
+    policy = fm.StageAutosave(
+        table=fm.TableAutosave(every_steps=10, quantities=["step", "mx"]),
+        fields=[fm.FieldAutosave("m", every_steps=100)],
+    )
+
+    assert policy.to_ir() == {
+        "kind": "stage_autosave",
+        "target": "main",
+        "layout": "continuous",
+        "format": "zarr",
+        "table": {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "every_steps": 10,
+            "quantities": ["step", "mx"],
+        },
+        "fields": [
+            {"kind": "field_autosave", "quantity": "m", "every_steps": 100},
+        ],
+    }
+
+
+def test_field_autosave_requires_exactly_one_valid_cadence() -> None:
+    assert fm.FieldAutosave("m", every=1e-12).to_ir() == {
+        "kind": "field_autosave",
+        "quantity": "m",
+        "every_seconds": 1e-12,
+    }
+
+    with pytest.raises(ValueError, match="exactly one of every or every_steps"):
+        fm.FieldAutosave("m")
+    with pytest.raises(ValueError, match="exactly one of every or every_steps"):
+        fm.FieldAutosave("m", every=1e-12, every_steps=10)
+    with pytest.raises(ValueError, match="every_steps must be a positive integer"):
+        fm.FieldAutosave("m", every_steps=0)
+
+
+@pytest.mark.parametrize("target", ["", "../escape", "a/b", "white space"])
+def test_stage_autosave_rejects_unsafe_targets(target: str) -> None:
+    with pytest.raises(ValueError, match="target"):
+        fm.StageAutosave(
+            target=target,
+            table=fm.TableAutosave(every_steps=10),
+        )
+
+
+def test_stage_autosave_rejects_invalid_layout_format_and_empty_policy() -> None:
+    table = fm.TableAutosave(every_steps=10)
+    with pytest.raises(ValueError, match="layout must be one of"):
+        fm.StageAutosave(layout="joined", table=table)
+    with pytest.raises(ValueError, match="format must be one of"):
+        fm.StageAutosave(format="csv", table=table)
+    with pytest.raises(ValueError, match="at least one table or field"):
+        fm.StageAutosave()
+
+
+def test_stage_autosave_rejects_duplicate_fields_and_txt_fields() -> None:
+    first = fm.FieldAutosave("m", every_steps=10)
+    duplicate = fm.FieldAutosave("m", every_steps=20)
+    with pytest.raises(ValueError, match="duplicate field autosave quantity 'm'"):
+        fm.StageAutosave(fields=[first, duplicate])
+    with pytest.raises(ValueError, match="txt supports scalar tables only"):
+        fm.StageAutosave(format="txt", fields=[first])
+
+
+def test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
+    study = fm.TimeEvolution(
+        dynamics=fm.LLG(),
         outputs=[fm.SaveScalar("E_total", every=1e-12)],
         table_autosave=fm.TableAutosave(t_sampl=2e-12),
     )
@@ -26,6 +93,89 @@ def test_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
         "table_id": "default",
         "sample_period_s": 2e-12,
         "quantities": ["step", "t", "mx", "my", "mz", "e_total", "max_torque"],
+    }
+
+
+def test_table_autosave_accepts_auto_sinc_policy() -> None:
+    table = fm.TableAutosave(t_sampl="auto", quantities=["t", "mx"])
+
+    assert table.to_ir() == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        },
+        "quantities": ["t", "mx"],
+    }
+
+
+def test_relaxation_table_autosave_lowers_accepted_step_cadence() -> None:
+    table = fm.TableAutosave(
+        every_steps=10,
+        quantities=["step", "mx", "my", "mz", "e_total"],
+    )
+    assert table.to_ir() == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": ["step", "mx", "my", "mz", "e_total"],
+    }
+
+    study = fm.Relaxation(outputs=[]).table_autosave(
+        every_steps=10,
+        quantities=["step", "mx"],
+    )
+    assert study.to_ir()["sampling"]["table_autosave"] == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": ["step", "mx"],
+    }
+
+
+@pytest.mark.parametrize("every_steps", [0, -1, 1.5, True])
+def test_table_autosave_rejects_invalid_or_ambiguous_step_cadence(
+    every_steps: object,
+) -> None:
+    with pytest.raises(ValueError, match="every_steps must be a positive integer"):
+        fm.TableAutosave(every_steps=every_steps)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="exactly one of t_sampl or every_steps"):
+        fm.TableAutosave(t_sampl=1e-12, every_steps=10)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["AUTO", "fast", True, False, 0.0, -1e-12, float("nan"), float("inf")],
+)
+def test_sampling_period_rejects_noncanonical_or_invalid_values(invalid: object) -> None:
+    with pytest.raises(ValueError, match='positive finite number or "auto"'):
+        fm.TableAutosave(t_sampl=invalid)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match='positive finite number or "auto"'):
+        fm.SaveField("m", every=invalid)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match='positive finite number or "auto"'):
+        fm.SaveScalar("E_total", every=invalid)  # type: ignore[arg-type]
+
+
+def test_automatic_field_and_scalar_outputs_lower_to_policy_ir() -> None:
+    assert fm.SaveField("m", every="auto").to_ir() == {
+        "kind": "field_auto",
+        "name": "m",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        },
+    }
+    assert fm.SaveScalar("E_total", every="auto").to_ir() == {
+        "kind": "scalar_auto",
+        "name": "E_total",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        },
     }
 
 
@@ -110,6 +260,70 @@ def test_flat_tableautosave_round_trips_as_sampling_table_autosave() -> None:
     )
 
 
+def test_explicit_snapshot_replaces_flat_default_outputs() -> None:
+    script = textwrap.dedent(
+        """
+        import fullmag as fm
+
+        fm.name("snapshot_only")
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        body = fm.geometry(fm.Box(20e-9, 10e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+        fm.snapshot("mz", every=2e-12)
+        fm.run(10e-12)
+        """
+    )
+
+    with TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "snapshot_only.py"
+        script_path.write_text(script, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+
+    assert loaded.problem.to_ir()["study"]["sampling"]["outputs"] == [
+        {
+            "kind": "snapshot",
+            "field": "m",
+            "component": "z",
+            "every_seconds": 2e-12,
+        }
+    ]
+
+
+def test_explicit_frequency_response_output_replaces_flat_defaults() -> None:
+    script = textwrap.dedent(
+        """
+        import fullmag as fm
+
+        fm.name("response_only")
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        body = fm.geometry(fm.Box(20e-9, 10e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+        fm.save_response("susceptibility_tensor")
+        fm.frequency_response(frequencies_hz=[1e9], include_demag=False)
+        """
+    )
+
+    with TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "response_only.py"
+        script_path.write_text(script, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+
+    assert loaded.problem.to_ir()["study"]["sampling"]["outputs"] == [
+        {
+            "kind": "frequency_response_output",
+            "observable": "susceptibility_tensor",
+        }
+    ]
+
+
 def test_table_autosave_survives_builder_scene_document_round_trip() -> None:
     script = textwrap.dedent(
         """
@@ -188,3 +402,45 @@ def test_scene_document_table_autosave_override_rewrites_script() -> None:
 
     assert 'fm.tableautosave(4e-12, quantities=["step", "t", "e_total"])' in rewritten
     assert 'fm.tableautosave(2e-12, quantities=["step", "mx"])' not in rewritten
+
+
+def test_scene_document_auto_table_override_preserves_requested_policy() -> None:
+    script = textwrap.dedent(
+        """
+        import fullmag as fm
+
+        fm.name("table_scene_auto_override")
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        body = fm.geometry(fm.Box(20e-9, 10e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+        fm.tableautosave(2e-12, quantities=["step", "mx"])
+        fm.run(10e-12)
+        """
+    )
+
+    with TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "table_scene_auto_override.py"
+        script_path.write_text(script, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        draft = export_builder_draft(loaded)
+        scene = build_scene_document_from_builder(draft)
+        scene["study"]["table_autosave"] = {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "sample_period_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3,
+            },
+            "resolved_sample_period_s": 7.6923e-11,
+            "quantities": ["step", "mx"],
+        }
+        rewritten = rewrite_loaded_problem_script(
+            loaded,
+            overrides=builder_overrides_from_scene_document(scene),
+        )["rendered_source"]
+
+    assert 'fm.tableautosave("auto", quantities=["step", "mx"])' in rewritten
+    assert "7.6923e-11" not in rewritten

@@ -9,7 +9,10 @@ const FIELD_VECTOR_METADATA_FIXED_LEN: usize = 68;
 const FIELD_VECTOR_METADATA_VERSION: u16 = 1;
 const FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN: usize = 32;
 const FEM_MESH_TOPOLOGY_BINARY_VERSION: u8 = 1;
+const FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN: usize = 64;
+const FEM_MESH_TOPOLOGY_BINARY_V2_VERSION: u8 = 2;
 const FEM_MESH_TOPOLOGY_BINARY_KIND_F64_U32: u8 = 1;
+const MAX_FEM_MESH_TOPOLOGY_BINARY_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FieldVectorIndexing {
@@ -231,14 +234,21 @@ fn write_f64_values(out: &mut Vec<u8>, values: &[f64]) {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn serialize_fem_mesh_topology_binary_v1(
     mesh: &fullmag_runner::FemMeshPayload,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        format!("FMMT v1 requires tet4 topology; mixed topology is deferred to FMMT v2: {error}")
+    })?;
+    let boundary_faces = mesh.require_tri3_boundary_faces().map_err(|error| {
+        format!("FMMT v1 requires tri3 facets; mixed topology is deferred to FMMT v2: {error}")
+    })?;
     let mut out = Vec::with_capacity(
         FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN
             + mesh.nodes.len() * 3 * std::mem::size_of::<f64>()
-            + mesh.elements.len() * 4 * std::mem::size_of::<u32>()
-            + mesh.boundary_faces.len() * 3 * std::mem::size_of::<u32>()
+            + mesh.cell_count() * 4 * std::mem::size_of::<u32>()
+            + mesh.facet_count() * 3 * std::mem::size_of::<u32>()
             + mesh.element_markers.len() * std::mem::size_of::<u32>()
             + mesh.boundary_markers.len() * std::mem::size_of::<u32>(),
     );
@@ -248,8 +258,8 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
     out.push(FEM_MESH_TOPOLOGY_BINARY_KIND_F64_U32);
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(mesh.nodes.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(mesh.elements.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(mesh.boundary_faces.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.cell_count() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.facet_count() as u32).to_le_bytes());
     out.extend_from_slice(&(mesh.element_markers.len() as u32).to_le_bytes());
     out.extend_from_slice(&(mesh.boundary_markers.len() as u32).to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
@@ -259,13 +269,13 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
         out.extend_from_slice(&node[1].to_le_bytes());
         out.extend_from_slice(&node[2].to_le_bytes());
     }
-    for element in &mesh.elements {
+    for element in &elements {
         out.extend_from_slice(&element[0].to_le_bytes());
         out.extend_from_slice(&element[1].to_le_bytes());
         out.extend_from_slice(&element[2].to_le_bytes());
         out.extend_from_slice(&element[3].to_le_bytes());
     }
-    for face in &mesh.boundary_faces {
+    for face in &boundary_faces {
         out.extend_from_slice(&face[0].to_le_bytes());
         out.extend_from_slice(&face[1].to_le_bytes());
         out.extend_from_slice(&face[2].to_le_bytes());
@@ -277,15 +287,485 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
         out.extend_from_slice(&marker.to_le_bytes());
     }
 
-    out
+    Ok(out)
+}
+
+fn checked_u32_len(value: usize, label: &str) -> Result<u32, String> {
+    u32::try_from(value).map_err(|_| format!("FMMT v2 {label} exceeds u32 capacity"))
+}
+
+fn checked_fem_mesh_topology_binary_v2_len(
+    section_lengths: &[(usize, usize)],
+) -> Result<usize, String> {
+    let mut byte_len = FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN;
+    for (element_count, bytes_per_element) in section_lengths {
+        byte_len = byte_len
+            .checked_add(7)
+            .map(|value| value & !7)
+            .ok_or_else(|| "FMMT v2 byte length overflow".to_string())?;
+        byte_len = byte_len
+            .checked_add(
+                element_count
+                    .checked_mul(*bytes_per_element)
+                    .ok_or_else(|| "FMMT v2 byte length overflow".to_string())?,
+            )
+            .ok_or_else(|| "FMMT v2 byte length overflow".to_string())?;
+        if byte_len > MAX_FEM_MESH_TOPOLOGY_BINARY_BYTES {
+            return Err(format!(
+                "FMMT v2 topology exceeds {} byte limit: {byte_len}",
+                MAX_FEM_MESH_TOPOLOGY_BINARY_BYTES
+            ));
+        }
+    }
+    Ok(byte_len)
+}
+
+fn validate_connectivity<T: Copy>(
+    label: &str,
+    types: &[T],
+    offsets: &[u32],
+    nodes: &[u32],
+    node_count: usize,
+    arity: impl Fn(T) -> usize,
+) -> Result<(), String> {
+    let expected_offset_count = types
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| format!("FMMT v2 {label} count overflow"))?;
+    if offsets.len() != expected_offset_count {
+        return Err(format!(
+            "FMMT v2 {label} offsets length mismatch: expected {expected_offset_count}, got {}",
+            offsets.len()
+        ));
+    }
+    if offsets.first().copied() != Some(0) {
+        return Err(format!("FMMT v2 {label} offsets must start at zero"));
+    }
+
+    for (ordinal, entity_type) in types.iter().copied().enumerate() {
+        let start = offsets[ordinal] as usize;
+        let end = offsets[ordinal + 1] as usize;
+        if end < start || end > nodes.len() {
+            return Err(format!(
+                "FMMT v2 {label} {ordinal} has invalid CSR range {start}..{end}"
+            ));
+        }
+        let expected_arity = arity(entity_type);
+        if end - start != expected_arity {
+            return Err(format!(
+                "FMMT v2 {label} {ordinal} has arity {}, expected {expected_arity}",
+                end - start
+            ));
+        }
+        if let Some(node) = nodes[start..end]
+            .iter()
+            .copied()
+            .find(|node| *node as usize >= node_count)
+        {
+            return Err(format!(
+                "FMMT v2 {label} {ordinal} references out-of-range node {node}"
+            ));
+        }
+    }
+
+    if offsets.last().copied().map(|value| value as usize) != Some(nodes.len()) {
+        return Err(format!(
+            "FMMT v2 {label} offsets do not cover the connectivity array"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_markers(
+    label: &str,
+    marker_count: usize,
+    entity_count: usize,
+) -> Result<(), String> {
+    if marker_count != 0 && marker_count != entity_count {
+        return Err(format!(
+            "FMMT v2 {label} marker count mismatch: expected zero or {entity_count}, got {marker_count}"
+        ));
+    }
+    Ok(())
+}
+
+fn pad_to_eight(out: &mut Vec<u8>) {
+    out.resize(out.len().next_multiple_of(8), 0);
+}
+
+fn write_u32_values(out: &mut Vec<u8>, values: &[u32]) {
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn write_u64_values(out: &mut Vec<u8>, values: &[u64]) {
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn fem_cell_type_code(cell_type: fullmag_ir::FemCellTypeIR) -> u32 {
+    match cell_type {
+        fullmag_ir::FemCellTypeIR::Tet4 => 1,
+        fullmag_ir::FemCellTypeIR::Prism6 => 2,
+        fullmag_ir::FemCellTypeIR::Pyramid5 => 3,
+        fullmag_ir::FemCellTypeIR::Hex8 => 4,
+    }
+}
+
+fn fem_facet_type_code(facet_type: fullmag_ir::FemFacetTypeIR) -> u32 {
+    match facet_type {
+        fullmag_ir::FemFacetTypeIR::Tri3 => 1,
+        fullmag_ir::FemFacetTypeIR::Quad4 => 2,
+    }
+}
+
+fn fem_facet_role_code(role: fullmag_ir::FemFacetRoleIR) -> u32 {
+    match role {
+        fullmag_ir::FemFacetRoleIR::Exterior => 1,
+        fullmag_ir::FemFacetRoleIR::MaterialInterface => 2,
+        fullmag_ir::FemFacetRoleIR::PeriodicSeam => 3,
+    }
+}
+
+pub(crate) fn serialize_fem_mesh_topology_binary_v2(
+    mesh: &fullmag_runner::FemMeshPayload,
+) -> Result<Vec<u8>, String> {
+    let node_count = checked_u32_len(mesh.nodes.len(), "node count")?;
+    let cell_count = checked_u32_len(mesh.cells.types.len(), "cell count")?;
+    let facet_count = checked_u32_len(mesh.facets.types.len(), "facet count")?;
+    let cell_connectivity_count =
+        checked_u32_len(mesh.cells.nodes.len(), "cell connectivity count")?;
+    let facet_connectivity_count =
+        checked_u32_len(mesh.facets.nodes.len(), "facet connectivity count")?;
+    let cell_marker_count = checked_u32_len(mesh.element_markers.len(), "cell marker count")?;
+    let facet_marker_count = checked_u32_len(mesh.boundary_markers.len(), "facet marker count")?;
+    let cell_global_ordinal_count = checked_u32_len(
+        mesh.cells.global_ordinals.len(),
+        "cell global ordinal count",
+    )?;
+    let facet_global_ordinal_count = checked_u32_len(
+        mesh.facets.global_ordinals.len(),
+        "facet global ordinal count",
+    )?;
+
+    if mesh
+        .nodes
+        .iter()
+        .flatten()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return Err("FMMT v2 nodes contain non-finite coordinates".to_string());
+    }
+    validate_connectivity(
+        "cell",
+        &mesh.cells.types,
+        &mesh.cells.offsets,
+        &mesh.cells.nodes,
+        mesh.nodes.len(),
+        fullmag_ir::FemCellTypeIR::arity,
+    )?;
+    validate_connectivity(
+        "facet",
+        &mesh.facets.types,
+        &mesh.facets.offsets,
+        &mesh.facets.nodes,
+        mesh.nodes.len(),
+        fullmag_ir::FemFacetTypeIR::arity,
+    )?;
+    if !mesh.cells.global_ordinals.is_empty()
+        && mesh.cells.global_ordinals.len() != mesh.cells.types.len()
+    {
+        return Err(format!(
+            "FMMT v2 cell global ordinal count mismatch: expected zero or {}, got {}",
+            mesh.cells.types.len(),
+            mesh.cells.global_ordinals.len()
+        ));
+    }
+    if !mesh.cells.mesh_parts.is_empty() && mesh.cells.mesh_parts.len() != mesh.cells.types.len() {
+        return Err(format!(
+            "FMMT v2 cell mesh-part count mismatch: expected zero or {}, got {}",
+            mesh.cells.types.len(),
+            mesh.cells.mesh_parts.len()
+        ));
+    }
+    if mesh.facets.roles.len() != mesh.facets.types.len() {
+        return Err(format!(
+            "FMMT v2 facet role count mismatch: expected {}, got {}",
+            mesh.facets.types.len(),
+            mesh.facets.roles.len()
+        ));
+    }
+    if !mesh.facets.global_ordinals.is_empty()
+        && mesh.facets.global_ordinals.len() != mesh.facets.types.len()
+    {
+        return Err(format!(
+            "FMMT v2 facet global ordinal count mismatch: expected zero or {}, got {}",
+            mesh.facets.types.len(),
+            mesh.facets.global_ordinals.len()
+        ));
+    }
+    validate_optional_markers("cell", mesh.element_markers.len(), mesh.cells.types.len())?;
+    validate_optional_markers(
+        "facet",
+        mesh.boundary_markers.len(),
+        mesh.facets.types.len(),
+    )?;
+
+    let mut section_lengths = vec![
+        (mesh.nodes.len(), 3 * std::mem::size_of::<f64>()),
+        (mesh.cells.types.len(), std::mem::size_of::<u32>()),
+        (mesh.cells.offsets.len(), std::mem::size_of::<u32>()),
+        (mesh.cells.nodes.len(), std::mem::size_of::<u32>()),
+        (mesh.facets.types.len(), std::mem::size_of::<u32>()),
+        (mesh.facets.roles.len(), std::mem::size_of::<u32>()),
+        (mesh.facets.offsets.len(), std::mem::size_of::<u32>()),
+        (mesh.facets.nodes.len(), std::mem::size_of::<u32>()),
+        (mesh.element_markers.len(), std::mem::size_of::<u32>()),
+        (mesh.boundary_markers.len(), std::mem::size_of::<u32>()),
+    ];
+    if !mesh.cells.global_ordinals.is_empty() {
+        section_lengths.push((mesh.cells.global_ordinals.len(), std::mem::size_of::<u64>()));
+    }
+    if !mesh.facets.global_ordinals.is_empty() {
+        section_lengths.push((
+            mesh.facets.global_ordinals.len(),
+            std::mem::size_of::<u64>(),
+        ));
+    }
+    let expected_byte_len = checked_fem_mesh_topology_binary_v2_len(&section_lengths)?;
+
+    let mut out = Vec::with_capacity(expected_byte_len);
+    out.extend_from_slice(b"FMMT");
+    out.push(FEM_MESH_TOPOLOGY_BINARY_V2_VERSION);
+    out.push(FEM_MESH_TOPOLOGY_BINARY_KIND_F64_U32);
+    out.extend_from_slice(&0u16.to_le_bytes());
+    for count in [
+        node_count,
+        cell_count,
+        facet_count,
+        cell_connectivity_count,
+        facet_connectivity_count,
+        cell_marker_count,
+        facet_marker_count,
+    ] {
+        out.extend_from_slice(&count.to_le_bytes());
+    }
+    out.extend_from_slice(&(FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN as u32).to_le_bytes());
+    out.extend_from_slice(&cell_global_ordinal_count.to_le_bytes());
+    out.extend_from_slice(&facet_global_ordinal_count.to_le_bytes());
+    out.resize(FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN, 0);
+
+    pad_to_eight(&mut out);
+    for node in &mesh.nodes {
+        write_f64_values(&mut out, node);
+    }
+    pad_to_eight(&mut out);
+    write_u32_values(
+        &mut out,
+        &mesh
+            .cells
+            .types
+            .iter()
+            .copied()
+            .map(fem_cell_type_code)
+            .collect::<Vec<_>>(),
+    );
+    pad_to_eight(&mut out);
+    write_u32_values(&mut out, &mesh.cells.offsets);
+    pad_to_eight(&mut out);
+    write_u32_values(&mut out, &mesh.cells.nodes);
+    pad_to_eight(&mut out);
+    write_u32_values(
+        &mut out,
+        &mesh
+            .facets
+            .types
+            .iter()
+            .copied()
+            .map(fem_facet_type_code)
+            .collect::<Vec<_>>(),
+    );
+    pad_to_eight(&mut out);
+    write_u32_values(
+        &mut out,
+        &mesh
+            .facets
+            .roles
+            .iter()
+            .copied()
+            .map(fem_facet_role_code)
+            .collect::<Vec<_>>(),
+    );
+    pad_to_eight(&mut out);
+    write_u32_values(&mut out, &mesh.facets.offsets);
+    pad_to_eight(&mut out);
+    write_u32_values(&mut out, &mesh.facets.nodes);
+    pad_to_eight(&mut out);
+    write_u32_values(&mut out, &mesh.element_markers);
+    pad_to_eight(&mut out);
+    write_u32_values(&mut out, &mesh.boundary_markers);
+    if !mesh.cells.global_ordinals.is_empty() {
+        pad_to_eight(&mut out);
+        write_u64_values(&mut out, &mesh.cells.global_ordinals);
+    }
+    if !mesh.facets.global_ordinals.is_empty() {
+        pad_to_eight(&mut out);
+        write_u64_values(&mut out, &mesh.facets.global_ordinals);
+    }
+
+    debug_assert_eq!(out.len(), expected_byte_len);
+
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        checked_fem_mesh_topology_binary_v2_len, serialize_fem_mesh_topology_binary_v2,
         serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
         FieldVectorBinaryMetadata, FieldVectorIndexing,
     };
+
+    fn mixed_topology_mesh() -> fullmag_runner::FemMeshPayload {
+        fullmag_runner::FemMeshPayload {
+            mesh_name: "mixed".to_string(),
+            mesh_id: "mixed:1".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [0.0, 1.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR {
+                types: vec![
+                    fullmag_ir::FemCellTypeIR::Tet4,
+                    fullmag_ir::FemCellTypeIR::Prism6,
+                    fullmag_ir::FemCellTypeIR::Pyramid5,
+                    fullmag_ir::FemCellTypeIR::Hex8,
+                ],
+                offsets: vec![0, 4, 10, 15, 23],
+                nodes: vec![
+                    0, 1, 2, 4, 0, 1, 2, 4, 5, 6, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 6, 7,
+                ],
+                global_ordinals: vec![10, 11, 9_007_199_254_740_993, u64::MAX],
+                mesh_parts: Vec::new(),
+            },
+            element_markers: vec![1, 2, 3, 4],
+            facets: fullmag_ir::FemFacetConnectivityIR {
+                types: vec![
+                    fullmag_ir::FemFacetTypeIR::Tri3,
+                    fullmag_ir::FemFacetTypeIR::Quad4,
+                    fullmag_ir::FemFacetTypeIR::Tri3,
+                ],
+                roles: vec![
+                    fullmag_ir::FemFacetRoleIR::Exterior,
+                    fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                    fullmag_ir::FemFacetRoleIR::PeriodicSeam,
+                ],
+                offsets: vec![0, 3, 7, 10],
+                nodes: vec![0, 1, 2, 0, 1, 5, 4, 4, 5, 6],
+                global_ordinals: vec![20, 9_007_199_254_740_995, u64::MAX],
+            },
+            boundary_markers: vec![5, 6, 7],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: None,
+        }
+    }
+
+    #[test]
+    fn fem_mesh_topology_v2_encodes_mixed_csr_sections_and_codes() {
+        let binary = serialize_fem_mesh_topology_binary_v2(&mixed_topology_mesh())
+            .expect("mixed FMMT v2 payload should serialize");
+
+        assert_eq!(&binary[0..4], b"FMMT");
+        assert_eq!(binary[4], 2);
+        assert_eq!(binary[5], 1);
+        assert_eq!(u32::from_le_bytes(binary[8..12].try_into().unwrap()), 8);
+        assert_eq!(u32::from_le_bytes(binary[12..16].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(binary[16..20].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(binary[20..24].try_into().unwrap()), 23);
+        assert_eq!(u32::from_le_bytes(binary[24..28].try_into().unwrap()), 10);
+        assert_eq!(u32::from_le_bytes(binary[28..32].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(binary[32..36].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(binary[36..40].try_into().unwrap()), 64);
+        assert_eq!(u32::from_le_bytes(binary[40..44].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(binary[44..48].try_into().unwrap()), 3);
+        assert!(binary[48..64].iter().all(|value| *value == 0));
+
+        assert_eq!(
+            &binary[256..272],
+            &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]
+        );
+        assert_eq!(
+            &binary[272..292],
+            &[0, 0, 0, 0, 4, 0, 0, 0, 10, 0, 0, 0, 15, 0, 0, 0, 23, 0, 0, 0]
+        );
+        assert_eq!(&binary[392..404], &[1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(&binary[408..420], &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
+        assert_eq!(u64::from_le_bytes(binary[512..520].try_into().unwrap()), 10,);
+        assert_eq!(
+            u64::from_le_bytes(binary[528..536].try_into().unwrap()),
+            9_007_199_254_740_993,
+        );
+        assert_eq!(
+            u64::from_le_bytes(binary[536..544].try_into().unwrap()),
+            u64::MAX,
+        );
+        assert_eq!(
+            u64::from_le_bytes(binary[552..560].try_into().unwrap()),
+            9_007_199_254_740_995,
+        );
+        assert_eq!(
+            u64::from_le_bytes(binary[560..568].try_into().unwrap()),
+            u64::MAX,
+        );
+        assert_eq!(binary.len(), 568);
+    }
+
+    #[test]
+    fn fem_mesh_topology_v2_rejects_malformed_csr_and_metadata() {
+        let mut bad_offsets = mixed_topology_mesh();
+        bad_offsets.cells.offsets[2] = 3;
+        let error = serialize_fem_mesh_topology_binary_v2(&bad_offsets)
+            .expect_err("non-monotonic CSR offsets must be rejected");
+        assert!(error.contains("invalid CSR range"));
+
+        let mut missing_roles = mixed_topology_mesh();
+        missing_roles.facets.roles.pop();
+        let error = serialize_fem_mesh_topology_binary_v2(&missing_roles)
+            .expect_err("missing facet roles must be rejected");
+        assert!(error.contains("facet role count mismatch"));
+
+        let mut legacy_ordinals = mixed_topology_mesh();
+        legacy_ordinals.cells.global_ordinals.clear();
+        legacy_ordinals.facets.global_ordinals.clear();
+        let binary = serialize_fem_mesh_topology_binary_v2(&legacy_ordinals)
+            .expect("legacy empty global ordinal vectors remain legal");
+        assert_eq!(u32::from_le_bytes(binary[40..44].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(binary[44..48].try_into().unwrap()), 0);
+        assert_eq!(binary.len(), 508);
+    }
+
+    #[test]
+    fn fem_mesh_topology_v2_rejects_oversized_payload_before_allocation() {
+        let error = checked_fem_mesh_topology_binary_v2_len(&[(usize::MAX, 24)])
+            .expect_err("oversized topology must reject before allocation");
+
+        assert!(error.contains("byte length overflow") || error.contains("byte limit"));
+    }
 
     #[test]
     fn field_vector_serializer_rejects_zero_component_count() {

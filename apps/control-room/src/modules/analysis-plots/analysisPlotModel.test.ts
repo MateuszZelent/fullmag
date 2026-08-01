@@ -1,435 +1,234 @@
 import { describe, expect, it } from "vitest";
 
-import { __analysisTableRowsAdapterTestUtils } from "./tableRowsAdapter";
+import {
+  chartTableWindowFromBinary,
+  chartTableWindowValue,
+  mergeChartTableWindows,
+  type ChartTableWindow,
+} from "@/shared/domain/analysis/chartDataPlan";
+import type { AxisColumnDescriptor } from "@/shared/domain/analysis/TableColumnList";
+import { __analysisTableRowsAdapterTestUtils as utils } from "./tableRowsAdapter";
+import {
+  buildAnalysisPlotsTableQuery,
+  normalizeTableRangeModeForXAxis,
+} from "./analysisPlotsModel";
+
+const step: AxisColumnDescriptor = { column_id: "step", label: "step", unit: "1" };
+
+function windowOf(cursorStart: number, cursorEnd: number, rows: number[][], options: {
+  resyncRequired?: boolean;
+  revision?: number;
+  totalRows?: number;
+} = {}): ChartTableWindow {
+  return chartTableWindowFromBinary({
+    columns: [step],
+    decoded: {
+      columnCount: 1,
+      cursorEnd,
+      cursorStart,
+      resyncRequired: options.resyncRequired ?? false,
+      revision: options.revision ?? cursorEnd,
+      rowCount: rows.length,
+      schemaRevision: 1,
+      totalRows: options.totalRows ?? cursorEnd,
+      values: Float64Array.from(rows.flat()),
+    },
+    tableId: "default",
+  });
+}
+
+function rowsOf(window: ChartTableWindow | null): number[][] | null {
+  return window
+    ? Array.from({ length: window.rowCount }, (_, row) =>
+        Array.from({ length: window.columnCount }, (_, column) =>
+          chartTableWindowValue(window, row, column) as number,
+        ),
+      )
+    : null;
+}
 
 describe("analysis plot scalar selection", () => {
-  it("uses one stable scalar column query for resource subscriptions", () => {
-    expect(__analysisTableRowsAdapterTestUtils.analysisScalarColumns).toEqual([
-      "step",
-      "t",
-      "mx",
-      "my",
-      "mz",
-      "e_total",
-      "max_torque",
-      "pseudo_time_s",
-      "active_runtime_s",
-    ]);
-    expect(Object.isFrozen(__analysisTableRowsAdapterTestUtils.analysisScalarColumns)).toBe(
-      true,
-    );
+  it("maps range presets to bounded resource queries", () => {
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "tailRows", rows: 100 },
+      targetPoints: 800,
+      xAxisId: "step",
+    // The API's minimum target_points is 160; because the window has only
+    // 100 rows it still returns every selected row without decimation.
+    })).toMatchObject({ includeTail: true, limit: 100, targetPoints: 160 });
+    // A tail-window is a data-selection contract, not a display-budget hint.
+    // Asking for the last 160 points must therefore return those 160 rows
+    // without server-side decimation to an unrelated target budget.
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "tailRows", rows: 160 },
+      targetPoints: 1600,
+      xAxisId: "step",
+    })).toMatchObject({ includeTail: true, limit: 160, targetPoints: 160 });
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      latestX: 20e-9,
+      range: null,
+      rangeMode: { mode: "tailTime", durationS: 1e-9 },
+      targetPoints: 400,
+      xAxisId: "t",
+    })).toMatchObject({ fromT: 19e-9, toT: 20e-9, targetPoints: 400 });
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "fullDecimated" },
+      targetPoints: 3200,
+      xAxisId: "step",
+    })).toMatchObject({ includeTail: false, limit: 3200, targetPoints: 3200 });
   });
 
-  it("merges cursor deltas into the bounded table window", () => {
-    expect(
-      __analysisTableRowsAdapterTestUtils.mergeTableRows(
-        {
-          columns: [
-            {
-              column_id: "step",
-              component: null,
-              dimension: "count",
-              label: "step",
-              quantity_id: "step",
-              reduction: null,
-              unit: "1",
-              value_type: "integer",
-            },
-          ],
-          cursor_end: 1,
-          cursor_start: 1,
-          resync_required: false,
-          returned_rows: 1,
-          revision: 1,
-          rows: [[1]],
-          schema_revision: 1,
-          table_id: "default",
-          total_rows: 1,
-        },
-        {
-          columns: [
-            {
-              column_id: "step",
-              component: null,
-              dimension: "count",
-              label: "step",
-              quantity_id: "step",
-              reduction: null,
-              unit: "1",
-              value_type: "integer",
-            },
-          ],
-          cursor_end: 2,
-          cursor_start: 2,
-          resync_required: false,
-          returned_rows: 1,
-          revision: 2,
-          rows: [[2]],
-          schema_revision: 1,
-          table_id: "default",
-          total_rows: 2,
-        },
-      ).rows,
-    ).toEqual([[1], [2]]);
-  });
-
-  it("deduplicates live scalar samples that are already present in a fetched table window", () => {
-    const table = {
-      columns: [
-        {
-          column_id: "step",
-          component: null,
-          dimension: "count",
-          label: "step",
-          quantity_id: "step",
-          reduction: null,
-          unit: "1",
-          value_type: "integer",
-        },
-      ],
-      cursor_end: 2,
-      cursor_start: 1,
-      resync_required: false,
-      returned_rows: 2,
-      revision: 2,
-      rows: [[1], [2]],
-      schema_revision: 1,
-      table_id: "default",
-      total_rows: 2,
-    };
-
-    expect(
-      __analysisTableRowsAdapterTestUtils.mergeTableRows(table, {
-        ...table,
-        cursor_start: 2,
-        returned_rows: 1,
-        rows: [[2]],
-      }).rows,
-    ).toEqual([[1], [2]]);
-  });
-
-  it("adapts live scalar sample websocket payloads into one-row table resources", () => {
-    const resource =
-      __analysisTableRowsAdapterTestUtils.tableRowsResourceFromScalarSample({
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-          {
-            column_id: "t",
-            component: null,
-            dimension: "time",
-            label: "t",
-            quantity_id: "t",
-            reduction: null,
-            unit: "s",
-            value_type: "float",
-          },
-          {
-            column_id: "max_torque",
-            component: null,
-            dimension: "effective_field",
-            label: "max torque",
-            quantity_id: "max_torque_Apm",
-            reduction: "max",
-            unit: "A/m",
-            value_type: "float",
-          },
-          {
-            column_id: "pseudo_time_s",
-            component: null,
-            dimension: "time",
-            label: "pseudo time",
-            quantity_id: "pseudo_time_s",
-            reduction: null,
-            unit: "s",
-            value_type: "float",
-          },
-          {
-            column_id: "active_runtime_s",
-            component: null,
-            dimension: "time",
-            label: "active runtime",
-            quantity_id: "active_runtime_s",
-            reduction: null,
-            unit: "s",
-            value_type: "float",
-          },
-        ],
-        queryColumns: [
-          "step",
-          "t",
-          "max_torque",
-          "pseudo_time_s",
-          "active_runtime_s",
-        ],
-        sample: {
-          revision: 9,
-          row: {
-            active_runtime_s: 0.15,
-            max_torque_Apm: 0.4,
-            pseudo_time_s: 0.5,
-            step: 7,
-            time: 0.2,
-          },
-        },
-        tableId: "default",
-      });
-
-    expect(resource?.cursor_end).toBe(9);
-    expect(resource?.rows).toEqual([[7, 0.2, 0.4, 0.5, 0.15]]);
-  });
-
-  it("adapts decoded binary table rows into the chart table resource shape", () => {
-    const resource =
-      __analysisTableRowsAdapterTestUtils.tableRowsResourceFromBinary({
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-          {
-            column_id: "mx",
-            component: "x",
-            dimension: "magnetization",
-            label: "mx",
-            quantity_id: "mx",
-            reduction: "mean",
-            unit: "1",
-            value_type: "float",
-          },
-        ],
-        decoded: {
-          columnCount: 2,
-          cursorEnd: 2,
-          cursorStart: 1,
-          resyncRequired: false,
-          revision: 2,
-          rowCount: 2,
-          schemaRevision: 1,
-          totalRows: 2,
-          values: new Float64Array([1, 0.1, 2, 0.2]),
-        },
-        queryColumns: ["step", "mx"],
-        tableId: "default",
-      });
-
-    expect(resource).toMatchObject({
-      cursor_end: 2,
-      cursor_start: 1,
-      returned_rows: 2,
-      revision: 2,
-      rows: [
-        [1, 0.1],
-        [2, 0.2],
-      ],
+  it("does not turn a non-time X axis into an invalid simulation-time request", () => {
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: 42,
+      latestX: 42,
+      range: null,
+      rangeMode: { mode: "tailTime", durationS: 1e-9 },
+      targetPoints: 400,
+      xAxisId: "step",
+    })).toMatchObject({
+      cursor: 42,
+      includeTail: true,
+      targetPoints: 400,
     });
+    const query = buildAnalysisPlotsTableQuery({
+      cursor: 42,
+      latestX: 42,
+      range: null,
+      rangeMode: { mode: "tailTime", durationS: 1e-9 },
+      targetPoints: 400,
+      xAxisId: "step",
+    });
+    expect(query.fromT).toBeUndefined();
+    expect(query.toT).toBeUndefined();
   });
 
-  it("keeps the binary fetch cursor stable when appending websocket samples", () => {
-    const current = {
-      cursor: 10,
-      visibleTable: {
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-        ],
-        cursor_end: 10,
-        cursor_start: 1,
-        resync_required: false,
-        returned_rows: 10,
-        revision: 10,
-        rows: [[10]],
-        schema_revision: 1,
-        table_id: "default",
-        total_rows: 10,
-      },
-    };
+  it("repairs a persisted time-window mode when its X axis is not time", () => {
+    expect(
+      normalizeTableRangeModeForXAxis(
+        { mode: "tailTime", durationS: 1e-9 },
+        "step",
+      ),
+    ).toEqual({ mode: "follow" });
+    expect(
+      normalizeTableRangeModeForXAxis(
+        { mode: "tailTime", durationS: 1e-9 },
+        "t",
+      ),
+    ).toEqual({ mode: "tailTime", durationS: 1e-9 });
+  });
 
-    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
-      current,
-      {
-        advanceCursor: false,
-        resource: {
-          ...current.visibleTable,
-          cursor_end: 11,
-          cursor_start: 11,
-          returned_rows: 1,
-          revision: 11,
-          rows: [[11]],
-          total_rows: 11,
-        },
-        type: "append",
-      },
+  it("requests the quantities published by the table schema", () => {
+    const customColumns = ["step", "mx", "e_ex", "e_demag", "e_total", "max_torque_T"];
+    expect(buildAnalysisPlotsTableQuery({
+      columns: customColumns,
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "follow" },
+      targetPoints: 1600,
+      xAxisId: "step",
+    }).columns).toEqual(customColumns);
+  });
+  it("uses one stable scalar column query", () => {
+    expect(utils.analysisScalarColumns).toEqual([
+      "step", "t", "mx", "my", "mz", "e_total", "max_torque_Apm",
+      "pseudo_time_s", "active_runtime_s",
+    ]);
+    expect(Object.isFrozen(utils.analysisScalarColumns)).toBe(true);
+  });
+
+  it("merges and deduplicates cursor deltas in the columnar window", () => {
+    expect(rowsOf(mergeChartTableWindows(windowOf(1, 1, [[1]]), windowOf(2, 2, [[2]])))).toEqual([[1], [2]]);
+    const current = windowOf(1, 2, [[1], [2]]);
+    expect(mergeChartTableWindows(current, windowOf(2, 2, [[2]]))).toBe(current);
+  });
+
+  it("adapts a live scalar sample into a columnar window", () => {
+    const resource = utils.tableRowsResourceFromScalarSample({
+      columns: [
+        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
+        { column_id: "t", component: null, dimension: "time", label: "t", quantity_id: "t", reduction: null, unit: "s", value_type: "float" },
+        { column_id: "max_torque", component: null, dimension: "effective_field", label: "max torque", quantity_id: "max_torque_Apm", reduction: "max", unit: "A/m", value_type: "float" },
+      ],
+      queryColumns: ["step", "t", "max_torque"],
+      sample: { revision: 9, row: { max_torque_Apm: 0.4, step: 7, time: 0.2 } },
+      tableId: "default",
+    });
+    expect(resource?.cursorEnd).toBe(9);
+    expect(rowsOf(resource)).toEqual([[7, 0.2, 0.4]]);
+  });
+
+  it("adopts decoded binary values without row-major expansion", () => {
+    const values = new Float64Array([1, 0.1, 2, 0.2]);
+    const resource = utils.tableRowsResourceFromBinary({
+      columns: [
+        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
+        { column_id: "mx", component: "x", dimension: "magnetization", label: "mx", quantity_id: "mx", reduction: "mean", unit: "1", value_type: "float" },
+      ],
+      decoded: { columnCount: 2, cursorEnd: 2, cursorStart: 1, resyncRequired: false, revision: 2, rowCount: 2, schemaRevision: 1, totalRows: 2, values },
+      queryColumns: ["step", "mx"],
+      tableId: "default",
+    });
+    expect(resource?.values).toBe(values);
+    expect(rowsOf(resource)).toEqual([[1, 0.1], [2, 0.2]]);
+  });
+
+  it("describes runtime timing columns returned before catalog publication", () => {
+    const values = new Float64Array([1, 0.2, 0.1]);
+    const resource = utils.tableRowsResourceFromBinary({
+      columns: [
+        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
+      ],
+      decoded: { columnCount: 3, cursorEnd: 1, cursorStart: 1, resyncRequired: false, revision: 1, rowCount: 1, schemaRevision: 1, totalRows: 1, values },
+      queryColumns: ["step", "pseudo_time_s", "active_runtime_s"],
+      tableId: "default",
+    });
+    expect(resource?.columns).toEqual([
+      expect.objectContaining({ column_id: "step", unit: "1" }),
+      { column_id: "pseudo_time_s", label: "pseudo time", unit: "s" },
+      { column_id: "active_runtime_s", label: "active runtime", unit: "s" },
+    ]);
+    expect(resource?.values).toBe(values);
+  });
+
+  it("keeps the fetch cursor stable while appending a live sample", () => {
+    const next = utils.tableResourceReducer(
+      { cursor: 10, visibleTable: windowOf(10, 10, [[10]]) },
+      { advanceCursor: false, resource: windowOf(11, 11, [[11]]), type: "append" },
     );
-
     expect(next.cursor).toBe(10);
-    expect(next.visibleTable?.cursor_end).toBe(11);
-    expect(next.visibleTable?.rows).toEqual([[10], [11]]);
+    expect(next.visibleTable?.cursorEnd).toBe(11);
+    expect(rowsOf(next.visibleTable)).toEqual([[10], [11]]);
   });
 
-  it("replaces the visible table window for range fetches", () => {
-    const current = {
-      cursor: 1_000,
-      visibleTable: {
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-        ],
-        cursor_end: 1_000,
-        cursor_start: 996,
-        resync_required: false,
-        returned_rows: 5,
-        revision: 1_000,
-        rows: [[996], [997], [998], [999], [1_000]],
-        schema_revision: 1,
-        table_id: "default",
-        total_rows: 1_000,
-      },
-    };
-
-    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
-      current,
-      {
-        advanceCursor: false,
-        mode: "replace",
-        resource: {
-          ...current.visibleTable,
-          cursor_end: 250,
-          cursor_start: 200,
-          returned_rows: 2,
-          revision: 1_000,
-          rows: [[200], [250]],
-        },
-        type: "append",
-      },
+  it("replaces the window for range fetches without advancing the tail cursor", () => {
+    const next = utils.tableResourceReducer(
+      { cursor: 1_000, visibleTable: windowOf(996, 1_000, [[996], [997], [998], [999], [1_000]]) },
+      { advanceCursor: false, mode: "replace", resource: windowOf(200, 250, [[200], [250]], { revision: 1_000, totalRows: 1_000 }), type: "append" },
     );
-
     expect(next.cursor).toBe(1_000);
-    expect(next.visibleTable?.rows).toEqual([[200], [250]]);
+    expect(rowsOf(next.visibleTable)).toEqual([[200], [250]]);
   });
 
-  it("keeps the visible table when a stale tail cursor returns an empty resync", () => {
-    const current = {
-      cursor: 473,
-      visibleTable: {
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-        ],
-        cursor_end: 473,
-        cursor_start: 469,
-        resync_required: false,
-        returned_rows: 5,
-        revision: 473,
-        rows: [[469], [470], [471], [472], [473]],
-        schema_revision: 1,
-        table_id: "default",
-        total_rows: 473,
-      },
-    };
-
-    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
-      current,
-      {
-        resource: {
-          ...current.visibleTable,
-          cursor_end: 473,
-          cursor_start: 474,
-          resync_required: true,
-          returned_rows: 0,
-          rows: [],
-        },
-        type: "append",
-      },
-    );
-
-    expect(next.cursor).toBe(473);
-    expect(next.visibleTable).toBe(current.visibleTable);
-  });
-
-  it("keeps the visible table when a visible-range fetch returns no rows", () => {
-    const current = {
-      cursor: 473,
-      visibleTable: {
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-        ],
-        cursor_end: 473,
-        cursor_start: 469,
-        resync_required: false,
-        returned_rows: 5,
-        revision: 473,
-        rows: [[469], [470], [471], [472], [473]],
-        schema_revision: 1,
-        table_id: "default",
-        total_rows: 473,
-      },
-    };
-
-    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
-      current,
-      {
-        advanceCursor: false,
-        mode: "replace",
-        resource: {
-          ...current.visibleTable,
-          cursor_end: 473,
-          cursor_start: 0,
-          returned_rows: 0,
-          rows: [],
-        },
-        type: "append",
-      },
-    );
-
-    expect(next.cursor).toBe(473);
-    expect(next.visibleTable).toBe(current.visibleTable);
+  it("preserves visible rows for empty resync and empty range responses", () => {
+    const visibleTable = windowOf(469, 473, [[469], [470], [471], [472], [473]]);
+    const current = { cursor: 473, visibleTable };
+    expect(utils.tableResourceReducer(current, {
+      resource: windowOf(474, 473, [], { resyncRequired: true }),
+      type: "append",
+    })).toBe(current);
+    expect(utils.tableResourceReducer(current, {
+      advanceCursor: false,
+      mode: "replace",
+      resource: windowOf(0, 473, []),
+      type: "append",
+    })).toBe(current);
   });
 });

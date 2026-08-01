@@ -29,7 +29,8 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   formatCount,
   formatValue,
@@ -86,6 +87,24 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     );
   }
 
+  if (isMixedTopologyUnsupportedError(crossSection.error)) {
+    return (
+      <InspectorGroup title="Cross-Section Unsupported" badge="mixed topology">
+        <FeedbackBanner
+          kind="warning"
+          message="Mixed topology cross-sections are not supported yet. Meshes with prism and pyramid cells require a generic convex slicer, and Fullmag will not reinterpret them as tetrahedra."
+        />
+        <MeshResourceFields
+          fields={[
+            { label: "Current support", value: "tet4-only" },
+            { label: "Requested mesh", value: "mixed prism / pyramid / tet" },
+            { label: "Fallback", value: "disabled" },
+          ]}
+        />
+      </InspectorGroup>
+    );
+  }
+
   if (crossSection.status === "error" || quality.status === "error") {
     return (
       <MeshResourceEmpty
@@ -137,8 +156,6 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
       },
       "inspector",
     );
-    kernel.layout.setActiveViewportMainModule("cross-section-image");
-    kernel.layout.setFocusedSlot("viewport-main");
     kernel.layout.setPanelVisible("right", true);
   };
 
@@ -160,7 +177,7 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
           }
         />
       ) : (
-        <InspectorSection title="Cut Plane">
+        <InspectorGroup title="Cut Plane">
           <MeshResourceFields
             fields={[
               { label: "Plane", value: query.plane.toUpperCase() },
@@ -179,10 +196,10 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
               { label: "Wireframe", value: query.includeWireframe ? "shown" : "hidden" },
             ]}
           />
-        </InspectorSection>
+        </InspectorGroup>
       )}
 
-      <InspectorSection title="Cross-Section Statistics">
+      <InspectorGroup title="Cross-Section Statistics">
         <MeshResourceFields
           fields={[
             {
@@ -221,9 +238,9 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
             totalCount={statistics.polygonCount}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Selected Element">
+      <InspectorGroup title="Selected Element">
         {selectedElement ? (
           <MeshResourceFields
             fields={[
@@ -235,8 +252,17 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         ) : (
           <MeshResourceEmpty label="Hover or click a cross-section polygon to inspect its parent tet." />
         )}
-      </InspectorSection>
+      </InspectorGroup>
     </div>
+  );
+}
+
+function isMixedTopologyUnsupportedError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "mixed_topology_not_supported"
   );
 }
 

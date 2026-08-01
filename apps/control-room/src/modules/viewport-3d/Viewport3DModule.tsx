@@ -31,12 +31,14 @@ import {
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
+import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   selectionSnapshotEquals,
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   resolveSemanticTargetForMeshPart,
   type SemanticRenderTargetCatalog,
@@ -93,12 +95,24 @@ import {
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
-import type { RegionOverlayMode } from "./regionOverlayMode";
+import {
+  DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
+  regionDiagnosticOverlayMode,
+  type RegionDiagnosticOverlaySource,
+  type RegionDiagnosticOverlayState,
+} from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
 import { type Viewport3DPartSelection } from "./viewport3dDomainAdapter";
+import {
+  currentViewport3DMeshCellAuditTopology,
+  listViewport3DMeshCellSelections,
+  resolveViewport3DMeshCellSelection,
+  type Viewport3DMeshCellSelectionIdentity,
+  type Viewport3DMeshCellSelectionRequest,
+} from "./viewport3dMeshCellSelection";
 import type {
   HysteresisReplayGlyphModel,
   HysteresisStepViewportTarget,
@@ -145,6 +159,7 @@ import {
 } from "./viewport3dRefreshCountdown";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+  buildViewport3DRenderedScalarRangeAliases,
   viewport3dStore,
   useViewport3DCommandState,
 } from "./viewport3dStore";
@@ -168,6 +183,16 @@ type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type Viewport3DCanvasCreatedState = Parameters<
   NonNullable<ComponentProps<typeof Viewport3DCanvas>["onCreated"]>
 >[0];
+
+declare global {
+  interface Window {
+    __FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__?: () =>
+      Viewport3DMeshCellSelectionIdentity[];
+    __FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__?: (
+      request: Viewport3DMeshCellSelectionRequest,
+    ) => Viewport3DMeshCellSelectionIdentity;
+  }
+}
 
 export function buildViewport3DVisualizationDebugFrameCommit({
   contextLost,
@@ -304,6 +329,8 @@ interface Viewport3DColorbarLegend {
   paletteGradient: string;
   quantityId?: string;
   range?: MeshQualityRange | null;
+  scopeId?: string | null;
+  scopeKind?: Viewport3DColorbarPlan["scopeKind"];
   sourceUnit?: string | null;
 }
 
@@ -315,6 +342,7 @@ interface Viewport3DScopedColorbarLegend {
 interface Viewport3DColorbarTargetPart {
   id: string;
   label: string;
+  objectScopeId?: string | null;
   role?: string | null;
   settings: VisualizationTargetSettings;
   targetKind: Viewport3DTargetRenderPlan["targetKind"];
@@ -470,6 +498,8 @@ function resolveViewport3DColorbarLegendFromPlan({
       paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
       quantityId: plan.quantityId,
       range: plan.range,
+      scopeId: plan.scopeId,
+      scopeKind: plan.scopeKind,
       sourceUnit: unit || null,
     },
   };
@@ -655,7 +685,10 @@ export function buildViewport3DColorbarTargetPlans({
 function isViewport3DColorbarTargetPartEligible(
   part: Viewport3DColorbarTargetPart,
 ): boolean {
-  return !isVisualizationAirboxIdentity(part) && part.role !== "interface";
+  return (
+    part.role !== "interface" &&
+    (part.targetKind === "airbox" || !isVisualizationAirboxIdentity(part))
+  );
 }
 
 export function resolveViewport3DColorbarLegendsFromPlans({
@@ -665,9 +698,41 @@ export function resolveViewport3DColorbarLegendsFromPlans({
   labelByTargetId: ReadonlyMap<string, string>;
   plans: readonly Viewport3DColorbarPlan[];
 }): Viewport3DScopedColorbarLegend[] {
-  return plans.map((plan) =>
+  const sharedScalePlans = new Map<string, Viewport3DColorbarPlan>();
+  for (const plan of plans) {
+    const scaleKey = viewport3DColorbarEffectiveScaleKey(plan);
+    const existing = sharedScalePlans.get(scaleKey);
+    if (!existing) {
+      sharedScalePlans.set(scaleKey, plan);
+      continue;
+    }
+    sharedScalePlans.set(scaleKey, {
+      ...existing,
+      renderKey: `viewport-3d-colorbar:shared:${scaleKey}`,
+      targetIds: Array.from(
+        new Set([...existing.targetIds, ...plan.targetIds]),
+      ).toSorted(),
+    });
+  }
+
+  return Array.from(sharedScalePlans.values(), (plan) =>
     resolveViewport3DColorbarLegendFromPlan({ labelByTargetId, plan }),
   );
+}
+
+function viewport3DColorbarEffectiveScaleKey(
+  plan: Viewport3DColorbarPlan,
+): string {
+  return [
+    resolveCanonicalQuantityId(plan.quantityId),
+    plan.colorMode,
+    plan.palette,
+    plan.projectionMode,
+    plan.rangeSource,
+    plan.rangeState,
+    plan.range?.min ?? "none",
+    plan.range?.max ?? "none",
+  ].join(":");
 }
 
 export function resolveViewport3DScalarColorbarLegends({
@@ -1066,7 +1131,9 @@ interface Viewport3DFrameProps
     patch: NonNullable<VisualizationStatePatch["camera"]>,
   ) => void;
   onClearSelection: () => void;
-  onRegionOverlayModeChange: (mode: RegionOverlayMode) => void;
+  onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
+  onRegionOverlayVisibilityChange: (visible: boolean) => void;
+  regionDiagnosticOverlayState: RegionDiagnosticOverlayState;
   quantityId: string;
   renderedMeshRevision: number | string | null;
   scalarColorPalette: string;
@@ -1099,8 +1166,10 @@ export default function Viewport3DModule({
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
-  const [regionOverlayMode, setRegionOverlayMode] =
-    useState<RegionOverlayMode>("auto");
+  const [regionDiagnosticOverlayState, setRegionDiagnosticOverlayState] =
+    useState<RegionDiagnosticOverlayState>(
+      DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
+    );
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -1119,6 +1188,13 @@ export default function Viewport3DModule({
       domainId,
       semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
+  });
+  useViewport3DMeshCellAuditSelection({
+    onSelectPart,
+    topologyModel: currentViewport3DMeshCellAuditTopology(
+      sceneModel.topologyModel,
+      sceneModel.topologyFreshness,
+    ),
   });
   const patchCameraState = useCallback(
     (patch: NonNullable<VisualizationStatePatch["camera"]>) => {
@@ -1180,6 +1256,15 @@ export default function Viewport3DModule({
   const endCameraInteraction = useCallback(() => {
     kernel.cameraRegistry.endInteraction();
   }, [kernel.cameraRegistry]);
+  const changeRegionOverlaySource = useCallback(
+    (source: RegionDiagnosticOverlaySource) => {
+      setRegionDiagnosticOverlayState((state) => ({ ...state, source }));
+    },
+    [],
+  );
+  const changeRegionOverlayVisibility = useCallback((visible: boolean) => {
+    setRegionDiagnosticOverlayState((state) => ({ ...state, visible }));
+  }, []);
 
   return (
     <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
@@ -1199,7 +1284,8 @@ export default function Viewport3DModule({
       kernel={kernel}
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
-      onRegionOverlayModeChange={setRegionOverlayMode}
+      onRegionOverlaySourceChange={changeRegionOverlaySource}
+      onRegionOverlayVisibilityChange={changeRegionOverlayVisibility}
       onSelectDomain={onSelectDomain}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
@@ -1213,7 +1299,8 @@ export default function Viewport3DModule({
       inspectRevision={commandState.widgets.inspectRevision}
       requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
-      regionOverlayMode={regionOverlayMode}
+      regionDiagnosticOverlayState={regionDiagnosticOverlayState}
+      regionOverlayMode={regionDiagnosticOverlayMode(regionDiagnosticOverlayState)}
       rotationMode={commandState.widgets.rotationMode}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
@@ -1229,6 +1316,52 @@ export default function Viewport3DModule({
 
 function Viewport3DAuditRenderErrorInjection(): never {
   throw new Error("Maximum update depth exceeded (viewport audit injection)");
+}
+
+function useViewport3DMeshCellAuditSelection({
+  onSelectPart,
+  topologyModel,
+}: {
+  onSelectPart: (partSelection: Viewport3DPartSelection) => void;
+  topologyModel: Viewport3DSceneProps["topologyModel"];
+}) {
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" && process.env.NEXT_PUBLIC_AUDIT_BUILD !== "1") {
+      return undefined;
+    }
+    const config = (window as Window & {
+      __FULLMAG_CONFIG__?: { enableAuditHooks?: unknown };
+    }).__FULLMAG_CONFIG__;
+    if (config?.enableAuditHooks !== true) return undefined;
+    if (!topologyModel) return undefined;
+
+    const list = () => listViewport3DMeshCellSelections(topologyModel);
+    const selectMeshCell = (request: Viewport3DMeshCellSelectionRequest) => {
+      const selection = resolveViewport3DMeshCellSelection(topologyModel, request);
+      if (!selection || !selection.elementFamily || !selection.globalCellOrdinal) {
+        throw new Error(
+          `Viewport mesh-cell audit selection was not found: ${JSON.stringify(request)}`,
+        );
+      }
+      onSelectPart(selection);
+      return {
+        carrier: request.carrier,
+        carrierPartId: selection.carrierPartId,
+        elementFamily: selection.elementFamily,
+        globalCellOrdinal: selection.globalCellOrdinal,
+      };
+    };
+    window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__ = list;
+    window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__ = selectMeshCell;
+    return () => {
+      if (window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__ === list) {
+        delete window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__;
+      }
+      if (window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__ === selectMeshCell) {
+        delete window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__;
+      }
+    };
+  }, [onSelectPart, topologyModel]);
 }
 
 function useViewport3DSelectionHandlers({
@@ -1254,6 +1387,8 @@ function useViewport3DSelectionHandlers({
         viewportSelectionForMeshPart(address, {
           boundaryFaceIndex: partSelection.boundaryFaceIndex,
           carrierPartId: partSelection.carrierPartId,
+          elementFamily: partSelection.elementFamily,
+          globalCellOrdinal: partSelection.globalCellOrdinal,
           label: partSelection.label,
         }),
       );
@@ -1295,7 +1430,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   meshQualityRange,
   onCameraPatch,
   onClearSelection,
-  onRegionOverlayModeChange,
+  onRegionOverlaySourceChange,
+  onRegionOverlayVisibilityChange,
+  regionDiagnosticOverlayState,
   quantityId,
   selectedLabel,
   slotId,
@@ -1311,6 +1448,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     sceneProps.primitiveModel?.objects
       .map((object) => object.objectId)
       .join(" ") ?? "";
+  const colorbarSceneObjectIds = useMemo(
+    () => new Set(sceneProps.primitiveModel?.objects.map((object) => object.objectId)),
+    [sceneProps.primitiveModel],
+  );
   const visualProfile = getViewport3DVisualProfile(
     sceneProps.visualProfileId,
   );
@@ -1433,13 +1574,21 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const getColorbarPartSettings = sceneProps.getPartSettings;
   const colorbarParts = useMemo<Viewport3DColorbarTargetPart[]>(
     () => [
-      ...(colorbarTopologyModel?.magneticParts ?? []).map((partModel) => ({
-        id: partModel.part.id,
-        label: partModel.part.label ?? partModel.part.id,
-        role: partModel.part.role ?? null,
-        settings: getColorbarPartSettings(partModel.part),
-        targetKind: "part" as const,
-      })),
+      ...(colorbarTopologyModel?.magneticParts ?? []).map((partModel) => {
+        const target = resolveVisualizationTargetForMeshPart({
+          part: partModel.part,
+          sceneObjectIds: colorbarSceneObjectIds,
+          targetRegistry: null,
+        });
+        return {
+          id: partModel.part.id,
+          label: partModel.part.label ?? partModel.part.id,
+          objectScopeId: target.kind === "object" ? target.id : null,
+          role: partModel.part.role ?? null,
+          settings: getColorbarPartSettings(partModel.part),
+          targetKind: "part" as const,
+        };
+      }),
       ...(colorbarTopologyModel?.airboxParts ?? []).map((partModel) => ({
         id: partModel.part.id,
         label: partModel.part.label ?? partModel.part.id,
@@ -1448,7 +1597,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         targetKind: "airbox" as const,
       })),
     ],
-    [colorbarTopologyModel, getColorbarPartSettings],
+    [colorbarSceneObjectIds, colorbarTopologyModel, getColorbarPartSettings],
   );
   const renderSurfaceAvailable = Boolean(sceneProps.topology || sceneProps.fdmDomain);
   const retainedColorbarPlans = useSyncExternalStore(
@@ -1465,7 +1614,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     [colorbarParts, sceneProps.fdmDomain, sceneProps.fdmSettings],
   );
   const initialColorbarPlans = useMemo(
-    () => planViewport3DColorbars({ targets: colorbarTargetPlans }),
+    () =>
+      planViewport3DColorbars({
+        includeInspectorRanges: true,
+        targets: colorbarTargetPlans,
+      }),
     [colorbarTargetPlans],
   );
   const previousColorbarPlansByGroupKey = useMemo(
@@ -1524,6 +1677,29 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       }),
     [colorbarLabelByTargetId, colorbarPlans],
   );
+  const renderedScalarRanges = useMemo(
+    () =>
+      initialColorbarPlans.flatMap((plan) => {
+        const range = colorbarRangeStates.get(plan.groupKey)?.range;
+        if (!range) return [];
+        const target = colorbarParts.find(
+          (candidate) => candidate.id === plan.targetIds[0],
+        );
+        return buildViewport3DRenderedScalarRangeAliases({
+          component: plan.colorMode,
+          quantityId: plan.quantityId,
+          range,
+          renderedScope: {
+            scopeId: plan.scopeId,
+            scopeKind: plan.scopeKind,
+          },
+          visualizationTarget: target?.objectScopeId
+            ? { id: `object:${target.objectScopeId}`, kind: "object" }
+            : null,
+        });
+      }),
+    [colorbarParts, colorbarRangeStates, initialColorbarPlans],
+  );
   useEffect(() => {
     setRetainedViewport3DColorbarPlans(
       slotId,
@@ -1538,19 +1714,21 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     viewport3dStore.setActiveScalarColorbarLegends(
       colorbarLegends.map(({ legend }) => legend),
     );
+    viewport3dStore.setRenderedScalarRanges(renderedScalarRanges);
   }, [
     colorbarLegends,
     colorbarTargetPlanAvailable,
     plannedColorbars,
     renderSurfaceAvailable,
     retainedColorbarPlans,
+    renderedScalarRanges,
     slotId,
     viewportColorbarRequested,
   ]);
-  useEffect(
-    () => () => viewport3dStore.setActiveScalarColorbarLegends([]),
-    [],
-  );
+  useEffect(() => () => {
+    viewport3dStore.setActiveScalarColorbarLegends([]);
+    viewport3dStore.setRenderedScalarRanges([]);
+  }, []);
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
     const canvas = canvasRef.current;
     const gl = canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
@@ -1728,9 +1906,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             aria-label="Region overlays"
             className="fm-viewport-3d__region-modes"
           >
+            <Button
+              aria-pressed={regionDiagnosticOverlayState.visible}
+              size="sm"
+              type="button"
+              variant={
+                regionDiagnosticOverlayState.visible ? "primary" : "secondary"
+              }
+              onClick={() =>
+                onRegionOverlayVisibilityChange(
+                  !regionDiagnosticOverlayState.visible,
+                )
+              }
+            >
+              Regions
+            </Button>
             {(
               [
-                ["off", "Off"],
                 ["auto", "Auto"],
                 ["authored", "Authored"],
                 ["realized", "Realized"],
@@ -1739,19 +1931,20 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             ).map(([mode, label]) => (
               <Button
                 key={mode}
-                aria-pressed={sceneProps.regionOverlayMode === mode}
+                aria-pressed={regionDiagnosticOverlayState.source === mode}
                 disabled={
-                  mode === "realized" &&
-                  sceneProps.meshRegionOverlays.length === 0
+                  !regionDiagnosticOverlayState.visible ||
+                  (mode === "realized" &&
+                    sceneProps.meshRegionOverlays.length === 0)
                 }
                 size="sm"
                 type="button"
                 variant={
-                  sceneProps.regionOverlayMode === mode
+                  regionDiagnosticOverlayState.source === mode
                     ? "primary"
                     : "secondary"
                 }
-                onClick={() => onRegionOverlayModeChange(mode)}
+                onClick={() => onRegionOverlaySourceChange(mode)}
               >
                 {label}
               </Button>
@@ -1859,12 +2052,28 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
 }: {
   legend: Viewport3DColorbarLegend;
 }) {
+  const fieldMeta = useFieldMetaResource({
+    component: legend.colorMode ?? null,
+    enabled: Boolean(!legend.range && legend.colorMode && legend.quantityId),
+    quantityId: legend.quantityId ?? "m",
+    scope_id: legend.scopeKind === "airbox" ? null : legend.scopeId ?? null,
+    scope_kind: legend.scopeKind ?? null,
+  });
+  const metadataRange =
+    typeof fieldMeta.data?.stats?.min === "number" &&
+    typeof fieldMeta.data.stats.max === "number"
+      ? {
+          max: fieldMeta.data.stats.max,
+          min: fieldMeta.data.stats.min,
+        }
+      : null;
+  const range = legend.range ?? metadataRange;
   const [selectedDisplayUnit, setSelectedDisplayUnit] = useState(
     legend.displayUnit ?? "",
   );
   const displayUnitItems = displayUnitItemsForSourceUnit(legend.sourceUnit);
   const hasUnitOptions =
-    Boolean(legend.range) && hasDisplayUnitOptions(legend.sourceUnit);
+    Boolean(range) && hasDisplayUnitOptions(legend.sourceUnit);
   const effectiveDisplayUnit = hasUnitOptions
     ? normalizeDisplayUnit(
         legend.sourceUnit,
@@ -1880,28 +2089,44 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
         })}`
       : legend.label;
   const minLabel =
-    hasUnitOptions && legend.range
+    hasUnitOptions && range
       ? formatValueWithDisplayUnit(
-          legend.range.min,
+          range.min,
           legend.sourceUnit,
           effectiveDisplayUnit,
         )
       : legend.minLabel;
   const maxLabel =
-    hasUnitOptions && legend.range
+    hasUnitOptions && range
       ? formatValueWithDisplayUnit(
-          legend.range.max,
+          range.max,
           legend.sourceUnit,
           effectiveDisplayUnit,
         )
       : legend.maxLabel;
+  const targetLabel = legend.labelPrefix?.replace(/:\s*$/, "") ?? "";
+  const componentLabel = viewport3DColorbarComponentLabel(legend.colorMode);
+  const unitLabel = effectiveDisplayUnit || legend.sourceUnit || "1";
+  const rangeLabel = range ? "Rendered range" : "Loading field range";
   return (
     <aside
       aria-label={`Color range: ${label}, ${minLabel} to ${maxLabel}`}
       className="fm-viewport-3d__colorbar"
     >
       <div className="fm-viewport-3d__colorbar-header">
-        <span>{label}</span>
+        <div className="fm-viewport-3d__colorbar-identity">
+          {targetLabel ? (
+            <span className="fm-viewport-3d__colorbar-context">{targetLabel}</span>
+          ) : null}
+          <span className="fm-viewport-3d__colorbar-quantity">
+            {legend.quantityId ?? label}
+          </span>
+          {componentLabel ? (
+            <span className="fm-viewport-3d__colorbar-component">
+              {componentLabel}
+            </span>
+          ) : null}
+        </div>
         {hasUnitOptions ? (
           <select
             aria-label={`${legend.label} display unit`}
@@ -1915,24 +2140,44 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
               </option>
             ))}
           </select>
-        ) : null}
+        ) : (
+          <span className="fm-viewport-3d__colorbar-unit" title="Display unit">
+            {unitLabel}
+          </span>
+        )}
       </div>
-      <div className="fm-viewport-3d__colorbar-row">
-        <span className="fm-viewport-3d__colorbar-limit">
-          {minLabel}
-        </span>
-        <span
-          aria-hidden="true"
-          className="fm-viewport-3d__colorbar-ramp"
-          style={{ background: legend.paletteGradient }}
-        />
-        <span className="fm-viewport-3d__colorbar-limit">
-          {maxLabel}
-        </span>
+      <div className="fm-viewport-3d__colorbar-range">
+        <span className="fm-viewport-3d__colorbar-range-label">{rangeLabel}</span>
+        <div className="fm-viewport-3d__colorbar-row">
+          <span className="fm-viewport-3d__colorbar-limit">{minLabel}</span>
+          <span
+            aria-hidden="true"
+            className="fm-viewport-3d__colorbar-ramp"
+            style={{ background: legend.paletteGradient }}
+          />
+          <span className="fm-viewport-3d__colorbar-limit">{maxLabel}</span>
+        </div>
       </div>
     </aside>
   );
 });
+
+function viewport3DColorbarComponentLabel(
+  colorMode: string | undefined,
+): string | null {
+  switch (colorMode) {
+    case "x":
+      return "Component X";
+    case "y":
+      return "Component Y";
+    case "z":
+      return "Component Z";
+    case "magnitude":
+      return "Magnitude";
+    default:
+      return null;
+  }
+}
 
 const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
   hover,

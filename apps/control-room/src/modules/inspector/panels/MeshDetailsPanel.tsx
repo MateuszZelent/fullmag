@@ -1,7 +1,5 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
-
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { JsonResourceSection } from "./MeshResourceView";
 import { MeshBuildHistorySection } from "./mesh-details/MeshBuildHistorySection";
@@ -23,6 +21,7 @@ import {
 } from "./mesh-details/MeshRealizedSizeFieldsSection";
 import { MeshEditorCapabilitiesSection } from "./mesh-details/MeshEditorCapabilitiesSection";
 import { MeshViewportDeliverySection } from "./mesh-details/MeshViewportDeliverySection";
+import { MixedTopologyProvenanceSection } from "./mesh-details/MixedTopologyProvenanceSection";
 import { useMeshDetailsModel } from "./mesh-details/useMeshDetailsModel";
 
 function meshDetailsInspectorSections(selectionKind: string | null): string[] {
@@ -32,6 +31,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "overview",
         "identity",
         "pipeline",
+        "mixed-topology",
         "policy-comparison",
         "viewport-delivery",
         "editor-capabilities",
@@ -44,6 +44,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "overview",
         "identity",
         "counts",
+        "mixed-topology",
         "viewport-delivery",
         "editor-capabilities",
         "json-universe-report",
@@ -54,6 +55,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
       return [
         "overview",
         "pipeline",
+        "mixed-topology",
         "build-history",
         "operation-statuses",
         "thin-film",
@@ -86,6 +88,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "identity",
         "counts",
         "pipeline",
+        "mixed-topology",
         "build-history",
         "policy-comparison",
         "quality-gates",
@@ -113,11 +116,9 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const showSection = (section: string) => sections.includes(section);
 
   return (
-    <Accordion
+    <div
       key={selection.kind ?? "default"}
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
+      className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
     >
       {showSection("overview") ? (
         <MeshOverviewSection
@@ -161,6 +162,9 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           onOpenBuildDetails={model.onOpenBuildDetails}
         />
       ) : null}
+      {showSection("mixed-topology") ? (
+        <MixedTopologyProvenanceSection model={model.mixedTopology} />
+      ) : null}
       {showSection("build-history") ? (
         <MeshBuildHistorySection entries={model.buildHistoryEntries} />
       ) : null}
@@ -171,6 +175,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
         <MeshQualityGatesSection
           badge={model.sharedQualityStatus}
           gateRows={model.gateRows}
+          mixedCertificate={model.mixedCertificateQuality}
         />
       ) : null}
       {showSection("quality-statistics") ? (
@@ -262,6 +267,6 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           value={model.latestBuildJson}
         />
       ) : null}
-    </Accordion>
+    </div>
   );
 }

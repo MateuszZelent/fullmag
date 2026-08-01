@@ -121,6 +121,12 @@ function frequencyDomainPanelId(kind: string): string {
 }
 
 describe("inspectorRegistry", () => {
+  it("routes a pinned Quick Chart to its preview-only Inspector", () => {
+    expect(resolveInspectorPanel({ kind: "results.quick_chart" })?.id).toBe(
+      "quick-chart",
+    );
+  });
+
   it("resolves geometry object selections to their correct panels", () => {
     expect(resolveInspectorPanel({ kind: "object.root" })?.id).toBe(
       "object-general",
@@ -313,6 +319,12 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "mesh.cross-section.plot" })?.id).toBe(
       "cross-section",
     );
+  });
+
+  it("resolves planar monitor drafts independently from legacy cross-section images", () => {
+    expect(
+      resolveInspectorPanel({ kind: "model.planar.monitor.draft" })?.id,
+    ).toBe("planar-monitor-draft");
   });
 
   it("routes study root separately from concrete study stage inspectors", () => {

@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import {
+  frequencySeriesRenderModel,
+  frequencySpectrumRenderModel,
+} from "@/shared/analysis-charts/frequencyRenderModels";
 
 import {
-  buildFrequencyDomainSeriesOption,
-  buildSpectrumOption,
   frequencyDomainSeriesPointIndexFromChartEvent,
   FrequencyDomainDispersionChart,
   FrequencyDomainResponseChart,
@@ -12,6 +15,20 @@ import {
 } from "./FrequencyDomainCharts";
 
 describe("FrequencyDomainCharts", () => {
+  it("never disposes an ECharts instance owned by another mounted frame", () => {
+    const source = readFileSync(
+      new URL("./FrequencyDomainCharts.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toContain("oldestChart.dispose()");
+    expect(source).not.toContain("activeCharts.shift()");
+    expect(source).toContain("EChartsCanvasSurface");
+    expect(source).not.toContain("echarts.init");
+    expect(source).not.toContain("chartRef.current");
+    expect(source).not.toContain("onDoubleClick={() => onPlotMode");
+  });
+
   it("renders sub-GHz spectrum summaries in MHz", () => {
     const html = renderToStaticMarkup(
       <FrequencyDomainSpectrumChart
@@ -87,7 +104,7 @@ describe("FrequencyDomainCharts", () => {
   });
 
   it("labels response chart x axes with the series frequency unit", () => {
-    const option = buildFrequencyDomainSeriesOption(
+    const model = frequencySeriesRenderModel(
       [
         {
           id: "analysis.frequency-domain:response:amplitude",
@@ -104,10 +121,11 @@ describe("FrequencyDomainCharts", () => {
           xUnit: "MHz",
         },
       ],
+      "Response",
       "frequency",
     );
 
-    expect(option.xAxis).toEqual(expect.objectContaining({ name: "frequency [MHz]" }));
+    expect(model.xAxis.label).toBe("frequency [MHz]");
   });
 
   it("maps spectrum chart events back to the model row", () => {
@@ -117,7 +135,7 @@ describe("FrequencyDomainCharts", () => {
   });
 
   it("maps generic frequency-domain series events back to the model row", () => {
-    const option = buildFrequencyDomainSeriesOption(
+    const model = frequencySeriesRenderModel(
       [
         {
           id: "analysis.frequency-domain:response:amplitude",
@@ -134,15 +152,10 @@ describe("FrequencyDomainCharts", () => {
           xUnit: "GHz",
         },
       ],
+      "Response",
       "frequency",
     );
-    const series = Array.isArray(option.series) ? option.series[0] : null;
-
-    expect(series).toEqual(
-      expect.objectContaining({
-        data: [expect.objectContaining({ value: [9.5, 2, 3] })],
-      }),
-    );
+    expect(model.series[0]?.points).toEqual([{ rowIndex: 3, x: 9.5, y: 2 }]);
     expect(
       frequencyDomainSeriesPointIndexFromChartEvent({ data: [9.5, 2, 3] }),
     ).toBe(3);
@@ -236,7 +249,7 @@ describe("FrequencyDomainCharts", () => {
     );
 
     expect(responseHtml).toContain("Select response point 0 at 9.5 GHz");
-    expect(responseHtml).toContain("Plot response field 0 at 9.5 GHz");
+    expect(responseHtml).toContain("Load response field 0 at 9.5 GHz");
     expect(responseHtml).toContain("field ready");
     expect(dispersionHtml).toContain("Select dispersion G sample 4, mode 2");
     expect(dispersionHtml).toContain("G sample 4, mode 2");
@@ -365,7 +378,7 @@ describe("FrequencyDomainCharts", () => {
     const html = renderToStaticMarkup(
       <FrequencyDomainResponseChart model={model} />,
     );
-    const option = buildFrequencyDomainSeriesOption(model.series, "frequency");
+    const renderModel = frequencySeriesRenderModel(model.series, "Response", "frequency");
 
     expect(html).toContain("Response component");
     expect(html).toContain("mx");
@@ -373,13 +386,13 @@ describe("FrequencyDomainCharts", () => {
     expect(html).toContain("Chart quantity");
     expect(html).toContain("Amplitude");
     expect(html).toContain("Phase");
-    expect(html).toContain("Plot response field 4 at 10.3 GHz");
-    expect(Array.isArray(option.series) ? option.series : []).toHaveLength(1);
-    expect(option.yAxis).toEqual(expect.objectContaining({ name: "Amplitude [a.u.]" }));
+    expect(html).toContain("Load response field 4 at 10.3 GHz");
+    expect(renderModel.series).toHaveLength(1);
+    expect(renderModel.yAxes[0]?.label).toBe("Amplitude [a.u.]");
   });
 
   it("highlights the selected spectrum mode without changing point identity", () => {
-    const option = buildSpectrumOption(
+    const model = frequencySpectrumRenderModel(
       [
         {
           dampingRateHz: null,
@@ -406,24 +419,9 @@ describe("FrequencyDomainCharts", () => {
       ],
       "GHz",
     );
-    // The new spectrum chart uses scatter instead of bar, with frequency on x-axis
-    const allSeries = Array.isArray(option.series) ? option.series : [];
-    // Find the Modes scatter series (last one, or the one without envelope data)
-    const modesSeries = allSeries.find(
-      (s) => (s as { name?: string }).name === "Modes",
-    );
-
-    expect(modesSeries).toEqual(
-      expect.objectContaining({
-        data: [
-          expect.objectContaining({ value: [7.5, 1, 0] }),
-          expect.objectContaining({
-            itemStyle: expect.objectContaining({ borderWidth: 2 }),
-            value: [8.25, 1, 1],
-          }),
-        ],
-        type: "scatter",
-      }),
-    );
+    expect(model.series.find((series) => series.id === "modes")?.points).toEqual([
+      { rowIndex: 0, x: 7.5, y: 1 },
+      { rowIndex: 1, x: 8.25, y: 1 },
+    ]);
   });
 });

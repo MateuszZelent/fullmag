@@ -10,14 +10,13 @@ import {
   MESH_UNIVERSE_POLICY_RESOURCE_KEY,
   useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { AirboxFieldRow as FieldRow, boundedDisplayText } from "./airboxDisplay";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   initialInspectorDraftState,
   resolveInspectorDraftState,
@@ -203,12 +202,8 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
   };
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={["canonical", "geometry", "effective", "transactions"]}
-    >
-      <InspectorSection value="canonical" title="Canonical Authored Parameters" badge="Python round-trip">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="Canonical Authored Parameters" badge="Python round-trip">
         <FieldRow label="Policy revision" value={String(resource.revision)} />
         {NUMBER_FIELDS.map(({ key, label, unit }) => (
           <FormField
@@ -235,8 +230,8 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
             <option key={mode} value={mode}>{mode}</option>
           ))}
         </FormField>
-      </InspectorSection>
-      <InspectorSection value="geometry" title="Canonical Airbox Geometry" badge="Python round-trip">
+      </InspectorGroup>
+      <InspectorGroup title="Canonical Airbox Geometry" badge="Python round-trip">
         <FormField
           label="Domain mode"
           type="select"
@@ -257,8 +252,8 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
             onChange={(event) => updateDraft({ [key]: event.target.value })}
           />
         ))}
-      </InspectorSection>
-      <InspectorSection value="effective" title="Backend-effective Values" badge="read-only">
+      </InspectorGroup>
+      <InspectorGroup title="Backend-effective Values" badge="read-only">
         <FieldRow label="Source" value="effective_config published by backend" />
         {EFFECTIVE_FIELDS.map(([key, label]) => (
           <FieldRow key={key} label={label} value={displayEffectiveValue(resource.effective_config?.[key])} />
@@ -268,8 +263,8 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
           value={String(Object.keys(resource.effective_config ?? {}).filter((key) => !EFFECTIVE_FIELDS.some(([known]) => known === key)).length)}
         />
         <FieldRow label="Effective key count" value={String(Object.keys(resource.effective_config ?? {}).length)} />
-      </InspectorSection>
-      <InspectorSection value="advanced-authored" title="Advanced Authored Policy JSON" badge="Python round-trip">
+      </InspectorGroup>
+      <InspectorGroup title="Advanced Authored Policy JSON" badge="Python round-trip" collapsible defaultOpen={false}>
         <FormField
           label="Advanced universe policy JSON"
           rows={8}
@@ -277,8 +272,8 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
           value={draft.configText}
           onChange={(event) => updateDraft({ configText: event.target.value })}
         />
-      </InspectorSection>
-      <InspectorSection value="transactions" title="Transactions">
+      </InspectorGroup>
+      <InspectorGroup title="Transactions">
         {dirty ? (
           <FeedbackBanner
             kind="warning"
@@ -297,7 +292,7 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
           </Button>
         </div>
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

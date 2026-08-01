@@ -884,6 +884,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_empty_mask"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_mesh_overlay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_probe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_render_png"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_scalar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/vectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_vectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask": {
         parameters: {
             query?: never;
@@ -2212,6 +2324,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/planar-monitors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_planar_monitors"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_planar_monitors"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/planar-monitors/{monitor_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_planar_monitors_monitor_id"];
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_planar_monitors_monitor_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_planar_monitors_monitor_id"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_planar_monitors_monitor_id_duplicate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/realized-regions": {
         parameters: {
             query?: never;
@@ -2612,6 +2772,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/simulation/preparation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_preparation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/simulation/runs/current": {
         parameters: {
             query?: never;
@@ -2952,6 +3128,8 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        AdaptiveSolverIntegratorRequest: "rk23" | "rk45";
         AirboxLayerPatch: {
             bounds?: null | components["schemas"]["BasicLayerPatch"];
             /** Format: double */
@@ -2973,14 +3151,23 @@ export interface components {
             wireframe: components["schemas"]["BasicLayerState"];
         };
         ApiErrorResponse: {
+            capability_reason?: string | null;
+            code: string;
             error: string;
             message: string;
             request_id?: string | null;
+            revision_context?: unknown;
         };
         ArtifactEntry: {
             kind: string;
             path: string;
             region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
+        };
+        ArtifactResource: {
+            kind: string;
+            path: string;
+            region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
+            stage_autosave?: null | components["schemas"]["StageAutosaveArtifactMetadata"];
         };
         AuthoringTransactionRequest: {
             /** @enum {string} */
@@ -3124,6 +3311,22 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
             transaction_kind: string;
+        };
+        AutomaticOutputSamplingResource: {
+            /** @enum {string} */
+            kind: "field_auto";
+            name: string;
+            sample_period_policy: components["schemas"]["SamplingPeriodPolicyResource"];
+        } | {
+            /** @enum {string} */
+            kind: "scalar_auto";
+            name: string;
+            sample_period_policy: components["schemas"]["SamplingPeriodPolicyResource"];
+        };
+        AutomaticTableAutosaveResource: {
+            quantities: string[];
+            sample_period_policy: components["schemas"]["SamplingPeriodPolicyResource"];
+            table_id: string;
         };
         BasicLayerPatch: {
             /** Format: double */
@@ -3293,6 +3496,7 @@ export interface components {
             run_id?: string | null;
             /** Format: int64 */
             seq: number;
+            solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
             stage_id?: string | null;
             /** Format: int32 */
             stage_index?: number | null;
@@ -3710,6 +3914,7 @@ export interface components {
             grid_fingerprint: string;
             /** Format: int64 */
             mesh_revision: number;
+            object_ids?: string[];
             origin_m: number[];
             region_legend: components["schemas"]["FdmRegionLegendEntryResource"][];
             region_legend_fingerprint?: string | null;
@@ -3820,6 +4025,14 @@ export interface components {
         };
         /** @enum {string} */
         FerromagnetVisibilityMode: "hide" | "ghost";
+        FieldAutosaveResource: {
+            /** Format: double */
+            every_seconds?: number | null;
+            /** Format: int64 */
+            every_steps?: number | null;
+            kind?: string;
+            quantity: string;
+        };
         FieldCatalog: {
             domain_generation_id: string;
             quantities: components["schemas"]["FieldDescriptor"][];
@@ -3838,7 +4051,19 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            materialization_error?: string | null;
+            /** Format: int64 */
+            materialization_wall_time_ns: number;
+            /** Format: int64 */
+            materialized_at_unix_ms: number;
             quantity_id: string;
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: int64 */
+            stale_by_steps: number;
+            state: components["schemas"]["FieldMaterializationState"];
             unit: string;
         };
         FieldDriveCreateRequest: {
@@ -3883,6 +4108,8 @@ export interface components {
             width_m?: number | null;
             window?: string;
         };
+        /** @enum {string} */
+        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "error";
         FieldMatrixResponse: {
             aggregation?: string | null;
             bounds: components["schemas"]["FieldSliceBounds"];
@@ -3923,7 +4150,19 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            materialization_error?: string | null;
+            /** Format: int64 */
+            materialization_wall_time_ns: number;
+            /** Format: int64 */
+            materialized_at_unix_ms: number;
             quantity_id: string;
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: int64 */
+            stale_by_steps: number;
+            state: components["schemas"]["FieldMaterializationState"];
             stats?: null | components["schemas"]["FieldStats"];
             unit: string;
         };
@@ -4206,9 +4445,10 @@ export interface components {
              * @description Optional hard cap for vector samples returned by the binary payload.
              *
              *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-             *     Sampled responses are valid for vector glyph placement only; surface
-             *     shader coloring requires either full-domain data or an explicit complete
-             *     node-index mapping for the target surface.
+             *     Sampled responses with a complete `node_indices` mapping and matching
+             *     mesh topology are valid for vector glyph placement and surface projection
+             *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
+             *     requires complete field coverage.
              */
             max_samples?: number | null;
             /**
@@ -4248,6 +4488,8 @@ export interface components {
              */
             view?: string | null;
         };
+        /** @enum {string} */
+        FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
         FrequencyDomainAvailabilitySummaryResource: {
             diagnostics_json: string;
             driven_response_available: boolean;
@@ -5107,6 +5349,12 @@ export interface components {
             /** Format: int64 */
             replace_count: number;
             /** Format: int64 */
+            successful_publish_source_revision?: number;
+            /** Format: int64 */
+            successful_publish_step_count?: number;
+            /** Format: int64 */
+            successful_publish_window_wall_time_ns?: number;
+            /** Format: int64 */
             total_clone_wall_time_ns: number;
             /** Format: int64 */
             total_merge_wall_time_ns: number;
@@ -5293,6 +5541,7 @@ export interface components {
             last_build_summary?: Record<string, never> | null;
             /** @description Build/pipeline state for build panels. */
             mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
+            mixed_layer_topology_rejection?: null | components["schemas"]["MeshMixedLayerTopologyRejectionResource"];
             /** @description Typed policy change summary for UI diff tables. */
             policy_diff?: components["schemas"]["MeshBuildPolicyDiffResource"][] | null;
             provenance?: null | components["schemas"]["MeshBuildProvenanceResource"];
@@ -5380,10 +5629,17 @@ export interface components {
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
             mesh_adaptivity_state?: unknown;
-            /** @description Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`. */
-            mesh_capabilities?: unknown;
+            mesh_capabilities?: null | components["schemas"]["MeshCapabilityMatrixResource"];
             /** Format: int64 */
             revision: number;
+        };
+        MeshCapabilityMatrixResource: {
+            "mesh.exact_layer_count"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.swept.prism"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.topology.mixed_p1"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.transition.pyramid_tet"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+        } & {
+            [key: string]: unknown;
         };
         MeshCommandTarget: {
             /** @enum {string} */
@@ -5403,6 +5659,12 @@ export interface components {
             geometry_name: string;
             /** Format: int32 */
             marker: number;
+        };
+        MeshFeatureCapabilityResource: {
+            reason?: string | null;
+            scope?: string | null;
+            status: string;
+            supported_layer_counts?: number[];
         };
         MeshHistogramBinElementsResource: {
             /** Format: int32 */
@@ -5450,6 +5712,83 @@ export interface components {
             revision: number;
             /** Format: int64 */
             source_scene_revision?: number | null;
+        };
+        MeshLayeredPolicyResource: {
+            exact_layer_count: boolean;
+            /** Format: int32 */
+            layers: number;
+            /** Format: int32 */
+            node_planes: number;
+            sweep_direction: string;
+            topology: string;
+            transition_policy: string;
+        };
+        MeshMixedCertificateFamilyQualityGateResource: {
+            family: string;
+            metric: string;
+            /** Format: double */
+            minimum_jacobian_m3: number;
+            /** Format: double */
+            p05: number;
+            passed: boolean;
+            positive_jacobian: boolean;
+            /** Format: double */
+            threshold: number;
+        };
+        MeshMixedCertificateQualityEvidenceResource: {
+            certificate_fingerprint?: string | null;
+            certificate_schema_version?: string | null;
+            certificate_status?: string | null;
+            family_gates?: components["schemas"]["MeshMixedCertificateFamilyQualityGateResource"][];
+            /** Format: int64 */
+            mesh_revision: number;
+            reason?: string | null;
+            status: components["schemas"]["MeshMixedCertificateQualityEvidenceStatus"];
+            topology_fingerprint?: string | null;
+        };
+        /** @enum {string} */
+        MeshMixedCertificateQualityEvidenceStatus: "valid" | "stale" | "rejected" | "unavailable";
+        MeshMixedLayerTopologyCertificateSummaryResource: {
+            /** Format: int32 */
+            actual_node_plane_count?: number;
+            certificate_status: string;
+            gmsh_version: string;
+            /** Format: int32 */
+            realized_layer_count: number;
+            rejection_reason?: string | null;
+            /** Format: int32 */
+            requested_layer_count: number;
+            schema_version: string;
+            topology_fingerprint: string;
+        };
+        MeshMixedLayerTopologyRejectionResource: {
+            certificate_status: string;
+            fallback?: string | null;
+            free_tetrahedral_alternative?: string | null;
+            missing_capabilities?: string[];
+            rejection_category?: string | null;
+            rejection_reason: string;
+            requested_execution?: null | components["schemas"]["MeshMixedP1ExecutionResource"];
+            /** Format: int32 */
+            requested_layer_count: number;
+            resolved_execution?: null | components["schemas"]["MeshMixedP1ExecutionResource"];
+            schema_version: string;
+        };
+        MeshMixedP1ExecutionResource: {
+            backend?: string | null;
+            device?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            study?: string | null;
+        };
+        MeshMixedTopologyProvenanceResource: {
+            accepted_certificate_fingerprint: string;
+            capability_reason?: string | null;
+            capability_status: string;
+            precision: string;
+            requested_device: string;
+            requested_topology: string;
+            resolved_topology: string;
         };
         MeshObjectConfigEntryResource: {
             config?: {
@@ -5522,6 +5861,12 @@ export interface components {
             scope: string;
             status: string;
         };
+        MeshOrphanEntityResource: {
+            /** Format: int32 */
+            dimension: number;
+            /** Format: int32 */
+            tag: number;
+        };
         MeshPartResource: {
             /** Format: int32 */
             boundary_face_count: number;
@@ -5532,6 +5877,9 @@ export interface components {
             bounds_min?: number[] | null;
             /** Format: int32 */
             element_count: number;
+            element_counts_by_type?: {
+                [key: string]: number;
+            };
             /** Format: int32 */
             element_start: number;
             geometry_id?: string | null;
@@ -5652,6 +6000,7 @@ export interface components {
         };
         MeshQualityGatesResource: {
             gates?: Record<string, never> | null;
+            mixed_certificate: components["schemas"]["MeshMixedCertificateQualityEvidenceResource"];
             /** Format: int64 */
             revision: number;
         };
@@ -5750,17 +6099,32 @@ export interface components {
             effective_per_object_targets?: {
                 [key: string]: components["schemas"]["MeshPerObjectTargetResource"];
             };
-            fallbacks_triggered?: string[];
+            element_counts_by_type?: {
+                [key: string]: number;
+            };
+            facet_counts_by_type_and_role?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            fallbacks_triggered?: string[] | null;
+            gmsh_version?: string | null;
+            mixed_layer_topology_certificate?: null | components["schemas"]["MeshMixedLayerTopologyCertificateSummaryResource"];
+            mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
             object_region_markers?: Record<string, never>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
-            orphan_entities?: Record<string, never>[];
+            orphan_entities?: components["schemas"]["MeshOrphanEntityResource"][];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
             rejected_element_types?: Record<string, never>[];
+            requested_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
+            resolved_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
             selector_resolution?: Record<string, never>[];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
+            /** Format: int32 */
+            topology_schema_version?: number | null;
             used_size_field_kinds?: string[];
         };
         MeshSharedDomainConfigReplaceRequest: {
@@ -5775,21 +6139,37 @@ export interface components {
         };
         MeshSharedDomainManifestResource: {
             domain_mesh_mode?: string | null;
+            element_counts_by_type?: {
+                [key: string]: number;
+            };
+            facet_counts_by_type_and_role?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            fallbacks_triggered?: string[] | null;
             generation_id?: string | null;
             /** Format: int64 */
             geometry_realization_revision?: number | null;
+            gmsh_version?: string | null;
             mesh_id: string;
             /** @description Mesh identity for tree/selection metadata. */
             mesh_name: string;
             /** @description Scoped mesh parts for object/airbox/selection fetches. Heavy topology remains in binary topology endpoints. */
             mesh_parts?: components["schemas"]["MeshPartResource"][];
+            mixed_layer_topology_certificate?: null | components["schemas"]["MeshMixedLayerTopologyCertificateSummaryResource"];
+            mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
             object_segments?: components["schemas"]["MeshObjectSegmentResource"][];
             regions?: components["schemas"]["MeshRegionResource"][];
+            requested_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
+            resolved_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
             /** Format: int64 */
             revision: number;
             /** Format: int64 */
             source_scene_revision?: number | null;
             topology_fingerprint: string;
+            /** Format: int32 */
+            topology_schema_version?: number | null;
         };
         MeshSharedDomainQualityResource: {
             quality?: unknown;
@@ -5873,7 +6253,11 @@ export interface components {
             revision: number;
         };
         MetricsSummary: {
-            /** Format: double */
+            /**
+             * Format: double
+             * @deprecated
+             * @description Deprecated compatibility alias of the diagnostics end-to-end rate.
+             */
             steps_per_second?: number | null;
             /** Format: int64 */
             total_steps: number;
@@ -5985,6 +6369,355 @@ export interface components {
         };
         /** @enum {string} */
         PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
+        /** @enum {string} */
+        PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
+        PlanarExtentSchema: {
+            /** @enum {string} */
+            kind: "explicit";
+            /** Format: double */
+            u_max_m: number;
+            /** Format: double */
+            u_min_m: number;
+            /** Format: double */
+            v_max_m: number;
+            /** Format: double */
+            v_min_m: number;
+        } | {
+            /** @enum {string} */
+            kind: "target_bounds";
+            /** Format: double */
+            padding_m: number;
+        } | {
+            /** @enum {string} */
+            kind: "magnetic_domain";
+            /** Format: double */
+            padding_m: number;
+        } | {
+            /** @enum {string} */
+            kind: "universe";
+            /** Format: double */
+            padding_m: number;
+        };
+        /** @enum {string} */
+        PlanarFieldComponent: "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
+        PlanarFieldFrameResource: {
+            bounds_uv_m: number[];
+            normal: number[];
+            origin_m: number[];
+            u_axis: number[];
+            v_axis: number[];
+        };
+        PlanarFieldLinksResource: {
+            empty_mask: string;
+            mesh_overlay: string;
+            probe: string;
+            render_png: string;
+            scalar: string;
+            vectors: string;
+        };
+        PlanarFieldMetaResource: {
+            /** Format: int32 */
+            basis_order: number;
+            canonical_unit: string;
+            component: string;
+            etag: string;
+            /** Format: int64 */
+            field_revision: number;
+            field_source: string;
+            /** Format: int32 */
+            fold_count: number;
+            frame: components["schemas"]["PlanarFieldFrameResource"];
+            generation_id: string;
+            /** Format: int32 */
+            integration_order: number;
+            links: components["schemas"]["PlanarFieldLinksResource"];
+            /** Format: int64 */
+            mesh_revision: number;
+            monitor_hash: string;
+            monitor_id: string;
+            /** Format: int64 */
+            monitor_revision: number;
+            non_injective: boolean;
+            occupancy: components["schemas"]["PlanarFieldOccupancyResource"];
+            /** Format: int32 */
+            overlap_count: number;
+            pixel_size_m: number[];
+            quantity_id: string;
+            resolution: number[];
+            sample_support: string;
+            sampler_version: string;
+            sampling_execution: string;
+            sampling_method: string;
+            /** Format: double */
+            scalar_max?: number | null;
+            /** Format: double */
+            scalar_min?: number | null;
+            schema_version: string;
+            scope_id?: string | null;
+            scope_kind: string;
+        };
+        PlanarFieldOccupancyResource: {
+            /** Format: int32 */
+            empty: number;
+            /** Format: int32 */
+            occupied: number;
+            /** Format: double */
+            occupied_measure: number;
+            /** Format: int32 */
+            partial: number;
+        };
+        PlanarFieldProbeResource: {
+            /** Format: int32 */
+            cell_id?: number | null;
+            /** Format: int32 */
+            element_id?: number | null;
+            monitor_id: string;
+            occupancy: string;
+            quantity_id: string;
+            sampling_method: string;
+            /** Format: double */
+            scalar?: number | null;
+            /** Format: double */
+            u_m: number;
+            /** Format: double */
+            v_m: number;
+            vector?: number[] | null;
+            world_m: number[];
+        };
+        /** @enum {string} */
+        PlanarFramePresetSchema: "xy" | "xz" | "yz";
+        PlanarFrameSchema: {
+            extent: components["schemas"]["PlanarExtentSchema"];
+            normal: number[];
+            normalization_version: string;
+            origin_m: number[];
+            preset?: null | components["schemas"]["PlanarFramePresetSchema"];
+            u_axis: number[];
+            v_axis: number[];
+        };
+        PlanarInteractionState: {
+            /** Format: double */
+            pan_u_m: number;
+            /** Format: double */
+            pan_v_m: number;
+            /** Format: double */
+            zoom: number;
+        };
+        PlanarLayerState: {
+            boundaries: boolean;
+            contours: boolean;
+            mesh: boolean;
+            probes: boolean;
+            raster: boolean;
+            vectors: boolean;
+        };
+        PlanarMonitorCollectionResource: {
+            count: number;
+            monitors: components["schemas"]["PlanarMonitorSchema"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        PlanarMonitorCreateRequest: {
+            /** Format: int64 */
+            expected_scene_revision: number;
+            monitor: components["schemas"]["PlanarMonitorSchema"];
+        };
+        PlanarMonitorDeleteRequest: {
+            /** Format: int64 */
+            expected_scene_revision: number;
+        };
+        PlanarMonitorDuplicateRequest: {
+            /** Format: int64 */
+            expected_scene_revision: number;
+            new_id?: string | null;
+            new_name?: string | null;
+        };
+        PlanarMonitorPatchRequest: {
+            /** Format: int64 */
+            expected_scene_revision: number;
+            monitor: components["schemas"]["PlanarMonitorSchema"];
+        };
+        PlanarMonitorResource: {
+            monitor: components["schemas"]["PlanarMonitorSchema"];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        PlanarMonitorSchema: {
+            frame: components["schemas"]["PlanarFrameSchema"];
+            id: string;
+            name: string;
+            operator: components["schemas"]["PlanarOperatorSchema"];
+            target: components["schemas"]["PlanarMonitorTargetSchema"];
+        };
+        PlanarMonitorTargetSchema: {
+            /** @enum {string} */
+            kind: "magnetic_domain";
+        } | {
+            /** @enum {string} */
+            kind: "domain";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        };
+        PlanarOperatorSchema: {
+            /** @enum {string} */
+            kind: "plane_sample";
+        } | {
+            /** @enum {string} */
+            kind: "slab_average";
+            /** Format: double */
+            thickness_m: number;
+        } | {
+            empty_policy: components["schemas"]["PlanarEmptyPolicySchema"];
+            /** @enum {string} */
+            kind: "depth_projection";
+            reduction: components["schemas"]["PlanarReductionSchema"];
+        } | {
+            boundary: components["schemas"]["PlanarSurfaceBoundarySelectorSchema"];
+            /** @enum {string} */
+            kind: "surface_projection";
+            visibility_policy: components["schemas"]["PlanarSurfaceVisibilityPolicySchema"];
+        };
+        /** @enum {string} */
+        PlanarReductionSchema: "mean_occupied" | "thickness_integral" | "rms" | "min" | "max" | "abs_max";
+        /** @enum {string} */
+        PlanarRenderQuality: "interactive" | "export";
+        PlanarResolutionPolicy: {
+            /** Format: int32 */
+            height: number;
+            /** Format: int32 */
+            vector_budget: number;
+            /** Format: int32 */
+            width: number;
+        };
+        PlanarSurfaceBoundarySelectorSchema: {
+            /** @enum {string} */
+            kind: "object_boundary";
+        } | {
+            /** @enum {string} */
+            kind: "region_boundary";
+            region_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "named_surface";
+            surface_id: string;
+        };
+        /** @enum {string} */
+        PlanarSurfaceVisibilityPolicySchema: "frontmost" | "backmost" | "nearest_to_origin" | "area_weighted_overlap";
+        PlanarVectorStyleState: {
+            color_mode: string;
+            length_mode: string;
+            /** Format: double */
+            scale: number;
+        };
+        PlanarViewScopeState: {
+            /** @enum {string} */
+            kind: "monitor_target";
+        } | {
+            /** @enum {string} */
+            kind: "mesh_part";
+            scope_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "airbox";
+        };
+        PlanarVisualizationPatch: {
+            active_monitor_id?: string | null;
+            auto_contrast?: boolean | null;
+            colormap?: string | null;
+            component?: null | components["schemas"]["PlanarFieldComponent"];
+            /** Format: double */
+            contrast_max?: number | null;
+            /** Format: double */
+            contrast_min?: number | null;
+            display_unit?: string | null;
+            interaction?: null | components["schemas"]["PlanarInteractionState"];
+            layers?: null | components["schemas"]["PlanarLayerState"];
+            quality?: null | components["schemas"]["PlanarRenderQuality"];
+            quantity_id?: string | null;
+            resolution?: null | components["schemas"]["PlanarResolutionPolicy"];
+            vector_style?: null | components["schemas"]["PlanarVectorStyleState"];
+            view_scope?: null | components["schemas"]["PlanarViewScopeState"];
+        };
+        PlanarVisualizationState: {
+            active_monitor_id?: string | null;
+            auto_contrast: boolean;
+            colormap: string;
+            component: components["schemas"]["PlanarFieldComponent"];
+            /** Format: double */
+            contrast_max?: number | null;
+            /** Format: double */
+            contrast_min?: number | null;
+            display_unit?: string | null;
+            interaction: components["schemas"]["PlanarInteractionState"];
+            layers: components["schemas"]["PlanarLayerState"];
+            quality: components["schemas"]["PlanarRenderQuality"];
+            quantity_id: string;
+            resolution: components["schemas"]["PlanarResolutionPolicy"];
+            vector_style: components["schemas"]["PlanarVectorStyleState"];
+            view_scope: components["schemas"]["PlanarViewScopeState"];
+        };
+        PreparationClockAdjustment: {
+            /** Format: int64 */
+            backward_delta_ms: number;
+            /** Format: int64 */
+            observed_at_unix_ms: number;
+            /** Format: int64 */
+            stage_started_at_unix_ms: number;
+        };
+        PreparationExecutionSummary: {
+            backend?: string | null;
+            device?: string | null;
+            engine_id?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            runtime_family?: string | null;
+            worker?: string | null;
+        };
+        PreparationFailureResource: {
+            detail?: string | null;
+            diagnostics_correlation_id?: string | null;
+            error_code: string;
+            stage_id: components["schemas"]["PreparationStageId"];
+            summary: string;
+        };
+        PreparationLogEntryResource: {
+            level: components["schemas"]["PreparationLogLevel"];
+            message: string;
+            stage_id: components["schemas"]["PreparationStageId"];
+            /** Format: int64 */
+            timestamp_unix_ms: number;
+        };
+        /** @enum {string} */
+        PreparationLogLevel: "info" | "warning" | "error";
+        PreparationProgressStage: {
+            clock_adjustment?: null | components["schemas"]["PreparationClockAdjustment"];
+            /** Format: int64 */
+            completed_at_unix_ms?: number | null;
+            detail: string;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            id: components["schemas"]["PreparationStageId"];
+            label: string;
+            progress_label?: string | null;
+            /** Format: int32 */
+            progress_percent?: number | null;
+            /** Format: int64 */
+            started_at_unix_ms?: number | null;
+            status: components["schemas"]["PreparationStageStatus"];
+        };
+        /** @enum {string} */
+        PreparationStageId: "runtime_startup" | "script_materialization" | "validation" | "planning" | "domain_preparation" | "meshing" | "mesh_postprocessing" | "solver_initialization" | "ready";
+        /** @enum {string} */
+        PreparationStageStatus: "pending" | "active" | "completed" | "failed" | "skipped";
+        /** @enum {string} */
+        PreparationStatus: "connecting" | "running" | "ready" | "failed";
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -6037,6 +6770,16 @@ export interface components {
             /** Format: double */
             contrast_min?: number | null;
             field_component: components["schemas"]["FieldComponent"];
+        };
+        RateMetricResource: {
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: double */
+            value: number;
+            /** Format: int64 */
+            window_step_count: number;
+            /** Format: int64 */
+            window_wall_time_ns: number;
         };
         RealizedGeometryBody: {
             body_id: string;
@@ -6283,6 +7026,8 @@ export interface components {
             /** Format: int64 */
             scene_revision?: number | null;
             /** Format: int64 */
+            simulation_preparation_revision: number;
+            /** Format: int64 */
             slice_revision: number;
             /** Format: int64 */
             solver_profile_revision: number;
@@ -6301,7 +7046,13 @@ export interface components {
          */
         RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "config_only";
         RunSummary: {
+            calibration_id?: string | null;
+            requested_device: string;
+            resolved_device: string;
             run_id: string;
+            /** Format: double */
+            selection_confidence?: number | null;
+            selection_reason: string;
             /** Format: int64 */
             solver_steps: number;
             /** Format: double */
@@ -6373,6 +7124,12 @@ export interface components {
             command_id: string;
             /** @enum {string} */
             kind: "command_id";
+        };
+        SamplingPeriodPolicyResource: {
+            /** @enum {string} */
+            kind: "auto_sinc_cutoff";
+            /** Format: double */
+            nyquist_guard_factor: number;
         };
         /** @enum {string} */
         SamplingProfile: "quality" | "balanced" | "interactive" | "memory_saver" | "custom";
@@ -6815,6 +7572,22 @@ export interface components {
             session_id: string;
             workspace_root: string;
         };
+        SimulationPreparationResource: {
+            active_stage_id?: null | components["schemas"]["PreparationStageId"];
+            /** Format: int64 */
+            completed_at_unix_ms?: number | null;
+            failure?: null | components["schemas"]["PreparationFailureResource"];
+            log_tail: components["schemas"]["PreparationLogEntryResource"][];
+            preparation_id: string;
+            requested_execution: components["schemas"]["PreparationExecutionSummary"];
+            resolved_execution?: null | components["schemas"]["PreparationExecutionSummary"];
+            /** Format: int64 */
+            revision: number;
+            stages: components["schemas"]["PreparationProgressStage"][];
+            /** Format: int64 */
+            started_at_unix_ms: number;
+            status: components["schemas"]["PreparationStatus"];
+        };
         /** @enum {string} */
         SliceAirboxRenderMode: "surface" | "wireframe" | "surface+edges" | "points";
         /** @enum {string} */
@@ -6942,6 +7715,49 @@ export interface components {
             /** Format: double */
             zeeman: number;
         };
+        SolverPolicyRequest: {
+            /** Format: double */
+            fix_dt: number;
+            integrator?: null | components["schemas"]["FixedSolverIntegratorRequest"];
+            /** @enum {string} */
+            kind: "fixed";
+        } | {
+            /** Format: double */
+            dt_initial?: number | null;
+            /** Format: double */
+            dt_max: number;
+            /** Format: double */
+            dt_min: number;
+            integrator: components["schemas"]["AdaptiveSolverIntegratorRequest"];
+            /** @enum {string} */
+            kind: "adaptive_max_error";
+            /** Format: double */
+            max_err: number;
+        } | {
+            /** Format: double */
+            atol: number;
+            /** Format: double */
+            dt_initial?: number | null;
+            /** Format: double */
+            dt_max: number;
+            /** Format: double */
+            dt_min: number;
+            /** Format: double */
+            growth_limit: number;
+            integrator: components["schemas"]["AdaptiveSolverIntegratorRequest"];
+            /** @enum {string} */
+            kind: "adaptive_advanced";
+            /** Format: double */
+            max_spin_rotation?: number | null;
+            /** Format: double */
+            norm_tolerance?: number | null;
+            /** Format: double */
+            rtol: number;
+            /** Format: double */
+            safety: number;
+            /** Format: double */
+            shrink_limit: number;
+        };
         SolverProfileAggregatesResource: {
             /** Format: int64 */
             average_demag_ns: number;
@@ -6963,6 +7779,28 @@ export interface components {
             /** Format: int64 */
             sample_interval_wall_ms?: number;
         };
+        SolverProfileOverheadDiagnosticsResource: {
+            /** Format: int64 */
+            heartbeat_seed_deep_clone_count?: number;
+            /** Format: int64 */
+            heartbeat_worker_deep_clone_count?: number;
+            /** Format: int64 */
+            last_persist_wall_time_ns: number;
+            /** Format: int64 */
+            last_publisher_replace_wall_time_ns: number;
+            /** Format: int64 */
+            last_record_wall_time_ns: number;
+            /** Format: int64 */
+            persist_completed_count?: number;
+            /** Format: int64 */
+            persist_enqueued_count?: number;
+            /** Format: int64 */
+            total_persist_wall_time_ns: number;
+            /** Format: int64 */
+            total_publisher_replace_wall_time_ns: number;
+            /** Format: int64 */
+            total_record_wall_time_ns: number;
+        };
         SolverProfilePhaseResource: {
             id: string;
             label: string;
@@ -6971,18 +7809,33 @@ export interface components {
             /** Format: int64 */
             wall_time_ns: number;
         };
+        SolverProfilePhaseWindowResource: {
+            id: string;
+            label: string;
+            /** Format: int64 */
+            max_wall_time_ns: number;
+            /** Format: int64 */
+            mean_wall_time_ns: number;
+            /** Format: int64 */
+            sum_wall_time_ns: number;
+        };
         SolverProfileResource: {
             aggregates: components["schemas"]["SolverProfileAggregatesResource"];
             artifact_refs: string[];
             config: components["schemas"]["SolverProfileCommandConfig"];
             latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
             live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
+            overhead?: components["schemas"]["SolverProfileOverheadDiagnosticsResource"];
+            persistence_failed?: boolean;
             preview_3d_disabled?: boolean;
+            rates?: components["schemas"]["SolverRateDiagnosticsResource"];
             /** Format: int64 */
             revision: number;
             state: string;
             threading?: null | components["schemas"]["SolverProfileThreadingResource"];
         };
+        /** @enum {string} */
+        SolverProfileSampleKindResource: "normal_step" | "publish" | "preview" | "finalization" | "stall";
         SolverProfileStepSampleResource: {
             /** Format: int64 */
             artifact_enqueue_bytes?: number;
@@ -7000,6 +7853,8 @@ export interface components {
             artifact_writer_job_wall_time_ns?: number;
             /** Format: int64 */
             artifact_writer_jobs_completed?: number;
+            /** Format: int64 */
+            backend_create_wall_time_ns?: number;
             /** Format: int64 */
             delta_wall_time_ns?: number | null;
             demag_preconditioner?: string | null;
@@ -7035,12 +7890,17 @@ export interface components {
             /** Format: int64 */
             native_ffi_overhead_wall_time_ns?: number;
             /** Format: int64 */
+            native_solver_wall_time_ns?: number;
+            /** Format: int64 */
             phase_sum_ns: number;
+            phase_windows?: components["schemas"]["SolverProfilePhaseWindowResource"][];
             phases: components["schemas"]["SolverProfilePhaseResource"][];
             /** Format: double */
             poisson_final_residual: number;
             /** Format: int32 */
             poisson_iterations: number;
+            /** Format: int64 */
+            profiled_step_total_ns?: number;
             /** Format: int32 */
             rejected_attempts: number;
             /** Format: int64 */
@@ -7063,15 +7923,30 @@ export interface components {
             relaxation_update_wall_time_ns?: number;
             /** Format: int32 */
             rhs_evaluations: number;
+            sample_kinds?: components["schemas"]["SolverProfileSampleKindResource"][];
             /** Format: int64 */
             sample_time_unix_ms?: number;
             /** Format: int64 */
+            span_first_step?: number;
+            /** Format: int64 */
+            span_last_step?: number;
+            /** Format: int64 */
+            span_monotonic_wall_time_ns?: number;
+            /** Format: int64 */
+            span_step_count?: number;
+            /** Format: int64 */
             step: number;
+            /** Format: int64 */
+            step_update_deep_clone_count?: number;
             threading: components["schemas"]["SolverProfileThreadingResource"];
             /** Format: double */
             time: number;
             /** Format: int64 */
             total_ns: number;
+            /** Format: int64 */
+            unprofiled_gap_per_step_ns?: number;
+            /** Format: int64 */
+            unprofiled_gap_total_ns?: number;
             /** Format: int64 */
             unprofiled_gap_wall_time_ns?: number | null;
         };
@@ -7086,6 +7961,11 @@ export interface components {
             requested_omp_threads: number;
             thread_mode: string;
         };
+        SolverRateDiagnosticsResource: {
+            end_to_end_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+            published_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+            solver_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+        };
         SolverStatusResource: {
             /** Format: double */
             active_runtime_seconds?: number | null;
@@ -7095,11 +7975,17 @@ export interface components {
             converged?: boolean | null;
             /** Format: double */
             dt_seconds?: number | null;
+            /** Format: double */
+            dt_suggested_seconds?: number | null;
+            /** Format: double */
+            error_estimate?: number | null;
             integrator?: string | null;
             is_busy: boolean;
             last_error?: string | null;
             /** Format: int64 */
             last_step_updated_at_unix_ms?: number | null;
+            /** Format: double */
+            max_error?: number | null;
             /**
              * Format: double
              * @description Maximum total dynamic RHS norm in 1/s. This is not an equilibrium torque.
@@ -7118,6 +8004,8 @@ export interface components {
             max_torque_T?: number | null;
             /** Format: double */
             pseudo_time_seconds?: number | null;
+            /** Format: int32 */
+            rejected_attempts?: number | null;
             relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: int64 */
             revision: number;
@@ -7201,6 +8089,42 @@ export interface components {
             /** Format: double */
             power: number;
         };
+        StageAutosaveArtifactMetadata: {
+            download_path?: string | null;
+            format: string;
+            layout: string;
+            resource_path: string;
+            schema_version: string;
+            stages: components["schemas"]["StageAutosaveArtifactStageMetadata"][];
+            target: string;
+        };
+        StageAutosaveArtifactStageMetadata: {
+            complete: boolean;
+            download_path?: string | null;
+            field_quantities: string[];
+            /** Format: int64 */
+            field_sample_count: number;
+            resource_path: string;
+            stage_id: string;
+            /** Format: int64 */
+            stage_index: number;
+            status: string;
+            table_quantities: string[];
+            /** Format: int64 */
+            table_sample_count: number;
+        };
+        /** @enum {string} */
+        StageAutosaveFormatResource: "zarr" | "hdf5" | "txt";
+        /** @enum {string} */
+        StageAutosaveLayoutResource: "continuous" | "separate";
+        StageAutosaveResource: {
+            fields?: components["schemas"]["FieldAutosaveResource"][];
+            format: components["schemas"]["StageAutosaveFormatResource"];
+            kind?: string;
+            layout: components["schemas"]["StageAutosaveLayoutResource"];
+            table?: null | components["schemas"]["StageTableAutosaveResource"];
+            target: string;
+        };
         StageExecutionRecordResource: {
             action?: string | null;
             artifact_refs?: string[];
@@ -7246,6 +8170,8 @@ export interface components {
             status: string;
             /** Format: double */
             threshold?: number | null;
+            /** Format: double */
+            time_to_tolerance_seconds?: number | null;
         };
         StageExecutionResource: {
             /** Format: int32 */
@@ -7266,12 +8192,22 @@ export interface components {
         StageMetricUnit: "A/m" | "J" | "s" | "1";
         /** @enum {string} */
         StageStopReason: "torque" | "energy" | "max_steps" | "max_pseudotime" | "max_physical_time" | "user_cancelled" | "backend_error" | "gradient";
+        StageTableAutosaveResource: {
+            /** Format: int64 */
+            every_steps?: number | null;
+            kind?: string;
+            quantities: string[];
+            /** Format: double */
+            sample_period_s?: number | null;
+            table_id?: string;
+        };
         StructuredCommandRequest: (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             fixed_timestep?: number | null;
             integrator?: string | null;
             /** Format: int64 */
             max_steps?: number | null;
+            solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
             /** Format: double */
             until_seconds: number;
         } & {
@@ -7293,6 +8229,7 @@ export interface components {
             relax_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: double */
             relax_alpha?: number | null;
+            solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
             /** Format: double */
             torque_tolerance?: number | null;
             /** Format: double */
@@ -7828,16 +8765,25 @@ export interface components {
         };
         VisualizationResolvedTargetSettings: {
             active_quantity_id: string;
+            /** Format: double */
+            bounds_opacity: number;
             bounds_visible: boolean;
             geometry_scope: components["schemas"]["VisualizationTargetGeometryScope"];
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Legacy compatibility projection of `surface_opacity`.
+             */
             opacity: number;
             point_color: string;
+            /** Format: double */
+            point_opacity: number;
             points_visible: boolean;
             render_mode: components["schemas"]["VisualizationTargetRenderMode"];
             scalar_color_palette: string;
             surface_color_source: components["schemas"]["SurfaceColorSource"];
             surface_mono_color: string;
+            /** Format: double */
+            surface_opacity: number;
             surface_projection_mode: components["schemas"]["SurfaceFieldProjectionMode"];
             surface_visible: boolean;
             /** Format: double */
@@ -7878,6 +8824,7 @@ export interface components {
             /** Format: int32 */
             max_points?: number | null;
             overrides?: components["schemas"]["VisualizationOverrideState"][] | null;
+            planar?: null | components["schemas"]["PlanarVisualizationPatch"];
             quantity?: null | components["schemas"]["QuantityVisualizationPatch"];
             sampling?: null | components["schemas"]["SamplingVisualizationPatch"];
             slice?: null | components["schemas"]["SliceVisualizationPatch"];
@@ -7935,6 +8882,8 @@ export interface components {
             max_points: number;
             /** @description Object/part overrides. Endpoint projections must patch this state, not create a second store. */
             overrides: components["schemas"]["VisualizationOverrideState"][];
+            /** @description Independent canonical 2-D planar-monitor visualization profile. */
+            planar?: components["schemas"]["PlanarVisualizationState"];
             /** @description Canonical quantity/color state. New clients should read this instead of the flat compatibility fields. */
             quantity: components["schemas"]["QuantityVisualizationState"];
             /**
@@ -8010,7 +8959,7 @@ export interface components {
             parts: components["schemas"]["VisualizationTargetRegistryEntry"][];
         };
         /** @enum {string} */
-        VisualizationTargetRenderMode: "points" | "surface" | "surface+edges" | "wireframe";
+        VisualizationTargetRenderMode: "off" | "points" | "surface" | "surface+edges" | "wireframe";
         /** @enum {string} */
         VisualizationTargetSource: "airbox" | "scene_object" | "mesh_part";
         VisualizationTargetStyleOverride: {
@@ -9293,7 +10242,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactEntry"][];
+                    "application/json": components["schemas"]["ArtifactResource"][];
                 };
             };
             /** @description Artifact list not modified for the supplied ETag */
@@ -9433,7 +10382,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FEM topology (FMMT) */
+            /** @description Binary FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9449,7 +10398,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial binary FEM topology range (FMMT) */
+            /** @description Partial binary FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -9467,6 +10416,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Active FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9612,7 +10568,14 @@ export interface operations {
                     "application/json": components["schemas"]["FdmRegionMembershipResource"];
                 };
             };
-            /** @description No realized FDM region membership artifact */
+            /** @description No realized FDM region membership artifact yet */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -9699,6 +10662,294 @@ export interface operations {
             };
             /** @description Snapshot does not match the current domain */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_empty_mask: {
+        parameters: {
+            query?: {
+                component?: string;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                quality?: string;
+                vector_budget?: number;
+                include_mesh?: boolean;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One occupancy byte per pixel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_mesh_overlay: {
+        parameters: {
+            query?: {
+                component?: string;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                quality?: string;
+                vector_budget?: number;
+                include_mesh?: boolean;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMCS v3 planar mesh overlay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Structured grid has no FEM overlay */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_meta: {
+        parameters: {
+            query?: {
+                component?: string;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                quality?: string;
+                vector_budget?: number;
+                include_mesh?: boolean;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarFieldMetaResource"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported planar sampling */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_probe: {
+        parameters: {
+            query: {
+                u_m: number;
+                v_m: number;
+                component?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarFieldProbeResource"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_render_png: {
+        parameters: {
+            query?: {
+                component?: string;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                quality?: string;
+                vector_budget?: number;
+                include_mesh?: boolean;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PNG export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_scalar: {
+        parameters: {
+            query?: {
+                component?: string;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                quality?: string;
+                vector_budget?: number;
+                include_mesh?: boolean;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMVP v2 scalar raster */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_vectors: {
+        parameters: {
+            query?: {
+                component?: string;
+                scope_kind?: string;
+                scope_id?: string;
+                stage_id?: string;
+                snapshot_id?: string;
+                resolution_x?: number;
+                resolution_y?: number;
+                quality?: string;
+                vector_budget?: number;
+                include_mesh?: boolean;
+                expected_monitor_revision?: number;
+                expected_mesh_revision?: number;
+                expected_field_revision?: number;
+            };
+            header?: never;
+            path: {
+                quantity_id: string;
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMVP v2 vector raster */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Quantity is not vector-valued */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10508,9 +11759,10 @@ export interface operations {
                  * @description Optional hard cap for vector samples returned by the binary payload.
                  *
                  *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-                 *     Sampled responses are valid for vector glyph placement only; surface
-                 *     shader coloring requires either full-domain data or an explicit complete
-                 *     node-index mapping for the target surface.
+                 *     Sampled responses with a complete `node_indices` mapping and matching
+                 *     mesh topology are valid for vector glyph placement and surface projection
+                 *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
+                 *     requires complete field coverage.
                  */
                 max_samples?: number | null;
                 /**
@@ -11558,7 +12810,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary per-object FEM topology (FMMT) */
+            /** @description Binary per-object FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11574,7 +12826,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial per-object FEM topology range (FMMT) */
+            /** @description Partial per-object FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -11592,6 +12844,13 @@ export interface operations {
             };
             /** @description No active workspace or object mesh */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11623,7 +12882,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary per-part FEM topology (FMMT) */
+            /** @description Binary per-part FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11639,7 +12898,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial per-part FEM topology range (FMMT) */
+            /** @description Partial per-part FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -11657,6 +12916,13 @@ export interface operations {
             };
             /** @description No active workspace or mesh part */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11745,12 +13011,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -11813,12 +13081,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section image */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -11865,12 +13135,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section quality */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -12081,7 +13353,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary shared-domain FEM topology (FMMT) */
+            /** @description Binary shared-domain FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12097,7 +13369,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial shared-domain FEM topology range (FMMT) */
+            /** @description Partial shared-domain FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -12115,6 +13387,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Active FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12230,6 +13509,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Mixed or otherwise non-tet4 topology is not supported for histogram selection */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13644,6 +14932,207 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_planar_monitors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarMonitorCollectionResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_planar_monitors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanarMonitorCreateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarMonitorResource"];
+                };
+            };
+            /** @description Invalid monitor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision or identity conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_planar_monitors_monitor_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarMonitorResource"];
+                };
+            };
+            /** @description Monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_planar_monitors_monitor_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanarMonitorDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarMonitorCollectionResource"];
+                };
+            };
+            /** @description Monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_planar_monitors_monitor_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanarMonitorPatchRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarMonitorResource"];
+                };
+            };
+            /** @description Monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_planar_monitors_monitor_id_duplicate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanarMonitorDuplicateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanarMonitorResource"];
+                };
+            };
+            /** @description Monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_realized_regions: {
         parameters: {
             query?: never;
@@ -14662,6 +16151,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_preparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current simulation preparation resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimulationPreparationResource"];
+                };
+            };
+            /** @description Simulation preparation is not available */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

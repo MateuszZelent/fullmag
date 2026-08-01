@@ -85,7 +85,7 @@ study.solver(max_error=1e-6, integrator="rk45", g=2.115)
 # (Wspólny stan magnetyzacji dla symulacji interaktywnej)
 if not USE_SAVED_RELAXED_STATE:
     relax_result = study.relax(
-        tol=1e-6,                       # torque tolerance (max_dm_dt)
+        tolA=1e-6,                       # torque tolerance (max_dm_dt)
         max_steps=200_000,              # limit kroków
         # Native FEM GPU currently supports LLG-based relaxation paths.
         algorithm="projected_gradient_bb", 

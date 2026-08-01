@@ -51,6 +51,12 @@ buffers or keep `viewport-3d` mounted. Arbitrary line cuts and k-space products
 come from `analysis` resources rather than client-side filtering of a full FEM
 field.
 
+The authoritative 2D spatial contract is the canonical `PlanarMonitor` from
+`docs/physics/0970-planar-monitor-sampling-and-projection.md`. Backend sampling
+resolves FDM/FEM interpolation, physical-measure reduction, occupancy, and
+surface ambiguity. The client receives domain-neutral raster/vector/overlay
+resources and must not reimplement solver-specific sampling.
+
 ## 4. Viewport State Split
 
 | State | Owner |
@@ -63,6 +69,10 @@ field.
 | selected object | kernel selection store |
 | layer visibility | visualization resource for canonical state, local store for transient panels |
 | per-object display overrides | visualization resource/controller keyed by canonical object or airbox target |
+| active planar monitor and view profile | planar visualization resource; monitor definition remains a model resource |
+| monitor edit draft | inspector-local explicit draft transaction |
+| planar scalar/vector/occupancy buffers | revision-aware resource cache, never React state |
+| planar pan/zoom and hover probe | private field-map external store/renderer |
 | perf counters | diagnostics controller |
 
 ## 5. Rendering Budget
@@ -100,6 +110,12 @@ Unmounting a viewport module must release:
 - render targets;
 - GPU buffers;
 - large typed arrays not owned by the resource cache.
+
+For `field-map`, teardown also terminates its worker, closes owned
+`ImageBitmap` instances, cancels its invalidation RAF, disconnects its
+`ResizeObserver`, and releases renderer-local paths. Idle `field-map` schedules
+no frames. Pan/zoom may transform a cached raster locally; it does not resample
+the physical field.
 
 The diagnostics module must expose resource counts in development mode.
 

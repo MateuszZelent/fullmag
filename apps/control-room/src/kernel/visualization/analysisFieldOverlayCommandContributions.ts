@@ -553,27 +553,53 @@ function plotCommand(
           selectedFieldMatchesSource(context, source) &&
           !unsupported3DPlotReason(context),
       ),
-    run: (context) => {
+    run: async (context) => {
       const unsupportedReason = unsupported3DPlotReason(context);
       if (unsupportedReason) {
-        return {
-          status: "failed",
-          message: unsupportedReason,
-        };
+        return { status: "failed", message: unsupportedReason };
       }
       const state = overlayStateFromContext(context, source, defaultView);
       if (!state || !context.analysisFieldOverlay) {
-        return {
-          status: "failed",
-          message: "No analysis field is selected.",
-        };
+        return { status: "failed", message: "No analysis field is selected." };
       }
-      context.analysisFieldOverlay.set(state);
-      activateViewport3D(context);
-      return {
-        status: "completed",
-        message: `Plotting ${state.label} in 3D.`,
+      const adopt = () => {
+        context.analysisFieldOverlay!.set(state);
+        activateViewport3D(context);
       };
+      if (!context.chartViewportHandoff) {
+        adopt();
+        return { status: "completed", message: `Plotting ${state.label} in 3D.` };
+      }
+      const selection = context.selection?.get();
+      const status = await context.chartViewportHandoff.run(
+        {
+          commandId: id,
+          fieldRef: {
+            fieldId: state.fieldId,
+            resourceKey: `data/fields/${encodeURIComponent(state.fieldId)}`,
+          },
+          selection: {
+            resourceKey:
+              selection?.ref?.type === "frequency-domain"
+                ? selection.ref.resourceRef ?? state.fieldId
+                : state.fieldId,
+            rowIds: selection?.nodeId ? [selection.nodeId] : [],
+            semanticTarget: selection?.kind ?? source,
+          },
+        },
+        async (signal) => {
+          await Promise.resolve();
+          if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+          return state;
+        },
+        adopt,
+      );
+      return status === "completed"
+        ? { status, message: `Plotting  in 3D.` }
+        : {
+            status: status === "failed" ? "failed" : "cancelled",
+            message: context.chartViewportHandoff.getSnapshot().message ?? undefined,
+          };
     },
     scope: "selection",
   };

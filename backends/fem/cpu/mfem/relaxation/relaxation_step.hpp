@@ -14,11 +14,20 @@ namespace fullmag::fem {
 
 struct Context;
 
+struct AcceptedEnergyProof {
+    bool available = false;
+    double delta_j = 0.0;
+    double roundoff_bound_j = 0.0;
+    double delta_upper_j = 0.0;
+    double armijo_rhs_j = 0.0;
+};
+
 struct FemRelaxationRuntimeState {
     double step_size = 1.0e-6;
     bool use_bb1 = true;
     uint64_t reset_consecutive = 0;
     uint64_t accepted_steps = 0;
+    AcceptedEnergyProof accepted_energy_proof;
     std::vector<double> nonlinear_cg_direction;
     mfem::SparseMatrix *exchange_mass_preconditioner = nullptr;
     const mfem::SparseMatrix *exchange_mass_preconditioner_mass = nullptr;

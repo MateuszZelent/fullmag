@@ -13,6 +13,7 @@ import type {
   Viewport3DTopologyIndexBundle,
   Viewport3DTopologyIndexPartInput,
 } from "../viewport3dTopologyIndexModel";
+import { topologyIndexBundleByteLength } from "../viewport3dTopologyIndexModel";
 
 export type Viewport3DTopologyIndexBuildStatus =
   | "building"
@@ -171,7 +172,7 @@ export function putViewport3DTopologyIndexBundleInCache({
   const token = {};
   const entry: Viewport3DTopologyIndexBundleCacheEntry = {
     bundle,
-    estimatedBytes: estimateTopologyIndexBundleBytes(bundle),
+    estimatedBytes: topologyIndexBundleByteLength(bundle),
     key,
     lastUsedAtMs: now(),
     refCount: 1,
@@ -374,6 +375,13 @@ export function useViewport3DTopologyIndexBundle({
       magneticSurfacePartsByPartId,
       topology: {
         boundaryFaces: topology.boundaryFaces,
+        cellGlobalOrdinals: topology.cellGlobalOrdinals,
+        cellNodes: topology.cellNodes,
+        cellOffsets: topology.cellOffsets,
+        cellTypes: topology.cellTypes,
+        facetNodes: topology.facetNodes,
+        facetOffsets: topology.facetOffsets,
+        facetTypes: topology.facetTypes,
         indices: topology.indices,
         nodeCount: topology.nodeCount,
       },
@@ -487,39 +495,6 @@ function evictTopologyIndexBundleCache(): void {
     topologyIndexBundleCache.delete(evictable.key);
     topologyIndexBundleBuffers.delete(evictable.token);
   }
-}
-
-function estimateTopologyIndexBundleBytes(
-  bundle: Viewport3DTopologyIndexBundle,
-): number {
-  let total =
-    (bundle.fallbackSurfaceEdgeIndices?.byteLength ?? 0) +
-    bundle.fallbackSurfaceIndices.byteLength +
-    bundle.fallbackSurfaceNodeIndices.byteLength +
-    bundle.fallbackVolumeEdgeIndices.byteLength;
-  for (const indices of bundle.magneticPartsById.values()) {
-    total += estimatePreparedPartTopologyIndexBytes(indices);
-  }
-  for (const indices of bundle.airboxPartsById.values()) {
-    total += estimatePreparedPartTopologyIndexBytes(indices);
-  }
-  return total;
-}
-
-function estimatePreparedPartTopologyIndexBytes(
-  indices: Viewport3DTopologyIndexBundle["magneticPartsById"] extends Map<
-    string,
-    infer TIndices
-  >
-    ? TIndices
-    : never,
-): number {
-  return (
-    (indices.edgeIndices?.byteLength ?? 0) +
-    (indices.surfaceIndices?.byteLength ?? 0) +
-    (indices.surfaceNodeIndices?.byteLength ?? 0) +
-    (indices.volumeEdgeIndices?.byteLength ?? 0)
-  );
 }
 
 function now(): number {

@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import { displayValue } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
@@ -22,8 +22,7 @@ export function HysteresisOrientationInspector({
     "field_axis";
 
   return (
-    <InspectorSection
-      value="hysteresis-orientation"
+    <InspectorGroup
       title="Field Orientation"
       badge={resolvedOrientation ?? "pending"}
     >
@@ -41,7 +40,7 @@ export function HysteresisOrientationInspector({
       {draft?.orientationMode === "global" && (
         <FieldRow label="Authored direction" value={draft.customDirection ?? "n/a"} />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

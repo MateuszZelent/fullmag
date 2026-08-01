@@ -15,7 +15,9 @@ use fullmag_engine::{
     ExchangeLlgProblem, ExchangeLlgState, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
+use fullmag_fdm_demag::{
+    compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
+};
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
     FdmMultilayerPlanIR, FdmPlanIR, GridDimensions, IntegratorChoice, OutputIR,
@@ -24,19 +26,19 @@ use fullmag_ir::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
-use crate::fdm::validate_multilayer_grid_budget;
 use crate::fdm::gpu::cuda::native::{is_cuda_available, DeviceInfo, NativeFdmBackend};
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
+use crate::fdm::validate_multilayer_grid_budget;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmMultilayerTransferTelemetry, FieldSnapshot, RunError,
+    RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -55,11 +57,117 @@ struct LayerContext {
 struct LayerGpuContext {
     backend: NativeFdmBackend,
     cell_count: usize,
+    transfer_counters: CudaTransferCounters,
 }
 
 struct NativeMultilayerDemagOperator {
     backend: NativeFdmBackend,
     layer_cell_counts: Vec<usize>,
+    transfer_counters: CudaTransferCounters,
+}
+
+/// Exact payload accounting for FDM vectors which cross the host/CUDA boundary.
+/// Scalar driver calls are not counted as field transfers.
+#[derive(Debug, Clone, Copy, Default)]
+struct CudaTransferCounters {
+    h2d_transfer_count: u64,
+    d2h_transfer_count: u64,
+    h2d_bytes: u64,
+    d2h_bytes: u64,
+}
+
+impl CudaTransferCounters {
+    fn record_h2d_vector(&mut self, cell_count: usize, scalar_bytes: usize) {
+        self.h2d_transfer_count = self
+            .h2d_transfer_count
+            .checked_add(1)
+            .expect("CUDA H2D transfer count overflow");
+        self.h2d_bytes = self
+            .h2d_bytes
+            .checked_add(vector_payload_bytes(cell_count, scalar_bytes))
+            .expect("CUDA H2D transfer bytes overflow");
+    }
+
+    fn record_d2h_vector(&mut self, cell_count: usize, scalar_bytes: usize) {
+        self.d2h_transfer_count = self
+            .d2h_transfer_count
+            .checked_add(1)
+            .expect("CUDA D2H transfer count overflow");
+        self.d2h_bytes = self
+            .d2h_bytes
+            .checked_add(vector_payload_bytes(cell_count, scalar_bytes))
+            .expect("CUDA D2H transfer bytes overflow");
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.h2d_transfer_count = self
+            .h2d_transfer_count
+            .checked_add(other.h2d_transfer_count)
+            .expect("CUDA H2D transfer count overflow");
+        self.d2h_transfer_count = self
+            .d2h_transfer_count
+            .checked_add(other.d2h_transfer_count)
+            .expect("CUDA D2H transfer count overflow");
+        self.h2d_bytes = self
+            .h2d_bytes
+            .checked_add(other.h2d_bytes)
+            .expect("CUDA H2D transfer bytes overflow");
+        self.d2h_bytes = self
+            .d2h_bytes
+            .checked_add(other.d2h_bytes)
+            .expect("CUDA D2H transfer bytes overflow");
+    }
+
+    fn assisted_telemetry(self) -> FdmMultilayerTransferTelemetry {
+        FdmMultilayerTransferTelemetry {
+            execution_shape: "cuda_assisted_multilayer".to_string(),
+            data_residency: "host_authoritative_with_cuda_field_roundtrips".to_string(),
+            h2d_transfer_count: self.h2d_transfer_count,
+            d2h_transfer_count: self.d2h_transfer_count,
+            h2d_bytes: self.h2d_bytes,
+            d2h_bytes: self.d2h_bytes,
+        }
+    }
+}
+
+fn vector_payload_bytes(cell_count: usize, scalar_bytes: usize) -> u64 {
+    u64::try_from(
+        cell_count
+            .checked_mul(3)
+            .and_then(|components| components.checked_mul(scalar_bytes))
+            .expect("CUDA vector transfer payload overflow"),
+    )
+    .expect("CUDA vector transfer payload does not fit u64")
+}
+
+impl LayerGpuContext {
+    fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+        self.backend.upload_magnetization(magnetization)?;
+        self.transfer_counters
+            .record_h2d_vector(self.cell_count, std::mem::size_of::<f64>());
+        Ok(())
+    }
+
+    fn copy_h_ex(&mut self) -> Result<Vec<[f64; 3]>, RunError> {
+        let values = self.backend.copy_h_ex(self.cell_count)?;
+        self.transfer_counters
+            .record_d2h_vector(self.cell_count, std::mem::size_of::<f64>());
+        Ok(values)
+    }
+
+    fn upload_magnetization_f32(&mut self, magnetization: &[[f32; 3]]) -> Result<(), RunError> {
+        self.backend.upload_magnetization_f32(magnetization)?;
+        self.transfer_counters
+            .record_h2d_vector(self.cell_count, std::mem::size_of::<f32>());
+        Ok(())
+    }
+
+    fn copy_h_ex_f32(&mut self) -> Result<Vec<[f32; 3]>, RunError> {
+        let values = self.backend.copy_h_ex_f32(self.cell_count)?;
+        self.transfer_counters
+            .record_d2h_vector(self.cell_count, std::mem::size_of::<f32>());
+        Ok(values)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +216,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     validate_multilayer_grid_budget(plan)?;
     if !is_cuda_available() {
         return Err(RunError {
@@ -266,10 +375,15 @@ fn build_contexts_and_states(
                         axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
                 }),
-                cubic_anisotropy: layer.material.cubic_anisotropy_kc1.map(|kc1| {
-                    CubicAnisotropyConfig {
-                        kc1,
+                cubic_anisotropy: layer
+                    .material
+                    .cubic_anisotropy_kc1
+                    .or(layer.material.cubic_anisotropy_kc2)
+                    .or(layer.material.cubic_anisotropy_kc3)
+                    .map(|_| CubicAnisotropyConfig {
+                        kc1: layer.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                         kc2: layer.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                        kc3: layer.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                         axis1: layer
                             .material
                             .cubic_anisotropy_axis1
@@ -278,8 +392,7 @@ fn build_contexts_and_states(
                             .material
                             .cubic_anisotropy_axis2
                             .unwrap_or([0.0, 1.0, 0.0]),
-                    }
-                }),
+                    }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
@@ -318,9 +431,9 @@ fn build_contexts_and_states(
                 plan.periodicity
                     .as_ref()
                     .map(|periodicity| {
-                        periodicity.axes.map(|axis| {
-                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
-                        })
+                        periodicity
+                            .axes
+                            .map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
                     })
                     .unwrap_or([false; 3]),
             ),
@@ -340,6 +453,7 @@ fn build_gpu_contexts(plan: &FdmMultilayerPlanIR) -> Result<Vec<LayerGpuContext>
             Ok(LayerGpuContext {
                 backend: NativeFdmBackend::create(&single_plan)?,
                 cell_count,
+                transfer_counters: CudaTransferCounters::default(),
             })
         })
         .collect()
@@ -371,6 +485,7 @@ fn build_native_multilayer_demag_operator(
     Ok(Some(NativeMultilayerDemagOperator {
         backend: NativeFdmBackend::create_multilayer_v2(plan)?,
         layer_cell_counts,
+        transfer_counters: CudaTransferCounters::default(),
     }))
 }
 
@@ -382,14 +497,22 @@ impl NativeMultilayerDemagOperator {
         for (layer_index, state) in states.iter().enumerate() {
             self.backend
                 .upload_layer_magnetization(layer_index as u32, state.magnetization())?;
+            self.transfer_counters.record_h2d_vector(
+                self.layer_cell_counts[layer_index],
+                std::mem::size_of::<f64>(),
+            );
         }
         self.backend.refresh_multilayer_demag()?;
         self.layer_cell_counts
             .iter()
             .enumerate()
             .map(|(layer_index, cell_count)| {
-                self.backend
-                    .copy_layer_h_demag(layer_index as u32, *cell_count)
+                let values = self
+                    .backend
+                    .copy_layer_h_demag(layer_index as u32, *cell_count)?;
+                self.transfer_counters
+                    .record_d2h_vector(*cell_count, std::mem::size_of::<f64>());
+                Ok(values)
             })
             .collect()
     }
@@ -401,14 +524,22 @@ impl NativeMultilayerDemagOperator {
         for (layer_index, state) in states.iter().enumerate() {
             self.backend
                 .upload_layer_magnetization_f32(layer_index as u32, &state.magnetization)?;
+            self.transfer_counters.record_h2d_vector(
+                self.layer_cell_counts[layer_index],
+                std::mem::size_of::<f32>(),
+            );
         }
         self.backend.refresh_multilayer_demag()?;
         self.layer_cell_counts
             .iter()
             .enumerate()
             .map(|(layer_index, cell_count)| {
-                self.backend
-                    .copy_layer_h_demag_f32(layer_index as u32, *cell_count)
+                let values = self
+                    .backend
+                    .copy_layer_h_demag_f32(layer_index as u32, *cell_count)?;
+                self.transfer_counters
+                    .record_d2h_vector(*cell_count, std::mem::size_of::<f32>());
+                Ok(values)
             })
             .collect()
     }
@@ -437,12 +568,18 @@ fn execute_cuda_assisted_multilayer_double(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
+    })?;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let native_demag_enabled = native_demag.is_some();
-    let provenance =
-        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
+    let provenance = assisted_multilayer_provenance(
+        plan,
+        device_info.clone(),
+        native_demag_enabled,
+        CudaTransferCounters::default(),
+    )?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -475,6 +612,7 @@ fn execute_cuda_assisted_multilayer_double(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut cancelled = false;
     let mut paused = false;
     while current_time(&states) < until_seconds {
@@ -530,7 +668,7 @@ fn execute_cuda_assisted_multilayer_double(
             let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,
@@ -560,7 +698,7 @@ fn execute_cuda_assisted_multilayer_double(
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &latest_stats,
                     energy_plateau_range,
@@ -613,6 +751,13 @@ fn execute_cuda_assisted_multilayer_double(
         })?;
     }
 
+    let transfer_counters = assisted_transfer_counters(&gpu_contexts, native_demag.as_ref());
+    artifacts.update_provenance(assisted_multilayer_provenance(
+        plan,
+        device_info,
+        native_demag_enabled,
+        transfer_counters,
+    )?);
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
         RunStatus::Paused
@@ -626,6 +771,7 @@ fn execute_cuda_assisted_multilayer_double(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: Some(final_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: final_stats.step,
             relaxation_time_s: Some(final_stats.time),
@@ -671,12 +817,18 @@ fn execute_cuda_assisted_multilayer_single(
         .and_then(|gpu| gpu.backend.device_info().ok());
 
     let initial_magnetization = flatten_layers_single(&states);
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
+    })?;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let native_demag_enabled = native_demag.is_some();
-    let provenance =
-        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
+    let provenance = assisted_multilayer_provenance(
+        plan,
+        device_info.clone(),
+        native_demag_enabled,
+        CudaTransferCounters::default(),
+    )?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -709,6 +861,7 @@ fn execute_cuda_assisted_multilayer_single(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut cancelled = false;
     let mut paused = false;
     while current_time_single(&states) < until_seconds {
@@ -764,7 +917,7 @@ fn execute_cuda_assisted_multilayer_single(
             let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,
@@ -794,7 +947,7 @@ fn execute_cuda_assisted_multilayer_single(
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &latest_stats,
                     energy_plateau_range,
@@ -847,6 +1000,13 @@ fn execute_cuda_assisted_multilayer_single(
         })?;
     }
 
+    let transfer_counters = assisted_transfer_counters(&gpu_contexts, native_demag.as_ref());
+    artifacts.update_provenance(assisted_multilayer_provenance(
+        plan,
+        device_info,
+        native_demag_enabled,
+        transfer_counters,
+    )?);
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
         RunStatus::Paused
@@ -860,6 +1020,7 @@ fn execute_cuda_assisted_multilayer_single(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: Some(final_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: final_stats.step,
             relaxation_time_s: Some(final_stats.time),
@@ -886,8 +1047,15 @@ fn assisted_multilayer_provenance(
     plan: &FdmMultilayerPlanIR,
     device_info: Option<DeviceInfo>,
     native_demag_enabled: bool,
-) -> ExecutionProvenance {
-    ExecutionProvenance {
+    transfer_counters: CudaTransferCounters,
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = crate::resolve_timestep_policy(
+        Some(plan.integrator),
+        plan.fixed_timestep,
+        None,
+        crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+    )?;
+    Ok(ExecutionProvenance {
         execution_engine: "cuda_assisted_multilayer".to_string(),
         precision: precision_name(plan.precision).to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -920,13 +1088,30 @@ fn assisted_multilayer_provenance(
             .map(|info| info.compute_capability.clone()),
         cuda_driver_version: device_info.as_ref().map(|info| info.driver_version),
         cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
+        timestep_policy: Some(timestep_policy),
+        fdm_multilayer_transfer_telemetry: Some(transfer_counters.assisted_telemetry()),
         ..Default::default()
+    })
+}
+
+fn assisted_transfer_counters(
+    gpu_contexts: &[LayerGpuContext],
+    native_demag: Option<&NativeMultilayerDemagOperator>,
+) -> CudaTransferCounters {
+    let mut counters = CudaTransferCounters::default();
+    for context in gpu_contexts {
+        counters.merge(context.transfer_counters);
     }
+    if let Some(native_demag) = native_demag {
+        counters.merge(native_demag.transfer_counters);
+    }
+    counters
 }
 
 fn build_native_stacked_cuda_plan(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<Option<NativeStackedCudaPlan>, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     let Some(first_layer) = plan.layers.first() else {
         return Ok(None);
     };
@@ -1104,6 +1289,7 @@ fn build_native_stacked_cuda_plan(
             oersted_radius: None,
             oersted_center: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: plan.interfacial_dmi,
             bulk_dmi: plan.bulk_dmi,
             dind_field: None,
@@ -1134,10 +1320,17 @@ fn execute_native_stacked_cuda_multilayer(
     mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
     let device_info = backend.device_info().ok();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut steps: Vec<StepStats> = Vec::new();
+    let timestep_policy = crate::resolve_timestep_policy(
+        native.combined_plan.integrator,
+        native.combined_plan.fixed_timestep,
+        native.combined_plan.adaptive_timestep.as_ref(),
+        crate::types::TimestepExecutionLane::fdm_cuda(native.combined_plan.precision),
+    )?;
     let provenance = ExecutionProvenance {
         execution_engine: "cuda_native_multilayer_single_grid".to_string(),
         precision: precision_name(native.combined_plan.precision).to_string(),
@@ -1157,6 +1350,7 @@ fn execute_native_stacked_cuda_multilayer(
             .map(|info| info.compute_capability.clone()),
         cuda_driver_version: device_info.as_ref().map(|info| info.driver_version),
         cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
+        timestep_policy: Some(timestep_policy.clone()),
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -1167,17 +1361,7 @@ fn execute_native_stacked_cuda_multilayer(
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
-    let mut dt = native
-        .combined_plan
-        .fixed_timestep
-        .or_else(|| {
-            native
-                .combined_plan
-                .adaptive_timestep
-                .as_ref()
-                .and_then(|a| a.dt_initial)
-        })
-        .unwrap_or(1e-13);
+    let mut dt = timestep_policy.initial_dt();
     let initial_magnetization = flatten_layers(
         &plan
             .layers
@@ -1202,6 +1386,7 @@ fn execute_native_stacked_cuda_multilayer(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut latest_stats: Option<StepStats> = None;
     let mut cancelled = false;
     let mut paused = false;
@@ -1254,7 +1439,7 @@ fn execute_native_stacked_cuda_multilayer(
                 let action = on_step(StepUpdate {
                     stats: stats.clone(),
                     grid: native.global_grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization: None,
                     preview_field: None,
                     cached_preview_fields: None,
@@ -1280,7 +1465,7 @@ fn execute_native_stacked_cuda_multilayer(
             let action = on_step(StepUpdate {
                 stats: stats.clone(),
                 grid: native.global_grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,
@@ -1310,7 +1495,7 @@ fn execute_native_stacked_cuda_multilayer(
         let energy_plateau_range = energy_plateau.record(stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &stats,
                     energy_plateau_range,
@@ -1365,6 +1550,7 @@ fn execute_native_stacked_cuda_multilayer(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: Some(final_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: final_stats.step,
             relaxation_time_s: Some(final_stats.time),
@@ -1468,6 +1654,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         oersted_radius: None,
         oersted_center: None,
         temperature: None,
+        thermal_seed_config: None,
         interfacial_dmi: plan.interfacial_dmi,
         bulk_dmi: plan.bulk_dmi,
         dind_field: None,
@@ -1500,11 +1687,13 @@ fn build_multilayer_demag_runtime(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
-        RunError {
+    let pair_capacity = plan
+        .layers
+        .len()
+        .checked_mul(plan.layers.len())
+        .ok_or_else(|| RunError {
             message: "FDM multilayer kernel-pair count overflow before allocation".to_string(),
-        }
-    })?;
+        })?;
     let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
@@ -1548,11 +1737,13 @@ fn build_multilayer_demag_runtime_f32(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
-        RunError {
+    let pair_capacity = plan
+        .layers
+        .len()
+        .checked_mul(plan.layers.len())
+        .ok_or_else(|| RunError {
             message: "FDM multilayer f32 kernel-pair count overflow before allocation".to_string(),
-        }
-    })?;
+        })?;
     let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
@@ -1618,10 +1809,10 @@ fn observe_multilayer_cuda(
 
     for ((index, context), gpu) in contexts.iter().enumerate().zip(gpu_contexts.iter_mut()) {
         let state = &states[index];
-        gpu.backend.upload_magnetization(state.magnetization())?;
+        gpu.upload_magnetization(state.magnetization())?;
         gpu.backend.refresh_observables()?;
 
-        let mut local_exchange = gpu.backend.copy_h_ex(gpu.cell_count)?;
+        let mut local_exchange = gpu.copy_h_ex()?;
         zero_outside_active(&mut local_exchange, context.problem.active_mask.as_deref());
         let local_observables = context.problem.observe(state).map_err(|error| RunError {
             message: format!(
@@ -1827,10 +2018,10 @@ fn llg_rhs_multilayer_cuda(
         .zip(gpu_contexts.iter_mut())
         .zip(states.iter())
     {
-        gpu.backend.upload_magnetization(state.magnetization())?;
+        gpu.upload_magnetization(state.magnetization())?;
         gpu.backend.refresh_observables()?;
 
-        let mut local_exchange = gpu.backend.copy_h_ex(gpu.cell_count)?;
+        let mut local_exchange = gpu.copy_h_ex()?;
         zero_outside_active(&mut local_exchange, context.problem.active_mask.as_deref());
         let local_observables = context.problem.observe(state).map_err(|error| RunError {
             message: format!(
@@ -1943,10 +2134,10 @@ fn observe_multilayer_cuda_single(
     for ((index, context), gpu) in contexts.iter().enumerate().zip(gpu_contexts.iter_mut()) {
         let state = &states[index];
         let local_magnetization = to_f64_vectors(&state.magnetization);
-        gpu.backend.upload_magnetization_f32(&state.magnetization)?;
+        gpu.upload_magnetization_f32(&state.magnetization)?;
         gpu.backend.refresh_observables()?;
 
-        let mut local_exchange = gpu.backend.copy_h_ex_f32(gpu.cell_count)?;
+        let mut local_exchange = gpu.copy_h_ex_f32()?;
         zero_outside_active_f32(&mut local_exchange, context.problem.active_mask.as_deref());
         let local_observables = observe_context_f32(context, &state.magnetization)?;
         let local_observable_exchange = to_f32_vectors(&local_observables.exchange_field);
@@ -2212,10 +2403,10 @@ fn llg_rhs_multilayer_cuda_single(
         .zip(gpu_contexts.iter_mut())
         .zip(magnetizations.iter())
     {
-        gpu.backend.upload_magnetization_f32(magnetization)?;
+        gpu.upload_magnetization_f32(magnetization)?;
         gpu.backend.refresh_observables()?;
 
-        let mut local_exchange = gpu.backend.copy_h_ex_f32(gpu.cell_count)?;
+        let mut local_exchange = gpu.copy_h_ex_f32()?;
         zero_outside_active_f32(&mut local_exchange, context.problem.active_mask.as_deref());
         let local_observables = observe_context_f32(context, magnetization)?;
         let local_observable_exchange = to_f32_vectors(&local_observables.exchange_field);
@@ -2355,7 +2546,7 @@ fn observe_native_stacked_fields(
         0.0
     };
     let external_energy = if native.combined_plan.external_field.is_some() {
-        field_energy_from_full(
+        external_field_energy_from_full(
             magnetization_full,
             external_full,
             active_mask,
@@ -2378,7 +2569,8 @@ fn observe_native_stacked_fields(
     let mut anisotropy_field = Vec::new();
     let mut anisotropy_energy = 0.0;
     let mut dmi_energy = 0.0;
-    let local_energy_factor = -0.5 * MU0 * ms * cell_volume;
+    let local_self_field_energy_factor = -0.5 * MU0 * ms * cell_volume;
+    let local_external_field_energy_factor = -MU0 * ms * cell_volume;
     for layer in &native.layers {
         let mut local_exchange_energy = 0.0;
         let mut local_demag_energy = 0.0;
@@ -2405,15 +2597,15 @@ fn observe_native_stacked_fields(
                     active_count += 1;
                     if native.combined_plan.enable_exchange {
                         local_exchange_energy +=
-                            local_energy_factor * dot(m, exchange_full[global_index]);
+                            local_self_field_energy_factor * dot(m, exchange_full[global_index]);
                     }
                     if native.combined_plan.enable_demag {
                         local_demag_energy +=
-                            local_energy_factor * dot(m, demag_full[global_index]);
+                            local_self_field_energy_factor * dot(m, demag_full[global_index]);
                     }
                     if native.combined_plan.external_field.is_some() {
-                        local_external_energy +=
-                            local_energy_factor * dot(m, external_full[global_index]);
+                        local_external_energy += local_external_field_energy_factor
+                            * dot(m, external_full[global_index]);
                     }
                 }
             }
@@ -2593,6 +2785,23 @@ fn field_energy_from_full(
             continue;
         }
         sum += -0.5 * MU0 * ms * dot(magnetization[index], field[index]) * cell_volume;
+    }
+    sum
+}
+
+fn external_field_energy_from_full(
+    magnetization: &[[f64; 3]],
+    field: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
+    ms: f64,
+    cell_volume: f64,
+) -> f64 {
+    let mut sum = 0.0;
+    for index in 0..magnetization.len() {
+        if active_mask.is_some_and(|mask| !mask[index]) {
+            continue;
+        }
+        sum += -MU0 * ms * dot(magnetization[index], field[index]) * cell_volume;
     }
     sum
 }
@@ -2922,9 +3131,55 @@ mod tests {
     use crate::fdm::cpu::multilayer_reference;
     use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
-    fn manufactured_rhs_single(
-        state: &[Vec<[f32; 3]>],
-    ) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
+    #[test]
+    fn assisted_multilayer_telemetry_counts_vector_roundtrips() {
+        let mut counters = CudaTransferCounters::default();
+        counters.record_h2d_vector(16, std::mem::size_of::<f64>());
+        counters.record_h2d_vector(16, std::mem::size_of::<f32>());
+        counters.record_d2h_vector(16, std::mem::size_of::<f64>());
+        counters.record_d2h_vector(16, std::mem::size_of::<f32>());
+
+        let telemetry = counters.assisted_telemetry();
+        assert_eq!(telemetry.execution_shape, "cuda_assisted_multilayer");
+        assert_eq!(
+            telemetry.data_residency,
+            "host_authoritative_with_cuda_field_roundtrips"
+        );
+        assert_eq!(telemetry.h2d_transfer_count, 2);
+        assert_eq!(telemetry.d2h_transfer_count, 2);
+        assert_eq!(telemetry.h2d_bytes, 576);
+        assert_eq!(telemetry.d2h_bytes, 576);
+    }
+
+    #[test]
+    fn assisted_multilayer_provenance_exposes_measured_transfer_telemetry() {
+        let mut counters = CudaTransferCounters::default();
+        counters.record_h2d_vector(16, std::mem::size_of::<f64>());
+        counters.record_d2h_vector(16, std::mem::size_of::<f64>());
+
+        let provenance = assisted_multilayer_provenance(
+            &make_plan(false, ExecutionPrecision::Double),
+            None,
+            false,
+            counters,
+        )
+        .expect("assisted plan should resolve a provenance contract");
+        let telemetry = provenance
+            .fdm_multilayer_transfer_telemetry
+            .expect("assisted execution must expose transfer telemetry");
+
+        assert_eq!(telemetry.execution_shape, "cuda_assisted_multilayer");
+        assert_eq!(
+            telemetry.data_residency,
+            "host_authoritative_with_cuda_field_roundtrips"
+        );
+        assert_eq!(telemetry.h2d_transfer_count, 1);
+        assert_eq!(telemetry.d2h_transfer_count, 1);
+        assert_eq!(telemetry.h2d_bytes, 384);
+        assert_eq!(telemetry.d2h_bytes, 384);
+    }
+
+    fn manufactured_rhs_single(state: &[Vec<[f32; 3]>]) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
         Ok(state
             .iter()
             .map(|layer| {
@@ -2979,6 +3234,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
+            grid_certificate: None,
             resolved_periodic_images: None,
             layers: vec![
                 FdmLayerPlanIR {
@@ -3062,10 +3318,35 @@ mod tests {
         plan
     }
 
+    #[test]
+    fn cuda_assisted_entry_rejects_adaptive_before_cuda_probe() {
+        let mut plan = make_assisted_plan(false, ExecutionPrecision::Double);
+        plan.integrator = IntegratorChoice::Rk45;
+        plan.fixed_timestep = None;
+        let error = match execute_cuda_fdm_multilayer(&plan, 1e-13, &[]) {
+            Ok(_) => panic!("adaptive CUDA must reject"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("adaptive time stepping"));
+    }
+
+    #[test]
+    fn native_stacked_build_boundary_rejects_adaptive_before_materialization() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.integrator = IntegratorChoice::Rk23;
+        plan.fixed_timestep = None;
+        let error = match build_native_stacked_cuda_plan(&plan) {
+            Ok(_) => panic!("adaptive native stack must reject"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("adaptive time stepping"));
+    }
+
     fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [2, 1, 1],
+            grid_certificate: None,
             resolved_periodic_images: None,
             field_refresh: None,
             layers: vec![
@@ -3219,7 +3500,10 @@ mod tests {
         let native = resolve_cuda_multilayer_execution_shape(&plan)
             .expect("native stacked RK45 should be a valid CUDA multilayer execution shape")
             .expect("plan should use native single-grid fast path");
-        assert_eq!(native.combined_plan.integrator, Some(IntegratorChoice::Rk45));
+        assert_eq!(
+            native.combined_plan.integrator,
+            Some(IntegratorChoice::Rk45)
+        );
 
         let mut assisted = make_assisted_plan(false, ExecutionPrecision::Double);
         assisted.integrator = IntegratorChoice::Rk23;
@@ -3280,6 +3564,43 @@ mod tests {
                 .is_some_and(|value| value.abs() > 0.0),
             "native stacked per-object scalars must include layer-local DMI energy"
         );
+    }
+
+    #[test]
+    fn native_stacked_zeeman_energy_has_no_self_field_half_factor() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let applied_field = [2.0e3, 2.0e3, 0.0];
+        plan.external_field = Some(applied_field);
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("native stacked plan should build")
+            .expect("plan should be eligible for native stacked fast path");
+        let cell_count = native.combined_plan.initial_magnetization.len();
+        let zero_field = vec![[0.0, 0.0, 0.0]; cell_count];
+        let external_field = vec![applied_field; cell_count];
+
+        let observables = observe_native_stacked_fields(
+            &native,
+            &native.combined_plan.initial_magnetization,
+            &zero_field,
+            &zero_field,
+            &external_field,
+            &zero_field,
+        )
+        .expect("native stacked field assembly should compute");
+
+        let cell_volume = 2e-9 * 2e-9 * 1e-9;
+        let expected_per_layer = -MU0 * 800e3 * cell_volume * 16.0 * 2.0e3;
+        let expected_total = 2.0 * expected_per_layer;
+        assert!((observables.external_energy - expected_total).abs() < 1e-30);
+        for magnet_name in ["free", "ref"] {
+            let local = observables
+                .per_object_scalars
+                .get(magnet_name)
+                .and_then(|values| values.get("e_ext"))
+                .copied()
+                .expect("each layer must publish Zeeman energy");
+            assert!((local - expected_per_layer).abs() < 1e-30);
+        }
     }
 
     #[test]

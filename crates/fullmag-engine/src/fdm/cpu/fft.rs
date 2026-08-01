@@ -4,9 +4,7 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 
-use crate::fdm::shared::types::{
-    AxisBoundary, FdmBoundaryPolicy, ResolvedFdmPeriodicWorkspace,
-};
+use crate::fdm::shared::types::{AxisBoundary, FdmBoundaryPolicy, ResolvedFdmPeriodicWorkspace};
 
 use crate::newell;
 use crate::Vector3;
@@ -240,17 +238,8 @@ impl FftWorkspace {
         boundary: &FdmBoundaryPolicy,
         image_counts: [u32; 3],
     ) -> Self {
-        Self::try_new_with_boundary(
-            nx,
-            ny,
-            nz,
-            dx,
-            dy,
-            dz,
-            boundary,
-            image_counts,
-        )
-        .unwrap_or_else(|reason| panic!("FDM periodic FFT workspace rejected: {reason}"))
+        Self::try_new_with_boundary(nx, ny, nz, dx, dy, dz, boundary, image_counts)
+            .unwrap_or_else(|reason| panic!("FDM periodic FFT workspace rejected: {reason}"))
     }
 
     pub fn try_new_with_boundary(
@@ -267,11 +256,7 @@ impl FftWorkspace {
         let pbc_y = matches!(boundary.y, AxisBoundary::Periodic);
         let pbc_z = matches!(boundary.z, AxisBoundary::Periodic);
 
-        checked_workspace_budget(
-            [nx, ny, nz],
-            [pbc_x, pbc_y, pbc_z],
-            image_counts,
-        )?;
+        checked_workspace_budget([nx, ny, nz], [pbc_x, pbc_y, pbc_z], image_counts)?;
 
         Ok(Self::new_with_boundary_unchecked(
             nx,

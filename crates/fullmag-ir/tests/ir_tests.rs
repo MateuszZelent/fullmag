@@ -2,6 +2,635 @@ use fullmag_ir::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[test]
+fn planar_monitor_operators_round_trip_with_canonical_snake_case() {
+    let fixtures = [
+        serde_json::json!({"kind": "plane_sample"}),
+        serde_json::json!({"kind": "slab_average", "thickness_m": 5e-9}),
+        serde_json::json!({
+            "kind": "depth_projection",
+            "reduction": "mean_occupied",
+            "empty_policy": "exclude_empty"
+        }),
+        serde_json::json!({
+            "kind": "surface_projection",
+            "boundary": {"kind": "object_boundary"},
+            "visibility_policy": "frontmost"
+        }),
+    ];
+
+    for fixture in fixtures {
+        let operator: PlanarOperatorIR = serde_json::from_value(fixture.clone()).unwrap();
+        assert_eq!(serde_json::to_value(operator).unwrap(), fixture);
+    }
+}
+
+#[test]
+fn planar_monitor_previous_payload_defaults_to_no_monitors() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value.as_object_mut().unwrap().remove("planar_monitors");
+
+    let parsed: ProblemIR = serde_json::from_value(value).unwrap();
+
+    assert!(parsed.planar_monitors.is_empty());
+}
+
+#[test]
+fn planar_monitor_validation_accepts_physical_targets_and_all_operators() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.planar_monitors = vec![
+        PlanarMonitorIR {
+            id: "plane".into(),
+            name: "Plane".into(),
+            target: MonitorTargetIR::MagneticDomain,
+            frame: PlanarFrameIR::axis_preset(
+                PlanarFramePresetIR::Xy,
+                0.0,
+                PlanarExtentIR::TargetBounds { padding_m: 0.0 },
+            ),
+            operator: PlanarOperatorIR::PlaneSample,
+        },
+        PlanarMonitorIR {
+            id: "slab".into(),
+            name: "Slab".into(),
+            target: MonitorTargetIR::Object {
+                object_id: "strip".into(),
+            },
+            frame: PlanarFrameIR::axis_preset(
+                PlanarFramePresetIR::Yz,
+                0.0,
+                PlanarExtentIR::MagneticDomain { padding_m: 0.0 },
+            ),
+            operator: PlanarOperatorIR::SlabAverage { thickness_m: 5e-9 },
+        },
+        PlanarMonitorIR {
+            id: "depth".into(),
+            name: "Depth".into(),
+            target: MonitorTargetIR::Domain,
+            frame: PlanarFrameIR::axis_preset(
+                PlanarFramePresetIR::Xz,
+                0.0,
+                PlanarExtentIR::Universe { padding_m: 1e-9 },
+            ),
+            operator: PlanarOperatorIR::DepthProjection {
+                reduction: PlanarReductionIR::MeanOccupied,
+                empty_policy: EmptyPolicyIR::ExcludeEmpty,
+            },
+        },
+        PlanarMonitorIR {
+            id: "surface".into(),
+            name: "Surface".into(),
+            target: MonitorTargetIR::Object {
+                object_id: "strip".into(),
+            },
+            frame: PlanarFrameIR {
+                origin_m: [0.0; 3],
+                u_axis: [2.0_f64.sqrt().recip(), -2.0_f64.sqrt().recip(), 0.0],
+                v_axis: [
+                    6.0_f64.sqrt().recip(),
+                    6.0_f64.sqrt().recip(),
+                    -2.0 * 6.0_f64.sqrt().recip(),
+                ],
+                normal: [3.0_f64.sqrt().recip(); 3],
+                preset: None,
+                normalization_version: "planar_frame_v1".into(),
+                extent: PlanarExtentIR::Explicit {
+                    u_min_m: -1e-7,
+                    u_max_m: 1e-7,
+                    v_min_m: -5e-8,
+                    v_max_m: 5e-8,
+                },
+            },
+            operator: PlanarOperatorIR::SurfaceProjection {
+                boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+                visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+            },
+        },
+    ];
+
+    ir.validate().expect("valid planar monitors");
+}
+
+#[test]
+fn planar_monitor_validation_rejects_invalid_values_and_duplicates() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let invalid = PlanarMonitorIR {
+        id: "duplicate".into(),
+        name: "Duplicate".into(),
+        target: MonitorTargetIR::Region {
+            object_id: "strip".into(),
+            region_id: "missing".into(),
+        },
+        frame: PlanarFrameIR {
+            origin_m: [f64::NAN, 0.0, 0.0],
+            u_axis: [1.0, 0.0, 0.0],
+            v_axis: [0.0, 1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            preset: None,
+            normalization_version: "planar_frame_v1".into(),
+            extent: PlanarExtentIR::Explicit {
+                u_min_m: 1.0,
+                u_max_m: 0.0,
+                v_min_m: -1.0,
+                v_max_m: 1.0,
+            },
+        },
+        operator: PlanarOperatorIR::SlabAverage { thickness_m: 0.0 },
+    };
+    ir.planar_monitors = vec![invalid.clone(), invalid];
+
+    let errors = ir.validate().expect_err("invalid monitors must fail");
+    let joined = errors.join("\n");
+    assert!(joined.contains("id must be non-empty and unique"));
+    assert!(joined.contains("name must be non-empty and unique"));
+    assert!(joined.contains("origin_m must be finite"));
+    assert!(joined.contains("u_min_m < u_max_m"));
+    assert!(joined.contains("thickness_m must be finite and > 0"));
+    assert!(joined.contains("target region 'strip/missing' does not exist"));
+}
+
+#[test]
+fn planar_monitor_wire_contract_rejects_runtime_only_targets() {
+    for kind in ["mesh_part", "airbox"] {
+        let value = serde_json::json!({
+            "id": "invalid",
+            "name": "Invalid",
+            "target": {"kind": kind, "part_id": "part-1"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {"kind": "target_bounds", "padding_m": 0.0}
+            },
+            "operator": {"kind": "plane_sample"}
+        });
+
+        assert!(serde_json::from_value::<PlanarMonitorIR>(value).is_err());
+    }
+}
+
+#[test]
+fn sampling_policy_round_trips_legacy_explicit_and_auto_sinc() {
+    let legacy: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_s": 2e-12,
+        "quantities": ["t", "mx"]
+    }))
+    .unwrap();
+    assert_eq!(legacy.explicit_sample_period_s(), Some(2e-12));
+    assert_eq!(
+        serde_json::to_value(&legacy).unwrap()["sample_period_s"],
+        serde_json::json!(2e-12)
+    );
+
+    let automatic: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3
+        },
+        "quantities": ["t", "mx"]
+    }))
+    .unwrap();
+    assert!(automatic.requests_auto_sinc_cutoff());
+    assert_eq!(
+        serde_json::to_value(automatic).unwrap()["sample_period_policy"]["kind"],
+        "auto_sinc_cutoff"
+    );
+}
+
+#[test]
+fn table_autosave_step_cadence_round_trips_and_rejects_time_ambiguity() {
+    let step_cadence: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": ["step", "mx"]
+    }))
+    .unwrap();
+    let mut ir = ProblemIR::bootstrap_example();
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(100),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.study.sampling_mut().table_autosave = Some(step_cadence.clone());
+    ir.validate()
+        .expect("accepted-step table cadence must be valid authoring intent");
+    assert_eq!(
+        serde_json::to_value(&step_cadence).unwrap()["every_steps"],
+        serde_json::json!(10)
+    );
+
+    let ambiguous: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_s": 1e-12,
+        "every_steps": 10,
+        "quantities": ["step", "mx"]
+    }))
+    .unwrap();
+    ir.study.sampling_mut().table_autosave = Some(ambiguous);
+    let errors = ir
+        .validate()
+        .expect_err("time and accepted-step table cadence are mutually exclusive");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("cadence state is ambiguous")));
+
+    let mut time_evolution = ProblemIR::bootstrap_example();
+    time_evolution.study.sampling_mut().table_autosave = Some(step_cadence);
+    let errors = time_evolution
+        .validate()
+        .expect_err("accepted-step cadence must not be accepted by time evolution");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("only valid for relaxation studies")));
+}
+
+#[test]
+fn stage_autosave_serde_preserves_formats_layouts_and_clock_kinds() {
+    let continuous: StageAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "stage_autosave",
+        "target": "main",
+        "layout": "continuous",
+        "format": "zarr",
+        "table": {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "every_steps": 10,
+            "quantities": ["step", "mx"]
+        },
+        "fields": [{
+            "kind": "field_autosave",
+            "quantity": "m",
+            "every_steps": 20
+        }]
+    }))
+    .expect("accepted-step autosave policy should deserialize");
+    assert_eq!(continuous.layout, AutosaveLayoutIR::Continuous);
+    assert_eq!(continuous.format, AutosaveFormatIR::Zarr);
+    assert_eq!(continuous.fields[0].accepted_step_cadence(), Some(20));
+
+    for format in ["hdf5", "txt"] {
+        let policy: StageAutosaveIR = serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "run-output",
+            "layout": "separate",
+            "format": format,
+            "table": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_s": 1e-12,
+                "quantities": ["step", "t", "mx"]
+            },
+            "fields": []
+        }))
+        .expect("time-clock autosave policy should deserialize");
+        assert_eq!(policy.layout, AutosaveLayoutIR::Separate);
+        assert_eq!(serde_json::to_value(policy).unwrap()["format"], format);
+    }
+}
+
+#[test]
+fn stage_autosave_validation_accepts_matching_relax_and_run_clocks() {
+    let mut relax = ProblemIR::bootstrap_example();
+    let sampling = relax.study.sampling().clone();
+    relax.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(100),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    relax.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "table": {"every_steps": 10, "quantities": ["step", "mx"]},
+            "fields": [{"quantity": "m", "every_steps": 20}]
+        }))
+        .unwrap(),
+    );
+    relax
+        .validate()
+        .expect("Relax accepted-step policy is valid");
+
+    let mut run = ProblemIR::bootstrap_example();
+    run.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "main",
+            "layout": "continuous",
+            "format": "hdf5",
+            "table": {"sample_period_s": 1e-12, "quantities": ["step", "t"]},
+            "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+        }))
+        .unwrap(),
+    );
+    run.validate().expect("Run physical-time policy is valid");
+}
+
+#[test]
+fn stage_autosave_validation_rejects_txt_fields_duplicates_and_unsafe_target() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "../escape",
+            "layout": "continuous",
+            "format": "txt",
+            "table": {
+                "sample_period_s": 1e-12,
+                "quantities": ["step", "step"]
+            },
+            "fields": [
+                {"quantity": "m", "every_seconds": 1e-12},
+                {"quantity": "m", "every_seconds": 2e-12}
+            ]
+        }))
+        .unwrap(),
+    );
+    let errors = ir
+        .validate()
+        .expect_err("invalid storage policy must fail closed");
+    for expected in [
+        "target must start",
+        "txt format supports scalar tables only",
+        "duplicate quantity 'step'",
+        "duplicate field quantity 'm'",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.contains(expected)),
+            "missing {expected:?} in {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn stage_autosave_validation_rejects_study_clock_mismatches() {
+    let mut run = ProblemIR::bootstrap_example();
+    run.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "table": {"every_steps": 10, "quantities": ["step"]},
+            "fields": [{"quantity": "m", "every_steps": 10}]
+        }))
+        .unwrap(),
+    );
+    let errors = run
+        .validate()
+        .expect_err("Run must reject accepted-step cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("only valid for relaxation")));
+
+    let mut relax = ProblemIR::bootstrap_example();
+    let sampling = relax.study.sampling().clone();
+    relax.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(100),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    relax.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "fields": [{"quantity": "m", "every_seconds": 1e-12}]
+        }))
+        .unwrap(),
+    );
+    let errors = relax
+        .validate()
+        .expect_err("Relax must reject physical-time cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("must use every_steps")));
+}
+
+#[test]
+fn sampling_policy_round_trips_automatic_field_and_scalar_outputs() {
+    for (kind, expected_name) in [("field_auto", "m"), ("scalar_auto", "mx")] {
+        let output: OutputIR = serde_json::from_value(serde_json::json!({
+            "kind": kind,
+            "name": expected_name,
+            "sample_period_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(output.periodic_name(), Some(expected_name));
+        assert!(output.requests_auto_sinc_cutoff());
+        match kind {
+            "field_auto" => assert!(matches!(output, OutputIR::FieldAuto { .. })),
+            "scalar_auto" => assert!(matches!(output, OutputIR::ScalarAuto { .. })),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn sampling_policy_validation_accepts_unresolved_and_resolved_auto_intent() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let table = TableAutosaveIR {
+        kind: "table_autosave".into(),
+        table_id: "default".into(),
+        sample_period_s: None,
+        sample_period_policy: Some(SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+        }),
+        resolved_sample_period_s: None,
+        every_steps: None,
+        quantities: vec!["t".into(), "mx".into()],
+    };
+    ir.study.sampling_mut().table_autosave = Some(table);
+    ir.validate()
+        .expect("unresolved automatic sampling is valid authoring intent");
+
+    let table = ir.study.sampling_mut().table_autosave.as_mut().unwrap();
+    table.set_resolved_sample_period_s(2e-12);
+    assert_eq!(table.sample_period_s, None);
+    assert_eq!(table.resolved_sample_period_s, Some(2e-12));
+    assert_eq!(table.explicit_sample_period_s(), None);
+    ir.validate()
+        .expect("resolved automatic sampling remains valid automatic intent");
+}
+
+#[test]
+fn sampling_policy_rejects_unmarked_numeric_and_auto_authoring_state() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().table_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "table_autosave",
+            "table_id": "default",
+            "sample_period_s": 2e-12,
+            "sample_period_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3
+            },
+            "quantities": ["t", "mx"]
+        }))
+        .unwrap(),
+    );
+    let errors = ir
+        .validate()
+        .expect_err("authoring payload must not combine explicit and automatic cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("cadence state is ambiguous")));
+}
+
+#[test]
+fn sampling_policy_validation_rejects_invalid_explicit_table_periods() {
+    for period in [0.0, -1e-12, f64::NAN, f64::INFINITY] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
+            kind: "table_autosave".into(),
+            table_id: "default".into(),
+            sample_period_s: Some(period),
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
+            every_steps: None,
+            quantities: vec!["t".into()],
+        });
+        let errors = ir
+            .validate()
+            .expect_err("explicit table cadence must be finite and positive");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("sample_period_s must be finite and positive")));
+    }
+}
+
+#[test]
+fn sampling_policy_preserves_legacy_numeric_field_serialization() {
+    let output = OutputIR::Field {
+        name: "m".into(),
+        every_seconds: 2e-12,
+    };
+    assert_eq!(
+        serde_json::to_value(output).unwrap(),
+        serde_json::json!({
+            "kind": "field", "name": "m", "every_seconds": 2e-12
+        })
+    );
+}
+
+#[test]
+fn resolved_auto_output_preserves_policy_and_validates_resolved_period() {
+    let output = OutputIR::FieldResolvedAuto {
+        name: "m".into(),
+        every_seconds: 2e-12,
+        requested_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(&output).unwrap(),
+        serde_json::json!({
+            "kind": "field_resolved_auto",
+            "name": "m",
+            "every_seconds": 2e-12,
+            "requested_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3
+            }
+        })
+    );
+
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().outputs = vec![OutputIR::ScalarResolvedAuto {
+        name: "mx".into(),
+        every_seconds: f64::NAN,
+        requested_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: 1.2,
+        },
+    }];
+    let errors = ir
+        .validate()
+        .expect_err("resolved auto output must retain valid policy and cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("nyquist_guard_factor must be exactly 1.3")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("finite positive every_seconds")));
+}
+
+#[test]
+fn sampling_policy_validation_rejects_missing_mode_and_noncanonical_values() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
+        kind: "table_autosave".into(),
+        table_id: "default".into(),
+        sample_period_s: None,
+        sample_period_policy: None,
+        resolved_sample_period_s: None,
+        every_steps: None,
+        quantities: vec!["t".into()],
+    });
+    let errors = ir
+        .validate()
+        .expect_err("table autosave must request an explicit or automatic mode");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("requires sample_period_s")));
+
+    ir.study.sampling_mut().table_autosave = None;
+    ir.study.sampling_mut().outputs = vec![OutputIR::FieldAuto {
+        name: "m".into(),
+        sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: 1.2,
+        },
+    }];
+    let errors = ir
+        .validate()
+        .expect_err("automatic sampling must use the canonical guard factor");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("nyquist_guard_factor must be exactly 1.3")));
+
+    ir.study.sampling_mut().outputs = vec![OutputIR::Scalar {
+        name: "mx".into(),
+        every_seconds: f64::NAN,
+    }];
+    let errors = ir
+        .validate()
+        .expect_err("explicit sampling periods must be finite");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("finite positive every_seconds")));
+}
+
+#[test]
 fn execution_plans_carry_regional_field_drives_without_legacy_aliasing() {
     fn fdm_drives(plan: &FdmPlanIR) -> &[RegionalFieldDriveIR] {
         &plan.field_drives
@@ -112,6 +741,56 @@ fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
 }
 
 #[test]
+fn current_v0_3_adaptive_payload_without_tolerance_mode_fails_deserialization() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["study"]["dynamics"]["integrator"] = serde_json::json!("rk45");
+    value["study"]["dynamics"]["fixed_timestep"] = serde_json::Value::Null;
+    value["study"]["dynamics"]["adaptive_timestep"] = serde_json::json!({
+        "atol":1e-6,"rtol":0.0,"dt_min":1e-16,"dt_max":1e-14,
+        "safety":0.9,"growth_limit":2.0,"shrink_limit":0.2
+    });
+    let error = serde_json::from_value::<ProblemIR>(value)
+        .expect_err("current IR must require explicit mode");
+    assert!(error.to_string().contains("tolerance_mode"));
+}
+
+#[test]
+fn v0_2_adaptive_payload_migrates_mode_shape_aware() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["study"]["dynamics"]["integrator"] = serde_json::json!("rk45");
+    value["study"]["dynamics"]["fixed_timestep"] = serde_json::Value::Null;
+    value["study"]["dynamics"]["adaptive_timestep"] = serde_json::json!({
+        "atol":1e-6,"rtol":0.0,"dt_min":1e-16,"dt_max":1e-14,
+        "safety":0.9,"growth_limit":2.0,"shrink_limit":0.2
+    });
+    value["problem_meta"]["runtime_metadata"]["adaptive_timestep"] =
+        serde_json::json!({"opaque":true});
+    let decoded: ProblemIR = serde_json::from_value(value).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(
+        encoded["study"]["dynamics"]["adaptive_timestep"]["tolerance_mode"],
+        "advanced"
+    );
+    assert!(
+        encoded["problem_meta"]["runtime_metadata"]["adaptive_timestep"]
+            .get("tolerance_mode")
+            .is_none()
+    );
+}
+
+#[test]
+fn migration_rejects_mixed_supported_versions() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    let error = serde_json::from_value::<ProblemIR>(value).expect_err("mixed versions must fail");
+    assert!(error.to_string().contains("conflicts"));
+}
+
+#[test]
 fn problem_ir_deserialize_migrates_previous_public_version() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
         .expect("bootstrap ProblemIR should serialize");
@@ -132,9 +811,9 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 fn previous_public_cylinder_without_axis_migrates_explicitly() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
         .expect("bootstrap ProblemIR should serialize");
-    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
-    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
-    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["ir_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
     value["geometry"]["entries"] = serde_json::json!([{
         "kind": "cylinder",
         "name": "legacy",
@@ -142,8 +821,8 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
         "height": 2.0
     }]);
 
-    let decoded: ProblemIR = serde_json::from_value(value)
-        .expect("legacy cylinder should migrate its axis explicitly");
+    let decoded: ProblemIR =
+        serde_json::from_value(value).expect("legacy cylinder should migrate its axis explicitly");
     match &decoded.geometry.entries[0] {
         GeometryEntryIR::Cylinder { axis, .. } => assert_eq!(*axis, [0.0, 0.0, 1.0]),
         other => panic!("expected migrated cylinder, got {other:?}"),
@@ -153,7 +832,7 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
 #[test]
 fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
     let mut value = serde_json::json!({
-        "ir_version": PREVIOUS_PUBLIC_IR_VERSION,
+        "ir_version": LEGACY_PUBLIC_IR_VERSION,
         "geometry": {"entries": [{
             "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
             "base": {"kind": "difference", "name": "difference",
@@ -165,9 +844,18 @@ fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
     });
 
     migrate_problem_ir_json_value(&mut value).expect("legacy payload should migrate");
-    assert_eq!(value["geometry"]["entries"][0]["base"]["base"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
-    assert_eq!(value["geometry"]["entries"][0]["base"]["tool"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
-    assert_eq!(value["object_regions"][0]["shape"]["expression"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(
+        value["geometry"]["entries"][0]["base"]["base"]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
+    assert_eq!(
+        value["geometry"]["entries"][0]["base"]["tool"]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
+    assert_eq!(
+        value["object_regions"][0]["shape"]["expression"]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
 }
 
 #[test]
@@ -198,6 +886,32 @@ fn unsupported_ir_version_is_rejected() {
 fn bootstrap_example_validates() {
     let ir = ProblemIR::bootstrap_example();
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn fdm_demag_hints_reject_removed_single_grid_fallback_switch() {
+    let legacy = serde_json::json!({
+        "strategy": "auto",
+        "mode": "auto",
+        "allow_single_grid_fallback": true,
+    });
+
+    let error = serde_json::from_value::<FdmDemagHintsIR>(legacy)
+        .expect_err("removed FDM demag fallback must not deserialize as a no-op");
+    assert!(error.to_string().contains("allow_single_grid_fallback"));
+}
+
+#[test]
+fn material_only_anisotropy_round_trips_and_validates() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.energy_terms.clear();
+    problem.materials[0].uniaxial_anisotropy = Some(0.5e6);
+    problem.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let encoded = serde_json::to_value(&problem).expect("serialize material anisotropy");
+    let decoded: ProblemIR =
+        serde_json::from_value(encoded).expect("deserialize material anisotropy");
+    assert!(decoded.validate().is_ok());
 }
 
 #[test]
@@ -249,18 +963,35 @@ fn regional_field_drive_validation_is_fail_closed() {
         name: "Bad".into(),
         kind: FieldDriveKindIR::Regional,
         enabled: true,
-        target: FieldTargetIR::Object { object_id: "missing".into() },
+        target: FieldTargetIR::Object {
+            object_id: "missing".into(),
+        },
         amplitude_b_t: -1.0,
         direction: [0.0, 0.0, 0.0],
         spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 0.0, t0: -1.0, amplitude: 1.0 },
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 0.0,
+            t0: -1.0,
+            amplitude: 1.0,
+        },
         time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::StageIds { stage_ids: vec!["missing-stage".into()] },
+        activation: DriveActivationIR::StageIds {
+            stage_ids: vec!["missing-stage".into()],
+        },
         migration: None,
     });
     let errors = ir.validate().expect_err("invalid regional drive must fail");
-    for needle in ["amplitude_B_T", "direction", "target object", "cutoff_hz", "t0"] {
-        assert!(errors.iter().any(|error| error.contains(needle)), "missing {needle}: {errors:?}");
+    for needle in [
+        "amplitude_B_T",
+        "direction",
+        "target object",
+        "cutoff_hz",
+        "t0",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.contains(needle)),
+            "missing {needle}: {errors:?}"
+        );
     }
 }
 
@@ -311,7 +1042,9 @@ fn active_stage_id_controls_minimizer_drive_validation() {
             {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
         ]}),
     );
-    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("relax"));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("active_stage_id".into(), serde_json::json!("relax"));
     let sampling = ir.study.sampling().clone();
     ir.study = StudyIR::Relaxation {
         algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
@@ -325,17 +1058,36 @@ fn active_stage_id_controls_minimizer_drive_validation() {
         sampling,
     };
     ir.field_drives.push(RegionalFieldDriveIR {
-        id: "excite-only".into(), name: "Excite only".into(), kind: FieldDriveKindIR::Regional,
-        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        id: "excite-only".into(),
+        name: "Excite only".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 20e9,
+            t0: 50e-12,
+            amplitude: 1.0,
+        },
         time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::StageIds { stage_ids: vec!["excite".into()] }, migration: None,
+        activation: DriveActivationIR::StageIds {
+            stage_ids: vec!["excite".into()],
+        },
+        migration: None,
     });
-    ir.validate().expect("inactive dynamic drive must not invalidate relaxation stage");
-    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("missing"));
-    let errors = ir.validate().expect_err("unknown active stage must fail closed");
-    assert!(errors.iter().any(|error| error.contains("active_stage_id") && error.contains("missing")));
+    ir.validate()
+        .expect("inactive dynamic drive must not invalidate relaxation stage");
+    ir.problem_meta
+        .runtime_metadata
+        .insert("active_stage_id".into(), serde_json::json!("missing"));
+    let errors = ir
+        .validate()
+        .expect_err("unknown active stage must fail closed");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("active_stage_id") && error.contains("missing")));
 }
 
 #[test]
@@ -380,21 +1132,34 @@ fn all_time_evolution_drive_is_inactive_during_relaxation() {
 fn spin_wave_analysis_request_is_validated_against_source_locality() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.field_drives.push(RegionalFieldDriveIR {
-        id: "gamma".into(), name: "Gamma".into(), kind: FieldDriveKindIR::Regional,
-        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        id: "gamma".into(),
+        name: "Gamma".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 20e9,
+            t0: 50e-12,
+            amplitude: 1.0,
+        },
         time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
     });
     ir.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
         "schema_version":"spin_wave_response.request.v1", "analysis":"gamma", "response_component":"my"
     }));
-    ir.validate().expect("global uniform source is valid for gamma analysis");
+    ir.validate()
+        .expect("global uniform source is valid for gamma analysis");
     ir.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
         "schema_version":"spin_wave_response.request.v1", "analysis":"finite_k", "response_component":"my", "probe_count":2
     }));
-    let errors = ir.validate().expect_err("finite-k must reject global source and too few probes");
+    let errors = ir
+        .validate()
+        .expect_err("finite-k must reject global source and too few probes");
     assert!(errors.iter().any(|error| error.contains("probe_count")));
     assert!(errors.iter().any(|error| error.contains("localized")));
 }
@@ -512,6 +1277,7 @@ fn hysteresis_validation_accepts_field_unit_provenance() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -557,6 +1323,7 @@ fn hysteresis_validation_rejects_invalid_field_unit_provenance() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -620,6 +1387,7 @@ fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -677,6 +1445,7 @@ fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -724,6 +1493,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
                 every_seconds: 1e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -777,6 +1547,7 @@ fn hysteresis_validation_accepts_replace_parent_minor_loop_continuation_policy()
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -819,6 +1590,7 @@ fn hysteresis_validation_accepts_minor_loop_intermediate_fields() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -861,6 +1633,7 @@ fn hysteresis_validation_rejects_duplicate_minor_loop_intermediate_boundary() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -909,6 +1682,7 @@ fn hysteresis_validation_rejects_unknown_minor_loop_continuation_policy() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -969,6 +1743,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1027,6 +1802,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1087,6 +1863,7 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1147,6 +1924,7 @@ fn hysteresis_validation_rejects_invalid_settle_step_selection_contract() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1207,6 +1985,7 @@ fn hysteresis_validation_rejects_direct_minimizer_physical_time_budget() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1318,6 +2097,7 @@ fn hysteresis_validation_rejects_dynamics_settle_stop_criteria() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1394,6 +2174,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1462,6 +2243,7 @@ fn hysteresis_validation_accepts_custom_measurement_axis_vector() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1501,6 +2283,7 @@ fn hysteresis_validation_accepts_checkpoint_with_initial_state_ref() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1537,6 +2320,7 @@ fn hysteresis_validation_rejects_checkpoint_without_initial_state_ref() {
         sampling: SamplingIR {
             outputs: vec![],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1580,6 +2364,7 @@ fn hysteresis_validation_rejects_zero_custom_measurement_axis_vector() {
         sampling: SamplingIR {
             outputs: vec![],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1930,6 +2715,22 @@ fn base_material_invalid_scalars_are_rejected() {
     }));
     assert!(errors.iter().any(|error| {
         error.contains("materials[0].damping") && error.contains("Alpha must be >= 0")
+    }));
+}
+
+#[test]
+fn material_uniaxial_anisotropy_accepts_signed_constants_and_rejects_nan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].uniaxial_anisotropy = Some(-0.5e6);
+    ir.materials[0].uniaxial_anisotropy_k2 = Some(-0.1e6);
+    assert!(ir.validate().is_ok());
+
+    ir.materials[0].uniaxial_anisotropy = Some(f64::NAN);
+    let errors = ir
+        .validate()
+        .expect_err("non-finite uniaxial anisotropy must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("materials[0].uniaxial_anisotropy") && error.contains("value must be finite")
     }));
 }
 
@@ -2481,6 +3282,178 @@ fn llg_requires_supported_integrator() {
         .any(|error| error.contains("llg.integrator must be one of")));
 }
 
+fn valid_adaptive_problem() -> ProblemIR {
+    let mut ir = ProblemIR::bootstrap_example();
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::TimeEvolution {
+        dynamics: serde_json::from_value(serde_json::json!({
+            "kind": "llg",
+            "gyromagnetic_ratio": 2.211e5,
+            "integrator": "rk45",
+            "fixed_timestep": null,
+            "adaptive_timestep": {
+                "tolerance_mode": "max_error",
+                "atol": 1e-6,
+                "rtol": 0.0,
+                "dt_initial": 1e-15,
+                "dt_min": 1e-16,
+                "dt_max": 1e-14,
+                "safety": 0.9,
+                "growth_limit": 2.0,
+                "shrink_limit": 0.2
+            }
+        }))
+        .unwrap(),
+        sampling,
+    };
+    ir
+}
+
+#[test]
+fn adaptive_policy_round_trips_explicit_mode() {
+    let ir = valid_adaptive_problem();
+    ir.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(ir).unwrap()["study"]["dynamics"]["adaptive_timestep"]
+            ["tolerance_mode"],
+        "max_error"
+    );
+}
+
+#[test]
+fn adaptive_validation_rejects_every_nonfinite_scalar() {
+    for field in [
+        "atol",
+        "rtol",
+        "dt_initial",
+        "dt_min",
+        "dt_max",
+        "safety",
+        "growth_limit",
+        "shrink_limit",
+        "max_spin_rotation",
+        "norm_tolerance",
+    ] {
+        let mut ir = valid_adaptive_problem();
+        let StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+            unreachable!()
+        };
+        let DynamicsIR::Llg {
+            adaptive_timestep, ..
+        } = dynamics;
+        let adaptive = adaptive_timestep.as_mut().unwrap();
+        match field {
+            "atol" => adaptive.atol = f64::NAN,
+            "rtol" => adaptive.rtol = f64::INFINITY,
+            "dt_initial" => adaptive.dt_initial = Some(f64::NAN),
+            "dt_min" => adaptive.dt_min = f64::NEG_INFINITY,
+            "dt_max" => adaptive.dt_max = Some(f64::INFINITY),
+            "safety" => adaptive.safety = f64::NAN,
+            "growth_limit" => adaptive.growth_limit = f64::INFINITY,
+            "shrink_limit" => adaptive.shrink_limit = f64::NEG_INFINITY,
+            "max_spin_rotation" => adaptive.max_spin_rotation = Some(f64::NAN),
+            "norm_tolerance" => adaptive.norm_tolerance = Some(f64::INFINITY),
+            _ => unreachable!(),
+        }
+        let errors = ir.validate().expect_err("nonfinite must fail");
+        assert!(
+            errors.iter().any(|error| error.contains(field)),
+            "{field}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn runtime_selection_validation_is_global() {
+    for (selection, expected) in [
+        (serde_json::json!("gpu"), "must be an object"),
+        (serde_json::json!({"device": 1}), "device must be a string"),
+        (serde_json::json!({"device": "quantum"}), "quantum"),
+    ] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".into(), selection);
+        let errors = ir.validate().expect_err("invalid selection must fail");
+        assert!(errors.iter().any(|error| error.contains(expected)));
+    }
+}
+
+#[test]
+fn runtime_selection_accepts_null_optional_integer_fields() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({
+            "device": "gpu",
+            "gpu_count": 1,
+            "device_index": null,
+            "cpu_threads": null,
+            "execution_precision": "double"
+        }),
+    );
+
+    ir.validate()
+        .expect("null optional runtime-selection integers mean unspecified");
+}
+
+#[test]
+fn runtime_selection_rejects_unimplemented_multi_gpu_requests() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({
+            "device": "cuda",
+            "gpu_count": 2,
+            "execution_precision": "double"
+        }),
+    );
+
+    let errors = ir
+        .validate()
+        .expect_err("multi-GPU must fail until an execution realization exists");
+    assert!(errors.iter().any(|error| {
+        error.contains("gpu_count=2") && error.contains("multi-GPU execution is not implemented")
+    }));
+}
+
+#[test]
+fn managed_runtime_device_override_has_a_separate_validated_identity() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "auto", "execution_precision": "double"}),
+    );
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".into(),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+    );
+    problem
+        .validate()
+        .expect("a typed managed launcher override must preserve valid authored intent");
+
+    for invalid in [
+        serde_json::json!({"device": "auto", "source": "managed_launcher"}),
+        serde_json::json!({"device": "cpu", "source": "unknown"}),
+        serde_json::json!("cpu"),
+    ] {
+        let mut rejected = problem.clone();
+        rejected
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_device_override".into(), invalid);
+        let errors = rejected
+            .validate()
+            .expect_err("malformed launcher override must fail IR validation");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("runtime_device_override")),
+            "{errors:?}",
+        );
+    }
+}
+
 #[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -2562,14 +3535,21 @@ fn cylinder_axis_is_serialized_and_validated() {
         axis: [1.0, 1.0, 1.0],
     };
     let value = serde_json::to_value(&ir).expect("cylinder should serialize");
-    assert_eq!(value["geometry"]["entries"][0]["axis"], serde_json::json!([1.0, 1.0, 1.0]));
+    assert_eq!(
+        value["geometry"]["entries"][0]["axis"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
 
     let mut invalid = ir.clone();
     if let GeometryEntryIR::Cylinder { axis, .. } = &mut invalid.geometry.entries[0] {
         *axis = [0.0, 0.0, 0.0];
     }
-    let errors = invalid.validate().expect_err("zero cylinder axis must fail validation");
-    assert!(errors.iter().any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
+    let errors = invalid
+        .validate()
+        .expect_err("zero cylinder axis must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
 }
 
 #[test]
@@ -2730,6 +3710,7 @@ fn execution_plan_ir_serializes() {
         },
         provenance: ProvenancePlanIR {
             notes: vec!["planner stub".to_string()],
+            integrator_resolution: None,
         },
     };
 
@@ -2779,6 +3760,7 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
         magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
@@ -2793,6 +3775,48 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
     };
 
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn unsampled_time_evolution_is_valid_but_eigenmodes_require_outputs() {
+    let mut time_ir = ProblemIR::bootstrap_example();
+    time_ir.study.sampling_mut().outputs.clear();
+    time_ir
+        .validate()
+        .expect("time evolution without periodic outputs must remain valid");
+
+    let mut eigen_ir = ProblemIR::bootstrap_example();
+    let dynamics = eigen_ir.study.dynamics().clone();
+    eigen_ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 4,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![],
+        },
+        mode_tracking: None,
+    };
+
+    let errors = eigen_ir
+        .validate()
+        .expect_err("eigenmodes without outputs must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("spectral study requires at least one output")));
 }
 
 #[test]
@@ -2848,6 +3872,7 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
         magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "frequency_hz".to_string(),
             }],
@@ -2939,6 +3964,7 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
         magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
                     quantity: "frequency_hz".to_string(),
@@ -2992,6 +4018,7 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
         magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "frequency_hz".to_string(),
             }],
@@ -3043,6 +4070,7 @@ fn frequency_response_round_trips_as_first_class_study() {
         }),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "susceptibility".to_string(),
             }],
@@ -3111,6 +4139,7 @@ fn frequency_response_does_not_validate_time_integrator_alias() {
         solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -3150,6 +4179,7 @@ fn frequency_response_rejects_non_finite_excitation_phase() {
         solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -3192,6 +4222,7 @@ fn frequency_response_output_is_first_class_sampling_request() {
         solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -3349,9 +4380,9 @@ fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2], [0, 1, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [0, 1, 3]]),
         boundary_markers: vec![99, 99],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -3390,9 +4421,9 @@ fn mesh_periodic_pair_validation_allows_fragmented_boundary_pairs_with_same_pair
             [0.0, 1.0, 1.0],
             [1.0, 1.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 4], [3, 5, 6, 7]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 4], [3, 5, 6, 7]]),
         element_markers: vec![1, 1],
-        boundary_faces: vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]]),
         boundary_markers: vec![10, 11, 12, 13],
         periodic_boundary_pairs: vec![
             MeshPeriodicBoundaryPairIR {
@@ -3487,9 +4518,9 @@ fn mesh_periodic_pair_validation_rejects_bad_translation_residual() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
         boundary_markers: vec![10, 11],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -3529,9 +4560,9 @@ fn mesh_periodic_pair_validation_rejects_duplicate_destination_nodes() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
         boundary_markers: vec![10, 11],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -3664,7 +4695,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
             generation_id: Some("mesh-gen-1".to_string()),
             build_report: Some(FemSharedDomainBuildReportIR {
                 build_mode: "shared_domain".to_string(),
-                fallbacks_triggered: Vec::new(),
+                fallbacks_triggered: Some(Vec::new()),
                 effective_airbox_target: None,
                 effective_airbox_hmax: Some(8e-9),
                 effective_per_object_targets: HashMap::new(),
@@ -3681,6 +4712,8 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 degraded: false,
                 authored_regions_count: None,
                 realized_regions_count: None,
+                mixed_layer_topology_certificate: None,
+                mixed_topology_provenance: None,
             }),
         }),
     });
@@ -3809,6 +4842,31 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
 }
 
 #[test]
+fn shared_domain_build_report_preserves_fallback_publication_presence() {
+    let omitted: FemSharedDomainBuildReportIR = serde_json::from_value(serde_json::json!({
+        "build_mode": "component_aware"
+    }))
+    .expect("build report without fallback evidence should deserialize");
+    assert_eq!(omitted.fallbacks_triggered, None);
+    assert!(serde_json::to_value(&omitted)
+        .expect("build report should serialize")
+        .get("fallbacks_triggered")
+        .is_none());
+
+    let explicit_empty: FemSharedDomainBuildReportIR = serde_json::from_value(serde_json::json!({
+        "build_mode": "component_aware",
+        "fallbacks_triggered": []
+    }))
+    .expect("build report with strict fallback evidence should deserialize");
+    assert_eq!(explicit_empty.fallbacks_triggered, Some(Vec::new()));
+    assert_eq!(
+        serde_json::to_value(&explicit_empty).expect("build report should serialize")
+            ["fallbacks_triggered"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
 fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.mesh_semantics = Some(MeshSemanticsIR {
@@ -3871,6 +4929,7 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
             }],
@@ -4203,4 +5262,288 @@ fn preset_texture_backward_compat_params_alias() {
         }
         other => panic!("expected PresetTexture, got {:?}", other),
     }
+}
+
+fn mixed_topology_mesh() -> MeshIR {
+    MeshIR {
+        mesh_name: "mixed".into(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+        ],
+        cells: FemConnectivityIR {
+            types: vec![
+                FemCellTypeIR::Prism6,
+                FemCellTypeIR::Pyramid5,
+                FemCellTypeIR::Tet4,
+            ],
+            offsets: vec![0, 6, 11, 15],
+            nodes: vec![0, 1, 2, 3, 4, 5, 0, 1, 6, 2, 7, 0, 1, 2, 3],
+            global_ordinals: vec![41, 7, 99],
+            mesh_parts: Vec::new(),
+        },
+        element_markers: vec![11, 12, 13],
+        facets: FemFacetConnectivityIR {
+            types: vec![FemFacetTypeIR::Tri3, FemFacetTypeIR::Quad4],
+            roles: vec![FemFacetRoleIR::Exterior, FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 3, 7],
+            nodes: vec![0, 1, 2, 0, 1, 4, 3],
+            global_ordinals: vec![88, 12],
+        },
+        boundary_markers: vec![21, 22],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: HashMap::new(),
+    }
+}
+
+#[test]
+fn fem_topology_enum_wire_strings_are_canonical() {
+    let cases = [
+        (serde_json::to_value(FemCellTypeIR::Tet4).unwrap(), "tet4"),
+        (
+            serde_json::to_value(FemCellTypeIR::Prism6).unwrap(),
+            "prism6",
+        ),
+        (
+            serde_json::to_value(FemCellTypeIR::Pyramid5).unwrap(),
+            "pyramid5",
+        ),
+        (serde_json::to_value(FemCellTypeIR::Hex8).unwrap(), "hex8"),
+        (serde_json::to_value(FemFacetTypeIR::Tri3).unwrap(), "tri3"),
+        (
+            serde_json::to_value(FemFacetTypeIR::Quad4).unwrap(),
+            "quad4",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::Exterior).unwrap(),
+            "exterior",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::MaterialInterface).unwrap(),
+            "material_interface",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::PeriodicSeam).unwrap(),
+            "periodic_seam",
+        ),
+    ];
+    for (actual, expected) in cases {
+        assert_eq!(actual, serde_json::Value::String(expected.into()));
+    }
+}
+
+#[test]
+fn mixed_mesh_serde_round_trip_is_v2_only() {
+    let mesh = mixed_topology_mesh();
+    mesh.validate().expect("valid mixed topology");
+    let value = serde_json::to_value(&mesh).unwrap();
+    assert!(value.get("cells").is_some());
+    assert!(value.get("facets").is_some());
+    assert!(value.get("elements").is_none());
+    assert!(value.get("boundary_faces").is_none());
+    assert_eq!(
+        value["cells"]["global_ordinals"],
+        serde_json::json!([41, 7, 99])
+    );
+    assert_eq!(
+        value["facets"]["global_ordinals"],
+        serde_json::json!([88, 12])
+    );
+    assert_eq!(serde_json::from_value::<MeshIR>(value).unwrap(), mesh);
+}
+
+#[test]
+fn topology_fingerprint_binds_cell_and_facet_global_ordinals() {
+    let mesh = mixed_topology_mesh();
+    let baseline = mesh.topology_fingerprint_v6();
+    let mut changed_cell = mesh.clone();
+    changed_cell.cells.global_ordinals[0] += 1_000;
+    assert_ne!(changed_cell.topology_fingerprint_v6(), baseline);
+    let mut changed_facet = mesh;
+    changed_facet.facets.global_ordinals[0] += 1_000;
+    assert_ne!(changed_facet.topology_fingerprint_v6(), baseline);
+}
+
+#[test]
+fn legacy_tet_mesh_normalizes_and_dual_truth_rejects() {
+    let legacy = serde_json::json!({
+        "mesh_name": "legacy",
+        "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        "elements": [[0, 1, 2, 3]],
+        "element_markers": [7],
+        "boundary_faces": [[0, 1, 2]],
+        "boundary_markers": [9]
+    });
+    let mesh: MeshIR = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(mesh.cells.types, vec![FemCellTypeIR::Tet4]);
+    assert_eq!(mesh.cells.offsets, vec![0, 4]);
+    assert_eq!(mesh.facets.roles, vec![FemFacetRoleIR::Exterior]);
+    assert_eq!(mesh.cells.global_ordinals, vec![0]);
+    assert_eq!(mesh.facets.global_ordinals, vec![0]);
+    let canonical = serde_json::to_value(mesh).unwrap();
+    assert!(canonical.get("elements").is_none());
+    assert!(canonical.get("boundary_faces").is_none());
+
+    let mut dual = legacy;
+    dual.as_object_mut().unwrap().insert(
+        "cells".into(),
+        serde_json::json!({"types": ["tet4"], "offsets": [0, 4], "nodes": [0, 1, 2, 3]}),
+    );
+    dual.as_object_mut().unwrap().insert(
+        "facets".into(),
+        serde_json::json!({"types": ["tri3"], "roles": ["exterior"], "offsets": [0, 3], "nodes": [0, 1, 2]}),
+    );
+    let error = serde_json::from_value::<MeshIR>(dual).unwrap_err();
+    assert!(error.to_string().contains("both legacy and v2 topology"));
+}
+
+#[test]
+fn mixed_mesh_validation_rejects_each_csr_invariant_and_periodicity() {
+    let mutations: Vec<(&str, Box<dyn Fn(&mut MeshIR)>)> = vec![
+        (
+            "cell offsets",
+            Box::new(|mesh| mesh.cells.offsets = vec![0, 6, 5, 15]),
+        ),
+        ("cell arity", Box::new(|mesh| mesh.cells.offsets[1] = 5)),
+        ("cell index", Box::new(|mesh| mesh.cells.nodes[0] = 99)),
+        (
+            "cell duplicate",
+            Box::new(|mesh| mesh.cells.nodes[1] = mesh.cells.nodes[0]),
+        ),
+        (
+            "cell markers",
+            Box::new(|mesh| mesh.element_markers.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "cell global ordinals",
+            Box::new(|mesh| mesh.cells.global_ordinals[1] = mesh.cells.global_ordinals[0]),
+        ),
+        (
+            "facet offsets",
+            Box::new(|mesh| mesh.facets.offsets = vec![0, 4, 7]),
+        ),
+        ("facet arity", Box::new(|mesh| mesh.facets.offsets[1] = 2)),
+        ("facet index", Box::new(|mesh| mesh.facets.nodes[0] = 99)),
+        (
+            "facet duplicate",
+            Box::new(|mesh| mesh.facets.nodes[1] = mesh.facets.nodes[0]),
+        ),
+        (
+            "facet roles",
+            Box::new(|mesh| mesh.facets.roles.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet markers",
+            Box::new(|mesh| mesh.boundary_markers.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet global ordinals",
+            Box::new(|mesh| mesh.facets.global_ordinals[1] = mesh.facets.global_ordinals[0]),
+        ),
+    ];
+    for (label, mutate) in mutations {
+        let mut mesh = mixed_topology_mesh();
+        mutate(&mut mesh);
+        assert!(mesh.validate().is_err(), "{label} mutation must reject");
+    }
+
+    let mut periodic = mixed_topology_mesh();
+    periodic
+        .periodic_boundary_pairs
+        .push(MeshPeriodicBoundaryPairIR {
+            pair_id: "x".into(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 21,
+            marker_b: 22,
+            axis_hint: Some("x".into()),
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-9),
+            orientation: None,
+            pairing_policy: None,
+        });
+    let errors = periodic.validate().unwrap_err().join("\n");
+    assert!(errors.contains("mixed topology"));
+    assert!(errors.contains("periodic"));
+}
+
+#[test]
+fn fixed_family_extractors_reject_malformed_csr_instead_of_shortening_output() {
+    let mut mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+
+    mesh.cells.global_ordinals.clear();
+    assert!(mesh
+        .require_tet4_elements()
+        .unwrap_err()
+        .contains("global_ordinals"));
+
+    mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        mesh.nodes.clone(),
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    mesh.element_markers.clear();
+    assert!(mesh
+        .require_tet4_elements()
+        .unwrap_err()
+        .contains("element_markers"));
+
+    mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        mesh.nodes.clone(),
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    mesh.facets.roles.clear();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("roles"));
+
+    mesh.facets = FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+    mesh.facets.offsets.pop();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("offsets"));
+
+    mesh.facets = FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+    mesh.boundary_markers.clear();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("boundary_markers"));
 }

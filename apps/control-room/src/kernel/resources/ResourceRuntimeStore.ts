@@ -253,7 +253,11 @@ export class ResourceRuntimeStore<TData = unknown> {
       return Promise.resolve(entry.snapshot);
     }
 
-    if (entry.inflight && entry.inflightExternalRevision === externalRevision) {
+    if (
+      !force &&
+      entry.inflight &&
+      entry.inflightExternalRevision === externalRevision
+    ) {
       return entry.inflight;
     }
 

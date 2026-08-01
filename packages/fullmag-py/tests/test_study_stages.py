@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import textwrap
 import unittest
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -28,20 +30,232 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+    def test_relax_and_run_stage_handles_own_autosave_without_leaking(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+).autosave(fm.StageAutosave(
+    target="main",
+    table=fm.TableAutosave(every_steps=10, quantities=["step", "mx"]),
+    fields=[fm.FieldAutosave("m", every_steps=20)],
+))
+study.stages.add_run(stage_id="run", until=4e-12).autosave(fm.StageAutosave(
+    target="main",
+    table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx"]),
+    fields=[fm.FieldAutosave("m", every=2e-12)],
+))
+study.stages.add_run(stage_id="plain", until=8e-12)
+"""
+        )
+
+        self.assertEqual(loaded.stages[0].autosave.target, "main")
+        self.assertEqual(loaded.stages[1].autosave.target, "main")
+        self.assertIsNone(loaded.stages[2].autosave)
+        relax_ir = loaded.stages[0].to_ir(
+            requested_backend=None,
+            execution_mode=None,
+            execution_precision=None,
+            script_source=loaded.script_source,
+            source_root=loaded.source_path.parent,
+            include_geometry_assets=False,
+            study_pipeline=loaded.study_pipeline_document(),
+        )
+        run_ir = loaded.stages[1].to_ir(
+            requested_backend=None,
+            execution_mode=None,
+            execution_precision=None,
+            script_source=loaded.script_source,
+            source_root=loaded.source_path.parent,
+            include_geometry_assets=False,
+            study_pipeline=loaded.study_pipeline_document(),
+        )
+        self.assertEqual(
+            relax_ir["study"]["sampling"]["stage_autosave"],
+            loaded.stages[0].autosave.to_ir(),
+        )
+        self.assertEqual(
+            run_ir["study"]["sampling"]["stage_autosave"],
+            loaded.stages[1].autosave.to_ir(),
+        )
+        self.assertNotIn(
+            "stage_autosave",
+            loaded.pipeline_base_problem().study.to_ir()["sampling"],
+        )
+
+    def test_stage_handle_rejects_duplicate_autosave(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "run stage 'run' already has autosave configured",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+run = study.stages.add_run(stage_id="run", until=4e-12)
+run.autosave(fm.StageAutosave(table=fm.TableAutosave(t_sampl=1e-12)))
+run.autosave(fm.StageAutosave(table=fm.TableAutosave(t_sampl=2e-12)))
+"""
+            )
+
+    def test_stage_handles_reject_wrong_clock_kind(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "relax stage autosave requires accepted-step cadence",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+).autosave(
+    fm.StageAutosave(table=fm.TableAutosave(t_sampl=1e-12))
+)
+"""
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "run stage autosave requires physical-time cadence",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+study.stages.add_run(stage_id="run", until=4e-12).autosave(
+    fm.StageAutosave(fields=[fm.FieldAutosave("m", every_steps=10)])
+)
+"""
+            )
+
+    def test_relax_stage_handle_owns_table_autosave_without_leaking(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+).tableautosave(every_steps=10, quantities=["step", "mx"])
+study.stages.add_run(stage_id="after", until=4e-12)
+"""
+        )
+
+        pipeline = loaded.study_pipeline_document()
+        self.assertIsNotNone(pipeline)
+        relax_payload = pipeline["nodes"][0]["payload"]
+        self.assertEqual(
+            relax_payload["table_autosave"],
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 10,
+                "quantities": ["step", "mx"],
+            },
+        )
+        self.assertNotIn("table_autosave", pipeline["nodes"][1]["payload"])
+        base_ir = loaded.pipeline_base_problem().study.to_ir()
+        self.assertNotIn("table_autosave", base_ir["sampling"])
+
+    def test_relax_stage_handle_rejects_duplicate_table_autosave(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "relax stage 'relax' already has table autosave configured",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+relax = study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+)
+relax.tableautosave(every_steps=10)
+relax.tableautosave(every_steps=20)
+"""
+            )
+
+    def test_persistent_table_autosave_warns_about_stage_local_migration(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            loaded = _load(
+                _PREAMBLE
+                + """
+study.stages.tableautosave(every_steps=10)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+)
+"""
+            )
+
+        self.assertTrue(
+            any(
+                issubclass(item.category, DeprecationWarning)
+                and "add_relax(...).tableautosave(...)" in str(item.message)
+                for item in caught
+            )
+        )
+        self.assertEqual(
+            loaded.study_pipeline_document()["nodes"][0]["stage_kind"],
+            "table_autosave",
+        )
+
+    def test_build_entrypoint_run_pipeline_contains_only_run_owned_controls(self) -> None:
+        loaded = _load(
+            """
+import fullmag as fm
+
+DEFAULT_UNTIL = 4e-12
+
+def build():
+    body = fm.Box(10e-9, 10e-9, 5e-9, name="film")
+    material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+    magnet = fm.Ferromagnet(
+        name="film",
+        geometry=body,
+        material=material,
+        m0=fm.texture.uniform(1, 0, 0),
+    )
+    return fm.Problem(
+        name="build-run-pipeline",
+        magnets=[magnet],
+        energy=[fm.Exchange()],
+        study=fm.TimeEvolution(
+            dynamics=fm.LLG(integrator="rk4", fixed_timestep=1e-15),
+            outputs=[fm.SaveScalar("E_total", every=1e-12)],
+        ),
+    )
+"""
+        )
+
+        pipeline = loaded.study_pipeline_document()
+        self.assertIsNotNone(pipeline)
+        self.assertEqual(
+            pipeline["nodes"][0]["payload"],
+            {
+                "kind": "run",
+                "entrypoint_kind": "build",
+                "until_seconds": "4e-12",
+            },
+        )
+
     def test_run_relax_and_minimize_preserve_explicit_stage_ids(self) -> None:
         loaded = _load(
             _PREAMBLE
             + """
-study.stages.add_relax(stage_id="relax", max_steps=2)
+study.stages.add_relax(stage_id="relax", max_steps=2, dt=1e-15)
 study.stages.add_minimize(stage_id="equilibrate", method="bb", max_steps=2)
-study.stages.add_run(stage_id="excite", until=4e-12, output_every=1e-12)
+study.stages.add_run(stage_id="excite", until=4e-12)
 """
         )
         self.assertEqual(
             [stage.stage_id for stage in loaded.stages],
             ["relax", "equilibrate", "excite"],
         )
-        self.assertEqual(loaded.stages[2].output_every_seconds, 1e-12)
         excite_ir = loaded.stages[2].to_ir(
             requested_backend=None,
             execution_mode=None,
@@ -64,7 +278,7 @@ study.stages.add_run(stage_id="excite", until=4e-12, output_every=1e-12)
         loaded = _load(
             _PREAMBLE
             + """
-study.stages.add_relax(max_steps=2)
+study.stages.add_relax(max_steps=2, dt=1e-15)
 study.stages.add_run(4e-12)
 """
         )
@@ -78,7 +292,7 @@ study.stages.add_run(4e-12)
             _load(
                 _PREAMBLE
                 + """
-study.stages.add_relax(stage_id="same", max_steps=2)
+study.stages.add_relax(stage_id="same", max_steps=2, dt=1e-15)
 study.stages.add_run(stage_id="same", until=4e-12)
 """
             )
@@ -101,7 +315,7 @@ study.stages.add_field_drive(
     ),
     stage_id="add-antenna",
 )
-study.stages.add_run(stage_id="excite", until=2e-9, output_every=5e-13)
+study.stages.add_run(stage_id="excite", until=2e-9)
 """
         )
 
@@ -194,34 +408,135 @@ study.stages.add_field_drive(
 """
             )
 
-    def test_run_owns_sampling_outputs_and_gamma_response_request(self) -> None:
+    def test_remove_field_drive_is_ordered_and_allows_readding_same_id(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+def drive(drive_id, name, direction):
+    return fm.RegionalFieldDrive(
+        id=drive_id,
+        name=name,
+        target=fm.FieldTarget.global_domain(),
+        amplitude_B_T=1e-3,
+        direction=direction,
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.Constant(),
+    )
+
+study.stages.add_field_drive(drive("first", "First", (0, 1, 0)), stage_id="add-first")
+study.stages.add_field_drive(drive("second", "Second", (0, 0, 1)), stage_id="add-second")
+study.stages.add_run(stage_id="both-active", until=1e-12)
+study.stages.remove_field_drive("first", stage_id="remove-first")
+study.stages.add_run(stage_id="second-only", until=1e-12)
+study.stages.add_field_drive(drive("first", "Replacement", (1, 0, 0)), stage_id="readd-first")
+study.stages.add_run(stage_id="replacement-active", until=1e-12)
+"""
+        )
+
+        self.assertEqual(
+            [stage.action["kind"] if stage.action else stage.problem.study.to_ir()["kind"] for stage in loaded.stages],
+            [
+                "add_field_drive", "add_field_drive", "time_evolution",
+                "remove_field_drive", "time_evolution", "add_field_drive", "time_evolution",
+            ],
+        )
+        remove = loaded.stages[3]
+        self.assertEqual(remove.entrypoint_kind, "flat_remove_field_drive")
+        self.assertEqual(remove.action, {"kind": "remove_field_drive", "drive_id": "first"})
+        self.assertEqual([drive.id for drive in remove.problem.field_drives], ["first", "second"])
+        self.assertEqual([drive.id for drive in loaded.stages[4].problem.field_drives], ["second"])
+        self.assertEqual(
+            [drive.name for drive in loaded.stages[6].problem.field_drives],
+            ["Second", "Replacement"],
+        )
+        node = loaded.study_pipeline_document()["nodes"][3]
+        self.assertEqual(node["stage_kind"], "remove_field_drive")
+        self.assertEqual(node["payload"]["drive_id"], "first")
+
+    def test_remove_field_drive_rejects_empty_unknown_and_repeated_ids(self) -> None:
+        for script, message in (
+            ('study.stages.remove_field_drive("")', "drive_id must be non-empty"),
+            ('study.stages.remove_field_drive("missing")', "field drive id 'missing' does not exist"),
+        ):
+            with self.subTest(script=script), self.assertRaisesRegex(ValueError, message):
+                _load(_PREAMBLE + script)
+
+        with self.assertRaisesRegex(ValueError, "field drive id 'pulse' does not exist"):
+            _load(
+                _PREAMBLE
+                + """
+study.stages.add_field_drive(fm.RegionalFieldDrive(
+    id="pulse", name="Pulse", target=fm.FieldTarget.global_domain(),
+    amplitude_B_T=1e-3, direction=(0, 1, 0),
+    spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+))
+study.stages.remove_field_drive("pulse")
+study.stages.remove_field_drive("pulse")
+"""
+            )
+
+    def test_remove_field_drive_stage_id_conflict_preserves_active_drive(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_field_drive(fm.RegionalFieldDrive(
+    id="pulse", name="Pulse", target=fm.FieldTarget.global_domain(),
+    amplitude_B_T=1e-3, direction=(0, 1, 0),
+    spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+), stage_id="occupied")
+try:
+    study.stages.remove_field_drive("pulse", stage_id="occupied")
+except ValueError as error:
+    assert "duplicate stage_id" in str(error)
+else:
+    raise AssertionError("duplicate stage_id must fail")
+study.stages.add_run(stage_id="after-conflict", until=1e-12)
+"""
+        )
+
+        self.assertEqual(
+            [drive.id for drive in loaded.stages[-1].problem.field_drives],
+            ["pulse"],
+        )
+
+    def test_autosave_and_fft_are_ordered_configuration_stages_not_run_arguments(self) -> None:
         loaded = _load(
             _PREAMBLE
             + """
 study.stages.add_minimize(stage_id="relax", method="bb", max_steps=2)
-study.stages.add_run(
-    stage_id="excite",
-    until=2e-9,
-    outputs=[
-        fm.SaveField("m", every=2e-12),
-        fm.SaveField("H_drive", every=5e-13),
-    ],
-    table_autosave=fm.TableAutosave(
-        t_sampl=5e-13,
-        quantities=["time", "step", "mx", "my", "mz", "E_drive"],
-    ),
-    spin_wave_response=fm.GammaResponseAnalysis(
-        response_component="my",
-        detrend="linear",
-        window="hann",
-        susceptibility_floor_fraction=1e-6,
-    ),
+study.stages.tableautosave(
+    5e-13,
+    quantities=["time", "step", "mx", "my", "mz", "E_drive"],
+    stage_id="table-on",
 )
+study.stages.autosave("m", every=2e-12, stage_id="autosave-m")
+study.stages.autosave("H_drive", every=5e-13, stage_id="autosave-drive")
+study.stages.fft_response("my", stage_id="analyse-k0")
+study.stages.add_run(stage_id="excite", until=2e-9)
+study.stages.tableautosave(enabled=False, stage_id="table-off")
+study.stages.autosave(enabled=False, stage_id="autosave-off")
+study.stages.fft_response(enabled=False, stage_id="analysis-off")
+study.stages.add_run(stage_id="unsampled", until=1e-9)
 """
         )
 
+        self.assertEqual(
+            [stage.action["kind"] if stage.action else stage.problem.study.to_ir()["kind"] for stage in loaded.stages],
+            [
+                "relaxation",
+                "table_autosave",
+                "autosave",
+                "autosave",
+                "fft_response",
+                "time_evolution",
+                "table_autosave",
+                "autosave",
+                "fft_response",
+                "time_evolution",
+            ],
+        )
         relax_sampling = loaded.stages[0].problem.study.to_ir()["sampling"]
-        run_ir = loaded.stages[1].problem.to_ir(include_geometry_assets=False)
+        run_ir = loaded.stages[5].problem.to_ir(include_geometry_assets=False)
         run_sampling = run_ir["study"]["sampling"]
         self.assertIsNone(relax_sampling.get("table_autosave"))
         self.assertEqual(run_sampling["table_autosave"]["sample_period_s"], 5e-13)
@@ -247,6 +562,108 @@ study.stages.add_run(
                 "window": "hann",
                 "susceptibility_floor_fraction": 1e-6,
             },
+        )
+        unsampled_ir = loaded.stages[9].problem.to_ir(include_geometry_assets=False)
+        self.assertIsNone(unsampled_ir["study"]["sampling"].get("table_autosave"))
+        self.assertEqual(unsampled_ir["study"]["sampling"]["outputs"], [])
+        self.assertNotIn(
+            "spin_wave_response",
+            unsampled_ir["problem_meta"]["runtime_metadata"],
+        )
+        for action_index in (1, 2, 3, 4, 6, 7, 8):
+            for attribute in (
+                "magnets",
+                "energy",
+                "dynamics",
+                "discretization",
+                "runtime",
+                "auxiliary_geometries",
+                "current_modules",
+                "couplings",
+                "pbc",
+            ):
+                self.assertEqual(
+                    getattr(loaded.stages[action_index].problem, attribute),
+                    getattr(loaded.stages[action_index - 1].problem, attribute),
+                    f"{attribute} must pass unchanged through configuration stage {action_index}",
+                )
+
+    def test_stage_sampling_accepts_auto_and_preserves_policy_intent(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.tableautosave("auto", quantities=["t", "mx"], stage_id="table-auto")
+study.stages.autosave("m", every="auto", stage_id="field-auto")
+study.stages.autosave("E_total", every="auto", stage_id="scalar-auto")
+study.stages.add_run(stage_id="excite", until=2e-9)
+"""
+        )
+
+        sampling = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)["study"]["sampling"]
+        policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+        self.assertEqual(
+            sampling["table_autosave"],
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_policy": policy,
+                "quantities": ["t", "mx"],
+            },
+        )
+        self.assertEqual(
+            sampling["outputs"],
+            [
+                {"kind": "field_auto", "name": "m", "sample_period_policy": policy},
+                {
+                    "kind": "scalar_auto",
+                    "name": "E_total",
+                    "sample_period_policy": policy,
+                },
+            ],
+        )
+
+    def test_add_run_primary_signature_contains_only_time_and_stage_id(self) -> None:
+        fm.reset()
+        study = fm.study("simple-run-signature")
+        self.assertEqual(
+            [
+                name
+                for name, parameter in inspect.signature(
+                    study.stages.add_run
+                ).parameters.items()
+                if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+            ],
+            ["until", "stage_id"],
+        )
+
+    def test_legacy_run_configuration_expands_to_visible_actions(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_run(
+    stage_id="excite",
+    until=2e-9,
+    outputs=[fm.SaveField("m", every=2e-12)],
+    table_autosave=fm.TableAutosave(
+        t_sampl=5e-13,
+        quantities=["t", "mx", "my", "mz"],
+    ),
+    spin_wave_response=fm.GammaResponseAnalysis(response_component="my"),
+)
+"""
+        )
+
+        self.assertEqual(
+            [stage.action["kind"] if stage.action else "run" for stage in loaded.stages],
+            ["table_autosave", "autosave", "autosave", "fft_response", "run"],
+        )
+        self.assertEqual(loaded.stages[-1].stage_id, "excite")
+        self.assertEqual(
+            loaded.stages[-1].problem.study.to_ir()["sampling"]["outputs"],
+            [{"kind": "field", "name": "m", "every_seconds": 2e-12}],
         )
 
 

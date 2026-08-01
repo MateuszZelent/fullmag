@@ -168,10 +168,15 @@ impl CpuInteractiveFdmPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -230,7 +235,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -328,7 +333,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -357,7 +362,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -383,6 +388,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -505,10 +511,15 @@ impl CpuInteractiveFdmPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested: None, // CPU FDM checks interrupt via on_step StepAction
@@ -549,7 +560,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -654,7 +665,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -686,7 +697,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -726,6 +737,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),

@@ -1,0 +1,120 @@
+.fm-field-map {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-canvas);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fm-field-map--status,
+.fm-field-map--error {
+  place-items: center;
+  padding: var(--fm-space-6);
+  color: var(--fm-text-secondary);
+}
+
+.fm-field-map--error {
+  color: var(--fm-danger);
+}
+
+.fm-field-map__toolbar {
+  display: flex;
+  gap: var(--fm-space-3);
+  align-items: center;
+  min-height: var(--fm-inspector-nav-icon-size);
+  padding: 0 var(--fm-space-3);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-field-map__diagnostic {
+  margin-left: auto;
+  color: var(--fm-warning);
+}
+
+.fm-field-map__stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--fm-space-6);
+}
+
+.fm-field-map__canvas-stack {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+}
+
+.fm-field-map__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-viewport);
+}
+
+.fm-field-map__canvas--overlay {
+  position: absolute;
+  inset: 0;
+  color: var(--fm-text-primary);
+  background: transparent;
+  pointer-events: none;
+}
+
+.fm-field-map__probe {
+  position: absolute;
+  right: var(--fm-space-2);
+  bottom: var(--fm-space-2);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-overlay);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-field-map__pinned-probe {
+  position: absolute;
+  right: var(--fm-space-3);
+  bottom: var(--fm-space-3);
+  padding: var(--fm-space-2);
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-overlay);
+  font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-field-map__axis,
+.fm-field-map__colorbar {
+  position: absolute;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-field-map__axis--u {
+  right: 50%;
+  bottom: var(--fm-space-2);
+}
+
+.fm-field-map__axis--v {
+  top: 50%;
+  left: var(--fm-space-2);
+  transform: rotate(-90deg);
+}
+
+.fm-field-map__colorbar {
+  top: var(--fm-space-7);
+  right: var(--fm-space-2);
+  bottom: var(--fm-space-7);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-left: var(--fm-space-2);
+  border-left: 8px solid var(--fm-accent);
+}

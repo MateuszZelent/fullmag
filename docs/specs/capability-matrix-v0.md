@@ -32,8 +32,97 @@ Every product-facing feature should be described with one of these statuses:
 | **`source_visible`** | Source code or scaffolding exists, but the lane is not publishable as an executable production path. |
 | **`semantic_only`** | Legal in Python API and `ProblemIR`, but not executable on the current public path. |
 | **`reference_executable`** | Executable on the trusted reference lane used for correctness and validation. |
+| **`development_executable`** | Executable only in an explicitly selected development mode; not production-qualified. |
+| **`partial_production_executable`** | Executable only for the explicitly documented bounded production workload. |
+| **`implemented`** | Implementation exists, but production execution and validation are separate states. |
 | **`production_executable`** | Executable on the intended production lane. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
+
+## Mixed-P1 shared-domain target vocabulary
+
+The canonical target is defined by
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` and ADR 0021.
+These IDs expose one cross-layer vocabulary without claiming execution or
+validation:
+
+| Capability | Current product status | implementation_state | Evidence now | First promotion scope |
+|---|---|---|---|---|
+| `mesh.topology.mixed_p1` | CPU/GPU `implemented`; FDM `unsupported` | implemented | complete source-report/certificate validation, deterministic clone packing, final fingerprint rebinding, and runner/native contract gates exist; managed public-runtime proof is missing | one axis-aligned P1 Box in one conforming airbox |
+| `mesh.swept.prism` | CPU/GPU `implemented`; FDM `unsupported` | implemented | native Python meshing and native contract tests preserve `prism6` without tet conversion; managed public-runtime proof is missing | `prism6` magnetic cells with no tet conversion |
+| `mesh.transition.pyramid_tet` | CPU/GPU `implemented`; FDM `unsupported` | implemented | conforming `pyramid5` transition and `tet4` far-air topology remain certificate-bound in source and contract tests | `pyramid5` air transition and `tet4` far air |
+| `mesh.exact_layer_count` | CPU/GPU `implemented`; FDM `unsupported` | implemented | accepted certificate requires requested = realized = `L`, exact `L+1` magnetic planes for `L in {1,2,3}`, empty report/certificate fallbacks, and `degraded=false` | exact `layers` in `{1,2,3}` for one physical film |
+| `fem.cpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded CPU/strict/double P1 exchange/Poisson/relaxation source and operator contracts exist, but no immutable managed public-runtime report exists | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
+| `fem.gpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded GPU/strict/double P1 exchange/Poisson/relaxation source and operator contracts exist, but no immutable managed public-runtime report exists | MFEM/libCEED/CUDA GPU double on the same certified mesh |
+
+The current first-slice legality is explicit FEM, explicit CPU or GPU, strict mode,
+double precision, P1, one Box, an exact layer count in `{1,2,3}`, one shared-domain airbox,
+uniform `Ms`/`Aex`, exchange, optional uniform Zeeman, Poisson Robin/Dirichlet,
+and PG-BB, NCG, or overdamped LLG. `auto`, single, extended, and hidden
+fallback remain illegal.
+Every mixed-P1 mesh feature capability publishes
+`supported_layer_counts=[1,2,3]`. Control Room authoring fails closed when an
+executable capability omits or changes that machine-readable scope, and the
+canonical object-mesh export rejects exact prism layer counts outside it.
+Strict execution requires both the certificate and enclosing build report to
+record `fallbacks_triggered=[]`, plus build-report `degraded=false`; no prism-to-tet, GPU-to-CPU,
+or mixed-to-free-tetrahedral fallback is legal.
+
+Until separately qualified, all modes reject before backend startup when a
+mixed-P1 request includes FEM/BEM, PBC/Floquet, DMI, STT, thermal,
+magnetoelasticity, regional projections, eigen/frequency-domain studies,
+DG0/material interfaces, order greater than one, arbitrary OCC shapes,
+multiple bodies, or multilayers. FDM and hybrid lanes are unsupported. The
+Gmsh 4.15.2 fixture is topology feasibility evidence and does not promote any
+row to `production_executable` or `validated`. Promotion requires a fresh
+managed public CPU/GPU run of the exact SP4 relaxation stage with immutable
+fingerprint, device/engine, fallback, telemetry, and artifact evidence.
+
+The Control Room may display typed mixed-certificate quality gates and
+structured mixed-P1 rejection evidence without changing any capability row.
+Typed orphan-entity diagnostics invalidate the Inspector topology-integrity
+gate when non-empty. Tet4-only histogram selection returns the typed
+`mixed_topology_not_supported` conflict for mixed topology instead of silently
+omitting prism or pyramid cells.
+Per-family quality evidence proves only the identity and acceptance checks of
+the current certified mesh. Missing-capability IDs, requested/resolved
+execution, `fallback=none`, and the `free_tetrahedral` alternative are
+diagnostics supplied by the planner/runtime path; rendering them must never be
+used to infer executable availability or validation.
+
+### Execution-device cardinality
+
+The public execution vocabulary accepts a device target and `gpu_count`, but
+current FDM and FEM realizations are single-device only. `gpu_count=0` or `1`
+is legal subject to the selected device/lane; `gpu_count>1` is rejected by the
+Python DSL and ProblemIR validator in `strict`, `extended`, and `hybrid`
+modes. This is an explicit unavailable-path diagnostic, not CPU fallback and
+not a claim of multi-GPU capability.
+
+### FEM automatic device crossover
+
+FEM keeps the public `cpu | gpu | auto` device vocabulary. Explicit CPU and
+GPU requests are hard constraints: performance policy never changes them, and
+an unavailable explicit GPU request fails closed. Only `auto` may consume a
+qualified, versioned, hash- and identity-verified crossover profile described
+by ADR 0021. Without a matching profile, `auto` remains availability-first and
+prefers an executable GPU lane; this is not benchmark qualification.
+
+Current production activation is fail-closed because the runtime registry does
+not yet join the selected manifest, actually loaded library hashes, and
+detected GPU into one authoritative identity. Matching caller-controlled JSON
+files cannot qualify a profile. Schema v1 rejects non-null signatures because
+no algorithm, trusted key, or verifier is defined.
+`FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is ignored and untrusted; it has no
+production or diagnostic consumer and cannot attest to runtime identity.
+
+The crossover feature vector includes node count, optional native assembled
+matrix nonzero count, demag state, relaxation algorithm, and preview state.
+Missing `matrix_nnz` stays missing rather than being estimated. Requested and
+resolved device, selection reason, calibration ID, and confidence are runtime
+provenance and resource-first v2 status fields.
+Preview state is derived from actual execution cadence, and the selected
+decision is pinned through engine, session, artifact, and persistent-runtime
+provenance without reloading mutable profile data.
 
 ### FEM dynamic-solver evidence overlay
 
@@ -184,6 +273,47 @@ field-solve lanes fail; they do not silently choose another device.
 
 ## Current execution policy
 
+### Planar monitor postprocessing capability
+
+Planar sampling is postprocessing of a published spatial field. Solver
+execution device and sampling execution are separate capability dimensions.
+The first production sampler runs on CPU, including when `source_device=gpu`;
+that does not claim native GPU sampling.
+
+| Capability | FDM | FEM P1 | FEM high-order | Failure/degraded rule |
+|---|---|---|---|---|
+| `planar_monitor_authoring` | implemented | implemented | gated | invalid authored frame/target rejects before execution |
+| `planar_plane_sample` axis frame | scientifically validated | scientifically validated | gated | no hidden basis-order fallback |
+| `planar_plane_sample` arbitrary frame | scientifically validated | scientifically validated | gated | invalid/unsupported frame returns stable reason |
+| `planar_slab_average` | cell-volume weighted, validated | conservative tetra measure, validated | gated | node-count averaging forbidden |
+| `planar_depth_projection` | cell-volume weighted, validated | conservative tetra measure, validated | gated | unsupported reduction rejects |
+| `planar_surface_projection` planar boundary | boundary measure | boundary triangle measure, validated | gated | folded/non-injective surfaces are diagnostic |
+| `planar_vector_sampling` | browser-verified | browser-verified nodal vectors | gated | unavailable component returns stable reason |
+| `planar_mesh_overlay` | optional grid outline | exact section topology, browser-verified | topology-gated | absence does not alter sampled values |
+| `planar_airbox_sampling` | full-domain quantities only | full-domain quantities and air mesh | gated | magnetic-only quantities do not become airbox fields |
+
+`contract target` and `production target` are not current validation claims.
+Promotion to `public-executable`, `browser-verified`, scientifically
+`validated`, or `production-ready` requires the current artifacts specified by
+`docs/physics/0970-planar-monitor-sampling-and-projection.md`. Strict and
+extended modes preserve the same monitor intent; no mode silently substitutes
+another operator. Hybrid sampling remains planned.
+
+Stable capability reasons are:
+
+- `quantity_not_spatial`;
+- `quantity_not_materialized`;
+- `target_outside_monitor`;
+- `fem_topology_required`;
+- `fem_basis_order_unsupported`;
+- `surface_projection_non_injective`;
+- `airbox_quantity_scope_unsupported`;
+- `vector_component_unavailable`;
+- `sampling_budget_exceeded`;
+- `stale_mesh_scope`;
+- `stale_monitor_revision`;
+- `stale_field_revision`.
+
 - `strict` means backend-neutral semantics only.
 - `extended` is reserved for future backend-specific features.
 - `hybrid` is explicit and requires both hybrid mode and hybrid backend.
@@ -236,6 +366,36 @@ field-solve lanes fail; they do not silently choose another device.
   resolution; capabilities metadata is part of the same public execution contract.
 - Canonical reference: `docs/specs/runtime-engine-naming-v0.md`.
 
+### LLG time-domain evidence overlay
+
+Contract IDs: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, and
+`LLG-TD-STIFF-V1`, with `LLG-TD-FIRST-DT-V1`, `LLG-TD-MAX-ERR-V1`, and
+`LLG-TD-ATOMIC-V1` as required policy semantics. Status describes publication availability; implementation
+and validation remain separate evidence axes.
+
+| Policy | Backend | Device | Precision | Product status | implementation_state | validation_state | validated_scope |
+|---|---|---|---|---|---|---|---|
+| explicit fixed | FDM | CPU | double | `reference_executable` | executable | unvalidated | RK23/RK45 AoS/SoA exact fixed-step contract tests pass; no adaptive retry or next-step suggestion; scientific qualification pending |
+| explicit fixed | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
+| explicit fixed | FDM | CUDA | double | `production_executable` | executable | unvalidated | source contract preserves exact fixed RK23/RK45 semantics; no CUDA runtime evidence in Task 7; Task 12 qualification pending |
+| explicit fixed | FDM | CUDA | single | `production_executable` | executable | unvalidated | source contract preserves exact fixed RK23/RK45 semantics; FP32 runtime budget remains separate and unproven |
+| explicit fixed | FEM | CPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; full interaction matrix not implied |
+| explicit fixed | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
+| explicit fixed | FEM | GPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; no FP32 implication |
+| explicit fixed | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 lane |
+| explicit adaptive | FDM | CPU | double | `reference_executable` | executable | unvalidated | AoS/SoA contract tests reject above-tolerance attempts at `dt_min` with no state commit; scientific trajectory and guard qualification pending |
+| explicit adaptive | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
+| explicit adaptive | FDM | CUDA | double | `source_visible` | executable | unvalidated | v2 ABI behavior, canonical PI vectors, fixed/adaptive separation, typed floor failure, and batch `dt_next` consumption are contract evidence; guard-enabled policies fail closed; trajectory/trace qualification pending |
+| explicit adaptive | FDM | CUDA | single | `source_visible` | executable | unvalidated | shared PI controller and FP32 compile/contract budget only; guards fail closed; separate runtime accuracy/trajectory qualification pending and no FP64 promotion |
+| explicit adaptive | FEM | CPU | double | `production_executable` | executable | validated | managed FP64 RK45 qualification covers Gilbert macrospin `alpha={0.1,1,10}`, periodic exchange frequency/decay/order, fast-mode rejection, exact relax-to-run handoff, bounded energy change, converged Poisson demag, attempt replay, and the checked-in periodic-antidot shared-domain PBC fixture; this does not imply every optional interaction |
+| explicit adaptive | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
+| explicit adaptive | FEM | GPU | double | `production_executable` | executable | validated | managed strict-device FP64 RK45 qualification matches CPU at common physical times with CUDA RK kernels, device Hypre Poisson, no fallback, exact relax-to-run handoff, and the checked-in periodic-antidot shared-domain PBC fixture; FP32 and optional interactions outside the fixtures remain unqualified |
+| explicit adaptive | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 adaptive lane |
+| stiff time-domain | FEM | CPU | double | `unsupported` | absent | unvalidated | a physical-time tangent-plane integrator must be implemented separately |
+| stiff time-domain | FEM | CPU | single | `unsupported` | absent | unvalidated | no implementation; CPU remains double-only |
+| stiff time-domain | FEM | GPU | double | `unsupported` | absent | unvalidated | no implementation and no hidden CPU fallback |
+| stiff time-domain | FEM | GPU | single | `unsupported` | absent | unvalidated | no implementation and no hidden CPU fallback |
+
 ## Capability matrix
 
 | Feature | FDM | FEM | Hybrid | Tier | Notes |
@@ -244,16 +404,16 @@ field-solve lanes fail; they do not silently choose another device.
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires active-mask voxelizer for accurate curved-boundary FDM execution |
 | Imported geometry ref | planned | planned | planned | semantic-only | FDM planner accepts it when a precomputed grid asset is attached; public execution still depends on voxelization extras |
 | Material constants (`Ms`, `A`, `alpha`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Used by the CPU reference FDM runner and the MFEM/libCEED/hypre CPU plus MFEM/libCEED/CUDA GPU FEM runners |
-| Material constants (`Ku1`, `anisU`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local uniaxial anisotropy is executable on the current FDM and FEM lanes. CPU FDM, single-grid native CUDA FDM, and public multilayer FDM expose the derived `H_ani` observation boundary; native FEM CPU qualification now includes `exchange_anis_uniaxial` and `exchange_demag_anis_uniaxial` readiness gates for the no-PBC adaptive slice. Shared-domain FEM may realize different per-object uniaxial axes as nodal axis fields when materialization proves ownership; cubic-axis heterogeneity and surface anisotropy remain separately gated. This does not promote the broader FEM relaxation solver to `validated`. |
-| Material constants (`Kc1`, `anisC1`, `anisC2`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local cubic anisotropy is executable on the current FDM and FEM lanes. CPU FDM, single-grid native CUDA FDM, and public multilayer FDM expose the derived `H_ani` observation boundary; native FEM CPU qualification now includes `exchange_anis_cubic` and `exchange_demag_anis_cubic` readiness gates for the no-PBC adaptive slice; this does not cover nonlocal or surface anisotropy. |
-| Per-cell material fields (`ms_field`, `a_field`, `alpha_field`, `ku*_field`, `kc*_field`) | planned | ✅ exec | planned | **explicitly-deferred** (FDM) | Current FDM execution plans carry uniform material constants only; single-grid and public multilayer FDM reject used materials with per-cell material fields instead of silently dropping them. FEM carries material field payloads through its native material-field lanes where supported. |
-| Object-owned authored regions (`object_regions`, region material overrides, region mesh policy, region couplings) | partial CUDA FDM exec | partial FEM executable | planned | **source-visible / partial-executable** | Authored regions are visible in Python, ProblemIR, OpenAPI, and the Control Room. Current single-grid CUDA FDM can materialize owner-scoped region masks for region texture overrides and explicit/disabled region-region exchange pairs; CPU reference FDM rejects executable pair overrides instead of silently ignoring them. FDM/FEM planning samples smooth `Ms/Aex` region material transitions into coefficient payloads using signed-distance weights; omitted `material_transition` defaults to `mesh_relative(cells=3, scope=boundary)` for `Ms/Aex`, while explicit `kind=sharp` remains the conformal/projection-gated discontinuous path. FEM also samples `Alpha` region overrides/fields into nodal coefficient payloads, records realization method plus min/max/mean statistics, and emits projection warnings for explicit sharp projection into runtime solver status. Python/Gmsh automatically creates conformal authored-region markers for fully contained box and cylinder regions on the OCC shared-domain path, including arbitrary cylinder axes; unsupported shapes, regions outside the owner, and overlapping conformal regions reject instead of degrading silently. Metadata-only markers do not qualify, and marker IDs cannot collide with object/domain `region_markers`. Strict sharp-jump runtime execution is not yet production-qualified: the native FEM lane still needs element/domain coefficient mapping for discontinuous `A/Ms` while preserving one shared `m` field across the internal interface. The planner must not promote that path by duplicating region interface DOFs. Explicit projection in extended mode remains the executable nodal-field path. Python `study.domain_mesh(..., object_region_markers=...)` preserves explicit precomputed markers through ProblemIR and script export. Region couplings, broader conformal CSG, strict conformal coefficient runtime mapping, and public multilayer FDM region-owned material/coupling remain deferred; public multilayer FDM rejects authored `object_regions` rather than silently ignoring them. Unsupported `rkky` and `interlayer_exchange` runtime coupling diagnostics use the public snake_case kind tokens, not Rust enum debug names. Native single-grid multilayer CUDA emits explicit disabled exchange pairs between object ids so separate objects keep free-surface semantics even though intra-object region defaults use harmonic mean. |
+| Material constants (`Ku1`, `anisU`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local uniaxial anisotropy is executable on the current FDM and FEM lanes. CPU FDM, single-grid native CUDA FDM, and public multilayer FDM expose the derived `H_ani` observation boundary; native FEM CPU qualification includes `exchange_anis_uniaxial` and `exchange_demag_anis_uniaxial` readiness gates for the no-PBC adaptive slice. A separate managed uniform-`M_s` FEM GPU fixture compares projected `eden_ani` and `eden_total` with native `E_ani` and `E_total`; this is bounded observable qualification, not validation of every anisotropy/runtime combination. Shared-domain FEM may realize different per-object uniaxial axes as nodal axis fields when materialization proves ownership; cubic-axis heterogeneity and surface anisotropy remain separately gated. |
+| Material constants (`Kc1`, `anisC1`, `anisC2`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local cubic anisotropy is executable on the current FDM and FEM lanes. CPU FDM, single-grid native CUDA FDM, and public multilayer FDM expose the derived `H_ani` observation boundary; native FEM CPU qualification includes `exchange_anis_cubic` and `exchange_demag_anis_cubic` readiness gates for the no-PBC adaptive slice. A separate managed uniform-`M_s` FEM GPU fixture selects `H_ani_cubic` and compares projected `eden_ani` and `eden_total` with native `E_ani` and `E_total`; this does not cover nonlocal or surface anisotropy. |
+| Per-cell material fields (`ms_field`, `a_field`, `alpha_field`, `ku*_field`, `kc*_field`) | planned | bounded FEM exec | planned | **partial-production-executable** (FEM CPU DG0 `M_s`) | Current FDM execution plans carry uniform material constants only; single-grid and public multilayer FDM reject used materials with per-cell material fields instead of silently dropping them. FEM carries material field payloads through native material-field lanes where supported. The newly qualified sharp element-DG0 `M_s` slice is CPU/double ordinary time evolution with mandatory consistent-mass exchange; Poisson demag and Zeeman are optional additions, not standalone DG0 owners. GPU DG0, direct relaxation, DG0 anisotropy/DMI/thermal/STT/Oersted/magnetoelastic combinations, and discontinuous DG0 `A` remain unsupported and reject without nodal fallback. The direct-relaxation restriction is enforced by both planner and native ABI; DG0 step statistics use a direct allocation-free material-weighted reduction. |
+| Object-owned authored regions (`object_regions`, region material overrides, region mesh policy, region couplings) | partial CUDA FDM exec | partial FEM executable | planned | **source-visible / partial-executable** | Authored regions are visible in Python, ProblemIR, OpenAPI, and the Control Room. Current single-grid CUDA FDM can materialize owner-scoped region masks for region texture overrides and explicit/disabled region-region exchange pairs; CPU reference FDM rejects executable pair overrides instead of silently ignoring them. FDM/FEM planning samples smooth `Ms/Aex` region material transitions into coefficient payloads using signed-distance weights; omitted `material_transition` defaults to `mesh_relative(cells=3, scope=boundary)` for `Ms/Aex`, while explicit `kind=sharp` remains the conformal/projection-gated discontinuous path. FEM also samples `Alpha` region overrides/fields into nodal coefficient payloads, records realization method plus min/max/mean statistics, and emits projection warnings for explicit sharp projection into runtime solver status. Python/Gmsh automatically creates conformal authored-region markers for fully contained box and cylinder regions on the OCC shared-domain path, including arbitrary cylinder axes; unsupported shapes, regions outside the owner, and overlapping conformal regions reject instead of degrading silently. Metadata-only markers do not qualify, and marker IDs cannot collide with object/domain `region_markers`. One bounded strict sharp-jump path is production-executable: conformal element-DG0 `M_s` on FEM CPU/double ordinary time evolution with mandatory consistent-mass exchange and optional Poisson demag/Zeeman. It preserves one shared P1 `m` field and uses no nodal fallback. This does not qualify discontinuous DG0 `A`, GPU DG0, other DG0 owners, region couplings, or general conformal coefficient runtime mapping. Explicit projection in extended mode remains the broader executable nodal-field path. Python `study.domain_mesh(..., object_region_markers=...)` preserves explicit precomputed markers through ProblemIR and script export. Broader conformal CSG and public multilayer FDM region-owned material/coupling remain deferred; public multilayer FDM rejects authored `object_regions` rather than silently ignoring them. Unsupported `rkky` and `interlayer_exchange` runtime coupling diagnostics use the public snake_case kind tokens, not Rust enum debug names. Native single-grid multilayer CUDA emits explicit disabled exchange pairs between object ids so separate objects keep free-surface semantics even though intra-object region defaults use harmonic mean. |
 | Ferromagnet + uniform `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Lowered to per-cell vectors for FDM and per-node vectors for FEM |
 | Ferromagnet + random `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Deterministic xorshift64 RNG in planner |
-| Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference, a native CUDA single-grid fast path for compatible stacks, and `cuda-assisted` fallback for the remaining current public scope; staged CPU and CUDA multilayer execute fixed-step Heun, classical RK4, and Bogacki-Shampine RK23 tableaus and explicitly reject adaptive stepping, RK45, and ABM3, while compatible native single-grid CUDA stacks can additionally route fixed-step RK45/ABM3 through the existing single-grid integrators; the CUDA multilayer paths honor `execution_precision` (`double` and calibrated `single`) across the native fast path and the assisted multilayer demag/explicit-RK runtime; FEM merges disjoint mesh assets into one execution plan with body-local exchange and global demag |
+| Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference, a native CUDA single-grid fast path for compatible stacks, and `cuda-assisted` fallback for the remaining current public scope; staged CPU and CUDA multilayer execute fixed-step Heun, classical RK4, and Bogacki-Shampine RK23 tableaus and explicitly reject adaptive stepping, RK45, and ABM3, while compatible native single-grid CUDA stacks can additionally route fixed-step RK45/ABM3 through the existing single-grid integrators. The assisted CUDA realization is explicitly host-authoritative: its execution provenance records `fdm_multilayer_transfer_telemetry` with measured vector H2D/D2H counts and bytes, so it must not be described as device-resident. The CUDA multilayer paths honor `execution_precision` (`double` and calibrated `single`) across the native fast path and the assisted multilayer demag/explicit-RK runtime. Session capabilities select a multilayer profile and therefore advertise only exchange, Newell demag, Zeeman, uniaxial/cubic anisotropy, and interfacial DMI; thermal, spin torque, Oersted, bulk DMI, magnetoelastic, and CUDA boundary correction remain absent until their planner/runtime scope is executable. FEM merges disjoint mesh assets into one execution plan with body-local exchange and global demag |
 | `Exchange` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU 6-point stencil in FDM and lumped-mass P1 operator in FEM |
 | `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM, validation pending for full FEM GPU demag) | FDM uses Newell tensor FFT. Executable FEM includes Poisson airbox (`poisson_robin` / `poisson_dirichlet`) on the MFEM/libCEED/hypre CPU lane and strict MFEM/libCEED/CUDA GPU lane. Strict FEM GPU demag mode is `device_hypre_poisson`: RHS, hypre solve, warm-start, recovery `H_demag`, and demag energy stay device-resident, with `uses_gpu_poisson=true`, `hypre_execution_policy=device`, and no hot-loop demag field/magnetization round-trip. `hybrid_cpu_poisson` is only an explicit compatibility/debug mode and must not be silently selected for `study.device("gpu")`. Initial strict GPU scope is P1, double precision, shared-domain airbox Dirichlet/Robin. High-order and Fredkin-Koehler GPU demag remain gated. The static/time-domain k=0 periodic demag slice has ordinary managed CPU/GPU periodic-antidot relaxation evidence for seam continuity and device-Poisson provenance, but remains below validated production until strict M5 z-padding and primitive-vs-supercell reports pass for the same workload; it may execute only when `ProblemIR.pbc.demag="periodic_airbox_k0"`, the mesh carries `periodic_node_pairs`, `periodic_boundary_pairs`, periodic axes that match `ProblemIR.pbc.axes`, a shared-domain airbox, at least one open axis, and accepted `periodic_pairs.v1` diagnostics proving shared-airbox coverage, magnetic coverage where the magnetic body crosses the selected seam, and opposed-normal boundary-face pairs; selected periodic axes may include `z` for non-fully-periodic cells, while the current antidot qualification fixture remains the film-specific `x/y` periodic, open-`z` case. A historical managed 3x3 primitive-vs-periodic-supercell artifact `.fullmag/reports/fem-demag-periodic-airbox-validation-supercell-pbc/periodic_airbox_validation.csv` passed with `2.4167958871934916e-3` relative energy error against the `2.0e-2` tolerance and zero primitive `H_demag`/`phi` seam mismatch for its fixture; this is supporting evidence for the reduced Poisson path, not current M5 antidot acceptance. Strict GPU k=0 static periodic demag has source-contract support and ordinary managed periodic-antidot GPU gate evidence proving `uses_cuda_kernels=true`, `uses_gpu_poisson=true`, `demag_operator_mode="device_hypre_poisson"`, and zero accepted `H_demag`/normal-flux seam mismatch for `exchange_coupled` and `air_gap`; it must still not be reported as validated production until strict M5 z-padding and primitive-vs-supercell evidence pass. Fully periodic 3D, dynamic frequency-response demag, nonzero-k Floquet magnetostatics, and broader GPU periodic demag remain gated. The public nonzero-k Floquet demag request is `magnetostatic_bc=floquet_airbox`; it is accepted as IR/DSL intent but must fail capability planning until a validated Bloch/Floquet demag-k operator exists. Executable FEM also includes the initial body-only `fredkin_koehler` FEM/BEM open-boundary path in the native MFEM CPU subsystem. Poisson requires a shared-domain mesh with air; `fredkin_koehler` must not require or allocate an airbox and uses the magnetic body boundary surface instead. The Fredkin-Koehler implementation is dense-reference/validation-scale until analytic and cross-model qualification are complete. Native FEM demag exposes an explicit backend-hint `FemLinearSolverPolicy` authoring contract (`CG/GMRES`, `AMG/JACOBI/NONE`, tolerances, iteration cap) while keeping `Demag()` physics-first. For explicit native `poisson_robin`, the managed runtime resolves directly to `hypre_pcg_boomeramg`; live session views preserve requested CPU threads, resolved Rayon threads, and requested/effective OpenMP threads when the native runtime reports them. |
-| `InterfacialDMI` / `BulkDMI` | ✅ exec | planned | planned | **public-executable** (FDM); **under-qualification** (FEM frequency response CPU/GPU open-gamma and k=0 static-periodic slices) | CPU FDM computes DMI field/energy in the reference lane and exposes `H_dmi` as a derived snapshot/preview observable. Public multilayer FDM carries global DMI constants through CPU reference observables/RHS, CUDA-assisted local effective fields, native stacked single-grid plans, native stacked scalar/field reporting, and staged multilayer v2 explicit-RK RHS for fixed-step Heun/RK4/RK23; staged multilayer handles expose per-layer `H_DMI` copy endpoints for those global constants. The FEM driven frequency-response CPU and GPU lanes have P1 tetrahedral tangent DMI payloads for open/gamma and k=0 static-periodic magnetic slices: CPU uses the native MFEM weak-residual operator and GPU uses the native CUDA weak-residual tangent operator inside the frequency-domain context. This remains under managed-runtime qualification and does not imply demag, nonzero-k Floquet DMI assembly, or spatial DMI field output for frequency response. Per-layer/per-cell DMI fields remain deferred. |
+| `InterfacialDMI` / `BulkDMI` | ✅ exec | planned | planned | **public-executable** (FDM); **bounded energy-observation qualification** (FEM GPU); **under-qualification** (FEM frequency response) | CPU FDM computes DMI field/energy in the reference lane and exposes `H_dmi` as a derived snapshot/preview observable. Public multilayer FDM carries global DMI constants through CPU reference observables/RHS, CUDA-assisted local effective fields, native stacked single-grid plans, native stacked scalar/field reporting, and staged multilayer v2 explicit-RK RHS for fixed-step Heun/RK4/RK23. Separate managed uniform-`M_s` native FEM GPU fixtures select interfacial `H_dmi` and bulk `H_dmi_bulk`, and compare `eden_dmi`/`eden_total` with native `E_dmi`/`E_total` at the same source step. That evidence qualifies only the bounded time-evolution energy-observation workload; it does not promote GPU DG0 or every FEM DMI execution surface. The FEM driven frequency-response CPU/GPU P1 tetrahedral tangent DMI slices remain under their separate qualification. Per-layer/per-cell DMI fields remain deferred. |
 | `Zeeman` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Public API authors `B`; planner normalizes to `H_ext` in A/m for CPU FDM and CPU FEM |
 | `RegionalFieldDrive` / legacy prescribed antenna mask import | CPU reference executable; CUDA unsupported | source-visible planning only; native CPU/GPU consumption unqualified | planned | **mixed current status; see the microwave slice above** | Separate MuMax-style source governed by note 0920 and ADR 0019. It is not a conductor field solve and must not be used as a hidden fallback for `SolvedAntennaDrive`; this summary does not promote any lane beyond the detailed row above. |
 | Variable-width 3D microstrip/CPW layout | planned | planned | planned | **planned** | Ordered width/gap stations along current flow, explicit signal/return conductors, and rigid 3D placement; the current constant-width preview does not qualify. |
@@ -262,6 +422,9 @@ field-solve lanes fail; they do not silently choose another device.
 | `ThermalNoise` | ✅ exec | planned | planned | **public-executable** (single-grid FDM) | CPU/GPU single-grid FDM execute Brown thermal noise where configured. Public multilayer FDM rejects thermal noise explicitly until staged CPU/GPU multilayer RHS coverage exists, rather than dropping it from `FdmMultilayerPlanIR`. |
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |
+| LLG explicit fixed | see LLG time-domain evidence overlay | see LLG time-domain evidence overlay | `unsupported` | lane-specific | Existing fixed execution is retained, but `fix_dt` API/IR round-trip is not complete until Task 5. |
+| LLG explicit adaptive | `source_visible` | `source_visible` | `unsupported` | **`source_visible`** | RK23/RK45 source exists, but production publication is blocked by findings `LLG-TD-API-001` through `LLG-TD-TEST-011`. |
+| LLG stiff time-domain | `unsupported` | `unsupported` | `unsupported` | **`unsupported`** | The existing `Relaxation(tangent_plane_implicit)` is an energy minimizer, not full physical-time LLG. No explicit-to-stiff or GPU-to-CPU fallback is legal. |
 | `Relaxation(llg_overdamped)` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Shared `StudyIR::Relaxation` with `RelaxStop` and structured execution-owned completion. This is the only relaxation algorithm that owns `dynamics`, RK, `dt`, and a stage-local relaxation clock. |
 | `Relaxation(projected_gradient_bb)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu`, including demag at `rtol<=1e-12` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. FEM demag uses direct polarized increments; no hidden fallback is permitted. Heterogeneous cellwise FDM CUDA material fields remain fail-closed where that lane does not support them. |
 | `Relaxation(nonlinear_cg)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | PR+ direct minimization uses the same physical energy metric, retraction, and Armijo units as PG-BB. Its accepted line-search step is in `m/A`; it owns no RK or time controls. |
@@ -271,6 +434,7 @@ field-solve lanes fail; they do not silently choose another device.
 | Execution precision `double` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU reference FDM remains the trusted baseline; FEM executes through the MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU runtimes |
 | Execution precision `single` | ✅ exec | planned | planned | **public-executable** (CUDA FDM) | Public CUDA FDM supports calibrated `single` precision across native single-body runs and multilayer CUDA paths; CPU reference FDM remains `double`-only |
 | Field/scalar outputs (`m`, `H_ex`, `H_ext`, `H_ani`, `H_dmi`, `H_eff`, `E_ex`, `E_ext`, `E_ani`, `E_dmi`, `E_total`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Common artifact layout for current FDM/FEM executable slices; FDM `H_ani` is exposed by CPU reference, single-grid native CUDA copy/preview/snapshot endpoints, and public multilayer observable paths. FDM `H_dmi` remains CPU/reference plus current public multilayer observable coverage, with broader per-layer/per-cell native DMI still tracked separately. |
+| FEM live energy-density preview (`eden_ex`, `eden_demag`, `eden_ext`, `eden_ani`, `eden_dmi`, `eden_total`) | n/a | bounded CPU/GPU exec | planned | **partial-production-executable** | Managed qualification compares each advertised projected term and `eden_total` at source step 52 with the matching native scalar. CPU DG0 covers consistent-mass exchange with optional Poisson demag and Zeeman through `fem_nodal_conservative_tetra_projection`. Four separate uniform-`M_s` GPU fixtures cover uniaxial, cubic, interfacial DMI, and bulk DMI through `fem_nodal_visualization_projection`. Canonical element/quadrature density publication, GPU DG0, and broader interaction combinations remain unsupported or unqualified. |
 | FEM demag outputs (`H_demag`, `demag_phi`, `E_demag`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | The MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM lanes emit demag outputs through the same quantity/artifact contract as FDM. Static PBC equilibrium acceptance requires same-step `H_demag` and scalar-potential `demag_phi` field artifacts plus seam checks across explicit periodic node pairs; `demag_phi` is checked after removing the best constant gauge offset per periodic pair id. |
 | FDM hints | ✅ exec | n/a | planned | **public-executable** | Cell size → grid dims in planner |
 | FEM hints | n/a | ✅ exec | planned | **public-executable** (FEM) | Planner builds `FemPlanIR`; execution currently requires `MeshIR` or external meshing extras |

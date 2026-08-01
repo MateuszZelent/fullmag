@@ -61,6 +61,12 @@ EnergyWeightedDotResult energy_weighted_dot_fields_with_absolute_term_sum(
     const std::vector<double> &a,
     const std::vector<double> &b);
 
+EnergyWeightedDotResult representable_chord_energy_linear_increment(
+    const Context &ctx,
+    const std::vector<double> &current_m_xyz,
+    const std::vector<double> &trial_m_xyz,
+    const std::vector<double> &current_h_eff_xyz);
+
 double metric_gradient_norm_sq(
     const Context &ctx,
     const std::vector<double> &gradient);

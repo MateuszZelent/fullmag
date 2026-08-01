@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { useKernel } from "@/kernel/KernelContext";
 
 import {
   useCurrentRunResource,
@@ -45,6 +46,7 @@ function serverMountedSnapshot(): boolean {
 }
 
 export default function StatusBarModule() {
+  const kernel = useKernel();
   const mounted = useSyncExternalStore(
     subscribeToMounted,
     clientMountedSnapshot,
@@ -115,6 +117,16 @@ export default function StatusBarModule() {
     : "—";
   const dotStatus = mounted ? sessionResourceStatus : "loading";
 
+  const handleItemClick = (tab: "telemetry" | "mesh" | "diagnostics") => {
+    kernel.bus.emit("footer:tab-requested", { tab });
+  };
+  const handleItemKeyDown = (event: React.KeyboardEvent, tab: "telemetry" | "mesh" | "diagnostics") => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleItemClick(tab);
+    }
+  };
+
   return (
     <div className="fm-status-bar" role="status" aria-label="Session status">
       <span
@@ -122,20 +134,48 @@ export default function StatusBarModule() {
         data-status={dotStatus}
         aria-hidden="true"
       />
-      <span className="fm-status-bar__item">{sessionState}</span>
+      <span
+        className="fm-status-bar__item fm-status-bar__item--clickable"
+        role="button"
+        tabIndex={0}
+        onClick={() => handleItemClick("telemetry")}
+        onKeyDown={(e) => handleItemKeyDown(e, "telemetry")}
+      >
+        {sessionState}
+      </span>
       <span className="fm-status-bar__sep" aria-hidden="true" />
-      <span className="fm-status-bar__item">{sessionName}</span>
+      <span
+        className="fm-status-bar__item fm-status-bar__item--clickable"
+        role="button"
+        tabIndex={0}
+        onClick={() => handleItemClick("telemetry")}
+        onKeyDown={(e) => handleItemKeyDown(e, "telemetry")}
+      >
+        {sessionName}
+      </span>
       <span className="fm-status-bar__sep" aria-hidden="true" />
       <span className="fm-status-bar__item">{runtimeVersion}</span>
       <span className="fm-status-bar__sep" aria-hidden="true" />
-      <span className="fm-status-bar__item" data-state={mesh.state} title={mesh.title}>
+      <span
+        className="fm-status-bar__item fm-status-bar__item--clickable"
+        data-state={mesh.state}
+        title={mesh.title}
+        role="button"
+        tabIndex={0}
+        onClick={() => handleItemClick("mesh")}
+        onKeyDown={(e) => handleItemKeyDown(e, "mesh")}
+      >
         {mesh.label}
       </span>
       <span className="fm-status-bar__spacer" aria-hidden="true" />
       <span
-        className="fm-status-bar__engine"
+        className="fm-status-bar__engine fm-status-bar__engine--clickable"
         data-state={engine.state}
         title={engine.title}
+        role="button"
+        tabIndex={0}
+        onClick={() => handleItemClick("diagnostics")}
+        onKeyDown={(e) => handleItemKeyDown(e, "diagnostics")}
       >
         <span className="fm-status-bar__engine-label">{engine.label}</span>
         <span className="fm-status-bar__engine-sep" aria-hidden="true">

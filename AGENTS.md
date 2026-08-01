@@ -201,6 +201,8 @@ Prefer single-file or single-test runs during iteration. Full suites are for the
 
 When the user corrects your approach, append a one-line rule here before ending the session. Write it concretely ("Always use X for Y"), never abstractly ("be careful with Y"). If an existing line already covers the correction, tighten it instead of adding a new one. Remove lines when the underlying issue goes away (model upgrades, refactors, process changes).
 
+- Sphinx MathJax inline HTML legitimately serializes delimiters such as `\(...\)` inside `.math` elements; enforce MyST `$...$` in source, but never reject those delimiters globally in rendered HTML.
+- The canonical durable build-storage root is `/zfn2/mateuszz/git/fullmag`; all heavy local build artifacts and backing images must be stored below this path. Do not describe `/mnt/fullmag-zfn2-native` or `/tmp/fullmag-zfn2-build` as storage roots: they are only transient mounted views of ext4 images physically stored under `/zfn2/mateuszz/git/fullmag/build-volumes/`. Never infer the real WSL mount permissions from an ordinary sandboxed Codex command: the sandbox can remount out-of-workspace paths read-only, so audit `/zfn2` and `/mnt/fullmag-zfn2-native` with an approved host-level command before declaring a storage blocker. Never build directly on the CIFS filesystem. Cargo uses `/tmp/fullmag-zfn2-build/cargo-targets/<task>` with `CARGO_INCREMENTAL=0`, backed by `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-cargo.ext4` mounted through `fuse2fs -o rw,noatime,fakeroot`; freshly linked Cargo build scripts can fail with `EINVAL` on direct CIFS. Managed CMake/native container builds use task-specific trees through the kernel-mounted `/mnt/fullmag-zfn2-native`, backed by `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4`, and bind that mounted view into the repository `just` container; Docker cannot bind the user-only FUSE mount. After a WSL restart, restore the native mount with `wsl.exe -d Ubuntu2 -u root -- mount -o loop,rw,noatime /zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4 /mnt/fullmag-zfn2-native` (create the mount point first if absent). Do not fill the workspace or ordinary `/tmp` storage with multi-gigabyte build trees; small final link outputs may use `/tmp` only when required. This does not replace the mandatory container-backed `just` route for native FEM/MFEM/CUDA/hypre/libCEED verification.
 - Always use `fm-` prefix for all CSS class names in `apps/control-room`, including shell-level layout classes. No unprefixed classes.
 - The CSS design system is token-first: `--fm-*` custom properties are the source of truth. Tailwind provides the utility layer. shadcn/ui provides accessible pre-built components. All three coexist — tokens define the visual language, Tailwind provides utilities, shadcn provides components.
 - Keep `apps/control-room` on Next.js 16 unless the user explicitly approves a version change.
@@ -229,7 +231,11 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Viewport performance fixes must preserve the currently enabled visualization quality by default; lower quality, lower glyph density, hidden layers, or simplified topology are explicit fallback modes only after quality-preserving optimization fails.
 - Always resolve abbreviated Git commit IDs with `git rev-parse` before using them in verification assertions; never infer missing hash characters.
 - In a shared dirty worktree, inspect `git diff --cached --name-only` in a separate command before every commit; never chain that inspection and `git commit`, because another process may have staged unrelated files between task steps.
+- Before deleting any shared Cargo target cache, obtain an explicit no-active-process confirmation from every running agent that may use it immediately before deletion; a process-list snapshot alone is insufficient.
 - Microwave antenna designs with a taper or constriction must use a full 3D conductor/current solve; never promote a translationally invariant 2.5D cross-section as the production model for width variation along current flow.
+- Ordinary `fullmag x.py` launches without `--output-dir` must replace only the auto-derived sibling `x.zarr` bundle and write final and per-stage scientific artifacts there; never auto-delete an explicit output path or hide the only result under `.fullmag` session history.
+- Never delete a worktree `target/` directory while a Docker Compose container bind-mounts that worktree, even when `/workspace/target` is overmounted by a named volume; stop the container and verify its mounts first.
+- For SP4 mixed-prism qualification, preserve the stricter relaxation threshold `tolT=1e-6 T` (`tolA=0.7957747154594767 A/m`); do not restore the legacy `7.957747 A/m` threshold during tolerance-unit migrations.
 
 ---
 
@@ -382,6 +388,14 @@ If two layers disagree, the higher layer wins and the lower layer must be repair
 ## 6. Golden rule: physics before implementation
 
 Before implementing any new physics or numerical feature, create or update a publication-style note in `docs/physics/`.
+
+For every creation, modification, review, restructuring, or publication of physics,
+solver, backend, interaction, numerical-method, Python-API, or `ProblemIR`
+documentation, agents **MUST use `scientific-documentation-contract`**. Its
+hierarchy, LaTeX/MathJax, complete parameter-table, Python-to-`ProblemIR`,
+path-plus-symbol source mapping, backend separation, bibliography, source-index,
+and automated validation gates are mandatory; publication documentation cannot
+defer them to follow-up work.
 
 Every such note must include:
 
@@ -962,6 +976,40 @@ Use them to study:
   - demag/operator caching concepts
   - interactions are plugin-like units and experiments/workflows such as
     relaxation and eigen solve live above interactions
+
+### Public-manual authoring pattern
+
+Use the NeuralMag and TetraX manuals as presentation references for Fullmag's public
+documentation:
+
+- NeuralMag's `getting_started` progression is the model for executable onboarding:
+  setup, geometry/material, state, interaction, stage, observables, output, and a
+  complete script. Fullmag examples must be copyable `# %%` cells in execution order,
+  with the public `fm.study(...).stages` workflow first.
+- TetraX's interaction catalog is the model for discoverability: one canonical page or
+  subtree per physical interaction, with API parameters, energy, effective field,
+  observables, implementation lanes, qualification state, and references. Large
+  interactions such as demagnetization may own focused subpages.
+- Keep workflow guidance before exhaustive reference material, and link every
+  parameter table, equation, backend section, and source map from the interaction's
+  navigation path. Do not publish orphaned API tables or detached solver notes.
+- Treat every documented code block as an executable contract: run it, verify its
+  output or expected rejection, and state the exact status when the current builder
+  cannot express the complete interaction graph.
+- The canonical simulation-script pattern is the repository-owned stage scenario: start with
+  `import fullmag as fm`, configure `fm.study(...)` with engine/device/mode, define the universe,
+  geometry, material and magnetization, register interactions, append ordered
+  `study.stages.add_*` stages, and configure autosave/outputs when relevant. Use
+  `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` as the
+  style reference and cite the exact scenario used.
+- Never put `fm.Problem(...)` in `public_docs/site` documentation, tutorials, examples, or
+  standard-problem snippets. Public scripts must use the stage-first `fm.study(...).stages`
+  workflow. If a stage builder cannot express an interaction, document that boundary explicitly
+  and show individual object-level `to_ir()` fragments or a repository scenario reference; do not
+  fabricate a top-level snapshot or stage API.
+- These manuals guide structure only. Never copy their code or infer Fullmag behavior
+  from them; current Fullmag source, Python API, `ProblemIR`, planner, runtime, tests,
+  and device evidence remain authoritative.
 
 ### Hard rule
 

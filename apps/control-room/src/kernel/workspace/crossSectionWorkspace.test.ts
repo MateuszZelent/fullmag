@@ -5,12 +5,17 @@ import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import {
   activeCrossSectionFrameRotationDegrees,
   activeCrossSectionFramePreview,
+  beginPlanarMonitorDraft,
   beginCrossSectionDraft,
   beginCrossSectionDraftFromPlot,
   commitCrossSectionDraft,
   crossSectionFramePreviewToClip,
   crossSectionWorkspaceStore,
+  discardPlanarMonitorDraft,
+  isPlanarMonitorRevisionConflict,
+  planarMonitorCreateRequestFromDraft,
   resetCrossSectionWorkspaceForTests,
+  updatePlanarMonitorDraft,
   updateCrossSectionDraft,
   updateCrossSectionPlot,
 } from "./crossSectionWorkspace";
@@ -34,6 +39,86 @@ const visualizationState = {
 } as VisualizationStateResource;
 
 describe("crossSectionWorkspace", () => {
+  it("owns planar monitor drafts separately from legacy cross-section image plots", () => {
+    resetCrossSectionWorkspaceForTests();
+
+    expect(crossSectionWorkspaceStore.getSnapshot()).toHaveProperty(
+      "planarMonitorDraft",
+      null,
+    );
+  });
+
+  it("starts a geometry-only planar monitor draft without legacy PNG settings", () => {
+    resetCrossSectionWorkspaceForTests();
+
+    const draft = beginPlanarMonitorDraft(visualizationState);
+
+    expect(draft).toEqual({
+      frameExtent: "universe",
+      id: "draft",
+      name: "Midplane",
+      plane: "xy",
+      positionPercent: 62.5,
+      rotationDegrees: 0,
+    });
+    expect(draft).not.toHaveProperty("colorScale");
+    expect(draft).not.toHaveProperty("metric");
+    expect(draft).not.toHaveProperty("shrinkFactor");
+    expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
+    expect(
+      crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft,
+    ).toEqual(draft);
+  });
+
+  it("updates and discards the planar monitor draft without touching legacy plots", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginPlanarMonitorDraft(visualizationState);
+
+    const updated = updatePlanarMonitorDraft({
+      name: "Oblique view",
+      plane: "yz",
+      positionPercent: 125,
+      rotationDegrees: -270,
+    });
+
+    expect(updated).toEqual({
+      frameExtent: "universe",
+      id: "draft",
+      name: "Oblique view",
+      plane: "yz",
+      positionPercent: 100,
+      rotationDegrees: -180,
+    });
+    expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
+    expect(crossSectionWorkspaceStore.getSnapshot().plots).toEqual([]);
+
+    discardPlanarMonitorDraft();
+
+    expect(
+      crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft,
+    ).toBeNull();
+  });
+
+  it("uses the planar monitor draft as the lightweight 3D frame preview", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginPlanarMonitorDraft(visualizationState);
+    updatePlanarMonitorDraft({
+      plane: "yz",
+      positionPercent: 12.5,
+      rotationDegrees: 30,
+    });
+
+    expect(
+      activeCrossSectionFramePreview(
+        crossSectionWorkspaceStore.getSnapshot(),
+      ),
+    ).toEqual({
+      axis: "x",
+      positionPercent: 12.5,
+      rotationDegrees: 30,
+    });
+  });
+
   it("creates an editable draft from visualization state", () => {
     resetCrossSectionWorkspaceForTests();
 
@@ -238,5 +323,51 @@ describe("crossSectionWorkspace", () => {
       flipped: false,
       position_percent: 12.5,
     });
+  });
+
+  it("lowers the compatibility axis draft into a revision-guarded planar monitor", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+    const updated = updateCrossSectionDraft({
+      name: "Mid plane",
+      plane: "xz",
+      positionPercent: 25,
+      rotationDegrees: 90,
+    });
+    if (!updated) throw new Error("Expected an editable planar monitor draft");
+
+    const request = planarMonitorCreateRequestFromDraft(updated, 7, {
+      min: [-2, -4, -6],
+      max: [2, 4, 6],
+    });
+
+    expect(request.expected_scene_revision).toBe(7);
+    expect(request.monitor).toMatchObject({
+      id: "mid_plane_8",
+      name: "Mid plane",
+      operator: { kind: "plane_sample" },
+      target: { kind: "domain" },
+      frame: {
+        normal: [0, -1, 0],
+        origin_m: [0, -2, 0],
+        preset: "xz",
+      },
+    });
+    expect(request.monitor.frame.u_axis).toEqual([
+      expect.closeTo(0, 12),
+      0,
+      expect.closeTo(1, 12),
+    ]);
+    expect(request.monitor.frame.v_axis).toEqual([
+      expect.closeTo(-1, 12),
+      0,
+      expect.closeTo(0, 12),
+    ]);
+  });
+
+  it("recognizes a revision conflict without treating other failures as conflicts", () => {
+    expect(isPlanarMonitorRevisionConflict({ status: 409 })).toBe(true);
+    expect(isPlanarMonitorRevisionConflict({ status: 422 })).toBe(false);
+    expect(isPlanarMonitorRevisionConflict(new Error("network"))).toBe(false);
   });
 });

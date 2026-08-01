@@ -7,6 +7,42 @@ pub(crate) mod schedules;
 use crate::types::RunError;
 use std::collections::BTreeSet;
 
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn next_fdm_attempt_dt(
+    adaptive: bool,
+    current_dt: f64,
+    suggested_dt: Option<f64>,
+) -> f64 {
+    if adaptive {
+        suggested_dt.unwrap_or(current_dt)
+    } else {
+        current_dt
+    }
+}
+
+#[cfg(test)]
+mod timestep_tests {
+    use super::next_fdm_attempt_dt;
+
+    #[test]
+    fn cuda_batch_consumes_accepted_dt_suggested_only_for_adaptive_policy() {
+        assert_eq!(next_fdm_attempt_dt(true, 1.0e-15, Some(4.0e-16)), 4.0e-16);
+        assert_eq!(next_fdm_attempt_dt(true, 1.0e-15, None), 1.0e-15);
+        assert_eq!(next_fdm_attempt_dt(false, 1.0e-15, Some(4.0e-16)), 1.0e-15);
+    }
+}
+
+pub(crate) fn reject_adaptive_multilayer_plan(
+    plan: &fullmag_ir::FdmMultilayerPlanIR,
+) -> Result<(), RunError> {
+    if plan.fixed_timestep.is_none() {
+        return Err(RunError {
+            message: "adaptive time stepping is unsupported for multilayer FDM runtimes; an explicit fixed_timestep is required before native materialization".to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Resolve the planner's requested FDM PBC demagnetization policy once for
 /// every runtime lane.  CPU and CUDA must not infer kernel padding directly
 /// from local periodic stencil flags.
@@ -36,9 +72,7 @@ pub(crate) fn resolve_fdm_demag_boundary_for_periodicity(
 /// Re-check the planner's resolved single-grid budget immediately before any
 /// CPU/CUDA engine allocation.  The runner must reject forged or stale plans
 /// whose payload lengths do not match the checked grid cell count.
-pub(crate) fn validate_single_grid_budget(
-    plan: &fullmag_ir::FdmPlanIR,
-) -> Result<u64, RunError> {
+pub(crate) fn validate_single_grid_budget(plan: &fullmag_ir::FdmPlanIR) -> Result<u64, RunError> {
     // Production callers always use strict certificate enforcement.  The
     // cfg(test) opt-in below exists only for legacy hand-built unit fixtures;
     // planner-produced plans never take this compatibility path.
@@ -97,7 +131,8 @@ fn validate_single_grid_budget_with_policy(
                 &_legacy_certificate
             } else {
                 return Err(RunError {
-                    message: "FDM grid certificate is required before runner allocation".to_string(),
+                    message: "FDM grid certificate is required before runner allocation"
+                        .to_string(),
                 });
             }
         }
@@ -107,11 +142,8 @@ fn validate_single_grid_budget_with_policy(
         .map_err(|message| RunError {
             message: format!("FDM grid certificate rejected before allocation: {message}"),
         })?;
-    fullmag_ir::validate_fdm_region_lut_indices(
-        &plan.region_mask,
-        &plan.inter_region_exchange,
-    )
-    .map_err(|message| RunError { message })?;
+    fullmag_ir::validate_fdm_region_lut_indices(&plan.region_mask, &plan.inter_region_exchange)
+        .map_err(|message| RunError { message })?;
     if certificate.origin_m != plan.origin_m
         || certificate.counts != plan.grid.cells
         || certificate.cell_m != plan.cell_size
@@ -225,7 +257,8 @@ pub(crate) fn validate_multilayer_grid_budget(
             #[cfg(not(test))]
             {
                 return Err(RunError {
-                    message: "FDM multilayer grid certificate is required before runner allocation".to_string(),
+                    message: "FDM multilayer grid certificate is required before runner allocation"
+                        .to_string(),
                 });
             }
         }
@@ -234,7 +267,9 @@ pub(crate) fn validate_multilayer_grid_budget(
     certificate
         .validate_against_topology_tokens(None, &topology_tokens)
         .map_err(|message| RunError {
-        message: format!("FDM multilayer grid certificate rejected before allocation: {message}"),
+            message: format!(
+                "FDM multilayer grid certificate rejected before allocation: {message}"
+            ),
         })?;
     let expected_origin = plan
         .layers
@@ -509,6 +544,8 @@ mod tests {
         });
         let error = validate_single_grid_budget(&plan)
             .expect_err("stale resolved workspace must fail before allocation");
-        assert!(error.message.contains("resolved periodic workspace contract mismatch"));
+        assert!(error
+            .message
+            .contains("resolved periodic workspace contract mismatch"));
     }
 }

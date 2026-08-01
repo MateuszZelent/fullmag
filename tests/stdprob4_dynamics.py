@@ -81,7 +81,7 @@ def prepare_relaxed_state() -> tuple[tuple[float, float, float], Path]:
     print("[SP4] Relaxing the standard initial state...")
     study, body = _build("stdprob4_relax", fm.uniform(1.0, 0.1, 0.0))
     result = study.relax(
-        tol=RELAX_TOL,
+        tolA=RELAX_TOL,
         max_steps=RELAX_MAX_STEPS,
         algorithm=RELAX_ALGORITHM,
         relax_alpha=1.0,

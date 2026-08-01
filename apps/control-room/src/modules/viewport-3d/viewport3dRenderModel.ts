@@ -44,10 +44,12 @@ import { resolveViewport3DFieldDomainCompatibility } from "./model/viewport3DFie
 import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
+  buildPartSurfaceEdgeIndicesWithSupplemental,
+  buildPartSurfaceTriangleFacetIndicesWithSupplemental,
   buildPartVolumeEdgeIndices as buildPartVolumeEdgeIndicesUncached,
-  buildSurfaceEdgeIndices,
-  buildTetraSurfaceIndices,
-  buildTetraVolumeEdgeIndices,
+  buildTopologySurfaceIndices,
+  buildTopologySurfaceEdgeIndices,
+  buildTopologyVolumeEdgeIndices,
   buildUnclaimedVolumeEdgeIndices,
   uniqueSortedIndices,
   type Viewport3DPreparedPartTopologyIndices,
@@ -97,6 +99,9 @@ export interface Viewport3DTopologyPartRenderModel<
   fullNodeSelection: Viewport3DNodeSelection;
   part: TPart;
   surfaceIndices: Uint32Array | null;
+  surfaceTriangleCellTypes?: Uint32Array | null;
+  surfaceTriangleFacetIndices?: Uint32Array | null;
+  surfaceTriangleGlobalCellOrdinals?: BigUint64Array | null;
   surfaceNodeIndices: Uint32Array | null;
   surfaceNodeSelection: Viewport3DNodeSelection | null;
   volumeEdgeIndices: Uint32Array | null;
@@ -359,6 +364,10 @@ const partVectorSegmentCache = new WeakMap<
 >();
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
+const topologySurfaceEdgeIndexCache = new WeakMap<
+  DecodedTopology,
+  Uint32Array | null
+>();
 const topologyVolumeEdgeIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
 const partSurfaceIndexCache = new WeakMap<
   DecodedTopology,
@@ -395,7 +404,7 @@ function buildCachedTopologySurfaceIndices(
 
   const surfaceIndices = measureViewport3DTopologyBuild(
     "fullmag.viewport3d.buildTopologySurfaceIndices",
-    () => buildTetraSurfaceIndices(topology.indices),
+    () => buildTopologySurfaceIndices(topology),
   );
   topologySurfaceIndexCache.set(topology, surfaceIndices);
   return surfaceIndices;
@@ -409,10 +418,24 @@ function buildCachedTopologyVolumeEdgeIndices(
 
   const volumeEdgeIndices = measureViewport3DTopologyBuild(
     "fullmag.viewport3d.buildTopologyVolumeEdgeIndices",
-    () => buildTetraVolumeEdgeIndices(topology.indices),
+    () => buildTopologyVolumeEdgeIndices(topology),
   );
   topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices);
   return volumeEdgeIndices;
+}
+
+function buildCachedTopologySurfaceEdgeIndices(
+  topology: DecodedTopology,
+): Uint32Array | null {
+  if (topologySurfaceEdgeIndexCache.has(topology)) {
+    return topologySurfaceEdgeIndexCache.get(topology) ?? null;
+  }
+  const edges = measureViewport3DTopologyBuild(
+    "fullmag.viewport3d.buildTopologySurfaceEdgeIndices",
+    () => buildTopologySurfaceEdgeIndices(topology),
+  );
+  topologySurfaceEdgeIndexCache.set(topology, edges);
+  return edges;
 }
 
 function getCachedPartTopologyValue<TValue>(
@@ -435,22 +458,6 @@ function getCachedPartTopologyValue<TValue>(
   const value = measureViewport3DTopologyBuild(measureName, build);
   partCache.set(part, value);
   return value;
-}
-
-function buildCachedSurfaceEdgeIndices(
-  surfaceIndices: Uint32Array | null,
-): Uint32Array | null {
-  if (!surfaceIndices) return null;
-  if (surfaceEdgeIndexCache.has(surfaceIndices)) {
-    return surfaceEdgeIndexCache.get(surfaceIndices) ?? null;
-  }
-
-  const edgeIndices = measureViewport3DTopologyBuild(
-    "fullmag.viewport3d.buildSurfaceEdgeIndices",
-    () => buildSurfaceEdgeIndices(surfaceIndices),
-  );
-  surfaceEdgeIndexCache.set(surfaceIndices, edgeIndices);
-  return edgeIndices;
 }
 
 function buildCachedSurfaceNodeIndices(
@@ -548,7 +555,7 @@ export function buildViewport3DTopologyRenderModel<
     topologyIndexBundle?.fallbackSurfaceEdgeIndices ??
     (topologyIndexPending
       ? null
-      : buildCachedSurfaceEdgeIndices(fallbackSurfaceIndices())),
+      : buildCachedTopologySurfaceEdgeIndices(topology)),
   );
   const fallbackSurfaceNodeIndices = lazyValue(() =>
     topologyIndexBundle?.fallbackSurfaceNodeIndices ??
@@ -660,6 +667,15 @@ function buildViewport3DTopologyPartRenderModel<
     part,
     get surfaceIndices() {
       return topologyModel.surfaceIndices;
+    },
+    get surfaceTriangleCellTypes() {
+      return topologyModel.surfaceTriangleCellTypes;
+    },
+    get surfaceTriangleFacetIndices() {
+      return topologyModel.surfaceTriangleFacetIndices;
+    },
+    get surfaceTriangleGlobalCellOrdinals() {
+      return topologyModel.surfaceTriangleGlobalCellOrdinals;
     },
     get surfaceNodeIndices() {
       return topologyModel.surfaceNodeIndices;
@@ -826,6 +842,15 @@ export function buildViewport3DFieldRenderModel(
         : null;
     const scopedPartFieldNodeIndices =
       isScopedPartFieldVector ? partFieldNodeIndices : null;
+    const partProjectionFieldNodeIndices =
+      partFieldVector && partFieldVector !== renderFieldVector
+        ? partFieldNodeIndices ??
+          resolveLegacyPartFieldNodeIndices(
+            partFieldVector,
+            partModel,
+            topology,
+          )
+        : null;
     const scopedPartFieldNodeSelection = scopedPartFieldNodeIndices
       ? nodeIndicesToSelection(scopedPartFieldNodeIndices)
       : null;
@@ -851,10 +876,13 @@ export function buildViewport3DFieldRenderModel(
           resolveNodeSelectionCount(vectorSelection, topology),
     );
     const partScalarColorMode = targetRenderPlan
+      ? targetRenderPlan.colorbar.scalarColorMode
+      : options.partScalarColorModes?.get(partId);
+    const partSurfaceScalarColorMode = targetRenderPlan
       ? targetRenderPlan.shader.visible
         ? targetRenderPlan.shader.scalarColorMode
         : null
-      : options.partScalarColorModes?.get(partId);
+      : partScalarColorMode;
     const partQuantityId =
       targetRenderPlan?.quantityId ?? options.partQuantityIds?.get(partId);
     const partScalarColorPalette =
@@ -863,9 +891,11 @@ export function buildViewport3DFieldRenderModel(
       options.scalarColorPalette;
     const partScalarColorModes =
       targetRenderPlan
-        ? partScalarColorMode
-          ? new Set([partScalarColorMode])
-          : null
+        ? new Set(
+            [partSurfaceScalarColorMode, partScalarColorMode].filter(
+              (mode): mode is string => mode != null,
+            ),
+          )
         : partScalarColorMode === undefined
         ? partFieldVector && partFieldVector !== renderFieldVector
           ? requestedScalarColorModes
@@ -893,6 +923,7 @@ export function buildViewport3DFieldRenderModel(
                 explicitPartFieldBuffer,
                 colorMode,
                 partQuantityId,
+                targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
               )
             ? null
             : targetRenderPlan?.shader.projectionMode === "surface_faces"
@@ -903,6 +934,7 @@ export function buildViewport3DFieldRenderModel(
                 colorMode,
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
+                partProjectionFieldNodeIndices,
               )
             : targetRenderPlan?.shader.projectionMode === "thickness_average_z"
             ? buildCachedThicknessAverageZScalarColors(
@@ -912,6 +944,7 @@ export function buildViewport3DFieldRenderModel(
                 colorMode,
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
+                partProjectionFieldNodeIndices,
               )
             : buildCachedPartVertexScalarColors(
                 partModel,
@@ -998,9 +1031,9 @@ export function buildViewport3DFieldRenderModel(
     });
     partVectorBuilds.set(partId, partVectorBuildReference);
     const activePartScalarColors =
-      partScalarColorMode == null
+      partSurfaceScalarColorMode == null
         ? null
-        : partScalarColorsByMode?.get(partScalarColorMode) ?? null;
+        : partScalarColorsByMode?.get(partSurfaceScalarColorMode) ?? null;
     targetPasses.set(partId, {
       fieldBuffer: explicitPartFieldBuffer
         ? targetFieldBufferSource(explicitPartFieldBuffer)
@@ -1012,15 +1045,16 @@ export function buildViewport3DFieldRenderModel(
       }),
       surface: {
         degradation: resolveViewport3DTargetSurfaceDegradation({
-          colorMode: partScalarColorMode ?? null,
+          colorMode: partSurfaceScalarColorMode ?? null,
           explicitPartFieldBuffer,
           quantityId: partQuantityId,
+          projectionMode: targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
           scalarColors: activePartScalarColors,
         }),
         passId: `${partId}:surface`,
         projectionMode:
           targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
-        scalarColorMode: partScalarColorMode ?? null,
+        scalarColorMode: partSurfaceScalarColorMode ?? null,
         scalarColors: activePartScalarColors,
       },
       vectors: {
@@ -1105,6 +1139,7 @@ export function buildViewport3DFieldRenderModel(
         degradation: resolveViewport3DTargetSurfaceDegradation({
           colorMode: fullScalarColorMode,
           explicitPartFieldBuffer: null,
+          projectionMode: "raw_nodal",
           scalarColors: fullScalarColors,
         }),
         passId: `${FULL_VIEWPORT_3D_TARGET_ID}:surface`,
@@ -1200,11 +1235,13 @@ function targetFieldBufferSource(
 function resolveViewport3DTargetSurfaceDegradation({
   colorMode,
   explicitPartFieldBuffer,
+  projectionMode,
   quantityId,
   scalarColors,
 }: {
   colorMode: string | null;
   explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  projectionMode: SurfaceFieldProjectionMode;
   quantityId?: string | null;
   scalarColors: ScalarColorBuffer | null;
 }): Viewport3DTargetPassDegradation | null {
@@ -1224,6 +1261,7 @@ function resolveViewport3DTargetSurfaceDegradation({
       explicitPartFieldBuffer,
       colorMode,
       quantityId,
+      projectionMode,
     )
   ) {
     return explicitPartFieldBuffer.sampled
@@ -1580,6 +1618,7 @@ function buildCachedSurfaceFaceScalarColors(
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
+  targetNodeIndices?: Uint32Array | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector || !partModel.surfaceIndices) return null;
 
@@ -1594,6 +1633,7 @@ function buildCachedSurfaceFaceScalarColors(
       partModel.surfaceIndices[0] ?? "none",
       partModel.surfaceIndices[partModel.surfaceIndices.length - 1] ?? "none",
       topology.nodeCount,
+      nodeIndexMappingCacheKey(targetNodeIndices),
       colorMode ?? "magnitude",
       colorPalette ?? "viridis",
       scalarRangeCacheKey(scalarRange),
@@ -1606,6 +1646,8 @@ function buildCachedSurfaceFaceScalarColors(
         colorMode,
         colorPalette,
         scalarRange,
+        Number.POSITIVE_INFINITY,
+        targetNodeIndices,
       ),
     "viewport3d.render.surfaceFaceScalarColorCache",
   );
@@ -1618,6 +1660,7 @@ function buildCachedThicknessAverageZScalarColors(
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
+  targetNodeIndices?: Uint32Array | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector || !partModel.surfaceIndices) return null;
 
@@ -1633,6 +1676,7 @@ function buildCachedThicknessAverageZScalarColors(
       partModel.surfaceIndices[partModel.surfaceIndices.length - 1] ?? "none",
       topology.nodeCount,
       topology.positions.length,
+      nodeIndexMappingCacheKey(targetNodeIndices),
       colorMode ?? "magnitude",
       colorPalette ?? "viridis",
       scalarRangeCacheKey(scalarRange),
@@ -1646,6 +1690,8 @@ function buildCachedThicknessAverageZScalarColors(
         colorMode,
         colorPalette,
         scalarRange,
+        Number.POSITIVE_INFINITY,
+        targetNodeIndices,
       ),
     "viewport3d.render.thicknessAverageZScalarColorCache",
   );
@@ -1715,6 +1761,18 @@ function scalarRangeCacheKey(range: ScalarRange | null | undefined): string {
     return "auto";
   }
   return `range=${range.min}:${range.max}`;
+}
+
+function nodeIndexMappingCacheKey(
+  targetNodeIndices: ArrayLike<number> | null | undefined,
+): string {
+  if (!targetNodeIndices) return "identity";
+  let hash = 2166136261;
+  for (let index = 0; index < targetNodeIndices.length; index += 1) {
+    hash ^= targetNodeIndices[index] ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${targetNodeIndices.length}:${hash >>> 0}`;
 }
 
 function intersectNodeSelections(
@@ -1840,6 +1898,24 @@ function buildNodeSelectionIndices(
   }
 
   return indices.length > 0 ? Uint32Array.from(indices) : null;
+}
+
+function resolveLegacyPartFieldNodeIndices(
+  fieldVector: DecodedFieldVector,
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): Uint32Array | null {
+  if (
+    fieldVector.pointCount <= 0 ||
+    fieldVector.indexing === "explicit_node_indices" ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return null;
+  }
+  const nodeIndices = buildNodeSelectionIndices(partModel.fullNodeSelection, topology);
+  return nodeIndices && nodeIndices.length === fieldVector.pointCount
+    ? nodeIndices
+    : null;
 }
 
 function nodeIndicesToSelection(
@@ -2192,6 +2268,9 @@ function buildPartTopologyModel(
   Viewport3DTopologyPartRenderModel,
   | "edgeIndices"
   | "surfaceIndices"
+  | "surfaceTriangleCellTypes"
+  | "surfaceTriangleFacetIndices"
+  | "surfaceTriangleGlobalCellOrdinals"
   | "surfaceNodeIndices"
   | "surfaceNodeSelection"
   | "volumeEdgeIndices"
@@ -2212,7 +2291,32 @@ function buildPartTopologyModel(
       ? preparedIndices.edgeIndices
       : topologyIndexPending
         ? null
-        : buildCachedSurfaceEdgeIndices(surfaceIndices()),
+        : buildCachedPartSurfaceEdgeIndicesWithSupplemental(
+            part,
+            topology,
+            supplementalSurfaceParts,
+            surfaceIndices(),
+          ),
+  );
+  const surfaceTriangleFacetIndices = lazyValue(() =>
+    preparedIndices
+      ? preparedIndices.surfaceTriangleFacetIndices
+      : topologyIndexPending
+        ? null
+        : buildPartSurfaceTriangleFacetIndicesWithSupplemental(
+            part,
+            topology,
+            supplementalSurfaceParts,
+            surfaceIndices(),
+          ),
+  );
+  const surfaceTriangleCellTypes = lazyValue(() =>
+    preparedIndices ? preparedIndices.surfaceTriangleCellTypes : null,
+  );
+  const surfaceTriangleGlobalCellOrdinals = lazyValue(() =>
+    preparedIndices
+      ? preparedIndices.surfaceTriangleGlobalCellOrdinals
+      : null,
   );
   const surfaceNodeSelection = lazyValue(() => {
     if (preparedIndices) return preparedIndices.surfaceNodeSelection;
@@ -2250,6 +2354,15 @@ function buildPartTopologyModel(
     get surfaceIndices() {
       return surfaceIndices();
     },
+    get surfaceTriangleCellTypes() {
+      return surfaceTriangleCellTypes();
+    },
+    get surfaceTriangleFacetIndices() {
+      return surfaceTriangleFacetIndices();
+    },
+    get surfaceTriangleGlobalCellOrdinals() {
+      return surfaceTriangleGlobalCellOrdinals();
+    },
     get surfaceNodeIndices() {
       return surfaceNodeIndices();
     },
@@ -2260,6 +2373,29 @@ function buildPartTopologyModel(
       return volumeEdgeIndices();
     },
   };
+}
+
+function buildCachedPartSurfaceEdgeIndicesWithSupplemental(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+  supplementalSurfaceParts: readonly Viewport3DSurfacePart[],
+  surfaceIndices: Uint32Array | null,
+): Uint32Array | null {
+  if (!surfaceIndices) return null;
+  if (surfaceEdgeIndexCache.has(surfaceIndices)) {
+    return surfaceEdgeIndexCache.get(surfaceIndices) ?? null;
+  }
+  const edges = measureViewport3DTopologyBuild(
+    "fullmag.viewport3d.buildPartSurfaceEdgeIndices",
+    () =>
+      buildPartSurfaceEdgeIndicesWithSupplemental(
+        part,
+        topology,
+        supplementalSurfaceParts,
+      ),
+  );
+  surfaceEdgeIndexCache.set(surfaceIndices, edges);
+  return edges;
 }
 
 function buildCachedPartSurfaceIndicesWithSupplemental(

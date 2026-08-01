@@ -1,0 +1,32 @@
+{
+  "document": {"path": "public_docs/site/physics/interactions/dmi/validation.md", "title": "DMI validation", "interaction": "Dzyaloshinskii-Moriya interaction validation"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Analytic and stencil tests exist; refreshed full qualification is not claimed."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Device-capable tests exist; executed-device identity is required."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Weak-residual and energy tests exist; complete cross-solver qualification is open."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Device contracts exist; mixed-element runtime parity remains open."}
+  ],
+  "sources": [
+    {"id": "interfacial-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "interfacial term lowering"},
+    {"id": "bulk-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "bulk term lowering"},
+    {"id": "fem-interfacial", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM interfacial residual"},
+    {"id": "fem-bulk", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "FEM bulk residual"},
+    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "fullmag_cuda_dmi_field_energy", "responsibility": "CUDA field and energy"}
+  ],
+  "symbols": [
+    {"id": "D", "latex": "$D$", "meaning": "DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "wi", "latex": "$w_{\\mathrm i}$", "meaning": "interfacial DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "wb", "latex": "$w_{\\mathrm b}$", "meaning": "bulk DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "mn", "latex": "$m_n$", "meaning": "normal magnetization component", "si_unit": "$1$"},
+    {"id": "nhat", "latex": "$\\hat{\\mathbf n}$", "meaning": "interface-symmetry normal", "si_unit": "$1$"},
+    {"id": "nabla", "latex": "$\\nabla$", "meaning": "spatial differential operator", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "k", "latex": "$k$", "meaning": "helical wave number", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "epsilon", "latex": "$\\varepsilon$", "meaning": "finite-difference perturbation amplitude", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-dmi-validation-interfacial-energy", "symbols": ["wi", "D", "mn", "m", "nhat", "nabla"], "sources": ["interfacial-api", "fem-interfacial"]},
+    {"id": "eq-dmi-validation-bulk-energy", "symbols": ["wb", "D", "m", "nabla"], "sources": ["bulk-api", "fem-bulk"]}
+  ],
+  "public_api": {"constructors": [], "parameters": []}
+}

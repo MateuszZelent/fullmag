@@ -1,0 +1,26 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/interpolation-and-state-transfer/fem-to-fdm.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FEM is the source representation; transfer is runtime continuation metadata."},
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Target execution consumes a validated transfer artifact."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-fem-to-fdm-p1", "symbols": ["x", "T", "lambda", "mnode", "mfdm"], "sources": ["transfer"]},
+    {"id": "eq-numerical-fem-to-fdm-normalization", "symbols": ["mplus", "mfdm"], "sources": ["transfer"]}
+  ],
+  "symbols": [
+    {"id": "x", "latex": "$\\mathbf x_i$", "meaning": "target FDM cell centre", "si_unit": "$\\mathrm{m}$"},
+    {"id": "T", "latex": "$T_i$", "meaning": "containing source FEM element", "si_unit": "$1$"},
+    {"id": "lambda", "latex": "$\\lambda_a$", "meaning": "P1 barycentric weight", "si_unit": "$1$"},
+    {"id": "mnode", "latex": "$\\mathbf m_a$", "meaning": "source FEM nodal magnetization", "si_unit": "$1$"},
+    {"id": "mfdm", "latex": "$\\mathbf m_{\\mathrm{FDM}}$", "meaning": "transferred FDM magnetization", "si_unit": "$1$"},
+    {"id": "mplus", "latex": "$\\mathbf m_i^{+}$", "meaning": "normalized continuation magnetization", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {"id": "transfer", "path": "crates/fullmag-engine/src/fem_solution_transfer.rs", "symbol": "transfer_fem_field_to_grid", "responsibility": "Locate and interpolate FEM field at FDM centres."},
+    {"id": "runtime", "path": "crates/fullmag-cli/src/step_utils.rs", "symbol": "resample_continuation_if_cross_backend", "responsibility": "Select and report cross-backend continuation."}
+  ],
+  "public_api": {"parameters": [{"python": "FEM → FDM continuation", "type": "automatic runtime operation", "default": "automatic", "si_unit": "$1$", "validation": "source and target artifacts must be compatible", "meaning": "evaluates FEM field on FDM cell centres", "backend_support": "FEM source → FDM target", "problem_ir": "runtime continuation metadata"}]}
+}

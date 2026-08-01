@@ -3,7 +3,7 @@
 import type { HysteresisExecutionTreeNode } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import {
   displayValue,
   findHysteresisExecutionTreeNode,
@@ -24,8 +24,7 @@ export function HysteresisExecutionNodeInspector({
   const badge = node?.kind ?? activeExecutionNode?.nodeKind ?? "node";
 
   return (
-    <InspectorSection
-      value="hysteresis-execution-node"
+    <InspectorGroup
       title="Execution Node"
       badge={badge}
     >
@@ -53,7 +52,7 @@ export function HysteresisExecutionNodeInspector({
           Select a hysteresis execution-tree child node to inspect its live status.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

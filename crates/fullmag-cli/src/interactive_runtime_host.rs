@@ -217,9 +217,12 @@ impl CurrentLiveDisplaySelectionHandle {
     ///
     /// Pushes a synthetic display-sync command before the solver loop starts, so
     /// the control room opens with the requested quantity already selected.
-    pub(super) fn set_quantity_hint(&self, quantity: &str) {
+    pub(super) fn set_quantity_hint(&self, quantity: &str, every_n: Option<u32>) {
         let mut selection = CurrentDisplaySelection::default();
         selection.selection.quantity = quantity.to_string();
+        if let Some(every_n) = every_n {
+            selection.selection.every_n = every_n;
+        }
         selection.selection.canonicalize();
         let command = synthetic_display_sync_command(selection);
         self.push_command_front(command);
@@ -362,6 +365,7 @@ fn synthetic_display_sync_command(selection: CurrentDisplaySelection) -> Session
         integrator: None,
         fixed_timestep: None,
         max_error: None,
+        solver_policy: None,
         relax_algorithm: None,
         relax_alpha: None,
         mesh_options: None,
@@ -633,6 +637,8 @@ impl InteractiveRuntimeHost {
         &mut self,
         problem: &ProblemIR,
         plan: &ExecutionPlanIR,
+        stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
+        field_every_n: u64,
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
@@ -643,6 +649,8 @@ impl InteractiveRuntimeHost {
             &mut self.runtime,
             problem,
             plan,
+            stage_fem_mesh_asset,
+            field_every_n,
             continuation_magnetization,
         )?;
         if let Some(runtime) = self.runtime.as_mut() {
@@ -846,11 +854,15 @@ fn refresh_interactive_preview_snapshot(
 fn create_interactive_preview_runtime(
     base_problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
+    field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
-    fullmag_runner::create_planned_interactive_runtime(
+    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
         base_problem,
         plan,
+        stage_fem_mesh_asset,
+        field_every_n,
         continuation_magnetization,
     )
     .map_err(|error| anyhow!(error.to_string()))
@@ -868,15 +880,19 @@ fn ensure_interactive_preview_runtime(
     runtime: &mut Option<fullmag_runner::InteractiveRuntime>,
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
+    field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
-    let needs_rebuild = runtime
-        .as_ref()
-        .map_or(true, |current| !current.matches_plan(plan).unwrap_or(true));
+    let needs_rebuild = runtime.as_ref().map_or(true, |current| {
+        !current.can_continue_with_plan(plan).unwrap_or(true)
+    });
     if needs_rebuild {
         *runtime = Some(create_interactive_preview_runtime(
             problem,
             plan,
+            stage_fem_mesh_asset,
+            field_every_n,
             continuation_magnetization,
         )?);
     }
@@ -956,6 +972,7 @@ mod tests {
         live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         LocalLiveWorkspaceState {
+            fem_mesh: None,
             session: SessionManifest {
                 session_id: "session-test".to_string(),
                 run_id: "run-test".to_string(),
@@ -980,6 +997,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,
@@ -1003,11 +1021,14 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
@@ -1032,6 +1053,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,
@@ -1150,6 +1172,18 @@ mod tests {
             !function_body.contains("cached_preview_quantity_ids()"),
             "idle preview refresh must not rebuild the cache from the vector-only preview list"
         );
+    }
+
+    #[test]
+    fn stage_runtime_reuse_uses_continuation_compatibility() {
+        let source = include_str!("interactive_runtime_host.rs");
+        let ensure = source
+            .split("fn ensure_interactive_preview_runtime(")
+            .nth(1)
+            .expect("interactive runtime ensure function");
+
+        assert!(ensure.contains("can_continue_with_plan(plan)"));
+        assert!(!ensure.contains("current.matches_plan(plan)"));
     }
 }
 

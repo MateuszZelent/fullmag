@@ -39,6 +39,7 @@ extern "C" {
 #define FULLMAG_FDM_ERR_CUDA     -2
 #define FULLMAG_FDM_ERR_INTERNAL -3
 #define FULLMAG_FDM_ERR_INTERRUPTED -4
+#define FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED -5
 
 /* Maximum number of distinct exchange regions supported by the LUT. */
 #define FULLMAG_FDM_MAX_EXCHANGE_REGIONS 256
@@ -263,6 +264,8 @@ typedef struct {
     double                     mel_strain[6];
 
     double                     temperature;            /* Temperature in K (0 = no thermal noise) */
+    /* Fixed Brown-noise seed. Zero requests a backend-resolved entropy seed. */
+    uint64_t                   thermal_seed;
 
     /* Zhang-Li Spin-Transfer Torque (CIP) */
     double                     current_density_x;      /* j_x (A/m^2) */
@@ -418,6 +421,33 @@ typedef struct {
     uint32_t                   stats_stride;
 } fullmag_fdm_plan_desc;
 
+typedef enum {
+    FULLMAG_FDM_ADAPTIVE_MAX_ERROR = 1,
+    FULLMAG_FDM_ADAPTIVE_ADVANCED = 2,
+} fullmag_fdm_adaptive_tolerance_mode;
+
+/* Complete single-grid LLG timestep policy. No field uses zero as a sentinel. */
+typedef struct {
+    int adaptive_enabled;
+    fullmag_fdm_adaptive_tolerance_mode adaptive_tolerance_mode;
+    double adaptive_atol;
+    double adaptive_rtol;
+    double adaptive_dt_min;
+    double adaptive_dt_max;
+    double adaptive_safety;
+    double adaptive_growth_limit;
+    double adaptive_shrink_limit;
+    int has_adaptive_max_spin_rotation;
+    double adaptive_max_spin_rotation;
+    int has_adaptive_norm_tolerance;
+    double adaptive_norm_tolerance;
+} fullmag_fdm_time_policy_desc_v2;
+
+typedef struct {
+    fullmag_fdm_plan_desc base;
+    fullmag_fdm_time_policy_desc_v2 time_policy;
+} fullmag_fdm_plan_desc_v2;
+
 /* ── Per-step diagnostics ── */
 
 typedef struct {
@@ -481,6 +511,10 @@ int fullmag_fdm_is_available(void);
  */
 fullmag_fdm_backend *fullmag_fdm_backend_create(
     const fullmag_fdm_plan_desc *plan);
+
+/* Canonical versioned single-grid entrypoint preserving complete LLG policy. */
+fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
+    const fullmag_fdm_plan_desc_v2 *plan);
 
 /**
  * Create a backend handle from the v2 executable FDM plan descriptor.

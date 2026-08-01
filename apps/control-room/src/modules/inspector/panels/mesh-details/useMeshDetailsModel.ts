@@ -27,6 +27,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
@@ -57,6 +58,14 @@ import {
 } from "../MeshResourceView";
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { emitMeshSizeHistogramHover } from "../meshSizeHistogramHover";
+import {
+  resolveMixedCertificateQualityPresentation,
+  type MixedCertificateQualityPresentation,
+} from "./MeshQualityGatesSection";
+import {
+  resolveMixedTopologyPresentation,
+  type MixedTopologyPresentation,
+} from "./MixedTopologyProvenanceSection";
 
 type MeshDetailsRuntimeStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -100,6 +109,8 @@ export interface MeshDetailsModel {
   meshSourceSceneRevision: number | null;
   meshStatistics: unknown;
   meshSummary: Record<string, unknown> | null;
+  mixedTopology: MixedTopologyPresentation;
+  mixedCertificateQuality: MixedCertificateQualityPresentation;
   objectPolicyCount: number;
   operationStatuses: readonly unknown[];
   policyDiffRows: MeshPolicyDiffRow[];
@@ -254,6 +265,43 @@ export function buildSharedDomainPolicyDiffRows({
     draft,
     realized,
     scope: "shared-domain",
+  });
+}
+
+export function resolveCurrentMixedCertificateQualityPresentation({
+  currentMeshRevision,
+  data,
+  resourceStatus,
+}: {
+  currentMeshRevision: unknown;
+  data: unknown;
+  resourceStatus: ResourceStatus;
+}): MixedCertificateQualityPresentation {
+  const resource = asRecord(data);
+  const sidecar = asRecord(resource?.mixed_certificate);
+  const enclosingRevision = numericRevision(resource?.revision);
+  const sidecarRevision = numericRevision(sidecar?.mesh_revision);
+  const currentRevision = numericRevision(currentMeshRevision);
+  const revisionsAgree =
+    enclosingRevision !== null &&
+    sidecarRevision !== null &&
+    currentRevision !== null &&
+    enclosingRevision === currentRevision &&
+    sidecarRevision === currentRevision;
+
+  if (resourceStatus === "ready" && revisionsAgree) {
+    return resolveMixedCertificateQualityPresentation(sidecar);
+  }
+
+  const reason =
+    resourceStatus === "ready"
+      ? "quality-gates resource, certificate evidence, and current mesh revisions do not agree"
+      : `quality-gates resource is ${resourceStatus}`;
+  return resolveMixedCertificateQualityPresentation({
+    ...(sidecar ?? {}),
+    family_gates: [],
+    reason,
+    status: sidecar ? "stale" : "unavailable",
   });
 }
 
@@ -459,6 +507,19 @@ export function useMeshDetailsModel(
     meshSourceSceneRevision,
     meshStatistics,
     meshSummary,
+    mixedTopology: resolveMixedTopologyPresentation({
+      buildReport:
+        activeBuild.data?.shared_domain_build_report ??
+        semantics.data?.solver_mesh?.build_report ??
+        sharedReport.data?.report,
+      manifest: manifest.data,
+      rejectionEvidence: activeBuild.data?.mixed_layer_topology_rejection,
+    }),
+    mixedCertificateQuality: resolveCurrentMixedCertificateQualityPresentation({
+      currentMeshRevision: runtimeStatus?.resources.mesh_revision,
+      data: qualityGates.data,
+      resourceStatus: qualityGates.status,
+    }),
     objectPolicyCount: objectConfigs.length,
     operationStatuses,
     policyDiffRows: buildSharedDomainPolicyDiffRows({

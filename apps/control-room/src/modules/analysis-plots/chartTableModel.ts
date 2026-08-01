@@ -13,7 +13,7 @@ export const DEFAULT_TABLE_CHART_COLUMNS = Object.freeze([
   "my",
   "mz",
   "e_total",
-  "max_torque",
+  "max_torque_Apm",
 ] as const);
 
 type TableDecimationMode = "minmax_lttb";
@@ -43,16 +43,23 @@ export interface ChartValueRange {
   toValue: number;
 }
 
+/** The table rows API can slice by simulation time only, never by an arbitrary quantity. */
+export function isTableTimeAxisId(columnId: string): boolean {
+  return columnId === "t" || columnId === "time";
+}
+
 interface TableColumnMeta {
   column_id: string;
-  dimension: string;
+  dimension?: string;
   label: string;
   unit: string;
 }
 
 export interface TableRowsLike {
   columns: readonly TableColumnMeta[];
-  rows: readonly (readonly number[])[];
+  rowCount?: number;
+  rows?: readonly (readonly number[])[];
+  valueAt?: (rowIndex: number, columnIndex: number) => number | undefined;
 }
 
 export interface AxisUnitGroup {
@@ -89,6 +96,7 @@ interface ChartPoint {
 type ChartResourceRef = AnalysisChartResourceRef;
 
 export interface ChartSeries {
+  dataRevision?: string | number | null;
   id: string;
   label: string;
   points: readonly ChartPoint[];
@@ -111,6 +119,8 @@ export function buildTableRowsQuery({
   cursor,
   fromRow,
   fromT,
+  includeTail,
+  limit,
   range,
   targetPoints,
   toRow,
@@ -120,6 +130,8 @@ export function buildTableRowsQuery({
   cursor?: number;
   fromRow?: number;
   fromT?: number;
+  includeTail?: boolean;
+  limit?: number;
   range?: TableRowsRangeQuery | null;
   targetPoints?: number;
   toRow?: number;
@@ -137,8 +149,8 @@ export function buildTableRowsQuery({
     decimation: "minmax_lttb",
     fromRow: visibleRange.fromRow,
     fromT: visibleRange.fromT,
-    includeTail: !hasVisibleRange,
-    limit: DEFAULT_TABLE_ROW_LIMIT,
+    includeTail: includeTail ?? !hasVisibleRange,
+    limit: clampInteger(limit ?? DEFAULT_TABLE_ROW_LIMIT, 10, DEFAULT_TABLE_ROW_LIMIT),
     targetPoints: clampInteger(
       targetPoints ?? 1_600,
       MIN_TARGET_POINTS,
@@ -161,9 +173,10 @@ export function tableRowsVisibleRangeQuery({
   if (!Number.isFinite(fromValue) || !Number.isFinite(toValue)) return null;
   const from = Math.min(fromValue, toValue);
   const to = Math.max(fromValue, toValue);
-  if (xAxisId === "t" || xAxisId === "time") {
+  if (isTableTimeAxisId(xAxisId)) {
     return { fromT: from, toT: to };
   }
+  if (xAxisId !== "step") return null;
   return {
     fromRow: Math.max(0, Math.floor(from)),
     toRow: Math.max(0, Math.ceil(to)),
@@ -243,7 +256,7 @@ export function buildChartSeriesModel(
 
   return {
     dataset: {
-      source: [columnIds, ...table.rows.map((row) => [...row])],
+      source: [columnIds, ...materializeTableRows(table)],
     },
     series: yColumns.flatMap((column) => {
       const yAxisIndex = axisIndexByColumn.get(column.column_id);
@@ -267,11 +280,13 @@ export function buildChartSeriesModel(
 export function buildScalarChartSeries(
   table: TableRowsLike,
   {
+    dataRevision = null,
     status = "ready",
     tableId = "default",
     xAxisId = DEFAULT_X_AXIS_COLUMN_ID,
     yAxisIds,
   }: {
+    dataRevision?: string | number | null;
     status?: ResourceStatus;
     tableId?: string;
     xAxisId?: string;
@@ -309,15 +324,14 @@ export function buildScalarChartSeries(
     const yColumnIndex = columnIds.indexOf(column.column_id);
     return [
       {
+        ...(dataRevision == null ? {} : { dataRevision }),
         id: `data.table:${tableId}:${resolvedXAxisId}:${column.column_id}`,
         label: column.label || column.column_id,
-        points: table.rows.flatMap((row, rowIndex) => {
-          const x = Number(row[xColumnIndex]);
-          const y = Number(row[yColumnIndex]);
-          return Number.isFinite(x) && Number.isFinite(y)
-            ? [{ rowIndex, x, y }]
-            : [];
-        }),
+        points: chartPointsForColumns(
+          table,
+          xColumnIndex,
+          yColumnIndex,
+        ),
         quantity: column.column_id,
         source,
         status,
@@ -326,6 +340,51 @@ export function buildScalarChartSeries(
       },
     ];
   });
+}
+
+function chartPointsForColumns(
+  table: TableRowsLike,
+  xColumnIndex: number,
+  yColumnIndex: number,
+): ChartPoint[] {
+  const points: ChartPoint[] = [];
+  const count = tableRowCount(table);
+  for (let rowIndex = 0; rowIndex < count; rowIndex += 1) {
+    const x = Number(tableValueAt(table, rowIndex, xColumnIndex));
+    const y = Number(tableValueAt(table, rowIndex, yColumnIndex));
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      points.push({ rowIndex, x, y });
+    }
+  }
+  return points;
+}
+
+function materializeTableRows(table: TableRowsLike): number[][] {
+  const rows: number[][] = [];
+  const count = tableRowCount(table);
+  for (let rowIndex = 0; rowIndex < count; rowIndex += 1) {
+    rows.push(
+      table.columns.map(
+        (_column, columnIndex) =>
+          tableValueAt(table, rowIndex, columnIndex) ?? Number.NaN,
+      ),
+    );
+  }
+  return rows;
+}
+
+function tableRowCount(table: TableRowsLike): number {
+  return table.rows?.length ?? table.rowCount ?? 0;
+}
+
+function tableValueAt(
+  table: TableRowsLike,
+  rowIndex: number,
+  columnIndex: number,
+): number | undefined {
+  return table.valueAt
+    ? table.valueAt(rowIndex, columnIndex)
+    : table.rows?.[rowIndex]?.[columnIndex];
 }
 
 function chartCursorPointFromSeriesPoint(

@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 
 #include "context.hpp"
+#include "core/demag_linear_solve_validation.hpp"
 #include "fem_common.hpp"
 
 #include <algorithm>
@@ -49,8 +50,9 @@ struct PeriodicPoissonReducedWorkspace {
         solver.SetPrintLevel(0);
     }
 
-    void configure(double rel_tol, int max_iter) {
+    void configure(double rel_tol, double abs_tol, int max_iter) {
         solver.SetRelTol(rel_tol);
+        solver.SetAbsTol(abs_tol);
         solver.SetMaxIter(max_iter);
     }
 
@@ -201,7 +203,12 @@ bool solve_demag_periodic_poisson_reduced(
     const int max_iter = ctx.demag.solver.max_iterations > 0
                              ? static_cast<int>(ctx.demag.solver.max_iterations)
                              : 1000;
-    periodic_workspace->configure(rel_tol, max_iter);
+    const double abs_tol =
+        ctx.demag.solver.has_absolute_tolerance &&
+        ctx.demag.solver.absolute_tolerance > 0.0
+            ? ctx.demag.solver.absolute_tolerance
+            : 0.0;
+    periodic_workspace->configure(rel_tol, abs_tol, max_iter);
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = true;
     *x_p = 0.0;
@@ -209,10 +216,35 @@ bool solve_demag_periodic_poisson_reduced(
     periodic_workspace->solver.Mult(*rhs_p, *x_p);
     ctx.poisson_demag.last_solver_apply_wall_time_ns =
         elapsed_ns(solver_apply_wall_start);
-    ctx.poisson_demag.last_iterations =
-        periodic_workspace->solver.GetNumIterations();
-    ctx.poisson_demag.last_residual =
-        static_cast<double>(periodic_workspace->solver.GetFinalNorm());
+    const int iterations = periodic_workspace->solver.GetNumIterations();
+    auto *periodic_matrix =
+        static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix);
+    mfem::Vector residual_vector(rhs_p->Size());
+    periodic_matrix->Mult(*x_p, residual_vector);
+    residual_vector -= *rhs_p;
+    const double absolute_residual = residual_vector.Norml2();
+    const double rhs_norm = rhs_p->Norml2();
+    const double relative_residual = rhs_norm > 0.0
+        ? absolute_residual / rhs_norm
+        : absolute_residual;
+    ctx.poisson_demag.last_iterations = iterations;
+    ctx.poisson_demag.last_residual = relative_residual;
+
+    DemagLinearSolveResult result;
+    result.solver_kind = "cpu_poisson_periodic/cg";
+    result.solver_reported_converged = periodic_workspace->solver.GetConverged();
+    result.iterations = iterations;
+    result.relative_residual = relative_residual;
+    result.has_absolute_residual = true;
+    result.absolute_residual = absolute_residual;
+    result.relative_tolerance = rel_tol;
+    result.has_absolute_tolerance = abs_tol > 0.0;
+    result.absolute_tolerance = abs_tol;
+    result.max_iterations = static_cast<uint32_t>(max_iter);
+    if (!validate_demag_linear_solve_result(result, error)) {
+        *x_p = 0.0;
+        return false;
+    }
 
     mfem::Vector &lifted_solution = periodic_workspace->full_solution;
     lift_vector_by_periodic_classes(ctx, *x_p, lifted_solution);

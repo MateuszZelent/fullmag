@@ -131,35 +131,31 @@ pub(crate) fn validate_region_owned_planning(
         ));
     }
     if resolved_backend == BackendTarget::Fdm && runtime_requests_cuda(problem) {
-        let has_cuda_region_fields = problem
-            .material_parameter_fields
-            .iter()
-            .any(|assignment| {
-                let active = assignment.region_id.as_deref().is_none_or(|region_id| {
-                    problem
-                        .object_regions
-                        .iter()
-                        .any(|region| region.enabled && region.region_id == region_id)
-                });
-                active
-                    && matches!(
-                        assignment.parameter,
+        let has_cuda_region_fields = problem.material_parameter_fields.iter().any(|assignment| {
+            let active = assignment.region_id.as_deref().is_none_or(|region_id| {
+                problem
+                    .object_regions
+                    .iter()
+                    .any(|region| region.enabled && region.region_id == region_id)
+            });
+            active
+                && matches!(
+                    assignment.parameter,
+                    fullmag_ir::MaterialParameterNameIR::Ms
+                        | fullmag_ir::MaterialParameterNameIR::Aex
+                        | fullmag_ir::MaterialParameterNameIR::Alpha
+                )
+        }) || problem.object_regions.iter().any(|region| {
+            region.enabled
+                && region.material_overrides.iter().any(|override_| {
+                    matches!(
+                        override_.parameter,
                         fullmag_ir::MaterialParameterNameIR::Ms
                             | fullmag_ir::MaterialParameterNameIR::Aex
                             | fullmag_ir::MaterialParameterNameIR::Alpha
                     )
-            })
-            || problem.object_regions.iter().any(|region| {
-                region.enabled
-                    && region.material_overrides.iter().any(|override_| {
-                        matches!(
-                            override_.parameter,
-                            fullmag_ir::MaterialParameterNameIR::Ms
-                                | fullmag_ir::MaterialParameterNameIR::Aex
-                                | fullmag_ir::MaterialParameterNameIR::Alpha
-                        )
-                    })
-            });
+                })
+        });
         if has_cuda_region_fields {
             errors.push(
                 "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
@@ -325,6 +321,7 @@ fn region_coupling_is_executable_for_backend(
 }
 
 pub(crate) struct PlannedStudyControls {
+    pub(crate) requested_integrator: Option<fullmag_ir::RequestedIntegratorIR>,
     pub(crate) integrator: Option<IntegratorChoice>,
     pub(crate) fixed_timestep: Option<f64>,
     pub(crate) gyromagnetic_ratio: f64,
@@ -342,7 +339,6 @@ pub(crate) fn planned_study_controls(
     let uses_time_integrator = matches!(
         problem.study,
         fullmag_ir::StudyIR::TimeEvolution { .. }
-            | fullmag_ir::StudyIR::Eigenmodes { .. }
             | fullmag_ir::StudyIR::Hysteresis { .. }
             | fullmag_ir::StudyIR::Relaxation {
                 algorithm: RelaxationAlgorithmIR::LlgOverdamped,
@@ -353,15 +349,15 @@ pub(crate) fn planned_study_controls(
 
     // Parse user-specified integrator string → Option<IntegratorChoice>.
     // "auto" resolves to None, which triggers per-study-kind default selection.
-    let user_integrator = if uses_time_integrator {
+    let requested_integrator = if uses_time_integrator {
         match dynamics.expect("validated time-integrating study must define dynamics") {
             fullmag_ir::DynamicsIR::Llg { integrator, .. } => match integrator.as_str() {
-                "heun" => Some(IntegratorChoice::Heun),
-                "rk4" => Some(IntegratorChoice::Rk4),
-                "rk23" => Some(IntegratorChoice::Rk23),
-                "rk45" => Some(IntegratorChoice::Rk45),
-                "abm3" => Some(IntegratorChoice::Abm3),
-                "auto" => None,
+                "heun" => Some(fullmag_ir::RequestedIntegratorIR::Heun),
+                "rk4" => Some(fullmag_ir::RequestedIntegratorIR::Rk4),
+                "rk23" => Some(fullmag_ir::RequestedIntegratorIR::Rk23),
+                "rk45" => Some(fullmag_ir::RequestedIntegratorIR::Rk45),
+                "abm3" => Some(fullmag_ir::RequestedIntegratorIR::Abm3),
+                "auto" => Some(fullmag_ir::RequestedIntegratorIR::Auto),
                 other => {
                     errors.push(format!(
                         "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
@@ -374,6 +370,20 @@ pub(crate) fn planned_study_controls(
     } else {
         None
     };
+
+    let user_integrator = requested_integrator.and_then(|requested| match requested {
+        fullmag_ir::RequestedIntegratorIR::Auto => None,
+        explicit => Some(match explicit {
+            fullmag_ir::RequestedIntegratorIR::Auto => {
+                unreachable!("auto has no concrete integrator")
+            }
+            fullmag_ir::RequestedIntegratorIR::Heun => IntegratorChoice::Heun,
+            fullmag_ir::RequestedIntegratorIR::Rk4 => IntegratorChoice::Rk4,
+            fullmag_ir::RequestedIntegratorIR::Rk23 => IntegratorChoice::Rk23,
+            fullmag_ir::RequestedIntegratorIR::Rk45 => IntegratorChoice::Rk45,
+            fullmag_ir::RequestedIntegratorIR::Abm3 => IntegratorChoice::Abm3,
+        }),
+    });
 
     // Resolve "auto" to the physics-optimal default per study kind.
     // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
@@ -392,9 +402,13 @@ pub(crate) fn planned_study_controls(
         None
     };
 
-    let fixed_timestep = dynamics.and_then(|dynamics| match dynamics {
-        fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => *fixed_timestep,
-    });
+    let fixed_timestep = uses_time_integrator
+        .then(|| {
+            dynamics.and_then(|dynamics| match dynamics {
+                fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => *fixed_timestep,
+            })
+        })
+        .flatten();
 
     let gyromagnetic_ratio = dynamics.map_or(2.211e5, |dynamics| match dynamics {
         fullmag_ir::DynamicsIR::Llg {
@@ -441,11 +455,15 @@ pub(crate) fn planned_study_controls(
         control
     });
 
-    let adaptive_timestep = dynamics.and_then(|dynamics| match dynamics {
-        fullmag_ir::DynamicsIR::Llg {
-            adaptive_timestep, ..
-        } => adaptive_timestep.clone(),
-    });
+    let adaptive_timestep = uses_time_integrator
+        .then(|| {
+            dynamics.and_then(|dynamics| match dynamics {
+                fullmag_ir::DynamicsIR::Llg {
+                    adaptive_timestep, ..
+                } => adaptive_timestep.clone(),
+            })
+        })
+        .flatten();
 
     let field_refresh = dynamics.and_then(|dynamics| match dynamics {
         fullmag_ir::DynamicsIR::Llg { field_refresh, .. } => field_refresh.clone(),
@@ -467,8 +485,40 @@ pub(crate) fn planned_study_controls(
             integrator,
         ));
     }
+    if uses_time_integrator {
+        if let Some(adaptive) = adaptive_timestep.as_ref() {
+            let requested_device = problem
+                .problem_meta
+                .runtime_metadata
+                .get("runtime_selection")
+                .and_then(|selection| selection.get("device"))
+                .and_then(serde_json::Value::as_str);
+            if resolved_backend == BackendTarget::Fdm
+                && !matches!(requested_device, Some("cpu" | "cuda" | "gpu"))
+            {
+                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu'; auto selection cannot silently change the qualified adaptive lane".to_string());
+            }
+            if resolved_backend == BackendTarget::Fdm
+                && matches!(requested_device, Some("cuda" | "gpu"))
+            {
+                errors.push("adaptive_timestep on FDM CUDA has no executable timestep capability identity; use runtime_selection.device='cpu' until the CUDA adaptive controller ABI is complete".to_string());
+            }
+            if adaptive.dt_max.is_none() {
+                errors.push("adaptive_timestep.dt_max is required; planner will not invent a hidden upper bound".to_string());
+            }
+            if resolved_backend == BackendTarget::Fdm {
+                if adaptive.max_spin_rotation.is_some() {
+                    errors.push("adaptive_timestep.max_spin_rotation is unsupported by current FDM execution lanes and cannot be dropped".to_string());
+                }
+                if adaptive.norm_tolerance.is_some() {
+                    errors.push("adaptive_timestep.norm_tolerance is unsupported by current FDM execution lanes and cannot be dropped".to_string());
+                }
+            }
+        }
+    }
 
     PlannedStudyControls {
+        requested_integrator,
         integrator,
         fixed_timestep,
         gyromagnetic_ratio,
@@ -614,7 +664,9 @@ pub(crate) fn validate_executable_outputs(
 
     for output in outputs {
         match output {
-            OutputIR::Field { name, .. } => {
+            OutputIR::Field { name, .. }
+            | OutputIR::FieldAuto { name, .. }
+            | OutputIR::FieldResolvedAuto { name, .. } => {
                 if !allowed_fields.contains(&name.as_str())
                     && !mechanical_fields.contains(&name.as_str())
                     && !(enable_oersted && name == "H_oe")
@@ -669,7 +721,9 @@ pub(crate) fn validate_executable_outputs(
                     ));
                 }
             }
-            OutputIR::Scalar { name, .. } => {
+            OutputIR::Scalar { name, .. }
+            | OutputIR::ScalarAuto { name, .. }
+            | OutputIR::ScalarResolvedAuto { name, .. } => {
                 if !allowed_scalars.contains(&name.as_str())
                     && !mechanical_scalars.contains(&name.as_str())
                     && !(enable_regional_field_drive && name == "E_drive")
@@ -838,7 +892,11 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
             }
             OutputIR::FrequencyResponseOutput { .. }
             | OutputIR::Field { .. }
+            | OutputIR::FieldAuto { .. }
+            | OutputIR::FieldResolvedAuto { .. }
             | OutputIR::Scalar { .. }
+            | OutputIR::ScalarAuto { .. }
+            | OutputIR::ScalarResolvedAuto { .. }
             | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(
@@ -867,7 +925,11 @@ pub(crate) fn validate_frequency_response_outputs(outputs: &[OutputIR], errors: 
             | OutputIR::DispersionCurve { .. }
             | OutputIR::EigenDiagnostics { .. }
             | OutputIR::Field { .. }
+            | OutputIR::FieldAuto { .. }
+            | OutputIR::FieldResolvedAuto { .. }
             | OutputIR::Scalar { .. }
+            | OutputIR::ScalarAuto { .. }
+            | OutputIR::ScalarResolvedAuto { .. }
             | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(

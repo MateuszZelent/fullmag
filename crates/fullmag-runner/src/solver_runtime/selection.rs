@@ -1,6 +1,6 @@
 //! Runtime selection helpers for user/env policy, registry lookup, and device hints.
 
-use fullmag_ir::{FemPlanIR, ProblemIR};
+use fullmag_ir::{ExecutionDevice, FemPlanIR, ProblemIR};
 use serde_json::Value;
 
 use crate::fdm::gpu::cuda::native as native_fdm;
@@ -20,6 +20,17 @@ pub(crate) fn runtime_selection(problem: &ProblemIR) -> Option<&serde_json::Map<
 pub(crate) fn runtime_device(problem: &ProblemIR) -> Option<&str> {
     runtime_selection(problem)
         .and_then(|selection| selection.get("device"))
+        .and_then(Value::as_str)
+}
+
+pub(crate) fn runtime_device_override(problem: &ProblemIR) -> Option<&str> {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(Value::as_object)
+        .filter(|value| value.get("source").and_then(Value::as_str) == Some("managed_launcher"))
+        .and_then(|value| value.get("device"))
         .and_then(Value::as_str)
 }
 
@@ -44,14 +55,94 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     }
 }
 
-pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
-    if all_in_gpu_fem_env_requested() {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FemSelectionEnvSnapshot {
+    execution: Option<String>,
+    all_in_gpu: Option<String>,
+}
+
+impl FemSelectionEnvSnapshot {
+    fn capture() -> Self {
+        Self {
+            execution: std::env::var("FULLMAG_FEM_EXECUTION").ok(),
+            all_in_gpu: std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok(),
+        }
+    }
+
+    fn from_sources(execution: Option<&str>, all_in_gpu: Option<&str>) -> Self {
+        Self {
+            execution: execution.map(str::to_string),
+            all_in_gpu: all_in_gpu.map(str::to_string),
+        }
+    }
+
+    fn all_in_gpu_requested(&self) -> bool {
+        matches!(self.execution.as_deref(), Some("all_in_gpu"))
+            || env_flag_enabled(self.all_in_gpu.as_deref())
+    }
+}
+
+pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
+    let snapshot = FemSelectionEnvSnapshot::capture();
+    effective_fem_device_request_from_snapshot(
+        runtime_device(problem),
+        runtime_device_override(problem),
+        &snapshot,
+    )
+}
+
+pub(crate) fn effective_fem_device_request_from_metadata(problem: &ProblemIR) -> String {
+    effective_fem_device_request_from_sources(
+        runtime_device(problem),
+        runtime_device_override(problem),
+        None,
+        false,
+    )
+}
+
+pub(crate) fn effective_fem_device_request_for_plan(
+    problem: &ProblemIR,
+    plan: &FemPlanIR,
+) -> String {
+    plan.mesh_build_report
+        .as_ref()
+        .and_then(|report| report.mixed_topology_provenance.as_ref())
+        .map(|provenance| match provenance.requested_device {
+            ExecutionDevice::Cpu => "cpu".to_string(),
+            ExecutionDevice::Gpu => "gpu".to_string(),
+            ExecutionDevice::Auto => "auto".to_string(),
+        })
+        .unwrap_or_else(|| effective_fem_device_request(problem))
+}
+
+fn effective_fem_device_request_from_snapshot(
+    script_device: Option<&str>,
+    managed_override: Option<&str>,
+    snapshot: &FemSelectionEnvSnapshot,
+) -> String {
+    effective_fem_device_request_from_sources(
+        script_device,
+        managed_override,
+        snapshot.execution.as_deref(),
+        snapshot.all_in_gpu_requested(),
+    )
+}
+
+pub(super) fn effective_fem_device_request_from_sources(
+    script_device: Option<&str>,
+    managed_override: Option<&str>,
+    execution_env: Option<&str>,
+    all_in_gpu_requested: bool,
+) -> String {
+    if all_in_gpu_requested {
         return "gpu".to_string();
     }
-    match std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref() {
+    match execution_env {
         Some("cpu") => "cpu".to_string(),
         Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
+        Some("auto") => "auto".to_string(),
+        None => managed_override
+            .or(script_device)
             .unwrap_or("auto")
             .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
@@ -126,6 +217,18 @@ pub(crate) fn runtime_fdm_policy(problem: &ProblemIR) -> &'static str {
     }
 }
 
+fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
+    problem.current_modules.iter().any(|module| {
+        matches!(
+            module,
+            fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+                model: fullmag_ir::AntennaFieldSourceModelIR::PrescribedZeemanMask,
+                ..
+            }
+        )
+    })
+}
+
 pub(crate) fn runtime_fem_policy(problem: &ProblemIR) -> &'static str {
     match runtime_device(problem) {
         Some("cpu") => "cpu",
@@ -140,7 +243,7 @@ pub(crate) fn resolve_fdm_engine_with_trail(
 ) -> Result<EngineResolution<FdmEngine>, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let ir_policy = runtime_fdm_policy(problem);
-    let (policy, env_override) = match std::env::var("FULLMAG_FDM_EXECUTION") {
+    let policy = match std::env::var("FULLMAG_FDM_EXECUTION") {
         Ok(env_val) => {
             if env_val != ir_policy {
                 let message = format!(
@@ -149,9 +252,9 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                 );
                 runtime_warn_once(&message);
             }
-            (env_val, true)
+            env_val
         }
-        Err(_) => (ir_policy.to_string(), false),
+        Err(_) => ir_policy.to_string(),
     };
 
     let resolution = match policy.as_str() {
@@ -165,22 +268,11 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                     engine: FdmEngine::CudaFdm,
                     fallback: None,
                 })
-            } else if env_override {
-                Err(RunError {
-                    message: "FULLMAG_FDM_EXECUTION=cuda but CUDA backend is not available"
-                        .to_string(),
-                })
             } else {
-                let message = "script requested CUDA FDM execution, but the CUDA backend is not available — falling back to CPU".to_string();
-                runtime_warn_once(&message);
-                Ok(EngineResolution {
-                    engine: FdmEngine::CpuReference,
-                    fallback: Some(runtime_fallback(
-                        fdm_engine_id(FdmEngine::CudaFdm),
-                        fdm_engine_id(FdmEngine::CpuReference),
-                        "fdm_cuda_unavailable",
-                        message,
-                    )),
+                Err(RunError {
+                    message:
+                        "FDM CUDA execution was requested, but the CUDA backend is not available"
+                            .to_string(),
                 })
             }
         }
@@ -193,20 +285,36 @@ pub(crate) fn resolve_fdm_engine_with_trail(
             } else {
                 Ok(EngineResolution {
                     engine: FdmEngine::CpuReference,
-                    fallback: runtime_device(problem)
-                        .filter(|device| matches!(*device, "gpu" | "cuda"))
-                        .map(|_| {
-                            runtime_fallback(
-                                fdm_engine_id(FdmEngine::CudaFdm),
-                                fdm_engine_id(FdmEngine::CpuReference),
-                                "fdm_cuda_unavailable",
-                                "preferred CUDA FDM runtime is unavailable; using CPU reference engine".to_string(),
-                            )
-                        }),
+                    fallback: Some(runtime_fallback(
+                        fdm_engine_id(FdmEngine::CudaFdm),
+                        fdm_engine_id(FdmEngine::CpuReference),
+                        "fdm_cuda_unavailable",
+                        "preferred CUDA FDM runtime is unavailable; using CPU reference engine"
+                            .to_string(),
+                    )),
                 })
             }
         }
     }?;
+
+    if resolution.engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
+        if policy == "cuda" {
+            return Err(RunError {
+                message: "FDM CUDA execution was requested, but CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string(),
+            });
+        }
+        let message = "FDM engine falling back to CPU reference — CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string();
+        runtime_warn_once(&message);
+        return Ok(EngineResolution {
+            engine: FdmEngine::CpuReference,
+            fallback: Some(runtime_fallback(
+                fdm_engine_id(FdmEngine::CudaFdm),
+                fdm_engine_id(FdmEngine::CpuReference),
+                "antenna_zeeman_mask_force_cpu",
+                message,
+            )),
+        });
+    }
 
     Ok(resolution)
 }
@@ -226,28 +334,22 @@ pub(crate) fn runtime_fem_order(problem: &ProblemIR) -> u32 {
 }
 
 pub(crate) fn fem_gpu_execution_forced() -> bool {
+    let snapshot = FemSelectionEnvSnapshot::capture();
     matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        snapshot.execution.as_deref(),
         Some("gpu") | Some("all_in_gpu")
     )
 }
 
-fn env_flag_enabled(value: Option<String>) -> bool {
+fn env_flag_enabled(value: Option<&str>) -> bool {
     matches!(
-        value
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
         Some("1" | "true" | "on" | "yes")
     )
 }
 
 pub(crate) fn all_in_gpu_fem_env_requested() -> bool {
-    matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        Some("all_in_gpu")
-    ) || env_flag_enabled(std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok())
+    FemSelectionEnvSnapshot::capture().all_in_gpu_requested()
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -257,26 +359,6 @@ pub(crate) fn all_in_gpu_fem_required() -> bool {
 
 pub(crate) fn fem_policy_requires_gpu(policy: &str) -> bool {
     matches!(policy, "gpu" | "all_in_gpu")
-}
-
-fn fem_gpu_min_nodes_threshold() -> Option<usize> {
-    match std::env::var("FULLMAG_FEM_GPU_MIN_NODES") {
-        Ok(raw) => match raw.trim().parse::<usize>() {
-            Ok(0) => None,
-            Ok(value) => Some(value),
-            Err(_) => None,
-        },
-        Err(_) => None,
-    }
-}
-
-pub(crate) fn should_fallback_to_cpu_for_small_fem_gpu(plan: &FemPlanIR) -> Option<usize> {
-    if fem_gpu_execution_forced() {
-        return None;
-    }
-    let min_nodes = fem_gpu_min_nodes_threshold()?;
-    let node_count = plan.mesh.nodes.len();
-    (node_count < min_nodes).then_some(min_nodes)
 }
 
 pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
@@ -293,5 +375,126 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
     }
     if std::env::var_os("FULLMAG_CUDA_DEVICE_INDEX").is_none() {
         std::env::set_var("FULLMAG_CUDA_DEVICE_INDEX", index.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        effective_fem_device_request_from_snapshot, effective_fem_device_request_from_sources,
+        resolve_fdm_engine_with_trail, FemSelectionEnvSnapshot,
+    };
+    use fullmag_ir::ProblemIR;
+    use serde_json::Value;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn fem_effective_request_collision_matrix_is_deterministic() {
+        for script in ["cpu", "auto", "gpu"] {
+            assert_eq!(
+                effective_fem_device_request_from_sources(Some(script), None, None, false),
+                script
+            );
+            for execution_env in ["cpu", "auto", "gpu"] {
+                assert_eq!(
+                    effective_fem_device_request_from_sources(
+                        Some(script),
+                        None,
+                        Some(execution_env),
+                        false,
+                    ),
+                    execution_env,
+                    "FULLMAG_FEM_EXECUTION must override script device"
+                );
+                assert_eq!(
+                    effective_fem_device_request_from_sources(
+                        Some(script),
+                        None,
+                        Some(execution_env),
+                        true,
+                    ),
+                    "gpu",
+                    "FULLMAG_FEM_ALL_IN_GPU must override both script and execution env"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fem_effective_request_is_derived_from_one_immutable_environment_snapshot() {
+        let snapshot = FemSelectionEnvSnapshot::from_sources(Some("cpu"), Some("true"));
+        assert_eq!(
+            effective_fem_device_request_from_snapshot(Some("auto"), Some("cpu"), &snapshot),
+            "gpu"
+        );
+        assert_eq!(snapshot.execution.as_deref(), Some("cpu"));
+        assert_eq!(snapshot.all_in_gpu.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn managed_override_is_separate_from_script_and_below_live_environment_priority() {
+        assert_eq!(
+            effective_fem_device_request_from_sources(Some("auto"), Some("cpu"), None, false,),
+            "cpu",
+        );
+        assert_eq!(
+            effective_fem_device_request_from_sources(
+                Some("auto"),
+                Some("cpu"),
+                Some("gpu"),
+                false,
+            ),
+            "gpu",
+        );
+    }
+
+    #[test]
+    fn script_forced_gpu_fails_closed_when_cuda_is_unavailable() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [("device".to_string(), Value::String("gpu".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        let error = resolve_fdm_engine_with_trail(&problem)
+            .expect_err("a script-forced GPU request must not fall back to CPU");
+
+        assert!(error.message.contains("CUDA backend is not available"));
+    }
+
+    #[test]
+    fn auto_fdm_gpu_miss_keeps_a_cpu_fallback_trail() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [("device".to_string(), Value::String("auto".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        let resolution = resolve_fdm_engine_with_trail(&problem)
+            .expect("auto FDM request should select an available engine");
+
+        assert_eq!(resolution.engine, super::FdmEngine::CpuReference);
+        let fallback = resolution
+            .fallback
+            .expect("unavailable CUDA must remain visible for auto FDM");
+        assert_eq!(fallback.reason, "fdm_cuda_unavailable");
     }
 }

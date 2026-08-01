@@ -1,0 +1,260 @@
+main,
+main > .container,
+main article,
+main article > section,
+main article section {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.drawer,
+.drawer-content,
+.drawer-content > * {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+article > main > section,
+article > main > section > * {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+article > main {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  overflow-x: auto;
+}
+
+main article .table-wrapper {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: hidden;
+  contain: inline-size;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+article > main .table-wrapper {
+  inline-size: 100%;
+  max-inline-size: 100%;
+}
+
+main article .table-wrapper table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+}
+
+main article .table-wrapper th,
+main article .table-wrapper td,
+main article table th,
+main article table td {
+  min-width: 0;
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+main article .table-wrapper code,
+main article .table-wrapper .math,
+main article table code,
+main article table .math,
+main article table mjx-container {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+main article div.math,
+main article pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+main article span.math {
+  display: inline;
+}
+
+#main-header {
+  overflow-x: clip;
+}
+
+/* Sidebar status: reference pages stay neutral; scaffold pages are discoverably pending. */
+.toctree-l1 > a.fm-doc-status-active,
+.toctree-l2 > a.fm-doc-status-active,
+.toctree-l3 > a.fm-doc-status-active,
+.toctree-l4 > a.fm-doc-status-active {
+  color: color-mix(in srgb, currentColor 78%, #6b7280);
+}
+
+.toctree-l1 > a.fm-doc-status-planned,
+.toctree-l2 > a.fm-doc-status-planned,
+.toctree-l3 > a.fm-doc-status-planned,
+.toctree-l4 > a.fm-doc-status-planned {
+  color: color-mix(in srgb, #c46a22 72%, currentColor);
+  border-inline-start: 0.18rem solid color-mix(in srgb, #e28a35 68%, transparent);
+  padding-inline-start: 0.42rem;
+}
+
+.toctree-l1 > a.fm-doc-status-planned::after,
+.toctree-l2 > a.fm-doc-status-planned::after,
+.toctree-l3 > a.fm-doc-status-planned::after,
+.toctree-l4 > a.fm-doc-status-planned::after {
+  content: " · planned";
+  font-size: 0.72em;
+  letter-spacing: 0.02em;
+  opacity: 0.78;
+}
+
+/* Public landing page: institutional identity first, concise content second. */
+.fm-home-masthead {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.75fr) minmax(12rem, 1fr) minmax(16rem, 1.25fr);
+  gap: 1.25rem;
+  align-items: start;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0 0 1.75rem;
+  padding: 0 0 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.fm-home-masthead__brand,
+.fm-home-masthead__authors,
+.fm-home-masthead__funding {
+  min-width: 0;
+}
+
+.fm-home-masthead__brand img {
+  display: block;
+  width: 100%;
+  max-width: 8rem;
+  height: auto;
+  margin: 0 0 0.85rem;
+}
+
+.fm-home-eyebrow,
+.fm-home-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.fm-home-label {
+  margin-bottom: 0.65rem;
+}
+
+.fm-home-masthead__authors p:not(.fm-home-label),
+.fm-home-masthead__funding p:not(.fm-home-label) {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.fm-home-masthead__funding {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: start;
+  padding-left: 1.1rem;
+  border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.fm-home-masthead__funding > img {
+  display: block;
+  width: 3.5rem;
+  height: auto;
+}
+
+.fm-home-funding-badge {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.fm-home-intro {
+  max-width: 48rem;
+  margin: 0 0 1.5rem;
+}
+
+.fm-home-intro h2 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: clamp(1.65rem, 3vw, 2.35rem);
+  line-height: 1.15;
+}
+
+.fm-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.fm-home-action {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: 0.4rem;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.fm-home-action--primary {
+  color: inherit;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.fm-home-status {
+  max-width: 48rem;
+  margin: 0 0 2rem;
+  padding: 0.7rem 0 0.7rem 0.9rem;
+  border-left: 3px solid currentColor;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 48rem) {
+  main article .table-wrapper {
+    scrollbar-width: thin;
+    background: linear-gradient(
+      to right,
+      transparent 95%,
+      color-mix(in srgb, currentColor 10%, transparent)
+    );
+  }
+
+  .fm-home-masthead {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .fm-home-masthead__brand img {
+    max-width: 7rem;
+  }
+
+  .fm-home-masthead__funding {
+    padding-top: 1rem;
+    padding-left: 0;
+    border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-left: 0;
+  }
+}

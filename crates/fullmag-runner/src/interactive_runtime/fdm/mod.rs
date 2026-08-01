@@ -52,7 +52,7 @@ impl InteractiveFdmPreviewRuntime {
                         backend,
                         original_grid: plan.grid.cells,
                         plan_signature: normalize_plan_signature(plan),
-                        provenance: cuda_execution_provenance(plan, &device_info),
+                        provenance: cuda_execution_provenance(plan, &device_info)?,
                         total_steps: 0,
                         total_time: 0.0,
                     })

@@ -351,6 +351,16 @@ def main() -> int:
                 "-vv",
             ],
         ),
+        run_check(
+            "python_mixed_shared_domain_meshing_tests",
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "packages/fullmag-py/tests/test_mixed_element_meshing.py",
+                "-vv",
+            ],
+        ),
         run_arch_waveguide_budget_check(),
     ]
 

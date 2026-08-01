@@ -32,20 +32,21 @@ use crate::preview::{
 };
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, average_magnetization_components,
-    scalar_outputs_request_average_m, scalar_row_due, set_object_average_m, single_object_scalars,
-    weighted_object_scalars,
+    apply_weighted_average_m_to_step_stats, average_magnetization_components,
+    scalar_outputs_request_average_m, scalar_row_due, single_object_scalars,
+    weighted_average_magnetization_components, weighted_object_scalars,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FemStageExecutionContext, FieldSnapshot, LivePreviewRequest,
+    LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
+    StepUpdate,
 };
 
 use std::time::Instant;
@@ -57,7 +58,33 @@ pub(crate) fn execute_reference_fem(
     live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_reference_fem_impl(plan, until_seconds, outputs, live, artifact_writer)
+    let stage_context = FemStageExecutionContext::from_fem_plan(plan);
+    execute_reference_fem_with_context(
+        plan,
+        &stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_reference_fem_with_context(
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'_>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fem_impl(
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
 }
 
 pub(crate) fn snapshot_preview(
@@ -326,7 +353,9 @@ pub(crate) fn build_problem_and_state(
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(crate::DEFAULT_ADAPTIVE_DT_MAX),
+            dt_max: adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -462,17 +491,21 @@ pub(crate) fn build_problem_and_state(
     Ok((problem, state))
 }
 
-pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
+pub(crate) fn execution_provenance(plan: &FemPlanIR) -> Result<ExecutionProvenance, RunError> {
     let resolved_demag_realization = reference_demag_provenance_name(plan);
-    let dt_policy = if plan.adaptive_timestep.is_some() {
-        Some("adaptive".to_string())
-    } else if plan.fixed_timestep.is_some() {
-        Some("user".to_string())
-    } else {
-        // No fallback: execute_reference_fem_impl returns an error
-        // if neither fixed nor adaptive timestep is configured.
-        None
-    };
+    let timestep_policy =
+        if crate::relaxation::direct_minimizer::direct_minimizer_control(plan.relaxation.as_ref())
+            .is_some()
+        {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+            )?)
+        };
     let mut provenance = ExecutionProvenance {
         execution_engine: FemBackendId::CpuBaseline.provenance_name().to_string(),
         precision: "double".to_string(),
@@ -488,11 +521,11 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
         resolved_demag_realization,
-        dt_policy,
+        timestep_policy,
         ..Default::default()
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    provenance
+    Ok(provenance)
 }
 
 fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
@@ -508,11 +541,13 @@ fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
 
 fn execute_reference_fem_impl(
     plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -541,16 +576,16 @@ fn execute_reference_fem_impl(
     };
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt =
-        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-            .ok_or_else(|| RunError {
-                message: "no fixed_timestep or adaptive_timestep specified; \
-                      please set an explicit timestep in your dynamics configuration"
-                    .to_string(),
-            })?;
+    let timestep_policy = crate::resolve_timestep_policy(
+        plan.integrator,
+        plan.fixed_timestep,
+        plan.adaptive_timestep.as_ref(),
+        crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+    )?;
+    let mut dt = timestep_policy.initial_dt();
     let mut steps = Vec::new();
     let mut step_count = 0u64;
-    let provenance = execution_provenance(plan);
+    let provenance = execution_provenance(plan)?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -595,6 +630,7 @@ fn execute_reference_fem_impl(
     }
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
@@ -611,6 +647,7 @@ fn execute_reference_fem_impl(
         &current_observables,
         &plan.object_segments,
         &plan.mesh_parts,
+        &problem.topology.magnetic_node_volumes,
     );
 
     let until_label = if until_seconds.is_finite() {
@@ -659,8 +696,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: (current_stats.step == 0)
-                        .then_some(crate::types::FemMeshPayload::from(plan)),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: None,
                     preview_field,
                     cached_preview_fields: None,
@@ -730,6 +766,7 @@ fn execute_reference_fem_impl(
             state.magnetization(),
             &plan.object_segments,
             &plan.mesh_parts,
+            &problem.topology.magnetic_node_volumes,
         );
 
         if !default_scalar_trace || !field_schedules.is_empty() {
@@ -800,16 +837,16 @@ fn execute_reference_fem_impl(
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = latest_stats.clone();
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
-                    apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
+                    apply_weighted_average_m_to_step_stats(
+                        &mut update_stats,
+                        state.magnetization(),
+                        &problem.topology.magnetic_node_volumes,
+                    );
                 }
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
                     grid: live.grid,
-                    fem_mesh: if step_count <= 1 {
-                        Some(crate::types::FemMeshPayload::from(plan))
-                    } else {
-                        None
-                    },
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -875,16 +912,16 @@ fn execute_reference_fem_impl(
                 || (preview_due && preview_targets_global_scalar);
             let mut update_stats = latest_stats.clone();
             if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
-                apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
+                apply_weighted_average_m_to_step_stats(
+                    &mut update_stats,
+                    state.magnetization(),
+                    &problem.topology.magnetic_node_volumes,
+                );
             }
             let action = (live.on_step)(StepUpdate {
                 stats: update_stats,
                 grid: live.grid,
-                fem_mesh: if step_count <= 1 {
-                    Some(crate::types::FemMeshPayload::from(plan))
-                } else {
-                    None
-                },
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
                 preview_field,
                 cached_preview_fields: None,
@@ -922,7 +959,7 @@ fn execute_reference_fem_impl(
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             let max_steps_hit = step_count >= control.stop.max_steps.unwrap_or(u64::MAX);
-            let converged = relaxation_converged(
+            let converged = torque_confirmation.observe_stats(
                 control,
                 &latest_stats,
                 energy_plateau_range,
@@ -1006,6 +1043,7 @@ fn execute_reference_fem_impl(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: Some(current_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: step_count,
             relaxation_time_s: Some(state.time_seconds),
@@ -1085,6 +1123,7 @@ fn record_due_outputs(
             &observables,
             object_segments,
             mesh_parts,
+            &problem.topology.magnetic_node_volumes,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1128,6 +1167,7 @@ fn record_scalar_snapshot(
         &observables,
         object_segments,
         mesh_parts,
+        &problem.topology.magnetic_node_volumes,
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -1188,6 +1228,7 @@ fn record_final_outputs(
             &observables,
             object_segments,
             mesh_parts,
+            &problem.topology.magnetic_node_volumes,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1210,10 +1251,16 @@ fn enrich_step_stats_from_magnetization(
     magnetization: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    magnetic_node_volumes: &[f64],
 ) -> StepStats {
-    apply_average_m_to_step_stats(&mut stats, magnetization);
-    stats.per_object_scalars =
-        fem_per_object_scalars(object_segments, mesh_parts, magnetization, &stats);
+    apply_weighted_average_m_to_step_stats(&mut stats, magnetization, magnetic_node_volumes);
+    stats.per_object_scalars = fem_per_object_scalars(
+        object_segments,
+        mesh_parts,
+        magnetization,
+        magnetic_node_volumes,
+        &stats,
+    );
     stats
 }
 
@@ -1275,6 +1322,7 @@ fn make_step_stats(
     observables: &StateObservables,
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    magnetic_node_volumes: &[f64],
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -1294,11 +1342,16 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    apply_weighted_average_m_to_step_stats(
+        &mut stats,
+        &observables.magnetization,
+        magnetic_node_volumes,
+    );
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
         mesh_parts,
         &observables.magnetization,
+        magnetic_node_volumes,
         &stats,
     );
     stats
@@ -1308,6 +1361,7 @@ fn fem_per_object_scalars(
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnetization: &[[f64; 3]],
+    magnetic_node_volumes: &[f64],
     stats: &StepStats,
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
     if object_segments.is_empty() {
@@ -1317,9 +1371,17 @@ fn fem_per_object_scalars(
     let mut weights_by_object: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
     for segment in object_segments {
-        let weight = fem_segment_node_indices(mesh_parts, segment, magnetization.len())
-            .len()
-            .max(1) as f64;
+        let node_indices = fem_segment_node_indices(mesh_parts, segment, magnetization.len());
+        let weight = node_indices
+            .iter()
+            .filter_map(|index| magnetic_node_volumes.get(*index).copied())
+            .filter(|weight| weight.is_finite() && *weight > 0.0)
+            .sum::<f64>();
+        let weight = if weight > 0.0 {
+            weight
+        } else {
+            node_indices.len().max(1) as f64
+        };
         *weights_by_object
             .entry(segment.object_id.clone())
             .or_insert(0.0) += weight;
@@ -1335,12 +1397,14 @@ fn fem_per_object_scalars(
                 magnetization,
                 segment.node_start as usize,
                 segment.node_count as usize,
+                magnetic_node_volumes,
             );
         } else {
             set_object_average_m_by_indices(
                 &mut per_object,
                 &segment.object_id,
                 magnetization,
+                magnetic_node_volumes,
                 &node_indices,
             );
         }
@@ -1412,20 +1476,59 @@ fn set_object_average_m_by_indices(
     per_object: &mut std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
     object_id: &str,
     magnetization: &[[f64; 3]],
+    magnetic_node_volumes: &[f64],
     node_indices: &[usize],
 ) {
-    let values = node_indices
-        .iter()
-        .filter_map(|index| magnetization.get(*index).copied())
-        .collect::<Vec<_>>();
+    let mut values = Vec::new();
+    let mut weighted_values = Vec::new();
+    let mut weights = Vec::new();
+    for index in node_indices {
+        let Some(value) = magnetization.get(*index).copied() else {
+            continue;
+        };
+        values.push(value);
+        if let Some(weight) = magnetic_node_volumes.get(*index).copied() {
+            weighted_values.push(value);
+            weights.push(weight);
+        }
+    }
     if values.is_empty() {
         return;
     }
-    let [mx, my, mz] = average_magnetization_components(&values);
+    let [mx, my, mz] = if weights
+        .iter()
+        .any(|weight| weight.is_finite() && *weight > 0.0)
+    {
+        weighted_average_magnetization_components(&weighted_values, &weights)
+    } else {
+        average_magnetization_components(&values)
+    };
     let entry = per_object.entry(object_id.to_string()).or_default();
     entry.insert("mx".to_string(), mx);
     entry.insert("my".to_string(), my);
     entry.insert("mz".to_string(), mz);
+}
+
+fn set_object_average_m(
+    per_object: &mut std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
+    object_id: &str,
+    magnetization: &[[f64; 3]],
+    start: usize,
+    count: usize,
+    magnetic_node_volumes: &[f64],
+) {
+    if count == 0 || start >= magnetization.len() {
+        return;
+    }
+    let end = start.saturating_add(count).min(magnetization.len());
+    let node_indices = (start..end).collect::<Vec<_>>();
+    set_object_average_m_by_indices(
+        per_object,
+        object_id,
+        magnetization,
+        magnetic_node_volumes,
+        &node_indices,
+    );
 }
 
 fn select_field_values(
@@ -1497,9 +1600,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -1660,16 +1763,16 @@ mod tests {
                     [20e-9, 10e-9, 5e-9],
                     [-20e-9, 10e-9, 5e-9],
                 ],
-                elements: vec![
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
                     [0, 1, 2, 6],
                     [0, 2, 3, 6],
                     [0, 3, 7, 6],
                     [0, 7, 4, 6],
                     [0, 4, 5, 6],
                     [0, 5, 1, 6],
-                ],
+                ]),
                 element_markers: vec![1; 6],
-                boundary_faces: vec![
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
                     [0, 1, 2],
                     [0, 1, 5],
                     [1, 2, 6],
@@ -1682,7 +1785,7 @@ mod tests {
                     [0, 4, 5],
                     [4, 5, 6],
                     [1, 5, 6],
-                ],
+                ]),
                 boundary_markers: vec![1; 12],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -1861,9 +1964,9 @@ mod tests {
         MeshIR {
             mesh_name: "shared_domain_airbox_structured".to_string(),
             nodes,
-            elements,
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
             element_markers,
-            boundary_faces,
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(boundary_faces),
             boundary_markers,
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -2102,7 +2205,7 @@ mod tests {
         let plan = make_shared_domain_airbox_demag_plan();
         let (_problem, _state) = build_problem_and_state(&plan)
             .expect("shared-domain FEM airbox problem should build in reference runner");
-        let provenance = execution_provenance(&plan);
+        let provenance = execution_provenance(&plan).unwrap();
 
         assert_eq!(
             provenance.demag_operator_kind.as_deref(),
@@ -2123,7 +2226,7 @@ mod tests {
     #[test]
     fn baseline_provenance_defaults_implicit_demag_to_fem_poisson() {
         let plan = make_test_plan(true);
-        let provenance = execution_provenance(&plan);
+        let provenance = execution_provenance(&plan).unwrap();
 
         assert_eq!(provenance.execution_engine, "fem_cpu_baseline_internal");
         assert_eq!(provenance.requested_demag_realization, None);
@@ -2161,7 +2264,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
             boundary_face_indices: Vec::new(),
             node_indices: vec![1, 3, 5],
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: None,
             bounds_max: None,
             parent_id: None,
@@ -2179,9 +2282,61 @@ mod tests {
             [5.0, 0.0, 0.0],
         ];
 
-        let per_object = fem_per_object_scalars(&[segment], &[mesh_part], &magnetization, &stats);
+        let per_object = fem_per_object_scalars(
+            &[segment],
+            &[mesh_part],
+            &magnetization,
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            &stats,
+        );
 
         assert_eq!(per_object["body"]["mx"], 3.0);
+    }
+
+    #[test]
+    fn fem_step_stats_use_magnetic_node_volume_average_for_magnetization() {
+        let observables = StateObservables {
+            magnetization: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            torque_field: Vec::new(),
+            exchange_field: Vec::new(),
+            demag_field: Vec::new(),
+            external_field: Vec::new(),
+            antenna_field: Vec::new(),
+            drive_field: Vec::new(),
+            effective_field: Vec::new(),
+            anisotropy_field: Vec::new(),
+            dmi_field: Vec::new(),
+            magnetoelastic_field: Vec::new(),
+            cubic_anisotropy_field: Vec::new(),
+            bulk_dmi_field: Vec::new(),
+            oersted_field: Vec::new(),
+            thermal_field: Vec::new(),
+            exchange_energy: 0.0,
+            demag_energy: 0.0,
+            external_energy: 0.0,
+            drive_energy: 0.0,
+            anisotropy_energy: 0.0,
+            dmi_energy: 0.0,
+            total_energy: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            per_object_scalars: std::collections::HashMap::new(),
+        };
+
+        let stats = make_step_stats(0, 0.0, 0.0, 0, &observables, &[], &[], &[1.0, 2.0, 7.0]);
+
+        for (actual, expected) in [
+            (stats.mx, 0.1),
+            (stats.my, 0.2),
+            (stats.mz, 0.7),
+            (stats.per_object_scalars["free"]["mx"], 0.1),
+            (stats.per_object_scalars["free"]["my"], 0.2),
+            (stats.per_object_scalars["free"]["mz"], 0.7),
+        ] {
+            assert!((actual - expected).abs() < 1e-12);
+        }
     }
 
     #[test]
@@ -2237,5 +2392,27 @@ mod tests {
             final_time < 1e-9,
             "FEM relaxation should stop early, got final_time={final_time}"
         );
+    }
+
+    #[test]
+    fn direct_minimizer_fem_provenance_has_no_physical_timestep_policy() {
+        let plan = FemPlanIR {
+            integrator: None,
+            fixed_timestep: None,
+            adaptive_timestep: None,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(100),
+                    max_relaxation_time_s: None,
+                },
+            }),
+            ..make_test_plan(false)
+        };
+
+        let provenance = execution_provenance(&plan).expect("direct minimizer provenance");
+        assert!(provenance.timestep_policy.is_none());
     }
 }

@@ -5,10 +5,18 @@ import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal, get_args, get_origin, get_type_hints
 
 import fullmag as fm
-from fullmag.runtime.scene_document import build_scene_document_from_builder
-from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+from fullmag.runtime.scene_document import (
+    build_builder_from_scene_document,
+    build_scene_document_from_builder,
+)
+from fullmag.runtime.script_builder import (
+    _requested_sampling_period_from_ir,
+    export_builder_draft,
+    rewrite_loaded_problem_script,
+)
 
 
 def _load_text(script: str, directory: Path, name: str = "problem.py"):
@@ -55,12 +63,660 @@ study.field_drives.add(fm.RegionalFieldDrive(
     time_origin="absolute",
     activation=fm.DriveActivation.all_time_evolution(),
 ))
-study.stages.add_relax(stage_id="relax", max_steps=2)
-study.stages.add_run(stage_id="excite", until=4e-12, output_every=1e-12)
+study.stages.add_relax(stage_id="relax", max_steps=2, dt=1e-15)
+study.stages.add_run(stage_id="excite", until=4e-12)
 """
 
 
+def _requested_layered_mesh(loaded: object) -> dict[str, object]:
+    problem = loaded.stages[-1].problem  # type: ignore[attr-defined]
+    per_geometry = problem.runtime_metadata["mesh_workflow"]["per_geometry"]
+    return dict(per_geometry[0])
+
+
+class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
+    def _load_layered(self, root: Path, call: str, name: str) -> object:
+        return _load_text(
+            f"""
+            import fullmag as fm
+
+            study = fm.study("layered-roundtrip")
+            study.engine("fem")
+            film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+            film.Ms = 800e3
+            film.Aex = 13e-12
+            film.alpha = 0.01
+            {call}
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """,
+            root,
+            name,
+        )
+
+    def test_prismatic_thin_film_preserves_requested_layered_mesh_ir(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded = self._load_layered(
+                Path(tmp_dir),
+                'film.mesh.thin_film(maximum_element_size=3e-9, layers=1, topology="prismatic", exact_layers=True, order=1)',
+                "thin_film.py",
+            )
+
+        mesh = _requested_layered_mesh(loaded)
+        self.assertEqual(mesh["topology"], "prismatic")
+        self.assertEqual(mesh["sweep_direction"], "auto")
+        self.assertEqual(mesh["element_family"], "prism")
+        self.assertEqual(mesh["transition_policy"], "pyramid_to_tetrahedra")
+        self.assertIs(mesh["exact_layer_count"], True)
+        self.assertEqual(mesh["through_thickness_elements"], 1)
+
+    def test_public_layered_mesh_enum_arguments_use_literal_types(self) -> None:
+        thin_film_hints = get_type_hints(fm.world.GeometryMeshHandle.thin_film)
+        swept_hints = get_type_hints(fm.world.GeometryMeshHandle.swept)
+
+        topology_literal = next(
+            argument
+            for argument in get_args(thin_film_hints["topology"])
+            if get_origin(argument) is Literal
+        )
+        transition_literal = next(
+            argument
+            for argument in get_args(thin_film_hints["transition"])
+            if get_origin(argument) is Literal
+        )
+        self.assertIs(get_origin(topology_literal), Literal)
+        self.assertEqual(
+            set(get_args(topology_literal)),
+            {"tetrahedral", "prismatic"},
+        )
+        self.assertIs(get_origin(transition_literal), Literal)
+        self.assertEqual(
+            set(get_args(transition_literal)),
+            {"pyramid_to_tetrahedra", "reject"},
+        )
+        self.assertIs(get_origin(swept_hints["distribution"]), Literal)
+        self.assertEqual(
+            set(get_args(swept_hints["distribution"])),
+            {"fixed", "linear", "exponential"},
+        )
+        self.assertIs(get_origin(swept_hints["face_meshing"]), Literal)
+        self.assertEqual(
+            set(get_args(swept_hints["face_meshing"])),
+            {"triangular", "quadrilateral"},
+        )
+
+        expected_direct_literals = {
+            "topology": {"tetrahedral", "prismatic"},
+            "through_thickness_distribution": {"fixed", "linear", "exponential"},
+            "sweep_face_meshing": {"triangular", "quadrilateral"},
+            "sweep_direction": {"auto", "x", "y", "z"},
+            "element_family": {"prism", "hex"},
+            "transition_policy": {"pyramid_to_tetrahedra", "reject"},
+        }
+        for method in (
+            fm.world.GeometryMeshHandle.__call__,
+            fm.world.GeometryMeshHandle.configure,
+        ):
+            hints = get_type_hints(method)
+            for argument, expected in expected_direct_literals.items():
+                literal = next(
+                    member
+                    for member in get_args(hints[argument])
+                    if get_origin(member) is Literal
+                )
+                self.assertEqual(set(get_args(literal)), expected)
+
+    def test_ui_scene_exports_canonical_prismatic_python_and_round_trips_ir(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic", exact_layers=True, order=1)',
+                "source.py",
+            )
+            expected = _requested_layered_mesh(loaded)
+            scene = json.loads(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(".mesh.thin_film(", rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn("exact_layers=True", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), expected)
+
+    def test_complete_ui_exact_prism_policy_round_trips_scene_python_and_ir(self) -> None:
+        expected_policy = {
+            "mesh_strategy": "swept_prism",
+            "topology": "prismatic",
+            "through_thickness_elements": 1,
+            "through_thickness_distribution": "fixed",
+            "through_thickness_element_ratio": 1.0,
+            "through_thickness_symmetric": False,
+            "sweep_face_meshing": "triangular",
+            "sweep_direction": "auto",
+            "element_family": "prism",
+            "transition_policy": "pyramid_to_tetrahedra",
+            "exact_layer_count": True,
+            "order": 1,
+        }
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                "film.mesh(maximum_element_size=3e-9)",
+                "ui_exact_source.py",
+            )
+            builder = export_builder_draft(loaded)
+            builder["geometries"][0]["mesh"].update(expected_policy)
+            scene = build_scene_document_from_builder(builder)
+            round_tripped_builder = build_builder_from_scene_document(scene)
+            self.assertIs(
+                round_tripped_builder["geometries"][0]["mesh"][
+                    "through_thickness_symmetric"
+                ],
+                False,
+            )
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=round_tripped_builder,
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "ui_exact_rewritten.py")
+
+        actual = _requested_layered_mesh(rewritten)
+        self.assertIn("body.mesh(", rendered)
+        self.assertIn('mesh_strategy="swept_prism"', rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        for key, value in expected_policy.items():
+            actual_value = (
+                actual.get(key, False)
+                if key == "through_thickness_symmetric"
+                else actual[key]
+            )
+            self.assertEqual(actual_value, value, key)
+
+    def test_ui_free_tetra_policy_round_trips_without_layered_intent(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                "film.mesh(maximum_element_size=3e-9)",
+                "ui_tetra_source.py",
+            )
+            builder = export_builder_draft(loaded)
+            mesh = builder["geometries"][0]["mesh"]
+            for key in (
+                "topology",
+                "through_thickness_elements",
+                "through_thickness_distribution",
+                "through_thickness_element_ratio",
+                "through_thickness_symmetric",
+                "sweep_face_meshing",
+                "sweep_direction",
+                "element_family",
+                "transition_policy",
+                "exact_layer_count",
+            ):
+                mesh.pop(key, None)
+            mesh.update({"mesh_strategy": "free_tetrahedral", "order": 1})
+            scene = build_scene_document_from_builder(builder)
+            round_tripped_builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=round_tripped_builder,
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "ui_tetra_rewritten.py")
+
+        actual = _requested_layered_mesh(rewritten)
+        self.assertEqual(actual["mesh_strategy"], "free_tetrahedral")
+        self.assertEqual(actual["order"], 1)
+        for key in (
+            "topology",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "sweep_direction",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        ):
+            self.assertNotIn(key, actual)
+        self.assertNotIn("topology=", rendered)
+
+    def test_swept_defaults_and_prismatic_thin_film_lower_to_equivalent_hints(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            thin = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic", order=1)',
+                "thin.py",
+            )
+            swept = self._load_layered(root, "film.mesh.swept(elements=1)", "swept.py")
+
+        keys = (
+            "sweep_direction",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        )
+        thin_mesh = _requested_layered_mesh(thin)
+        swept_mesh = _requested_layered_mesh(swept)
+        self.assertEqual(
+            {key: thin_mesh[key] for key in keys},
+            {key: swept_mesh[key] for key in keys},
+        )
+
+    def test_legacy_thin_film_remains_tetrahedral_across_authoring_round_trip(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                "film.mesh.thin_film(maximum_element_size=3e-9, layers=1)",
+                "legacy.py",
+            )
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "legacy_rewritten.py")
+
+        before = _requested_layered_mesh(loaded)
+        after = _requested_layered_mesh(rewritten)
+        self.assertEqual(
+            before,
+            {
+                "geometry": "film",
+                "mode": "custom",
+                "hmax": 3e-9,
+                "maximum_element_size": 3e-9,
+                "hmin": 5e-9,
+                "minimum_element_size": 5e-9,
+                "interface_hmax": 3e-9,
+                "interface_thickness": 3e-9,
+                "transition_distance": 24e-9,
+                "edge_hmax": 5e-9,
+                "edge_thickness": 3e-9,
+                "edge_transition_distance": 12e-9,
+                "corner_hmax": 5e-9,
+                "corner_extent": 3e-9,
+                "corner_transition_distance": 12e-9,
+                "mesh_strategy": "thin_film_tetrahedral",
+                "through_thickness_elements": 1,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+            },
+        )
+        self.assertEqual(after, before)
+        self.assertNotIn("topology=", rendered)
+
+    def test_scene_rewrite_rejects_non_integral_or_non_positive_layer_counts(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            thin_loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic")',
+                "scene_thin.py",
+            )
+            swept_loaded = self._load_layered(
+                root,
+                "film.mesh.swept(elements=1)",
+                "scene_swept.py",
+            )
+
+            for loaded in (thin_loaded, swept_loaded):
+                for invalid in (True, 1.5, 0, -1):
+                    with self.subTest(strategy=_requested_layered_mesh(loaded)["mesh_strategy"], invalid=invalid):
+                        builder = export_builder_draft(loaded)
+                        builder["geometries"][0]["mesh"]["through_thickness_elements"] = invalid
+                        with self.assertRaises((TypeError, ValueError)):
+                            rewrite_loaded_problem_script(loaded, overrides=builder)
+
+    def test_extended_prismatic_exact_false_round_trips_without_early_rejection(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'study.mode("extended"); film.mesh.thin_film(layers=1, topology="prismatic", exact_layers=False)',
+                "extended.py",
+            )
+            builder = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(builder)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "extended_rewritten.py")
+
+        self.assertEqual(builder["requested_mode"], "extended")
+        self.assertEqual(scene["study"]["requested_mode"], "extended")
+        self.assertIs(_requested_layered_mesh(loaded)["exact_layer_count"], False)
+        self.assertIn("exact_layers=False", rendered)
+        self.assertIs(_requested_layered_mesh(rewritten)["exact_layer_count"], False)
+
+    def test_prismatic_thin_film_with_generic_controls_preserves_typed_export(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=2, topology="prismatic").configure(compute_quality=True, growth_rate=1.3, algorithm_3d=1)',
+                "controlled.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "controlled_rewritten.py")
+
+        self.assertIn(".mesh(", rendered)
+        self.assertIn(".thin_film(", rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn("compute_quality=True", rendered)
+        self.assertIn("growth_rate=1.3", rendered)
+        self.assertIn("algorithm_3d=1", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+    def test_prismatic_then_explicit_swept_direction_exports_swept_call(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic").swept(elements=2, sweep_direction="x", transition="reject")',
+                "sequence.py",
+            )
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "sequence_rewritten.py")
+
+        self.assertIn(".swept(", rendered)
+        self.assertIn('sweep_direction="x"', rendered)
+        self.assertIn('transition="reject"', rendered)
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), _requested_layered_mesh(loaded))
+
+    def test_direct_prismatic_configure_round_trips_explicit_sweep_direction(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                """film.mesh.configure(
+                    mesh_strategy="swept_prism",
+                    topology="prismatic",
+                    through_thickness_elements=1,
+                    through_thickness_distribution="fixed",
+                    sweep_face_meshing="triangular",
+                    sweep_direction="x",
+                    element_family="prism",
+                    transition_policy="pyramid_to_tetrahedra",
+                    exact_layer_count=True,
+                    order=1,
+                )""",
+                "direct_configure.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "direct_configure_rewritten.py")
+
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn('sweep_direction="x"', rendered)
+        self.assertIn('element_family="prism"', rendered)
+        self.assertIn('transition_policy="pyramid_to_tetrahedra"', rendered)
+        self.assertIn("exact_layer_count=True", rendered)
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+    def test_direct_prismatic_configure_round_trips_graded_symmetric_intent(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                """study.mode("extended"); film.mesh.configure(
+                    mesh_strategy="swept_prism",
+                    topology="prismatic",
+                    through_thickness_elements=2,
+                    through_thickness_distribution="fixed",
+                    through_thickness_element_ratio=1.5,
+                    through_thickness_symmetric=True,
+                    sweep_face_meshing="triangular",
+                    sweep_direction="auto",
+                    element_family="prism",
+                    transition_policy="pyramid_to_tetrahedra",
+                    exact_layer_count=False,
+                    order=1,
+                )""",
+                "direct_graded.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "direct_graded_rewritten.py")
+
+        self.assertIn("through_thickness_element_ratio=1.5", rendered)
+        self.assertIn("through_thickness_symmetric=True", rendered)
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+    def test_direct_prismatic_configure_without_order_does_not_gain_order_on_export(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                """film.mesh.configure(
+                    mesh_strategy="swept_prism",
+                    topology="prismatic",
+                    through_thickness_elements=1,
+                    through_thickness_distribution="fixed",
+                    sweep_face_meshing="triangular",
+                    sweep_direction="auto",
+                    element_family="prism",
+                    transition_policy="pyramid_to_tetrahedra",
+                    exact_layer_count=True,
+                )""",
+                "direct_without_order.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "direct_without_order_rewritten.py")
+
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
+    def test_stage_autosave_roundtrips_for_relax_and_run(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("stage-autosave-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).autosave(fm.StageAutosave(
+            table=fm.TableAutosave(every_steps=10, quantities=["step", "mx"]),
+            fields=[fm.FieldAutosave("m", every_steps=20)],
+        ))
+        study.stages.add_run(stage_id="run", until=2e-12).autosave(
+            fm.StageAutosave(
+                target="reversal",
+                layout="separate",
+                format="hdf5",
+                table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx"]),
+                fields=[fm.FieldAutosave("m", every=2e-12)],
+            )
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(".autosave(fm.StageAutosave(", rendered)
+        self.assertIn('target="reversal"', rendered)
+        self.assertIn('layout="separate"', rendered)
+        self.assertIn('format="hdf5"', rendered)
+        self.assertEqual(
+            [node["payload"]["autosave"] for node in loaded.study_pipeline_document()["nodes"]],
+            [node["payload"]["autosave"] for node in rewritten.study_pipeline_document()["nodes"]],
+        )
+
+    def test_txt_table_only_stage_autosave_roundtrips(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("txt-autosave-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        study.stages.add_run(stage_id="run", until=2e-12).autosave(
+            fm.StageAutosave(
+                target="table",
+                layout="separate",
+                format="txt",
+                table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx"]),
+            )
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertEqual(
+            loaded.study_pipeline_document()["nodes"][0]["payload"]["autosave"],
+            rewritten.study_pipeline_document()["nodes"][0]["payload"]["autosave"],
+        )
+
+    def test_relax_stage_table_autosave_roundtrips_as_fluent_chain(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("relax-table-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).tableautosave(every_steps=10, quantities=["step", "mx"])
+        study.stages.add_run(stage_id="after", until=2e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(
+            ').tableautosave(every_steps=10, quantities=["step", "mx"])',
+            rendered,
+        )
+        self.assertEqual(
+            loaded.study_pipeline_document()["nodes"][0]["payload"]["table_autosave"],
+            rewritten.study_pipeline_document()["nodes"][0]["payload"]["table_autosave"],
+        )
+        self.assertNotIn(
+            "table_autosave",
+            rewritten.study_pipeline_document()["nodes"][1]["payload"],
+        )
+
+    def test_planar_monitors_roundtrip_through_scene_and_canonical_python(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("planar-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.monitors.add_planar(
+            monitor_id="plane",
+            name="Plane",
+            target=fm.MonitorTarget.object("film"),
+            frame=fm.PlanarFrame.xy(
+                position=0.0,
+                extent=fm.PlanarExtent.target_bounds(padding=1e-9),
+            ),
+            operator=fm.PlaneSample(),
+        )
+        study.monitors.add_planar(
+            monitor_id="slab",
+            name="Slab",
+            target=fm.MonitorTarget.magnetic_domain(),
+            frame=fm.PlanarFrame.yz(
+                position=2e-9,
+                extent=fm.PlanarExtent.magnetic_domain(),
+            ),
+            operator=fm.SlabAverage(thickness=3e-9),
+        )
+        study.monitors.add_planar(
+            monitor_id="depth",
+            name="Depth",
+            target=fm.MonitorTarget.domain(),
+            frame=fm.PlanarFrame(
+                origin=(0.0, 0.0, 0.0),
+                normal=(1.0, 1.0, 1.0),
+                u_axis=(1.0, -1.0, 0.0),
+                extent=fm.PlanarExtent.universe(padding=2e-9),
+            ),
+            operator=fm.DepthProjection(
+                reduction="thickness_integral",
+                empty_policy="exclude_empty",
+            ),
+        )
+        study.monitors.add_planar(
+            monitor_id="surface",
+            name="Surface",
+            target=fm.MonitorTarget.object("film"),
+            frame=fm.PlanarFrame.xz(
+                position=0.0,
+                extent=fm.PlanarExtent.explicit(
+                    u=(-50e-9, 50e-9),
+                    v=(-2.5e-9, 2.5e-9),
+                ),
+            ),
+            operator=fm.SurfaceProjection(
+                boundary=fm.SurfaceBoundary.object_boundary(),
+                visibility_policy="frontmost",
+            ),
+        )
+        study.stages.add_run(stage_id="run", until=1e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder,
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        expected = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)[
+            "planar_monitors"
+        ]
+        actual = rewritten.stages[-1].problem.to_ir(include_geometry_assets=False)[
+            "planar_monitors"
+        ]
+        self.assertEqual(scene["monitors"]["planar"], expected)
+        self.assertEqual(builder["planar_monitors"], expected)
+        self.assertEqual(actual, expected)
+        self.assertEqual(rendered.count("study.monitors.add_planar("), 4)
+        self.assertNotIn('"quantity"', rendered)
+        self.assertNotIn('"resolution"', rendered)
+
     def test_add_field_drive_roundtrip_preserves_pipeline_order_without_global_leakage(self) -> None:
         script = """
         import fullmag as fm
@@ -84,7 +740,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             ),
             stage_id="add-antenna",
         )
-        study.stages.add_run(stage_id="excite", until=2e-9, output_every=5e-13)
+        study.stages.add_run(stage_id="excite", until=2e-9)
         """
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -111,24 +767,22 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             ["k0-sinc"],
         )
 
-    def test_run_stage_sampling_and_gamma_analysis_roundtrip(self) -> None:
+    def test_remove_field_drive_roundtrip_preserves_drive_and_action_ids(self) -> None:
         script = """
         import fullmag as fm
-        study = fm.study("sampling-roundtrip")
+        study = fm.study("remove-drive-roundtrip")
         film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
         film.Ms = 800e3
         film.Aex = 13e-12
         film.alpha = 0.01
-        study.stages.add_run(
-            stage_id="excite",
-            until=2e-9,
-            outputs=[fm.SaveField("m", every=2e-12), fm.SaveField("H_drive", every=5e-13)],
-            table_autosave=fm.TableAutosave(
-                t_sampl=5e-13,
-                quantities=["time", "step", "mx", "my", "mz", "E_drive"],
-            ),
-            spin_wave_response=fm.GammaResponseAnalysis(response_component="my"),
-        )
+        study.stages.add_field_drive(fm.RegionalFieldDrive(
+            id="antenna", name="Antenna", target=fm.FieldTarget.global_domain(),
+            amplitude_B_T=1e-3, direction=(0, 1, 0),
+            spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+        ), stage_id="add-antenna")
+        study.stages.add_run(stage_id="driven", until=1e-12)
+        study.stages.remove_field_drive("antenna", stage_id="remove-antenna")
+        study.stages.add_run(stage_id="free", until=1e-12)
         """
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -136,16 +790,258 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
             rewritten = _load_text(str(rendered), root, "rewritten.py")
 
-        self.assertIn("table_autosave=fm.TableAutosave(", rendered)
-        self.assertIn("outputs=[fm.SaveField(", rendered)
-        self.assertIn("spin_wave_response=fm.GammaResponseAnalysis(", rendered)
-        before = loaded.stages[0].problem.to_ir(include_geometry_assets=False)
-        after = rewritten.stages[0].problem.to_ir(include_geometry_assets=False)
+        self.assertIn(
+            'study.stages.remove_field_drive("antenna", stage_id="remove-antenna")',
+            rendered,
+        )
+        self.assertEqual(rewritten.stages[2].action["drive_id"], "antenna")
+        self.assertEqual(rewritten.stages[2].stage_id, "remove-antenna")
+        self.assertEqual([drive.id for drive in rewritten.stages[1].problem.field_drives], ["antenna"])
+        self.assertEqual(rewritten.stages[3].problem.field_drives, ())
+
+    def test_independent_autosave_and_fft_stages_roundtrip_before_simple_run(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("sampling-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave(
+            5e-13,
+            quantities=["time", "step", "mx", "my", "mz", "E_drive"],
+            stage_id="table-on",
+        )
+        study.stages.autosave("m", every=2e-12, stage_id="autosave-m")
+        study.stages.autosave("H_drive", every=5e-13, stage_id="autosave-drive")
+        study.stages.fft_response("my", stage_id="analyse-k0")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn("study.stages.tableautosave(", rendered)
+        self.assertIn('study.stages.autosave("m", every=2e-12', rendered)
+        self.assertIn('study.stages.fft_response("my"', rendered)
+        self.assertIn('study.stages.add_run(stage_id="excite", until=2e-09)', rendered)
+        self.assertNotIn("table_autosave=", rendered)
+        self.assertNotIn("outputs=[", rendered)
+        self.assertNotIn("spin_wave_response=", rendered)
+        before = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)
+        after = rewritten.stages[-1].problem.to_ir(include_geometry_assets=False)
         self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
         self.assertEqual(
             before["problem_meta"]["runtime_metadata"]["spin_wave_response"],
             after["problem_meta"]["runtime_metadata"]["spin_wave_response"],
         )
+
+    def test_relax_stage_table_autosave_roundtrips_without_leaking(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("relax-table-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).tableautosave(
+            every_steps=10,
+            quantities=["step", "mx"],
+            table_id="relax_metrics",
+        )
+        study.stages.add_run(stage_id="after", until=4e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(
+            ').tableautosave(every_steps=10, quantities=["step", "mx"], '
+            'table_id="relax_metrics")',
+            rendered,
+        )
+        self.assertEqual(
+            rewritten.stages[0].table_autosave.to_ir(),
+            loaded.stages[0].table_autosave.to_ir(),
+        )
+        self.assertIsNone(rewritten.stages[1].table_autosave)
+        self.assertNotIn(
+            "table_autosave",
+            rewritten.pipeline_base_problem().study.to_ir()["sampling"],
+        )
+
+    def test_automatic_sampling_stages_roundtrip_as_literal_auto(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("auto-sampling-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave("auto", quantities=["t", "mx"], stage_id="table-auto")
+        study.stages.autosave("m", every="auto", stage_id="field-auto")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn('study.stages.tableautosave("auto"', rendered)
+        self.assertIn('study.stages.autosave("m", every="auto"', rendered)
+        before = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)
+        after = rewritten.stages[-1].problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
+
+    def test_auto_sampling_export_ignores_resolved_cadence(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("auto-sampling-resolved")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave("auto", stage_id="table-auto")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            loaded.stages[0].action["table_autosave"]["resolved_sample_period_s"] = 7.6923e-11
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn('study.stages.tableautosave("auto"', rendered)
+        self.assertNotIn("7.6923e-11", rendered)
+
+    def test_resolved_auto_output_ir_imports_as_requested_auto_intent(self) -> None:
+        policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+        for kind in ("field_resolved_auto", "scalar_resolved_auto"):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    _requested_sampling_period_from_ir(
+                        {
+                            "kind": kind,
+                            "name": "m" if kind.startswith("field") else "mx",
+                            "every_seconds": 7.6923e-11,
+                            "requested_policy": policy,
+                        },
+                        "every_seconds",
+                    ),
+                    "auto",
+                )
+
+    def test_ordered_resolved_auto_outputs_rewrite_as_literal_auto(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("resolved-auto-output-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.autosave("m", every="auto", stage_id="field-auto")
+        study.stages.autosave("mx", every="auto", stage_id="scalar-auto")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir), "source.py")
+            for index, kind in enumerate(("field_resolved_auto", "scalar_resolved_auto")):
+                output = loaded.stages[index].action["output"]
+                output.clear()
+                output.update(
+                    {
+                        "kind": kind,
+                        "name": "m" if kind.startswith("field") else "mx",
+                        "every_seconds": 7.6923e-11,
+                        "requested_policy": policy,
+                    }
+                )
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn('study.stages.autosave("m", every="auto"', rendered)
+        self.assertIn('study.stages.autosave("mx", every="auto"', rendered)
+        self.assertNotIn("7.6923e-11", rendered)
+
+    def test_resolved_auto_output_rejects_invalid_requested_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported automatic sampling period policy"):
+            _requested_sampling_period_from_ir(
+                {
+                    "kind": "field_resolved_auto",
+                    "name": "m",
+                    "every_seconds": 7.6923e-11,
+                    "requested_policy": {
+                        "kind": "auto_sinc_cutoff",
+                        "nyquist_guard_factor": 1.2,
+                    },
+                },
+                "every_seconds",
+            )
+
+    def test_table_autosave_override_rejects_invalid_numeric_ir_cadence(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("invalid-imported-sampling")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_run(stage_id="run", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir), "source.py")
+            for invalid in (0.0, -1e-12, float("nan"), float("inf"), "1e-12", True):
+                with self.subTest(invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        rewrite_loaded_problem_script(
+                            loaded,
+                            overrides={
+                                "table_autosave": {
+                                    "kind": "table_autosave",
+                                    "sample_period_s": invalid,
+                                }
+                            },
+                        )
+
+    def test_ordered_sampling_stages_reject_invalid_numeric_ir_cadence(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("invalid-ordered-sampling")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave(1e-12, stage_id="table")
+        study.stages.autosave("m", every=1e-12, stage_id="field")
+        study.stages.add_run(stage_id="run", until=2e-9)
+        """
+        invalid_values = (0.0, -1e-12, float("nan"), float("inf"), "1e-12", True)
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            for stage_index, payload_key, cadence_key in (
+                (0, "table_autosave", "sample_period_s"),
+                (1, "output", "every_seconds"),
+            ):
+                for invalid in invalid_values:
+                    with self.subTest(stage_index=stage_index, invalid=invalid):
+                        loaded = _load_text(script, root, f"source-{stage_index}.py")
+                        loaded.stages[stage_index].action[payload_key][cadence_key] = invalid
+                        with self.assertRaises(ValueError):
+                            rewrite_loaded_problem_script(loaded)
 
     def test_canonical_rewrite_preserves_drives_and_stage_ids(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -159,7 +1055,6 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertIn("study.field_drives.add(fm.RegionalFieldDrive(", rendered)
         self.assertIn('stage_id="relax"', rendered)
         self.assertIn('stage_id="excite"', rendered)
-        self.assertIn("output_every=1e-12", rendered)
         self.assertEqual(before, after)
         self.assertEqual(
             [stage.stage_id for stage in rewritten.stages],
@@ -221,6 +1116,28 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             json.dumps(first_scene["field_drives"], sort_keys=True),
             json.dumps(second_scene["field_drives"], sort_keys=True),
         )
+
+    def test_flat_thermal_noise_roundtrip_preserves_temperature_and_seed(self) -> None:
+        script = """
+        import fullmag as fm
+        fm.engine("fdm")
+        film = fm.geometry(fm.Box(40e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        fm.thermal_noise(300.0, seed=123)
+        fm.run(1e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "thermal_source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "thermal_rewritten.py")
+
+        before = loaded.problem.to_ir(include_geometry_assets=False)
+        after = rewritten.problem.to_ir(include_geometry_assets=False)
+        self.assertIn("fm.thermal_noise(temperature=300, seed=123)", rendered)
+        self.assertEqual(after["temperature"], before["temperature"])
+        self.assertEqual(after["energy_terms"], before["energy_terms"])
 
 
 if __name__ == "__main__":

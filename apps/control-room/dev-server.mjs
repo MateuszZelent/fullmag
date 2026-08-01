@@ -17,7 +17,7 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { resolve, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,6 +37,7 @@ const apiTarget =
   apiTargetIdx >= 0
     ? (args[apiTargetIdx + 1] ?? "http://localhost:8081")
     : "http://localhost:8081";
+const browserOrigin = `http://localhost:${port}`;
 const staticRootIdx = args.indexOf("--static-root");
 const staticRoot =
   staticRootIdx >= 0
@@ -84,10 +85,10 @@ function startDevServer() {
         ...process.env,
         FULLMAG_API_PROXY_TARGET: apiTarget,
         FULLMAG_API_URL: apiTarget,
-        NEXT_PUBLIC_API_URL: apiTarget,
-        NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: apiTarget,
-        NEXT_PUBLIC_FULLMAG_API_URL: apiTarget,
-        NEXT_PUBLIC_RUNTIME_HTTP_BASE: apiTarget,
+        NEXT_PUBLIC_API_URL: browserOrigin,
+        NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin,
+        NEXT_PUBLIC_FULLMAG_API_URL: browserOrigin,
+        NEXT_PUBLIC_RUNTIME_HTTP_BASE: browserOrigin,
       },
       stdio: "inherit",
     },
@@ -204,9 +205,47 @@ function startStaticServer(root) {
     }
     serveStaticFile(resolvedRoot, requestUrl.pathname, res);
   });
+  server.on("upgrade", proxyWebSocketUpgrade);
   server.listen(Number(port), hostname);
   process.on("SIGINT", () => server.close(() => process.exit(130)));
   process.on("SIGTERM", () => server.close(() => process.exit(143)));
+}
+
+function proxyWebSocketUpgrade(req, clientSocket, head) {
+  const target = new URL(req.url ?? "/", apiTarget);
+  const proxyRequest = request(target, {
+    headers: { ...req.headers, host: target.host },
+    method: req.method ?? "GET",
+  });
+
+  proxyRequest.on("upgrade", (response, proxySocket, proxyHead) => {
+    writeRawResponseHead(clientSocket, response);
+    if (head.length > 0) proxySocket.write(head);
+    if (proxyHead.length > 0) clientSocket.write(proxyHead);
+    proxySocket.on("error", () => clientSocket.destroy());
+    clientSocket.on("error", () => proxySocket.destroy());
+    proxySocket.pipe(clientSocket);
+    clientSocket.pipe(proxySocket);
+  });
+  proxyRequest.on("response", (response) => {
+    writeRawResponseHead(clientSocket, response);
+    response.pipe(clientSocket);
+  });
+  proxyRequest.on("error", () => clientSocket.destroy());
+  proxyRequest.end();
+}
+
+function writeRawResponseHead(socket, response) {
+  const statusMessage = response.statusMessage
+    ? ` ${response.statusMessage}`
+    : "";
+  socket.write(`HTTP/1.1 ${response.statusCode ?? 502}${statusMessage}\r\n`);
+  for (let index = 0; index < response.rawHeaders.length; index += 2) {
+    socket.write(
+      `${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}\r\n`,
+    );
+  }
+  socket.write("\r\n");
 }
 
 function proxyApiRequest(req, res, requestUrl) {

@@ -14,10 +14,15 @@ mod diagnostics;
 mod feature_flags;
 mod formatting;
 mod interactive_runtime_host;
+mod live_publisher_diagnostics;
 mod live_workspace;
+mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;
+mod simulation_preparation;
+mod solver_profile_persistence;
+mod stage_heartbeat;
 mod step_utils;
 mod terminal_logs;
 mod types;
@@ -29,6 +34,7 @@ use step_utils::*;
 use types::*;
 
 fn main() -> Result<()> {
+    fullmag_build_info::print_startup_stamp();
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     if is_script_mode(&raw_args) {
         return orchestrator::run_script_mode(raw_args);
@@ -177,18 +183,12 @@ fn main() -> Result<()> {
             let ir = read_ir(&path)?;
             let execution_plan =
                 fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
-            emit_initial_state_warnings(None, &execution_plan.backend_plan)?;
+            emit_initial_state_warnings(None, &ir, &execution_plan)?;
             let result = fullmag_runner::run_problem(&ir, until, &output_dir)
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "status": result.status,
-                    "total_steps": result.steps.len(),
-                    "final_energy": result.steps.last().map(|s| s.e_ex),
-                    "final_total_energy": result.steps.last().map(|s| s.e_total),
-                    "output_dir": output_dir.display().to_string(),
-                }))?
+                serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
             );
         }
         Command::ResolveRuntimeInvocation { shell, raw_args } => {
@@ -417,6 +417,41 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     Ok(())
 }
 
+fn run_json_summary(
+    result: &fullmag_runner::RunResult,
+    output_dir: &std::path::Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": result.status,
+        "total_steps": result.steps.len(),
+        "final_energy": result.steps.last().map(|step| step.e_ex),
+        "final_total_energy": result.steps.last().map(|step| step.e_total),
+        "backend_create_wall_time_ns": result
+            .steps
+            .iter()
+            .map(|step| step.backend_create_wall_time_ns)
+            .find(|duration| *duration > 0),
+        "first_accepted_step_demag_solver_apply_wall_time_ns": result
+            .steps
+            .iter()
+            .map(|step| step.demag_solver_apply_wall_time_ns)
+            .find(|duration| *duration > 0),
+        "wall_time_ns": result.steps.last().map(|step| step.wall_time_ns),
+        "exchange_wall_time_ns": result.steps.last().map(|step| step.exchange_wall_time_ns),
+        "demag_wall_time_ns": result.steps.last().map(|step| step.demag_wall_time_ns),
+        "rhs_wall_time_ns": result.steps.last().map(|step| step.rhs_wall_time_ns),
+        "extra_energy_wall_time_ns": result.steps.last().map(|step| step.extra_energy_wall_time_ns),
+        "snapshot_wall_time_ns": result.steps.last().map(|step| step.snapshot_wall_time_ns),
+        "rhs_evals": result.steps.last().map(|step| step.rhs_evals),
+        "total_rhs_evals": result
+            .steps
+            .iter()
+            .map(|step| u64::from(step.rhs_evals))
+            .sum::<u64>(),
+        "output_dir": output_dir.display().to_string(),
+    })
+}
+
 fn is_script_mode(raw_args: &[OsString]) -> bool {
     const SUBCOMMANDS: &[&str] = &[
         "doctor",
@@ -517,6 +552,7 @@ fn resolve_runtime_invocation(raw_args: Vec<OsString>) -> Result<RuntimeResoluti
             resolved_engine_id: None,
             resolved_worker: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             local_engine_id: None,
             local_engine_label: None,
             requires_managed_runtime: false,
@@ -598,7 +634,11 @@ fn resolve_runtime_invocation(raw_args: Vec<OsString>) -> Result<RuntimeResoluti
         resolved_worker: resolved_session_runtime
             .as_ref()
             .and_then(|runtime| runtime.resolved_worker.clone()),
-        resolved_fallback: resolved_session_runtime.and_then(|runtime| runtime.resolved_fallback),
+        resolved_fallback: resolved_session_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.resolved_fallback.clone()),
+        fem_crossover_decision: resolved_session_runtime
+            .and_then(|runtime| runtime.fem_crossover_decision),
         local_engine_id,
         local_engine_label,
         requires_managed_runtime,
@@ -793,6 +833,51 @@ mod tests {
         IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
+    #[test]
+    fn run_json_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
+        let result = fullmag_runner::RunResult {
+            status: fullmag_runner::RunStatus::Completed,
+            steps: vec![
+                fullmag_runner::StepStats::default(),
+                fullmag_runner::StepStats {
+                    backend_create_wall_time_ns: 91,
+                    demag_solver_apply_wall_time_ns: 41,
+                    rhs_evals: 2,
+                    ..fullmag_runner::StepStats::default()
+                },
+                fullmag_runner::StepStats {
+                    demag_solver_apply_wall_time_ns: 99,
+                    wall_time_ns: 601,
+                    exchange_wall_time_ns: 101,
+                    demag_wall_time_ns: 211,
+                    rhs_wall_time_ns: 307,
+                    extra_energy_wall_time_ns: 13,
+                    snapshot_wall_time_ns: 17,
+                    rhs_evals: 3,
+                    ..fullmag_runner::StepStats::default()
+                },
+            ],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+
+        let payload = run_json_summary(&result, std::path::Path::new("/tmp/run"));
+
+        assert_eq!(payload["backend_create_wall_time_ns"], 91);
+        assert_eq!(
+            payload["first_accepted_step_demag_solver_apply_wall_time_ns"],
+            41
+        );
+        assert_eq!(payload["rhs_evals"], 3);
+        assert_eq!(payload["total_rhs_evals"], 5);
+        assert_eq!(payload["wall_time_ns"], 601);
+        assert_eq!(payload["exchange_wall_time_ns"], 101);
+        assert_eq!(payload["demag_wall_time_ns"], 211);
+        assert_eq!(payload["rhs_wall_time_ns"], 307);
+        assert_eq!(payload["extra_energy_wall_time_ns"], 13);
+        assert_eq!(payload["snapshot_wall_time_ns"], 17);
+    }
+
     fn shared_domain_fem_problem() -> ProblemIR {
         let mut problem = ProblemIR::bootstrap_example();
         problem.backend_policy.requested_backend = BackendTarget::Fem;
@@ -831,9 +916,15 @@ mod tests {
                         [-2.0, 2.0, -2.0],
                         [-2.0, -2.0, 2.0],
                     ],
-                    elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                        [0, 1, 2, 3],
+                        [4, 5, 6, 7],
+                    ]),
                     element_markers: vec![1, 0],
-                    boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                        [0, 1, 2],
+                        [4, 5, 6],
+                    ]),
                     boundary_markers: vec![1, 99],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -911,10 +1002,10 @@ mod tests {
             ..Default::default()
         });
 
-        let update = initial_step_update(&plan);
+        let update = initial_step_update(&plan, None);
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [4, 3, 1]);
-        assert!(update.fem_mesh.is_none());
+        assert!(update.fem_mesh_generation_id.is_none());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(36));
         assert!(!update.finished);
     }
@@ -929,9 +1020,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -1033,15 +1124,57 @@ mod tests {
             use_consistent_mass: None,
         });
 
-        let update = initial_step_update(&plan);
+        let stage_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("FEM stage asset");
+        let update = initial_step_update(
+            &plan,
+            Some(stage_asset.identity.generation_id().to_string()),
+        );
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [0, 0, 0]);
-        assert_eq!(
-            update.fem_mesh.as_ref().map(|payload| payload.nodes.len()),
-            Some(mesh.nodes.len())
-        );
+        assert!(update.fem_mesh_generation_id.is_some());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(12));
         assert!(!update.finished);
+    }
+
+    #[test]
+    fn native_mixed_fem_initial_diagnostic_does_not_use_legacy_tet_only_topology() {
+        let problem = shared_domain_fem_problem();
+        let mut execution_plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM fixture should plan");
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed topology golden fixture should be valid JSON");
+        let mesh: MeshIR = serde_json::from_value(golden["mesh"].clone())
+            .expect("mixed topology golden mesh should deserialize");
+        let BackendPlanIR::Fem(fem) = &mut execution_plan.backend_plan else {
+            panic!("FEM fixture should produce a FEM execution plan");
+        };
+        fem.mesh = mesh;
+        fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+
+        let diagnostic = crate::diagnostics::diagnose_initial_fem_plan(fem)
+            .expect("native mixed FEM diagnostics must not instantiate the legacy tet-only engine");
+
+        assert_eq!(diagnostic.max_effective_field_amplitude, None);
+        assert_eq!(diagnostic.max_rhs_amplitude, None);
+    }
+
+    #[test]
+    fn tetrahedral_fem_initial_diagnostic_keeps_numeric_observables() {
+        let problem = shared_domain_fem_problem();
+        let execution_plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM fixture should plan");
+        let BackendPlanIR::Fem(fem) = &execution_plan.backend_plan else {
+            panic!("FEM fixture should produce a FEM execution plan");
+        };
+
+        let diagnostic = crate::diagnostics::diagnose_initial_fem_plan(fem)
+            .expect("tetrahedral FEM diagnostics should keep the numeric Rust evaluator");
+
+        assert!(diagnostic.max_effective_field_amplitude.is_some());
+        assert!(diagnostic.max_rhs_amplitude.is_some());
     }
 
     #[test]
@@ -1325,6 +1458,7 @@ mod tests {
             mode_tracking: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
                 }],

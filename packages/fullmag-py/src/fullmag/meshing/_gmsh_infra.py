@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import re
 import threading
 import time
 from typing import Any
@@ -13,7 +12,7 @@ from numpy.typing import NDArray
 from fullmag._progress import emit_progress
 from fullmag.model.geometry import Geometry, Translate
 
-from ._gmsh_types import MeshData
+from ._gmsh_types import MeshData, _rebuild_mixed_layer_topology_certificate
 
 
 def _peel_translate_chain(
@@ -75,15 +74,46 @@ def _source_hmax_from_scale(hmax: float, scale_xyz: NDArray[np.float64]) -> floa
 
 
 def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshData:
-    if np.allclose(scale_xyz, 1.0):
+    scale_xyz = np.asarray(scale_xyz, dtype=np.float64)
+    if scale_xyz.shape != (3,) or not np.all(np.isfinite(scale_xyz)) or np.any(scale_xyz <= 0.0):
+        raise ValueError("mesh scale must contain exactly three finite positive values")
+    if np.array_equal(scale_xyz, np.ones(3, dtype=np.float64)):
         return mesh
-    return MeshData(
+    certificate = mesh.mixed_layer_topology_certificate
+    if certificate is not None and not (
+        scale_xyz[0] == scale_xyz[1] == scale_xyz[2]
+    ):
+        raise ValueError(
+            "anisotropic scaling of a certified mixed shared-domain mesh is not qualified"
+        )
+    scaled = MeshData(
         nodes=np.asarray(mesh.nodes, dtype=np.float64) * scale_xyz.reshape(1, 3),
-        elements=mesh.elements,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
         element_markers=mesh.element_markers,
-        boundary_faces=mesh.boundary_faces,
+        facet_types=mesh.facet_types,
+        facet_roles=mesh.facet_roles,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
         boundary_markers=mesh.boundary_markers,
+        cell_global_ordinals=mesh.cell_global_ordinals,
+        facet_global_ordinals=mesh.facet_global_ordinals,
+        cell_mesh_parts=mesh.cell_mesh_parts,
+        periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+        periodic_node_pairs=mesh.periodic_node_pairs,
+        periodic_mesh_certificate=mesh.periodic_mesh_certificate,
+        quality=mesh.quality,
+        per_domain_quality=mesh.per_domain_quality,
+        realization_report=mesh.realization_report,
     )
+    if certificate is not None:
+        return _rebuild_mixed_layer_topology_certificate(
+            scaled,
+            certificate,
+            authored_scale=float(scale_xyz[0]),
+        )
+    return scaled
 
 
 
@@ -104,8 +134,17 @@ def _resolve_gmsh_thread_count(requested_threads: int | None = None) -> int:
     return max(1, cpu_total)
 
 
-def _configure_gmsh_threads(gmsh: Any, requested_threads: int | None = None) -> int:
-    thread_count = _resolve_gmsh_thread_count(requested_threads)
+def _configure_gmsh_threads(
+    gmsh: Any,
+    requested_threads: int | None = None,
+    *,
+    honor_environment: bool = True,
+) -> int:
+    thread_count = (
+        _resolve_gmsh_thread_count(requested_threads)
+        if honor_environment
+        else max(1, int(requested_threads or 1))
+    )
     gmsh.option.setNumber("General.NumThreads", thread_count)
     gmsh.option.setNumber("Mesh.MaxNumThreads1D", thread_count)
     gmsh.option.setNumber("Mesh.MaxNumThreads2D", thread_count)
@@ -167,27 +206,16 @@ def _normalize_gmsh_log_line(message: str) -> str | None:
     return None
 
 
-_INLINE_PROGRESS_RE = re.compile(r"\[\s*(\d{1,3})%\]")
-
-
-def _progress_from_gmsh_message(message: str | None) -> tuple[int, str]:
+def _phase_from_gmsh_message(message: str | None) -> str:
     if not message:
-        return (75, "generating 3D mesh")
+        return "generating 3D mesh"
     lower = message.lower()
-    inline = _INLINE_PROGRESS_RE.search(message)
-    raw_percent = int(inline.group(1)) if inline else None
     if "meshing curve" in lower or "meshing 1d" in lower:
-        if raw_percent is not None:
-            return (min(99, 10 + (raw_percent * 12) // 100), "meshing curves")
-        return (15, "meshing curves")
+        return "meshing curves"
     if "meshing surface" in lower or "meshing 2d" in lower:
-        if raw_percent is not None:
-            return (min(99, 22 + (raw_percent * 18) // 100), "meshing surfaces")
-        return (30, "meshing surfaces")
+        return "meshing surfaces"
     if "meshing volume" in lower or "meshing 3d" in lower:
-        if raw_percent is not None:
-            return (min(99, 55 + (raw_percent * 25) // 100), "meshing 3D volume")
-        return (75, "meshing 3D volume")
+        return "meshing 3D volume"
     if (
         "tetrahedrizing" in lower
         or "reconstructing mesh" in lower
@@ -195,19 +223,37 @@ def _progress_from_gmsh_message(message: str | None) -> tuple[int, str]:
         or "done tetrahedrizing" in lower
         or "done reconstructing mesh" in lower
     ):
-        return (75, "generating 3D mesh")
+        return "generating 3D mesh"
     if "optimizing mesh" in lower or "optimization starts" in lower or "edge swaps" in lower:
-        return (85, "optimizing mesh")
-    return (75, "generating 3D mesh")
+        return "optimizing mesh"
+    return "generating 3D mesh"
 
 
-def _format_gmsh_heartbeat(elapsed_s: float, last_message: str | None = None) -> str:
-    percent, label = _progress_from_gmsh_message(last_message)
+def _format_gmsh_heartbeat(
+    elapsed_s: float,
+    last_message: str | None = None,
+    *,
+    backend_idle_s: float | None = None,
+) -> str:
+    label = _phase_from_gmsh_message(last_message)
     suffix = ""
     if last_message:
         last = last_message.removeprefix("Gmsh: ").strip()
         suffix = f"; last: {last}"
-    return f"Gmsh: meshing in progress ~{percent}% ({label}; {elapsed_s:.1f}s elapsed{suffix})"
+    idle_detail = (
+        f"no detailed backend update for {backend_idle_s:.1f}s"
+        if last_message and backend_idle_s is not None
+        else "no detailed backend update yet"
+    )
+    return f"Gmsh: meshing active ({label}; {elapsed_s:.1f}s elapsed; {idle_detail}{suffix})"
+
+
+def _gmsh_heartbeat_interval(elapsed_s: float, base_interval_s: float) -> float:
+    if elapsed_s < 30.0:
+        return base_interval_s
+    if elapsed_s < 120.0:
+        return max(base_interval_s, 15.0)
+    return max(base_interval_s, 30.0)
 
 
 class _GmshProgressLogger:
@@ -225,13 +271,16 @@ class _GmshProgressLogger:
         self._seen_count = 0
         self._started_at = 0.0
         self._last_emit_at = 0.0
+        self._last_detail_at = 0.0
         self._last_normalized_message: str | None = None
+        self._logger_error_reported = False
 
     def __enter__(self) -> "_GmshProgressLogger":
         self._gmsh.logger.start()
         now = time.monotonic()
         self._started_at = now
         self._last_emit_at = now
+        self._last_detail_at = now
         self._thread = threading.Thread(target=self._poll, name="fullmag-gmsh-progress", daemon=True)
         self._thread.start()
         return self
@@ -250,15 +299,32 @@ class _GmshProgressLogger:
         while not self._stop.wait(self._poll_interval_s):
             emitted = self._flush()
             now = time.monotonic()
-            if not emitted and now - self._last_emit_at >= self._heartbeat_interval_s:
-                elapsed = now - self._started_at
-                emit_progress(_format_gmsh_heartbeat(elapsed, self._last_normalized_message))
+            elapsed = now - self._started_at
+            heartbeat_interval = _gmsh_heartbeat_interval(
+                elapsed,
+                self._heartbeat_interval_s,
+            )
+            if not emitted and now - self._last_emit_at >= heartbeat_interval:
+                backend_idle = now - self._last_detail_at
+                emit_progress(
+                    _format_gmsh_heartbeat(
+                        elapsed,
+                        self._last_normalized_message,
+                        backend_idle_s=backend_idle,
+                    )
+                )
                 self._last_emit_at = now
 
     def _flush(self) -> bool:
         try:
             messages = self._gmsh.logger.get()
-        except Exception:
+        except Exception as exc:
+            if not self._logger_error_reported:
+                emit_progress(
+                    "Gmsh telemetry warning: failed to read native progress log "
+                    f"({exc}); mesh progress is indeterminate"
+                )
+                self._logger_error_reported = True
             return False
         if self._seen_count > len(messages):
             self._seen_count = 0
@@ -268,9 +334,9 @@ class _GmshProgressLogger:
         for message in new_messages:
             normalized = _normalize_gmsh_log_line(message)
             if normalized:
+                self._last_detail_at = time.monotonic()
                 emit_progress(normalized)
                 self._last_normalized_message = normalized
                 emitted_any = True
                 self._last_emit_at = time.monotonic()
         return emitted_any
-

@@ -12,6 +12,8 @@ pub struct StepDiagnostics {
     pub time: f64,
     pub dt: f64,
     pub wall_time_ns: u64,
+    #[serde(default)]
+    pub backend_create_wall_time_ns: u64,
     pub exchange_wall_time_ns: u64,
     #[serde(default)]
     pub demag_wall_time_ns: u64,
@@ -63,6 +65,8 @@ pub struct StepDiagnostics {
     pub finalization_field_copy_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dt_suggested: Option<f64>,
     #[serde(default)]

@@ -830,7 +830,7 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert "maximum_element_size=3e-9" not in example
     assert "rtol=1e-4" in example
     assert "max_iterations=1000" in example
-    assert "tol=equilibrium_torque_tolerance_a_per_m" in example
+    assert "tolA=equilibrium_torque_tolerance_a_per_m" in example
     assert "include_demag=True" in example
     assert 'magnetostatic_bc="periodic_airbox_k0"' in example
     assert 'solver_method="gpu_operator_host_krylov"' in example

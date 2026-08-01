@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-05-30
+- Last updated: 2026-07-27
 - Related ADRs: `docs/adr/0009-geometry-invalidates-mesh.md`, `docs/adr/0010-magnetization-does-not-invalidate-mesh.md`
 - Related specs: `docs/specs/mesh-roundtrip-semantics-v1.md`, `docs/specs/resource-first-control-room-api-v2.md`
 - Related notes:
@@ -10,6 +10,7 @@
   - `docs/physics/0102-airbox-mesh-grading-geometric.md`
   - `docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md`
   - `docs/physics/0104-thin-film-shared-domain-meshing.md`
+  - `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
   - `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
 
 ## 1. Problem statement
@@ -77,11 +78,17 @@ or sampled as if airbox nodes belonged to magnetic objects.
 | `d_corner_transition` | corner transition span | m |
 | `q_sicn` | signed inverse condition number quality metric | dimensionless |
 | `q_gamma` | gamma or gamma-like quality metric | dimensionless |
+| `det(J_K)` | sampled physical-cell Jacobian determinant | m3 |
+| `h_K` | maximum distance between vertices of cell `K` | m |
+| `tau_J` | relative numerical-degeneracy tolerance | dimensionless |
 
 ### 2.3 Assumptions and approximations
 
 - The production shared-domain mesh is tetrahedral unless a workflow explicitly
   declares a swept/layered strategy and reports the realized strategy.
+- A mixed-P1 declaration is not a production claim until its exact-layer
+  certificate and lane-specific operator gates from note 0106 pass. Strict
+  mixed-P1 requests never degrade to the tetrahedral path.
 - The mesh is one conforming solver mesh. Region statistics may overlap in node
   sets at shared interfaces, but element ownership must remain unambiguous.
 - Airbox far-field elements may be much larger than magnetic body elements, but
@@ -158,6 +165,19 @@ FEM production meshing must satisfy these contracts:
    - Gmsh SICN is reported as SICN only when computed as SICN,
    - swept or topology-proxy quality metrics are labeled as proxy metrics,
    - per-domain quality and histograms use final shared-domain markers.
+
+   For mixed-P1 meshes, reports also separate `prism6`, `pyramid5`, and `tet4`
+   counts and apply a topology-valid SICN implementation or an honestly named
+   scaled-Jacobian metric. The exact-layer certificate uses p05 `>= 0.1` and
+   rejects non-positive order-2-or-higher Jacobians.
+
+   Strict topology validation is invariant under uniform changes of physical
+   length scale. Unless a caller supplies an explicit SI volume tolerance, a
+   sampled cell Jacobian is numerically degenerate when
+   `abs(det(J_K)) <= tau_J h_K^3`, with `tau_J = 64 epsilon_float64`.
+   `det(J_K)` and `h_K^3` both have unit m3. This numerical guard does not
+   replace the stronger dimensionless SICN/scaled-Jacobian quality gates, and
+   every negative sampled determinant still fails closed as an inversion.
 
 6. **Adaptive criterion truthfulness**
    - FEM relaxation adaptivity may use only an explicitly named estimator:
@@ -238,6 +258,7 @@ concatenated STL fallback are degraded, not production-equivalent.
 | S10 | swept/thin-film strategy | bbox | quality metrics are truthful; SICN is real or unavailable, never a mislabeled proxy |
 | S11 | control-room mesh diagnostics | bbox | user can read scoped points/nodes/tetrahedra, size histogram, quality histogram, and selected histogram-bin elements |
 | S12 | `examples/arch_waveguide_relax_50nm.py` | bbox | materializes without fallback crash, without silent auto-coarsen for intended interactive preset, and with bounded node/RAM estimate |
+| S13 | axis-aligned Box, native mixed P1, one magnetic layer | bbox | target-only until note 0106 gates pass: prism-only magnet, pyramid/tet-only air, exact two-plane certificate, conforming manifold, `fallbacks_triggered=[]` |
 
 ## 6. Required observables
 
@@ -247,6 +268,7 @@ API resources, or UI diagnostics:
 - requested mesh controls,
 - realized mesh controls,
 - total node, element, and boundary-face counts,
+- cell and facet counts by canonical topology and region,
 - per-part node, element, and boundary-face counts,
 - magnetic-air interface face counts,
 - outer airbox boundary face counts,
@@ -281,6 +303,11 @@ Small realized Gmsh fixtures must verify:
   features,
 - fallback reports degradation without replacing the primary failure with a
   secondary planner error.
+- mixed-P1 feasibility fixtures freeze topology and manifold invariants without
+  freezing incidental far-air tet counts; they do not promote runtime support.
+- strict Jacobian tests apply the same valid and degenerate reference cells at
+  metre and nanometre scales, proving scale invariance while retaining
+  zero/near-zero and negative-Jacobian rejection.
 
 ### 7.3 Cross-layer checks
 

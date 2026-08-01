@@ -98,7 +98,7 @@ pub fn run_exchange_density_study(
         fem_mesh.periodic_boundary_pairs = vec![];
         fem_mesh.periodic_node_pairs = vec![];
         let fem_nodes = fem_mesh.nodes.len();
-        let fem_elements = fem_mesh.elements.len();
+        let fem_elements = fem_mesh.cell_count();
         let fem_center_index = structured_node_index(
             fem_divisions_per_axis / 2,
             fem_divisions_per_axis / 2,
@@ -567,9 +567,9 @@ pub(crate) fn build_structured_box_tet_mesh(box_size_m: [f64; 3], divisions: usi
     MeshIR {
         mesh_name: format!("structured_box_{}", divisions),
         nodes,
-        elements,
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
         element_markers: vec![1; element_count],
-        boundary_faces,
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(boundary_faces),
         boundary_markers: vec![1; boundary_face_count],
         periodic_boundary_pairs,
         periodic_node_pairs,

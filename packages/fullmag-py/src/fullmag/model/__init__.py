@@ -14,6 +14,19 @@ from .antenna import (
 )
 from .current_transport import CurrentTransport
 from .couplings import Coupling, CouplingEndpoint, CouplingRegistry
+from .planar_monitor import (
+    DepthProjection,
+    MonitorTarget,
+    PlanarExtent,
+    PlanarFrame,
+    PlanarMonitor,
+    PlanarOperator,
+    PlaneSample,
+    SlabAverage,
+    StudyMonitorRegistry,
+    SurfaceBoundary,
+    SurfaceProjection,
+)
 from .dynamics import (
     AdaptiveTimestep,
     Elastodynamics,
@@ -92,7 +105,7 @@ from .structure import (
     RegionMaterialOverride,
     RegionTextureOverride,
 )
-from .study import Eigenmodes, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
+from .study import Eigenmodes, FieldAutosave, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, StageAutosave, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
 from .eigen import (
     DispersionValidationScenario,
     K0KittelFieldSample,
@@ -107,6 +120,8 @@ __all__ = [
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",
+    "FieldAutosave",
+    "StageAutosave",
     "TableAutosave",
     "GammaResponseAnalysis",
     "UniaxialAnisotropy",
@@ -123,6 +138,17 @@ __all__ = [
     "Coupling",
     "CouplingEndpoint",
     "CouplingRegistry",
+    "DepthProjection",
+    "MonitorTarget",
+    "PlanarExtent",
+    "PlanarFrame",
+    "PlanarMonitor",
+    "PlanarOperator",
+    "PlaneSample",
+    "SlabAverage",
+    "StudyMonitorRegistry",
+    "SurfaceBoundary",
+    "SurfaceProjection",
     "Constant",
     "Cylinder",
     "Demag",

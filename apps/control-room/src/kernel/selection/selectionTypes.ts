@@ -108,10 +108,21 @@ export function visualizationObjectIdForMeshPartLike(part: {
   return objectId ? canonicalVisualizationSceneObjectId(objectId) : null;
 }
 
+export type MeshElementFamily = "hex8" | "prism6" | "pyramid5" | "tet4";
+
 export type SelectionRef =
+  | {
+      kind: "model.planar.monitor";
+      monitorId: string;
+      nodeId: string;
+      type: "planar-monitor";
+      visualizationTargetId: `planar-monitor:${string}`;
+    }
   | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
+      elementFamily?: MeshElementFamily | null;
+      globalCellOrdinal?: string | null;
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
@@ -123,6 +134,8 @@ export type SelectionRef =
   | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
+      elementFamily?: MeshElementFamily | null;
+      globalCellOrdinal?: string | null;
       kind:
         | "airbox.root"
         | "airbox.mesh"
@@ -140,6 +153,8 @@ export type SelectionRef =
   | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
+      elementFamily?: MeshElementFamily | null;
+      globalCellOrdinal?: string | null;
       kind: "mesh-part" | "mesh-part-airbox";
       nodeId: string;
       objectId: string | null;
@@ -168,6 +183,13 @@ export type SelectionRef =
       nodeId: string;
       type: "cross-section-draft";
       visualizationTargetId: "cross-section:draft";
+    }
+  | {
+      draftId: "draft";
+      kind: "model.planar.monitor.draft";
+      nodeId: string;
+      type: "planar-monitor-draft";
+      visualizationTargetId: "planar-monitor:draft";
     }
   | {
       kind: "mesh.cross-section.plot";
@@ -219,6 +241,15 @@ export type SelectionRef =
       fieldRevision?: string | number | null;
     }
   | {
+      chartId: string;
+      kind: "results.quick_chart";
+      nodeId: string;
+      tableId: string;
+      type: "quick-chart";
+      xAxisId: string;
+      yAxisIds: readonly string[];
+    }
+  | {
       kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
       nodeId: string;
       type: "study";
@@ -243,6 +274,7 @@ export type SelectionRef =
       kind:
         | "study.stage.action"
         | "study.stage.add_field_drive"
+        | "study.stage.autosave"
         | "study.stage.eigenmodes"
         | "study.stage.eigenmodes.setup"
         | "study.stage.eigenmodes.calculation_mode"
@@ -267,9 +299,12 @@ export type SelectionRef =
         | "study.stage.frequency_response.solver"
         | "study.stage.frequency_response.outputs"
         | "study.stage.frequency_response.diagnostics"
+        | "study.stage.fft_response"
         | "study.stage.hysteresis"
         | "study.stage.relax"
         | "study.stage.run"
+        | "study.stage.table_autosave"
+        | "study.stage.change_device"
         | "study.stage.save_state";
       hysteresisExecutionNodeId?: string;
       hysteresisExecutionNodeKind?: string;
@@ -365,6 +400,14 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "planar-monitor":
+      return (
+        right.type === "planar-monitor" &&
+        left.kind === right.kind &&
+        left.monitorId === right.monitorId &&
+        left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
     case "scene-object":
       return (
         right.type === "scene-object" &&
@@ -376,6 +419,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
+        (left.globalCellOrdinal ?? null) ===
+          (right.globalCellOrdinal ?? null) &&
+        nullableStringEquals(left.elementFamily, right.elementFamily) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "airbox":
@@ -386,6 +432,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
+        (left.globalCellOrdinal ?? null) ===
+          (right.globalCellOrdinal ?? null) &&
+        nullableStringEquals(left.elementFamily, right.elementFamily) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-part":
@@ -397,6 +446,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.objectId, right.objectId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
+        (left.globalCellOrdinal ?? null) ===
+          (right.globalCellOrdinal ?? null) &&
+        nullableStringEquals(left.elementFamily, right.elementFamily) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-quality-element":
@@ -420,6 +472,14 @@ export function selectionRefEquals(
     case "cross-section-draft":
       return (
         right.type === "cross-section-draft" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.draftId === right.draftId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "planar-monitor-draft":
+      return (
+        right.type === "planar-monitor-draft" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.draftId === right.draftId &&
@@ -478,6 +538,17 @@ export function selectionRefEquals(
         nullableStringEquals(left.fieldOrientation, right.fieldOrientation) &&
         nullableStringEquals(left.measurementAxis, right.measurementAxis) &&
         (left.fieldRevision ?? null) === (right.fieldRevision ?? null)
+      );
+    case "quick-chart":
+      return (
+        right.type === "quick-chart" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.chartId === right.chartId &&
+        left.tableId === right.tableId &&
+        left.xAxisId === right.xAxisId &&
+        left.yAxisIds.length === right.yAxisIds.length &&
+        left.yAxisIds.every((id, index) => id === right.yAxisIds[index])
       );
     case "study":
       return (

@@ -5,7 +5,7 @@ import { Play } from "lucide-react";
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { FrequencyDomainCalculationModeSection } from "./FrequencyDomainCalculationModeSection";
 import { StageInspectorFrame, type StageInspectorFrameProps } from "./StageInspectorFrame";
 
@@ -49,8 +49,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
         />
       ) : null}
       {authoringView === "setup" ? (
-        <InspectorSection
-          value="eigenmodes-setup-detail"
+        <InspectorGroup
           title="Study Settings"
           badge={draft?.target ?? "target"}
         >
@@ -90,11 +89,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Non-uniform equilibrium"
             value="valid only when the selected operator supports tangent-space linearization"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "equilibrium" ? (
-        <InspectorSection
-          value="eigenmodes-equilibrium-detail"
+        <InspectorGroup
           title="Linearization Point"
           badge={equilibriumSummary.source}
         >
@@ -118,11 +116,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Relaxation prerequisite"
             value={equilibriumSummary.relaxationPrerequisite}
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "solver" ? (
-        <InspectorSection
-          value="eigenmodes-solver-detail"
+        <InspectorGroup
           title="Solver Configuration"
           badge={draft?.deviceTarget ?? "device"}
         >
@@ -158,11 +155,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Stop reason"
             value={stage?.stopReason ?? "not available"}
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "operator" ? (
-        <InspectorSection
-          value="eigenmodes-operator-detail"
+        <InspectorGroup
           title="Physics and Variables"
           badge="linearized LLG"
         >
@@ -194,11 +190,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Artifacts"
             value="spectrum, selected complex mode fields, residual diagnostics"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "diagnostics" ? (
-        <InspectorSection
-          value="eigenmodes-diagnostics-detail"
+        <InspectorGroup
           title="Diagnostics"
           badge={validationSummary.badge}
         >
@@ -231,11 +226,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Published artifacts"
             value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "outputs" ? (
-        <InspectorSection
-          value="eigenmodes-outputs-detail"
+        <InspectorGroup
           title="Output"
           badge={draft?.target ?? "outputs"}
         >
@@ -275,11 +269,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Artifact readiness"
             value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "boundary" ? (
-        <InspectorSection
-          value="eigenmodes-boundary-detail"
+        <InspectorGroup
           title="Boundary"
           badge={draft?.bc || "free"}
         >
@@ -313,11 +306,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
                 : "demag disabled for this draft"
             }
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "periodic_pairs" ? (
-        <InspectorSection
-          value="eigenmodes-periodic-pairs-detail"
+        <InspectorGroup
           title="Periodic Pairs"
           badge={draft?.bc || "periodic pairs"}
         >
@@ -338,15 +330,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Demag-k gate"
             value="nonzero-k dynamic demag readiness is reported in diagnostics"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "k_sampling" || authoringView === "k_path" ? (
-        <InspectorSection
-          value={
-            authoringView === "k_path"
-              ? "eigenmodes-k-path-detail"
-              : "eigenmodes-k-sampling-detail"
-          }
+        <InspectorGroup
           title={
             authoringView === "k_path"
               ? "k-Path"
@@ -370,11 +357,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Expected result"
             value="branch-aware dispersion and mode-field handoff when artifacts exist"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {showCommandCenter ? (
-        <InspectorSection
-          value="eigenmodes-command-center"
+        <InspectorGroup
           title="Modal Stage Command Center"
           badge="Eigenmodes"
         >
@@ -470,10 +456,11 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             label="Export canonical Python"
             value="Canonical Python export is available after the saved stage patch is materialized"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
-      <InspectorSection
-        value="eigenmodes-problem"
+      {showCommandCenter ? (
+        <>
+      <InspectorGroup
         title="Eigenproblem"
         badge={draft?.target ?? "target"}
       >
@@ -501,8 +488,8 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           label="Effective normalization"
           value={modalDefaults.normalization}
         />
-      </InspectorSection>
-      <InspectorSection value="eigenmodes-linearization" title="Linearization State">
+      </InspectorGroup>
+      <InspectorGroup title="Linearization State">
         <FieldRow
           label="Equilibrium source"
           value={draft?.equilibriumSource ?? "not set"}
@@ -513,14 +500,14 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
         />
         <FieldRow label="Damping policy" value={draft?.dampingPolicy ?? "not set"} />
         <FieldRow label="Include demag" value={draft?.includeDemag ? "yes" : "no"} />
-      </InspectorSection>
-      <InspectorSection value="eigenmodes-wavevector" title="Spin-Wave Sampling">
+      </InspectorGroup>
+      <InspectorGroup title="Spin-Wave Sampling">
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
           <FieldRow label="k vector" value={draft?.kVector || "not set"} />
           <FieldRow label="k sampling" value={draft?.kSampling || "not set"} />
           <FieldRow label="k path" value={draft?.kPath || "not set"} />
-      </InspectorSection>
-      <InspectorSection value="eigenmodes-results" title="Eigenmode Results">
+      </InspectorGroup>
+      <InspectorGroup title="Eigenmode Results">
         <FieldRow label="Status" value={stage?.status ?? "not started"} />
         <FieldRow label="Solver activity" value={modalRuntime.activity} />
         <FieldRow label="Progress interpretation" value={modalRuntime.progress} />
@@ -533,7 +520,9 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           label="Artifacts"
           value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
         />
-      </InspectorSection>
+      </InspectorGroup>
+        </>
+      ) : null}
     </>
   );
 }

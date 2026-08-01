@@ -523,13 +523,20 @@ export function AppMenuBar() {
         ))}
       </div>
 
-      <label className="fm-header__search">
+      <label
+        className="fm-header__search"
+        onClick={() => runCommand("workspace.command-palette")}
+      >
         <Search size={13} aria-hidden="true" />
         <input
           aria-label="Command search"
           placeholder="Command search (Ctrl+Shift+P)"
           readOnly
           type="text"
+          onFocus={(e) => {
+            e.target.blur();
+            runCommand("workspace.command-palette");
+          }}
         />
       </label>
 

@@ -56,10 +56,11 @@ pub async fn list_tables(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<TableListResource>, ApiError> {
     let guard = state.current_live_state.read().await;
-    let all_rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
+    let snapshot = guard.as_ref();
+    let all_rows = snapshot.map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
     Ok(Json(TableListResource {
         revision: all_rows.len() as u64,
-        tables: vec![default_table_resource(all_rows)],
+        tables: vec![default_table_resource(snapshot)],
     }))
 }
 
@@ -79,8 +80,7 @@ pub async fn get_table(
 ) -> Result<Json<TableResource>, ApiError> {
     ensure_default_table(&table_id)?;
     let guard = state.current_live_state.read().await;
-    let all_rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    Ok(Json(default_table_resource(all_rows)))
+    Ok(Json(default_table_resource(guard.as_ref())))
 }
 
 #[utoipa::path(
@@ -94,10 +94,12 @@ pub async fn get_table(
     tag = "data"
 )]
 pub async fn get_table_columns(
+    State(state): State<Arc<AppState>>,
     Path(table_id): Path<String>,
 ) -> Result<Json<Vec<TableColumnMeta>>, ApiError> {
     ensure_default_table(&table_id)?;
-    Ok(Json(default_table_columns()))
+    let guard = state.current_live_state.read().await;
+    Ok(Json(default_table_columns(guard.as_ref())))
 }
 
 #[utoipa::path(
@@ -130,8 +132,9 @@ pub async fn get_table_rows(
     ensure_default_table(&table_id)?;
 
     let guard = state.current_live_state.read().await;
-    let all_rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    let window = build_table_rows_resource(table_id, all_rows, &query);
+    let snapshot = guard.as_ref();
+    let all_rows = snapshot.map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
+    let window = build_table_rows_resource(table_id, all_rows, &query, table_columns(snapshot))?;
 
     Ok(Json(window))
 }
@@ -166,8 +169,9 @@ pub async fn get_table_rows_binary(
     ensure_default_table(&table_id)?;
 
     let guard = state.current_live_state.read().await;
-    let all_rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    let window = build_table_rows_resource(table_id, all_rows, &query);
+    let snapshot = guard.as_ref();
+    let all_rows = snapshot.map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
+    let window = build_table_rows_resource(table_id, all_rows, &query, table_columns(snapshot))?;
     let payload = encode_table_rows_binary(&window);
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -188,31 +192,59 @@ fn ensure_default_table(table_id: &str) -> Result<(), ApiError> {
     Err(ApiError::not_found(format!("table '{table_id}' not found")))
 }
 
-fn default_table_resource(all_rows: &[ScalarRow]) -> TableResource {
+fn default_table_resource(snapshot: Option<&crate::types::SessionStateResponse>) -> TableResource {
+    let all_rows = snapshot.map(|state| &state.scalar_rows[..]).unwrap_or(&[]);
     TableResource {
         table_id: "default".to_string(),
         revision: all_rows.len() as u64,
         schema_revision: 1,
         total_rows: all_rows.len() as u64,
-        columns: default_table_columns(),
+        columns: default_table_columns(snapshot),
         rows_href: "/v2/sessions/current/data/tables/default/rows".to_string(),
         columns_href: "/v2/sessions/current/data/tables/default/columns".to_string(),
         binary_rows_href: "/v2/sessions/current/data/tables/default/rows.bin".to_string(),
     }
 }
 
-fn default_table_columns() -> Vec<TableColumnMeta> {
-    resolve_table_columns(None)
+fn default_table_columns(
+    snapshot: Option<&crate::types::SessionStateResponse>,
+) -> Vec<TableColumnMeta> {
+    table_columns(snapshot)
         .into_iter()
         .filter_map(|column| table_column_meta(&column))
         .collect()
+}
+
+fn table_columns(snapshot: Option<&crate::types::SessionStateResponse>) -> Vec<String> {
+    let configured = snapshot
+        .and_then(|state| state.metadata.as_ref())
+        .and_then(|metadata| metadata.get("table_autosave"))
+        .and_then(|autosave| autosave.get("quantities"))
+        .and_then(serde_json::Value::as_array)
+        .map(|quantities| {
+            quantities
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|quantity| table_column_meta(quantity).is_some())
+                .fold(Vec::new(), |mut columns, quantity| {
+                    if !columns.iter().any(|column| column == quantity) {
+                        columns.push(quantity.to_string());
+                    }
+                    columns
+                })
+        })
+        .filter(|columns| !columns.is_empty());
+
+    configured
+        .unwrap_or_else(|| resolve_table_columns(None, &[]).expect("legacy defaults are valid"))
 }
 
 fn build_table_rows_resource(
     table_id: String,
     all_rows: &[ScalarRow],
     query: &TableRowsQuery,
-) -> TableRowsResource {
+    available_columns: Vec<String>,
+) -> Result<TableRowsResource, ApiError> {
     let total_rows = all_rows.len() as u64;
     let selection = select_table_rows(all_rows, query);
     let decimation_mode = query.decimation.as_deref().unwrap_or("none");
@@ -231,7 +263,7 @@ fn build_table_rows_resource(
         decimation_mode,
     );
 
-    let column_ids = resolve_table_columns(query.columns.as_deref());
+    let column_ids = resolve_table_columns(query.columns.as_deref(), &available_columns)?;
     let columns: Vec<TableColumnMeta> = column_ids
         .iter()
         .filter_map(|column| table_column_meta(column))
@@ -257,7 +289,7 @@ fn build_table_rows_resource(
         .map(|index| *index as u64 + 1)
         .unwrap_or(selection.cursor_floor);
 
-    TableRowsResource {
+    Ok(TableRowsResource {
         table_id,
         revision: total_rows,
         schema_revision: 1,
@@ -269,7 +301,7 @@ fn build_table_rows_resource(
         rows,
         decimation,
         resync_required: selection.resync_required,
-    }
+    })
 }
 
 fn encode_table_rows_binary(window: &TableRowsResource) -> Vec<u8> {
@@ -449,23 +481,52 @@ fn decimation_meta(
     })
 }
 
-fn resolve_table_columns(columns: Option<&str>) -> Vec<String> {
-    let mut resolved = vec!["step".to_string()];
+fn resolve_table_columns(
+    columns: Option<&str>,
+    available_columns: &[String],
+) -> Result<Vec<String>, ApiError> {
     if let Some(columns) = columns {
+        let mut resolved = available_columns
+            .iter()
+            .any(|column| column == "step")
+            .then(|| "step".to_string())
+            .into_iter()
+            .collect::<Vec<_>>();
         for column in columns
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            if table_column_meta(column).is_some() && !resolved.iter().any(|value| value == column)
-            {
-                resolved.push(column.to_string());
+            let requested_quantity = table_column_meta(column)
+                .map(|metadata| metadata.quantity_id)
+                .unwrap_or_default();
+            if !available_columns.iter().any(|available| {
+                available == column
+                    || table_column_meta(available)
+                        .is_some_and(|metadata| metadata.quantity_id == requested_quantity)
+            }) {
+                return Err(ApiError::bad_request(format!(
+                    "table column '{column}' is not available in this table"
+                )));
+            }
+            if !resolved.iter().any(|value| value == column) {
+                resolved.push(column.to_owned());
             }
         }
+        if resolved.is_empty() {
+            return Err(ApiError::bad_request("table columns must not be empty"));
+        }
+        Ok(resolved)
     } else {
-        resolved.extend(["t", "mx", "my", "mz", "e_total", "max_torque_Apm"].map(str::to_string));
+        let defaults = if available_columns.is_empty() {
+            ["step", "t", "mx", "my", "mz", "e_total", "max_torque_Apm"]
+                .map(str::to_string)
+                .to_vec()
+        } else {
+            available_columns.to_vec()
+        };
+        Ok(defaults)
     }
-    resolved
 }
 
 fn table_column_meta(column: &str) -> Option<TableColumnMeta> {

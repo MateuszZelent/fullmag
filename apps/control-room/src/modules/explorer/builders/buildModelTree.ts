@@ -21,6 +21,8 @@ import {
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import type { PlanarMonitorCollectionResource } from "@/kernel/api/apiTypes";
+import type { PlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
@@ -48,7 +50,67 @@ function formatSize(size: readonly [number, number, number] | null | undefined):
 
 type ModelTreeResources = ExplorerTreeResources & {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
+  planarMonitorDraft?: PlanarMonitorDraft | null;
+  planarMonitors?: PlanarMonitorCollectionResource | null;
 };
+
+export function buildPlanarMonitorNodes(
+  resource: PlanarMonitorCollectionResource | null | undefined,
+  draft: PlanarMonitorDraft | null | undefined = null,
+): ExplorerNode {
+  const monitors: ExplorerNode[] = (resource?.monitors ?? [])
+    .map((monitor) => {
+      const id = monitor.id;
+      return {
+        badge: monitor.operator.kind,
+        contextCommands: [
+          "field-map.select-monitor",
+          "planar-monitor.show-frame-3d",
+          "planar-monitor.duplicate",
+          "planar-monitor.rename",
+          "planar-monitor.delete",
+          "field-map.export-data",
+        ],
+        contextCommandInputs: {
+          "field-map.export-data": { monitorId: id },
+          "field-map.select-monitor": { monitorId: id },
+          "planar-monitor.delete": { monitorId: id },
+          "planar-monitor.duplicate": { monitorId: id },
+          "planar-monitor.rename": { monitorId: id },
+          "planar-monitor.show-frame-3d": { monitorId: id },
+        },
+        icon: "layers" as const,
+        id: `model:definitions:planar-monitors:${id}`,
+        kind: "model.planar.monitor" as const,
+        label: monitor.name,
+        monitorId: id,
+        parentId: "model:definitions:planar-monitors",
+        status: "ready" as const,
+      };
+    });
+  if (draft) {
+    monitors.unshift({
+      badge: `${draft.plane.toUpperCase()} ${draft.positionPercent}%`,
+      contextCommands: ["workspace.focus-selection"],
+      icon: "layers",
+      id: "model:definitions:planar-monitors:draft",
+      kind: "model.planar.monitor.draft",
+      label: draft.name,
+      parentId: "model:definitions:planar-monitors",
+      status: "queued",
+    });
+  }
+  return {
+    badge: `${monitors.length}`,
+    children: monitors,
+    icon: "layers",
+    id: "model:definitions:planar-monitors",
+    kind: "model.planar.monitors",
+    label: "Planar Monitors",
+    parentId: "model:definitions",
+    status: "ready",
+  };
+}
 
 const MODE_VISUALIZATION_VIEWS = [
   "phase_rotated_real",
@@ -1049,6 +1111,21 @@ export function buildModelTree(
       : "unavailable";
   const sessionChildren: ExplorerNode[] = [
     {
+      badge: "authoring",
+      children: [
+        buildPlanarMonitorNodes(
+          resources.planarMonitors,
+          resources.planarMonitorDraft,
+        ),
+      ],
+      icon: "braces",
+      id: "model:definitions",
+      kind: "definitions.root",
+      label: "Definitions",
+      parentId: "model:session",
+      status: "ready",
+    },
+    {
       id: "model:universe",
       kind: "universe.root",
       label: universe.label,
@@ -1271,6 +1348,21 @@ export function buildExplorerTree(
             icon: "wave",
             status: "ready",
           },
+          ...(resources.pinnedQuickChart
+            ? [{
+                badge: `${resources.pinnedQuickChart.yAxisIds.length} series`,
+                chartId: resources.pinnedQuickChart.chartId,
+                icon: "wave" as const,
+                id: `results:quick-charts:${resources.pinnedQuickChart.chartId}`,
+                kind: "results.quick_chart" as const,
+                label: "Quick Chart",
+                parentId: "results:root",
+                status: "ready" as const,
+                tableId: resources.pinnedQuickChart.tableId,
+                xAxisId: resources.pinnedQuickChart.xAxisId,
+                yAxisIds: resources.pinnedQuickChart.yAxisIds,
+              }]
+            : []),
         ],
       },
     ];

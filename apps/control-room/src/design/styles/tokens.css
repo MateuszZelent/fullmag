@@ -13,13 +13,72 @@
   --fm-space-4: 16px;
   --fm-space-5: 20px;
   --fm-space-6: 24px;
+  --fm-space-7: 28px;
+  --fm-space-8: 32px;
 
   /* Geometry */
   --fm-menu-height: 38px;
   --fm-ribbon-height: 124px;
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
-  --fm-panel-header-height: 32px;
+  --fm-panel-header-height: 38px;
+  --fm-control-height-compact: 26px;
+  --fm-control-height-regular: 30px;
+  --fm-control-height-sm: var(--fm-control-height-compact);
+  --fm-control-height-md: var(--fm-control-height-regular);
+  --fm-field-row-min-height: 28px;
+  --fm-slider-hit-height: 28px;
+  --fm-slider-track-height: 4px;
+  --fm-slider-thumb-size: 12px;
+  --fm-inspector-padding-inline: 10px;
+  --fm-inspector-row-gap: 2px;
+  --fm-inspector-control-gap: 2px;
+  --fm-inspector-group-gap: 8px;
+  --fm-inspector-tab-height: 44px;
+  --fm-inspector-icon-size: 44px;
+  --fm-inspector-nav-icon-size: 36px;
+  --fm-inspector-group-nav-height: 52px;
+  --fm-chart-height-xs: 64px;
+  --fm-chart-height-sm: 96px;
+  --fm-chart-height-md: 260px;
+  --fm-chart-height-lg: 360px;
+  --fm-chart-height-analysis: 360px;
+  --fm-ribbon-chevron-size: 19px;
+  --fm-ribbon-tab-indicator-bottom: 25px;
+  --fm-thread-progress-width: 54px;
+  --fm-tree-indent: 15px;
+  --fm-tree-guide-offset: 7px;
+
+  /* Icon / glyph column widths */
+  --fm-icon-sm: 18px;   /* drag handle, tree chevron — between space-4 and space-5 */
+
+  /* Breakpoints (documentation — @media cannot use var(), but these establish the scale) */
+  --fm-bp-sm: 720px;     /* narrow dialogs, mobile fallback */
+  --fm-bp-md: 760px;     /* tablet / narrow window */
+  --fm-bp-lg: 960px;     /* wide panels */
+  --fm-bp-xl: 1180px;    /* full-layout threshold */
+  --fm-bp-2xl: 1400px;   /* ultrawide ribbon */
+  --fm-bp-inspector: 390px; /* inspector @container narrow breakpoint */
+
+  /* Dialog / panel spatial constraints */
+  --fm-dialog-mesh-build-width: 680px;
+  --fm-dialog-mesh-build-width-compact: 480px;
+  --fm-dialog-mesh-build-section-max-height: 168px;
+  --fm-dialog-data-preview-thumb-max-height: 92px;
+  --fm-dialog-recorder-min-width: 720px;
+  --fm-ribbon-dropdown-min-width: 240px;
+  --fm-dropdown-min-width: 224px;
+  --fm-panel-command-audit-min-width: 760px;
+  --fm-panel-transport-log-min-width: 860px;
+  --fm-inspector-freq-domain-max-height: 190px;
+  --fm-inspector-mesh-type-icon-min-width: 96px;
+  --fm-inspector-topo-charge-min-width: 82px;
+  --fm-panel-section-min-width: 120px;
+
+  /* Footer diagnostics grid column widths */
+  --fm-footer-diag-label-col-width: 82px;
+  --fm-footer-diag-value-col-width: 72px;
+  --fm-footer-freq-indicator-col-width: 46px;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
@@ -29,11 +88,96 @@
   --fm-font-size-xs: 11px;
   --fm-font-size-sm: 12px;
   --fm-font-size-md: 13px;
+  --fm-font-size-base: var(--fm-font-size-md); /* semantic alias: base body text size */
   --fm-font-size-lg: 15px;
+  --fm-font-size-xl: 18px;
   --fm-line-height-tight: 1.1;
+  --fm-font-size-field-label: 11px;
+  --fm-font-size-control: 11px;
+  --fm-font-size-help: 10px;
+  --fm-line-height-control: 1.35;
+
+  /* Control geometry and states */
+  --fm-radius-input: 7px;
+  --fm-radius-segment: 8px;
+  --fm-radius-disclosure: 10px;
+  --fm-radius-control: var(--fm-radius-input);
+  --fm-radius-surface: var(--fm-radius-disclosure);
+  --fm-disabled-opacity: 1;
+
+  /* Font weights */
+  --fm-font-weight-normal: 400;
+  --fm-font-weight-medium: 500;
+  --fm-font-weight-semibold: 600;
+  --fm-font-weight-bold: 650;
+  --fm-font-weight-extrabold: 700;
+
+  /* Shadows */
+  --fm-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --fm-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --fm-shadow-control-hover: 0 2px 5px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --fm-shadow-control-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+  --fm-shadow-control-inset: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  --fm-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.2), 0 2px 6px -1px rgba(0, 0, 0, 0.1);
+  --fm-shadow-lg: 0 6px 16px -2px rgba(0, 0, 0, 0.25), 0 4px 8px -1px rgba(0, 0, 0, 0.15);
+  --fm-shadow-elevated: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  --fm-shadow-panel: 0 8px 32px -6px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.2);
+  --fm-shadow-drop-sm: 0 1px 3px rgb(0 0 0 / 50%);
+  --fm-shadow-swatch-inset: inset 0 1px 2px rgb(0 0 0 / 30%);
+
+  /* Scrim / modal backdrop */
+  --fm-scrim: rgba(0, 0, 0, 0.5);
 
   /* Effects */
   --fm-focus-ring: 0 0 0 2px var(--fm-bg-app), 0 0 0 4px var(--fm-accent);
   --fm-transition-fast: 120ms ease-out;
   --fm-transition-normal: 180ms ease-out;
+
+  /* Z-index scale — stacking layer contract */
+  --fm-z-base: 1;           /* local stacking context */
+  --fm-z-panel: 50;         /* floating panel above content */
+  --fm-z-dialog-backdrop: 80;   /* dialog scrim */
+  --fm-z-dialog: 90;        /* dialog shell */
+  --fm-z-dialog-content: 100;   /* dialog foreground / dropdown */
+  --fm-z-overlay: 120;      /* context-menu, notifications, draggable overlays */
+  --fm-z-overlay-raised: 130;   /* overlay above overlay */
+  --fm-z-portal: 140;       /* Radix portal backdrop */
+  --fm-z-portal-top: 141;   /* Radix portal content (tooltip, popover) */
+  --fm-z-floating: 150;     /* floating elements above portals */
+  --fm-z-toast: 200;        /* toast / notification — always on top */
+
+  /* Duration scale — micro-animation timing */
+  --fm-duration-instant: var(--fm-duration-instant);   /* hover state, very fast toggle */
+  --fm-duration-fast: var(--fm-duration-fast);      /* snappy micro-interaction */
+  --fm-duration-normal: var(--fm-duration-normal);   /* standard small motion */
+  --fm-duration-moderate: var(--fm-duration-moderate); /* standard reveal / expand */
+  --fm-duration-slow: var(--fm-duration-slow);     /* entrance animation */
+  --fm-duration-loading: var(--fm-duration-loading);  /* progress / loading state */
+
+  /* Pill border-radius — replaces magic 999px */
+  --fm-radius-pill: 9999px;
+}
+
+/* ── Spacing utilities ── */
+.fm-mt-1 { margin-top: var(--fm-space-1); }
+.fm-mt-2 { margin-top: var(--fm-space-2); }
+.fm-mt-3 { margin-top: var(--fm-space-3); }
+.fm-mt-4 { margin-top: var(--fm-space-4); }
+.fm-mb-2 { margin-bottom: var(--fm-space-2); }
+.fm-mb-3 { margin-bottom: var(--fm-space-3); }
+.fm-ml-auto { margin-left: auto; }
+
+/* ── Common structural utilities ── */
+.fm-section-separator {
+  border-top: 1px solid var(--fm-border-subtle);
+  padding-top: var(--fm-space-3);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-toolbar-top {
+  margin-top: var(--fm-space-2);
+}
+
+.fm-toolbar-top-lg {
+  margin-top: var(--fm-space-3);
 }

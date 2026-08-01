@@ -1,14 +1,16 @@
 //! API request/response types and view models.
 
-use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
+use crate::schemas::commands::{
+    CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+};
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
 use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
-    SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
-    VectorStyleVisualizationState, VisualizationCameraState, VisualizationClientAckEntry,
-    VisualizationLayerState, VisualizationOverrideState,
+    PlanarVisualizationState, SamplingVisualizationState, SliceVisualizationState,
+    TrimVisualizationState, VectorStyleVisualizationState, VisualizationCameraState,
+    VisualizationClientAckEntry, VisualizationLayerState, VisualizationOverrideState,
 };
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
@@ -50,6 +52,8 @@ pub(crate) struct DisplayPresentationState {
     #[serde(default)]
     pub visualization_slice: Option<SliceVisualizationState>,
     #[serde(default)]
+    pub visualization_planar: Option<PlanarVisualizationState>,
+    #[serde(default)]
     pub visualization_trim: Option<TrimVisualizationState>,
     #[serde(default)]
     pub visualization_camera: Option<VisualizationCameraState>,
@@ -67,12 +71,13 @@ impl Default for DisplayPresentationState {
             colormap: "viridis".to_string(),
             contrast_min: None,
             contrast_max: None,
-            vector_glyphs: true,
+            vector_glyphs: false,
             visualization_layers: None,
             visualization_domains: None,
             visualization_sampling: None,
             visualization_fem: None,
             visualization_slice: None,
+            visualization_planar: None,
             visualization_trim: None,
             visualization_camera: None,
             visualization_clip: None,
@@ -258,6 +263,8 @@ pub(crate) struct SessionManifest {
     pub resolved_cpu_threads: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
     pub artifact_dir: String,
     pub started_at_unix_ms: u128,
     pub finished_at_unix_ms: u128,
@@ -300,6 +307,52 @@ pub(crate) struct ArtifactEntry {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_owned_provenance: Option<RegionOwnedArtifactProvenance>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct ArtifactResource {
+    pub path: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_autosave: Option<StageAutosaveArtifactMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_owned_provenance: Option<RegionOwnedArtifactProvenance>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct StageAutosaveArtifactMetadata {
+    pub schema_version: String,
+    pub target: String,
+    pub format: String,
+    pub layout: String,
+    pub resource_path: String,
+    pub download_path: Option<String>,
+    pub stages: Vec<StageAutosaveArtifactStageMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct StageAutosaveArtifactStageMetadata {
+    pub stage_id: String,
+    pub stage_index: u64,
+    pub resource_path: String,
+    pub download_path: Option<String>,
+    pub status: String,
+    pub complete: bool,
+    pub table_quantities: Vec<String>,
+    pub field_quantities: Vec<String>,
+    pub table_sample_count: u64,
+    pub field_sample_count: u64,
+}
+
+impl From<ArtifactEntry> for ArtifactResource {
+    fn from(entry: ArtifactEntry) -> Self {
+        Self {
+            path: entry.path,
+            kind: entry.kind,
+            stage_autosave: None,
+            region_owned_provenance: entry.region_owned_provenance,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
@@ -414,6 +467,14 @@ pub(crate) struct ScalarRow {
     pub time: f64,
     pub solver_dt: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_estimate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_suggested: Option<f64>,
+    #[serde(default)]
+    pub rejected_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pseudo_time_s: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_runtime_s: Option<f64>,
@@ -483,7 +544,12 @@ pub(crate) struct StepUpdateView {
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
+    /// Transitional input-only compatibility for legacy publishers.
+    /// Ingestion promotes this payload to the top-level stage mesh resource;
+    /// API responses never serialize it back into a step frame.
+    #[serde(default, skip_serializing)]
     pub fem_mesh: Option<FemMeshPayload>,
     /// **Deprecated (Q16):** Spatial data now flows through `latest_fields`.
     /// Retained for backwards-compatible imports / load_state only.
@@ -491,6 +557,8 @@ pub(crate) struct StepUpdateView {
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<fullmag_runner::LiveFieldMaterializationStatus>,
     /// **Deprecated (Q17):** Never serialized to the frontend
     /// (`#[serde(skip_serializing)]`). Internal-only cache for preview
     /// rebuild; will be removed once preview pipeline is fully quantities-based.
@@ -575,6 +643,8 @@ pub(crate) struct SessionStateResponse {
     pub mesh_workspace: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<StageExecutionState>,
+    #[serde(skip_serializing)]
+    pub simulation_preparation: Option<SimulationPreparationSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
@@ -617,9 +687,64 @@ pub(crate) struct SessionStateResponse {
     /// Revision for simulation stage execution state.
     #[serde(skip)]
     pub stage_execution_revision: u64,
+    /// Revision for the internal simulation preparation snapshot.
+    #[serde(skip)]
+    pub simulation_preparation_revision: u64,
     /// Independent region-realization product revisions; scene revision is not a substitute.
     #[serde(skip)]
     pub region_realization_revisions: fullmag_authoring::RegionRealizationRevisions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationSnapshot {
+    pub preparation_id: String,
+    pub revision: u64,
+    pub status: String,
+    pub active_stage_id: Option<String>,
+    pub started_at_unix_ms: u64,
+    pub completed_at_unix_ms: Option<u64>,
+    pub stages: Vec<SimulationPreparationStageSnapshot>,
+    pub log_tail: Vec<SimulationPreparationLogEntrySnapshot>,
+    pub failure: Option<SimulationPreparationFailureSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationClockAdjustmentSnapshot {
+    pub observed_at_unix_ms: u64,
+    pub stage_started_at_unix_ms: u64,
+    pub backward_delta_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationStageSnapshot {
+    pub id: String,
+    pub label: String,
+    pub detail: String,
+    pub status: String,
+    pub started_at_unix_ms: Option<u64>,
+    pub completed_at_unix_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub clock_adjustment: Option<SimulationPreparationClockAdjustmentSnapshot>,
+    pub progress_percent: Option<u8>,
+    pub progress_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationLogEntrySnapshot {
+    pub timestamp_unix_ms: u64,
+    pub level: String,
+    pub stage_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationFailureSnapshot {
+    pub error_code: String,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub stage_id: String,
+    pub diagnostics_correlation_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -893,6 +1018,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     #[serde(default)]
     pub stage_execution: Option<StageExecutionState>,
     #[serde(default)]
+    pub simulation_preparation: Option<SimulationPreparationSnapshot>,
+    #[serde(default)]
     pub run: Option<RunManifest>,
     #[serde(default)]
     pub live_state: Option<LiveState>,
@@ -929,6 +1056,8 @@ pub(crate) struct CurrentLiveSessionFrameRequest {
     pub mesh_workspace: Option<Value>,
     #[serde(default)]
     pub stage_execution: Option<StageExecutionState>,
+    #[serde(default)]
+    pub simulation_preparation: Option<SimulationPreparationSnapshot>,
     #[serde(default)]
     pub run: Option<RunManifest>,
 }
@@ -1147,6 +1276,8 @@ pub(crate) struct SessionCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_error: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_policy: Option<SolverPolicyRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relax_algorithm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relax_alpha: Option<f64>,
@@ -1286,6 +1417,7 @@ mod tests {
         ScriptBuilderState {
             revision: 3,
             backend: None,
+            requested_mode: Some("strict".to_string()),
             cpu_threads: None,
             fem_demag_solver_policy: None,
             exchange_enabled: true,
@@ -1299,6 +1431,7 @@ mod tests {
                 torque_tolerance: "1e-4".to_string(),
                 energy_tolerance: String::new(),
                 max_relax_steps: "1000".to_string(),
+                ..fullmag_authoring::ScriptBuilderSolverState::default()
             },
             mesh: fullmag_authoring::ScriptBuilderMeshState {
                 algorithm_2d: 6,
@@ -1383,6 +1516,7 @@ mod tests {
             mesh_interfaces: Vec::new(),
             current_modules: Vec::new(),
             field_drives: Vec::new(),
+            planar_monitors: Vec::new(),
             excitation_analysis: None,
         }
     }
@@ -1419,6 +1553,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: String::new(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,
@@ -1435,6 +1570,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             scene_document: Some(scene_document),
             scalar_rows: Vec::new(),
             engine_log: Vec::new(),
@@ -1456,6 +1592,7 @@ mod tests {
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
             stage_execution_revision: 0,
+            simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
         };
 
@@ -1511,9 +1648,11 @@ mod tests {
             max_torque_T: 0.0,
             wall_time_ns: 0,
             grid: [2, 1, 1],
+            fem_mesh_generation_id: None,
             fem_mesh: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             per_object_scalars: Default::default(),
+            field_materialization_states: Vec::new(),
             preview_field: None,
             finished: false,
         };

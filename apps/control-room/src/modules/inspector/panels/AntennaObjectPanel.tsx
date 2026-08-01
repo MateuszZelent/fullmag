@@ -10,7 +10,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
@@ -106,7 +106,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection
+      <InspectorGroup
         title="Antenna"
         badge={model.mode === "canonical" ? "Regional drive" : model.mode === "legacy" ? "Migration required" : "unassigned"}
       >
@@ -184,7 +184,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
             {pending ? "Saving" : model.mode === "legacy" ? "Migrate and save" : "Save field drive"}
           </Button>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }

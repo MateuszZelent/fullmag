@@ -30,5 +30,10 @@ bool gpu_rk_prepare_stage_attempt(
     bool &fsal_reused,
     std::string &reason);
 
+bool gpu_rk_capture_pre_normalization_candidate(
+    Context &ctx,
+    cudaStream_t stream,
+    std::string &reason);
+
 } // namespace fullmag::fem
 #endif

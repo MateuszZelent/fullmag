@@ -27,10 +27,11 @@ pub(crate) mod scalars;
 pub(crate) mod snapshots;
 pub mod stop;
 
-use fullmag_ir::{FemPlanIR, OutputIR};
+use fullmag_ir::{ExecutionMode, FemPlanIR, OutputIR};
 
 use crate::artifact_pipeline::ArtifactPipelineSender;
-use crate::dispatch::{execute_fem, FemEngine};
+use crate::dispatch::FemEngine;
+use crate::types::FemStageExecutionContext;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 
 use super::engine::FemEngineKind;
@@ -57,6 +58,26 @@ pub fn execute_fem_relax<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_relax_in_mode(
+        engine,
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        ExecutionMode::Strict,
+    )
+}
+
+pub(crate) fn execute_fem_relax_in_mode<'a>(
+    engine: FemEngineKind,
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
+) -> Result<ExecutedRun, RunError> {
     // Validate algorithm support on the requested engine.
     algorithm::check_algorithm_support(plan.relaxation.as_ref(), engine)?;
 
@@ -67,12 +88,61 @@ pub fn execute_fem_relax<'a>(
         FemEngineKind::NativeGpu => FemEngine::NativeGpu,
     };
 
-    execute_fem(
+    crate::dispatch::execute_fem_in_mode(
         dispatch_engine,
         plan,
         until_seconds,
         outputs,
         live,
         artifact_writer,
+        execution_mode,
+    )
+}
+
+pub(crate) fn execute_fem_relax_with_context<'a>(
+    engine: FemEngineKind,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_relax_with_context_in_mode(
+        engine,
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        ExecutionMode::Strict,
+    )
+}
+
+pub(crate) fn execute_fem_relax_with_context_in_mode<'a>(
+    engine: FemEngineKind,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
+) -> Result<ExecutedRun, RunError> {
+    algorithm::check_algorithm_support(plan.relaxation.as_ref(), engine)?;
+    let dispatch_engine = match engine {
+        FemEngineKind::CpuNative => FemEngine::CpuNative,
+        FemEngineKind::NativeGpu => FemEngine::NativeGpu,
+    };
+    crate::dispatch::execute_fem_with_context_in_mode(
+        dispatch_engine,
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        execution_mode,
     )
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -16,6 +17,7 @@ DEFAULT_SHARED_DOMAIN_HMAX = 12e-9
 DEFAULT_AIRBOX_HMAX = 48e-9
 DEFAULT_AIRBOX_SIZE = (360e-9, 180e-9, 90e-9)
 BOX500_AIRBOX_SCENARIO = "exchange_only_box500_airbox1um"
+BOX500_EXCHANGE_SCENARIO = "exchange_only_box500"
 BOX500_AIRBOX_BODY_SIZE = (500e-9, 100e-9, 10e-9)
 BOX500_AIRBOX_SIZE = (1e-6, 1e-6, 1e-6)
 BOX500_DOMAIN_HMAX = 20e-9
@@ -26,10 +28,12 @@ RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 FULL_RELAXATION_MAX_STEPS = 50_000
 BOX500_AIRBOX_SCENARIO_ALIASES = {
+    BOX500_EXCHANGE_SCENARIO: "exchange_only",
     BOX500_AIRBOX_SCENARIO: "exchange_only",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
     "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
+    "box500_airbox_exchange_anis_uniaxial_tilted": "exchange_anis_uniaxial_tilted",
     "box500_airbox_exchange_anis_cubic": "exchange_anis_cubic",
     "box500_airbox_exchange_demag_anis_uniaxial": "exchange_demag_anis_uniaxial",
     "box500_airbox_exchange_demag_anis_cubic": "exchange_demag_anis_cubic",
@@ -37,6 +41,10 @@ BOX500_AIRBOX_SCENARIO_ALIASES = {
     "box500_airbox_stt_oersted": "stt_oersted",
 }
 BOX500_AIRBOX_SCENARIOS = set(BOX500_AIRBOX_SCENARIO_ALIASES)
+RELAXATION_SCENARIO_ALIASES = {
+    "relax_exchange_only": "exchange_only",
+    "relax_exchange_demag": "exchange_demag",
+}
 DEFAULT_DEMAG_SOLVER = "CG"
 DEFAULT_DEMAG_PRECONDITIONER = "AMG"
 OMITTED_DEMAG_POLICY_PRECONDITIONER = "OMIT"
@@ -65,6 +73,7 @@ SUPPORTED_SCENARIOS = {
     "exchange_zeeman",
     "exchange_demag",
     "exchange_anis_uniaxial",
+    "exchange_anis_uniaxial_tilted",
     "exchange_anis_cubic",
     "exchange_demag_anis_uniaxial",
     "exchange_demag_anis_cubic",
@@ -72,6 +81,7 @@ SUPPORTED_SCENARIOS = {
     "exchange_dmi",
     "stt_oersted",
     *BOX500_AIRBOX_SCENARIOS,
+    *RELAXATION_SCENARIO_ALIASES,
 }
 
 
@@ -213,7 +223,10 @@ def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
 
 
 def canonical_scenario(scenario: str) -> str:
-    return BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+    return RELAXATION_SCENARIO_ALIASES.get(
+        scenario,
+        BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario),
+    )
 
 
 def scenario_is_box500_airbox(scenario: str) -> bool:
@@ -226,15 +239,23 @@ def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
         return [fm.Exchange()], {}
     if scenario == "exchange_zeeman":
         return [fm.Exchange(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
-    if scenario in {"exchange_anis_uniaxial", "exchange_anis_cubic"}:
+    if scenario in {"exchange_anis_uniaxial", "exchange_anis_uniaxial_tilted"}:
+        return [
+            fm.Exchange(),
+            fm.UniaxialAnisotropy(ku1=0.5e6, axis=(0.0, 0.0, 1.0)),
+        ], {}
+    if scenario == "exchange_anis_cubic":
         return [fm.Exchange()], {}
     if scenario == "exchange_demag":
         return [fm.Exchange(), fm.Demag(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
-    if scenario in {
-        "exchange_demag_anis_uniaxial",
-        "exchange_demag_anis_cubic",
-        "exchange_demag_anisotropy",
-    }:
+    if scenario in {"exchange_demag_anis_uniaxial", "exchange_demag_anisotropy"}:
+        return [
+            fm.Exchange(),
+            fm.Demag(),
+            fm.Zeeman(B=(0.0, 0.0, 0.05)),
+            fm.UniaxialAnisotropy(ku1=0.5e6, axis=(0.0, 0.0, 1.0)),
+        ], {}
+    if scenario == "exchange_demag_anis_cubic":
         return [fm.Exchange(), fm.Demag(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
     if scenario == "exchange_dmi":
         return [
@@ -257,12 +278,33 @@ def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
     raise AssertionError(f"unsupported benchmark scenario: {scenario}")
 
 
+def scenario_initial_magnetization(scenario: str):
+    if canonical_scenario(scenario) == "exchange_anis_uniaxial_tilted":
+        inv_sqrt_two = 1.0 / math.sqrt(2.0)
+        body_size = scenario_body_size(scenario)
+        return fm.init.texture.helical(
+            wavevector=(2.0 * math.pi / body_size[0], 0.0, 0.0),
+            e1=(inv_sqrt_two, 0.0, inv_sqrt_two),
+            e2=(0.0, 1.0, 0.0),
+        )
+    if scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES:
+        body_size = scenario_body_size(scenario)
+        return fm.init.texture.helical(
+            wavevector=(2.0 * math.pi / body_size[0], 0.0, 0.0),
+            e1=(1.0, 0.0, 0.0),
+            e2=(0.0, 1.0, 0.0),
+        )
+    return fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+
 def scenario_requires_shared_domain(scenario: str) -> bool:
-    return "demag" in canonical_scenario(scenario) or scenario_is_box500_airbox(scenario)
+    return (
+        scenario_is_box500_airbox(scenario) and scenario != BOX500_EXCHANGE_SCENARIO
+    ) or "demag" in canonical_scenario(scenario)
 
 
 def scenario_uses_relaxation(scenario: str) -> bool:
-    return scenario_is_box500_airbox(scenario)
+    return scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES
 
 
 def scenario_body_size(scenario: str) -> tuple[float, float, float]:
@@ -273,7 +315,8 @@ def scenario_body_size(scenario: str) -> tuple[float, float, float]:
 
 def scenario_airbox_size(scenario: str) -> tuple[float, float, float]:
     if scenario_is_box500_airbox(scenario):
-        return BOX500_AIRBOX_SIZE
+        scale = env_float("FULLMAG_BENCH_AIRBOX_EXTENT_SCALE", 1.0)
+        return tuple(component * scale for component in BOX500_AIRBOX_SIZE)
     return DEFAULT_AIRBOX_SIZE
 
 
@@ -289,8 +332,6 @@ def scenario_airbox_hmax(scenario: str) -> float:
 
 def scenario_material_kwargs(scenario: str) -> dict[str, object]:
     scenario = canonical_scenario(scenario)
-    if scenario in {"exchange_anis_uniaxial", "exchange_demag_anis_uniaxial", "exchange_demag_anisotropy"}:
-        return {"Ku1": 0.5e6, "anisU": (0.0, 0.0, 1.0)}
     if scenario in {"exchange_anis_cubic", "exchange_demag_anis_cubic"}:
         return {
             "Kc1": 4.8e4,
@@ -337,7 +378,12 @@ def build(
     dynamics = (
         fm.LLG(
             integrator=integrator,
-            adaptive_timestep=fm.AdaptiveTimestep(atol=1e-6, dt_initial=dt),
+            adaptive_timestep=fm.AdaptiveTimestep(
+                atol=1e-6,
+                dt_initial=dt,
+                dt_min=dt * 1e-3,
+                dt_max=dt,
+            ),
         )
         if timestep_policy == "adaptive"
         else fm.LLG(integrator=integrator, fixed_timestep=dt)
@@ -355,7 +401,7 @@ def build(
         name="body",
         geometry=body,
         material=material,
-        m0=fm.init.UniformMagnetization((1.0, 0.0, 0.0)),
+        m0=scenario_initial_magnetization(scenario),
     )
     energy_terms, extra_problem_kwargs = scenario_terms(scenario)
     requires_shared_domain = scenario_requires_shared_domain(scenario)
@@ -422,7 +468,11 @@ def build(
                 maximum_element_size=(
                     scenario_domain_hmax(scenario) if requires_shared_domain else 3e-9
                 ),
-                mesh=None if requires_shared_domain else str(mesh_path),
+                mesh=(
+                    None
+                    if requires_shared_domain or scenario == BOX500_EXCHANGE_SCENARIO
+                    else str(mesh_path)
+                ),
                 demag_solver_policy=env_demag_solver_policy(),
             ),
         ),
@@ -430,6 +480,15 @@ def build(
         runtime_metadata=runtime_metadata,
         **extra_problem_kwargs,
     )
+
+
+def executed_problem_ir_sha256(problem: fm.Problem) -> str:
+    canonical_bytes = json.dumps(
+        problem.to_ir(include_geometry_assets=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_bytes).hexdigest()
 
 
 def emit_summary(
@@ -440,6 +499,8 @@ def emit_summary(
     scenario: str,
     integrator: str,
     timestep_policy: str = "fixed",
+    *,
+    executed_problem_ir_sha256: str | None = None,
 ) -> None:
     final = result.steps[-1] if result.steps else None
     total_rhs_evals = sum(
@@ -453,6 +514,7 @@ def emit_summary(
         "scenario": scenario,
         "integrator": integrator,
         "timestep_policy": timestep_policy,
+        "executed_problem_ir_sha256": executed_problem_ir_sha256,
         "relaxation_algorithm": (
             env_relaxation_algorithm() if scenario_uses_relaxation(scenario) else None
         ),
@@ -577,5 +639,15 @@ if __name__ == "__main__":
         )
         raise SystemExit(0)
     problem = build(mesh_path, dt, steps, scenario, integrator, timestep_policy)
+    problem_ir_sha256 = executed_problem_ir_sha256(problem)
     result = fm.Simulation(problem, backend="fem").run(until=steps * dt)
-    emit_summary(result, mesh_path, steps, dt, scenario, integrator, timestep_policy)
+    emit_summary(
+        result,
+        mesh_path,
+        steps,
+        dt,
+        scenario,
+        integrator,
+        timestep_policy,
+        executed_problem_ir_sha256=problem_ir_sha256,
+    )

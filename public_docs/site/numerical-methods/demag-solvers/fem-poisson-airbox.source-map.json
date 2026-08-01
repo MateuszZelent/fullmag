@@ -1,0 +1,49 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Device Poisson sources exist; executed-device qualification remains separate."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses the cell-averaged convolution realization."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM CUDA uses tensor spectra and cuFFT rather than a shared FEM airbox."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-demag-poisson-field", "symbols": ["Hd", "u"], "sources": ["recovery"]},
+    {"id": "eq-numerical-demag-poisson-strong", "symbols": ["u", "M", "Oma", "Omegam"], "sources": ["rhs"]},
+    {"id": "eq-numerical-demag-poisson-robin-weak", "symbols": ["u", "v", "beta", "Gammaa", "M", "Oma"], "sources": ["rhs", "boundary"]},
+    {"id": "eq-numerical-demag-poisson-robin", "symbols": ["u", "beta", "Gammaa", "n", "c", "Rstar"], "sources": ["boundary"]},
+    {"id": "eq-numerical-demag-poisson-energy", "symbols": ["Ed", "mu0", "M", "Hd", "Omegam"], "sources": ["energy"]}
+  ],
+  "symbols": [
+    {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "v", "latex": "$v$", "meaning": "FEM test function", "si_unit": "$1$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "recovered demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Oma", "latex": "$\\Omega_a$", "meaning": "complete magnetic-plus-air domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Omegam", "latex": "$\\Omega_m$", "meaning": "magnetic subdomain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Gammaa", "latex": "$\\Gamma_a$", "meaning": "selected outer airbox boundary", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "n", "latex": "$\\mathbf n$", "meaning": "outward unit normal on $\\Gamma_a$", "si_unit": "$1$"},
+    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "c", "latex": "$c$", "meaning": "dimensionless Robin coefficient", "si_unit": "$1$"},
+    {"id": "Rstar", "latex": "$R_\\star$", "meaning": "open-axis reference radius", "si_unit": "$\\mathrm{m}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"}
+  ],
+  "sources": [
+    {"id": "api-demag", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Public realization and variant normalization."},
+    {"id": "fem-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "FEM linear solver policy."},
+    {"id": "rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Magnetic Poisson RHS assembly."},
+    {"id": "boundary", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "initialize_demag_poisson_boundary_operator", "responsibility": "Dirichlet and Robin boundary construction."},
+    {"id": "solve", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp", "symbol": "solve_demag_poisson_hypre", "responsibility": "CPU Hypre/MFEM solve and telemetry."},
+    {"id": "recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Field recovery and masking."},
+    {"id": "energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Field-based demagnetization energy reduction."},
+    {"id": "gpu-rhs", "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu", "symbol": "demag_rhs_csr_kernel", "responsibility": "Device CSR RHS."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "Demag.variant", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "with `model=\"airbox\"`: `auto`, `robin`, `dirichlet`", "meaning": "outer closure", "backend_support": "FEM CPU/GPU subject to qualification", "problem_ir": "`energy[].realization`"},
+      {"python": "FEM.order", "type": "int", "default": "required", "si_unit": "$1$", "validation": "integer greater than or equal to $1$", "meaning": "finite-element polynomial order", "backend_support": "FEM CPU/GPU", "problem_ir": "`backend_policy.discretization_hints.fem.order`"},
+      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "finite and strictly positive", "meaning": "relative algebraic tolerance", "backend_support": "FEM CPU/GPU", "problem_ir": "`demag_solver_policy.rtol`"},
+      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "integer greater than or equal to $1$", "meaning": "Krylov iteration ceiling", "backend_support": "FEM CPU/GPU", "problem_ir": "`demag_solver_policy.max_iterations`"}
+    ]
+  }
+}

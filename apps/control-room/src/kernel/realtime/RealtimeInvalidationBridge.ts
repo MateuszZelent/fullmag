@@ -19,6 +19,7 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
@@ -39,6 +40,7 @@ import {
   MODEL_SCENE_PATH,
   SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
@@ -59,6 +61,11 @@ import {
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
+const PLANAR_FIELD_RESOURCE_PREFIX = DATA_PLANAR_FIELD_META_PATH.slice(
+  0,
+  DATA_PLANAR_FIELD_META_PATH.indexOf("{quantity_id}"),
+);
+const PLANAR_MONITOR_SEGMENT = "/planar-monitors/";
 
 interface RealtimeResourceEvent {
   resource_key?: string;
@@ -424,6 +431,18 @@ export class RealtimeInvalidationBridge {
         const recommendedFetch = change.recommended_fetch;
         const fieldSampleChange =
           change.resource === "fields" && change.resource_id === "samples";
+        const planarFieldChange = change.resource === "planar_fields";
+        const scalarChange = change.resource === "scalars";
+
+        if (scalarChange) {
+          this.queuePrefixInvalidation(
+            resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
+            dependentResourceRevision(
+              recommendedFetch ?? "scalars",
+              change.revision,
+            ),
+          );
+        }
 
         if (recommendedFetch && shouldInvalidateSessionStatus(recommendedFetch)) {
           statusRevision = latestRevision(
@@ -431,7 +450,25 @@ export class RealtimeInvalidationBridge {
             dependentResourceRevision(recommendedFetch, change.revision),
           );
         }
-        if (fieldSampleChange) {
+        if (planarFieldChange) {
+          const revision = fieldSamplesInvalidationRevision(change);
+          this.queueMatchingInvalidation((resourceKey) => {
+            if (
+              !resourceKey.includes(PLANAR_FIELD_RESOURCE_PREFIX) ||
+              !resourceKey.includes(PLANAR_MONITOR_SEGMENT)
+            ) {
+              return false;
+            }
+            return (
+              !change.quantity_ids?.length ||
+              change.quantity_ids.some((quantityId) =>
+                resourceKey.includes(
+                  `${PLANAR_FIELD_RESOURCE_PREFIX}${quantityId}${PLANAR_MONITOR_SEGMENT}`,
+                ),
+              )
+            );
+          }, revision);
+        } else if (fieldSampleChange) {
           const fieldSampleRevision = fieldSamplesInvalidationRevision(change);
           const exactFieldResource = change.recommended_fetch
             ? parseCanonicalFieldVectorResourceKey(change.recommended_fetch)
@@ -452,6 +489,14 @@ export class RealtimeInvalidationBridge {
               fieldSampleRevision,
               "broad",
             );
+            if (
+              !change.quantity_ids?.length ||
+              change.quantity_ids.some(
+                (quantityId) => resolveCanonicalQuantityId(quantityId) === "m",
+              )
+            ) {
+              this.queueMagnetizationFieldDependents(fieldSampleRevision);
+            }
           } else {
             this.recordFieldInvalidation("broad");
             for (const quantityId of change.quantity_ids) {

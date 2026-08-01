@@ -12,7 +12,9 @@ use fullmag_engine::{
     ExchangeLlgState, FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
+use fullmag_fdm_demag::{
+    compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
+};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
@@ -22,7 +24,7 @@ use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -52,6 +54,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     crate::fdm::validate_multilayer_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -85,7 +88,13 @@ pub(crate) fn execute_reference_fdm_multilayer(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let timestep_policy = crate::resolve_timestep_policy(
+        Some(plan.integrator),
+        plan.fixed_timestep,
+        None,
+        crate::types::TimestepExecutionLane::fdm_cpu(),
+    )?;
+    let dt = timestep_policy.initial_dt();
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
@@ -104,6 +113,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         cuda_runtime_version: None,
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
@@ -113,9 +123,13 @@ pub(crate) fn execute_reference_fdm_multilayer(
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
+        timestep_policy: Some(timestep_policy),
+        fdm_multilayer_transfer_telemetry: None,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
+        mfem_version: None,
+        hypre_version: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
@@ -180,6 +194,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut completion_metrics = crate::relaxation::RelaxationCompletionMetrics::default();
     let mut cancelled = false;
     let mut paused = false;
@@ -228,7 +243,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
             let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,
@@ -256,16 +271,9 @@ pub(crate) fn execute_reference_fdm_multilayer(
         }
 
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
-        completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: Some(latest_stats.max_torque_Apm),
-            accepted_energy_plateau_range_j: energy_plateau_range,
-            steps: step_count,
-            relaxation_time_s: Some(latest_stats.time),
-            numerical_stagnation: false,
-        };
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &latest_stats,
                     energy_plateau_range,
@@ -274,6 +282,14 @@ pub(crate) fn execute_reference_fdm_multilayer(
                     pure_damping_relax,
                 )
         });
+        completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: Some(latest_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
+            accepted_energy_plateau_range_j: energy_plateau_range,
+            steps: step_count,
+            relaxation_time_s: Some(latest_stats.time),
+            numerical_stagnation: false,
+        };
         if stop_for_relaxation {
             break;
         }
@@ -402,10 +418,15 @@ fn build_contexts_and_states(
                         axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
                 }),
-                cubic_anisotropy: layer.material.cubic_anisotropy_kc1.map(|kc1| {
-                    CubicAnisotropyConfig {
-                        kc1,
+                cubic_anisotropy: layer
+                    .material
+                    .cubic_anisotropy_kc1
+                    .or(layer.material.cubic_anisotropy_kc2)
+                    .or(layer.material.cubic_anisotropy_kc3)
+                    .map(|_| CubicAnisotropyConfig {
+                        kc1: layer.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                         kc2: layer.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                        kc3: layer.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                         axis1: layer
                             .material
                             .cubic_anisotropy_axis1
@@ -414,8 +435,7 @@ fn build_contexts_and_states(
                             .material
                             .cubic_anisotropy_axis2
                             .unwrap_or([0.0, 1.0, 0.0]),
-                    }
-                }),
+                    }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
@@ -446,12 +466,10 @@ fn build_contexts_and_states(
                 problem.demag_image_counts = ic;
             }
         }
-        problem.set_demag_boundary(
-            crate::fdm::resolve_fdm_demag_boundary_for_periodicity(
-                plan.periodicity.as_ref(),
-                plan.enable_demag,
-            )?,
-        );
+        problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary_for_periodicity(
+            plan.periodicity.as_ref(),
+            plan.enable_demag,
+        )?);
         let state = problem
             .new_state(layer.initial_magnetization.clone())
             .map_err(|error| RunError {
@@ -475,9 +493,9 @@ fn build_contexts_and_states(
                 plan.periodicity
                     .as_ref()
                     .map(|periodicity| {
-                        periodicity.axes.map(|axis| {
-                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
-                        })
+                        periodicity
+                            .axes
+                            .map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
                     })
                     .unwrap_or([false; 3]),
             ),
@@ -936,45 +954,45 @@ mod tests {
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
         let layers = vec![
-                FdmLayerPlanIR {
-                    magnet_name: "free".to_string(),
-                    native_grid: [4, 4, 1],
-                    native_cell_size: [2e-9, 2e-9, 1e-9],
-                    native_origin: [-4e-9, -4e-9, 0.0],
-                    native_active_mask: None,
-                    initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
-                    material: FdmMaterialIR {
-                        name: "Py".to_string(),
-                        saturation_magnetisation: 800e3,
-                        exchange_stiffness: 13e-12,
-                        damping: 0.1,
-                        ..Default::default()
-                    },
-                    convolution_grid: [4, 4, 1],
-                    convolution_cell_size: [2e-9, 2e-9, 1e-9],
-                    convolution_origin: [-4e-9, -4e-9, 0.0],
-                    transfer_kind: "identity".to_string(),
+            FdmLayerPlanIR {
+                magnet_name: "free".to_string(),
+                native_grid: [4, 4, 1],
+                native_cell_size: [2e-9, 2e-9, 1e-9],
+                native_origin: [-4e-9, -4e-9, 0.0],
+                native_active_mask: None,
+                initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
+                material: FdmMaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.1,
+                    ..Default::default()
                 },
-                FdmLayerPlanIR {
-                    magnet_name: "ref".to_string(),
-                    native_grid: [4, 4, 1],
-                    native_cell_size: [2e-9, 2e-9, 1e-9],
-                    native_origin: [-4e-9, -4e-9, 3e-9],
-                    native_active_mask: None,
-                    initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
-                    material: FdmMaterialIR {
-                        name: "Py".to_string(),
-                        saturation_magnetisation: 800e3,
-                        exchange_stiffness: 13e-12,
-                        damping: 0.1,
-                        ..Default::default()
-                    },
-                    convolution_grid: [4, 4, 1],
-                    convolution_cell_size: [2e-9, 2e-9, 1e-9],
-                    convolution_origin: [-4e-9, -4e-9, 3e-9],
-                    transfer_kind: "identity".to_string(),
+                convolution_grid: [4, 4, 1],
+                convolution_cell_size: [2e-9, 2e-9, 1e-9],
+                convolution_origin: [-4e-9, -4e-9, 0.0],
+                transfer_kind: "identity".to_string(),
+            },
+            FdmLayerPlanIR {
+                magnet_name: "ref".to_string(),
+                native_grid: [4, 4, 1],
+                native_cell_size: [2e-9, 2e-9, 1e-9],
+                native_origin: [-4e-9, -4e-9, 3e-9],
+                native_active_mask: None,
+                initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
+                material: FdmMaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.1,
+                    ..Default::default()
                 },
-            ];
+                convolution_grid: [4, 4, 1],
+                convolution_cell_size: [2e-9, 2e-9, 1e-9],
+                convolution_origin: [-4e-9, -4e-9, 3e-9],
+                transfer_kind: "identity".to_string(),
+            },
+        ];
         let mut plan = FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
@@ -1026,6 +1044,27 @@ mod tests {
             .expect("test certificate should be valid"),
         );
         plan
+    }
+
+    #[test]
+    fn direct_cpu_multilayer_entry_requires_fixed_timestep_for_every_integrator() {
+        for integrator in [
+            IntegratorChoice::Heun,
+            IntegratorChoice::Rk4,
+            IntegratorChoice::Rk23,
+            IntegratorChoice::Rk45,
+            IntegratorChoice::Abm3,
+        ] {
+            let mut plan = make_plan(false);
+            plan.integrator = integrator;
+            plan.fixed_timestep = None;
+            let error =
+                execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None).unwrap_err();
+            assert!(
+                error.message.contains("explicit fixed_timestep"),
+                "{integrator:?} must fail closed without fixed_timestep"
+            );
+        }
     }
 
     #[test]

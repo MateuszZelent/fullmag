@@ -31,6 +31,7 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_FIELD_META_PATH,
+  DATA_ARTIFACTS_PATH,
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
   DATA_TABLE_COLUMNS_PATH,
@@ -69,6 +70,7 @@ import {
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   BinaryResourceResult,
+  ArtifactResource,
   CommandQueueStatusResource,
   CommandDetailResource,
   CheckpointEntry,
@@ -616,6 +618,30 @@ export function useStageExecutionResource({
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_STAGES_EXECUTION_PATH,
+  });
+}
+
+export function useArtifactsResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.data.artifacts.list({ signal }),
+    [api],
+  );
+
+  return useResource<ArtifactResource[]>({
+    enabled,
+    load,
+    resolveRevision: (artifacts) => artifacts
+      .map((artifact) => {
+        const autosave = artifact.stage_autosave;
+        return autosave
+          ? `${artifact.path}:${autosave.stages.map((stage) => `${stage.stage_id}:${stage.status}:${stage.table_sample_count}:${stage.field_sample_count}`).join(",")}`
+          : `${artifact.path}:${artifact.kind}`;
+      })
+      .join("|"),
+    resourceKey: DATA_ARTIFACTS_PATH,
   });
 }
 
@@ -1751,6 +1777,22 @@ export function resolveFieldMetaResourceKeyWithComponent(
   return resolveFieldMetaResourceKey(quantityId, { component });
 }
 
+export function fieldMetaFreshnessRevision(
+  data: FieldMetaResource | null,
+): string | null {
+  if (!data) return null;
+  return [
+    data.field_revision,
+    data.state,
+    data.source_revision,
+    data.source_step,
+    data.stale_by_steps,
+    data.materialized_at_unix_ms,
+    data.materialization_wall_time_ns,
+    data.materialization_error ?? "",
+  ].join(":");
+}
+
 export function useFieldMetaResource({
   enabled = true,
   component = null,
@@ -1796,7 +1838,7 @@ export function useFieldMetaResource({
   return useResource<FieldMetaResource | null>({
     enabled,
     load,
-    resolveRevision: (data) => data?.field_revision ?? null,
+    resolveRevision: fieldMetaFreshnessRevision,
     resourceKey,
   });
 }
@@ -1969,6 +2011,7 @@ export function useTableRowsBinaryResource(
     cursor,
     decimation,
     enabled = true,
+    pauseLoad = false,
     fromRow,
     fromT,
     includeTail,
@@ -1976,7 +2019,7 @@ export function useTableRowsBinaryResource(
     targetPoints,
     toRow,
     toT,
-  }: TableRowsQuery & { enabled?: boolean } = {},
+  }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean } = {},
 ) {
   const { api } = useKernel();
   const resourceKey = `${tableRowsResourceKey(tableId, {
@@ -2031,6 +2074,7 @@ export function useTableRowsBinaryResource(
     enabled,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
+    pauseLoad,
     resolveRevision: (data) =>
       data?.status === "ready" ? data.data.revision : null,
     resourceKey,

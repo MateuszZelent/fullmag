@@ -187,9 +187,112 @@ function DropdownMenuSeparator({
 DropdownMenuSeparator.displayName =
   DropdownMenuPrimitive.Separator.displayName;
 
+/* ── Extended dropdown items ── */
+
+interface DropdownMenuSliderItemProps {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (value: number) => void;
+  className?: string;
+}
+
+function DropdownMenuSliderItem({
+  label,
+  value,
+  min = 0,
+  max = 100,
+  step = 1,
+  onChange,
+  className,
+}: DropdownMenuSliderItemProps) {
+  return (
+    <div
+      className={cn("fm-dropdown-slider", className)}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="fm-dropdown-slider__label">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="fm-dropdown-slider__input"
+      />
+      <span className="fm-dropdown-slider__value">{value}</span>
+    </div>
+  );
+}
+
+interface DropdownMenuColorItemProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}
+
+function DropdownMenuColorItem({
+  label,
+  value,
+  onChange,
+  className,
+}: DropdownMenuColorItemProps) {
+  return (
+    <div
+      className={cn("fm-dropdown-color", className)}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="fm-dropdown-color__label">{label}</span>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="fm-dropdown-color__input"
+      />
+    </div>
+  );
+}
+
+interface DropdownMenuTextItemProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+}
+
+function DropdownMenuTextItem({
+  label,
+  value,
+  onChange,
+  placeholder,
+  className,
+}: DropdownMenuTextItemProps) {
+  return (
+    <div
+      className={cn("fm-dropdown-text", className)}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="fm-dropdown-text__label">{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="fm-dropdown-text__input"
+      />
+    </div>
+  );
+}
+
 export {
   DropdownMenu,
   DropdownMenuCheckboxItem,
+  DropdownMenuColorItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -198,8 +301,10 @@ export {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSliderItem,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
+  DropdownMenuTextItem,
   DropdownMenuTrigger,
 };

@@ -3,7 +3,7 @@
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::quantities::normalized_quantity_name;
-use crate::scalar_metrics::{apply_average_m_to_step_stats, scalar_outputs_request_average_m};
+use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{advance_due_schedules, is_due, same_time, OutputSchedule};
 use crate::types::{FieldSnapshot, RunError, StepStats};
 
@@ -42,6 +42,7 @@ pub(crate) fn record_cuda_due_outputs(
     backend: &NativeFdmBackend,
     cell_count: usize,
     stats: &StepStats,
+    magnetization: Option<&[[f64; 3]]>,
     scalar_schedules: &mut [OutputSchedule],
     field_schedules: &mut [OutputSchedule],
     steps: &mut Vec<StepStats>,
@@ -51,8 +52,15 @@ pub(crate) fn record_cuda_due_outputs(
         .iter()
         .any(|schedule| is_due(stats.time, schedule.next_time));
     if scalar_due {
-        artifacts.record_scalar(stats)?;
-        steps.push(stats.clone());
+        let mut sampled_stats = stats.clone();
+        if let Some(magnetization) = magnetization {
+            apply_average_m_to_step_stats(&mut sampled_stats, magnetization);
+        } else {
+            let magnetization = backend.copy_m(cell_count)?;
+            apply_average_m_to_step_stats(&mut sampled_stats, &magnetization);
+        }
+        artifacts.record_scalar(&sampled_stats)?;
+        steps.push(sampled_stats);
         advance_due_schedules(scalar_schedules, stats.time);
     }
 
@@ -101,13 +109,12 @@ pub(crate) fn record_cuda_final_outputs(
             .unwrap_or(true);
     if need_scalar {
         let mut final_stats = latest_stats.clone();
-        if scalar_outputs_request_average_m(scalar_schedules) {
-            let magnetization = backend.copy_m(cell_count)?;
-            apply_average_m_to_step_stats(&mut final_stats, &magnetization);
-        }
+        let magnetization = backend.copy_m(cell_count)?;
+        apply_average_m_to_step_stats(&mut final_stats, &magnetization);
         artifacts.record_scalar(&final_stats)?;
         steps.push(final_stats);
     }
+    let _ = scalar_schedules;
 
     let requested_field_names = field_schedules
         .iter()

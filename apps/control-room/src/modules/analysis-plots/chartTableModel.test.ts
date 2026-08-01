@@ -26,7 +26,7 @@ describe("chartTableModel", () => {
       "my",
       "mz",
       "e_total",
-      "max_torque",
+      "max_torque_Apm",
     ]);
     expect(
       buildTableRowsQuery({
@@ -78,6 +78,16 @@ describe("chartTableModel", () => {
       fromT: 1e-12,
       toT: 5e-12,
     });
+  });
+
+  it("keeps an arbitrary-quantity zoom local instead of mislabelling it as a row range", () => {
+    expect(
+      tableRowsVisibleRangeQuery({
+        fromValue: -0.5,
+        toValue: 0.5,
+        xAxisId: "mx",
+      }),
+    ).toBeNull();
   });
 
   it("extracts a finite ECharts dataZoom value range", () => {

@@ -14,6 +14,8 @@ use fullmag_fdm_sys as ffi;
 #[cfg(feature = "cuda")]
 use crate::derived_fields::compute_torque_field;
 #[cfg(feature = "cuda")]
+use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
+#[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
 };
@@ -22,9 +24,7 @@ use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
-use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
-#[cfg(feature = "cuda")]
-use crate::scalar_metrics::single_object_scalars;
+use crate::scalar_metrics::{apply_average_m_to_step_stats, single_object_scalars};
 #[cfg(any(feature = "cuda", test))]
 use crate::types::RunError;
 #[cfg(feature = "cuda")]
@@ -50,6 +50,134 @@ pub(crate) fn is_cuda_available() -> bool {
     #[cfg(not(feature = "cuda"))]
     {
         false
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn validate_native_adaptive_policy(
+    integrator: fullmag_ir::IntegratorChoice,
+    adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+) -> Result<(), RunError> {
+    let Some(policy) = adaptive else {
+        return Ok(());
+    };
+    if !matches!(
+        integrator,
+        fullmag_ir::IntegratorChoice::Rk23 | fullmag_ir::IntegratorChoice::Rk45
+    ) {
+        return Err(RunError {
+            message: "adaptive CUDA FDM requires RK23 or RK45".to_string(),
+        });
+    }
+    match policy.tolerance_mode {
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError if policy.rtol != 0.0 => {
+            return Err(RunError {
+                message: "maximum-error CUDA FDM requires rtol=0".to_string(),
+            })
+        }
+        fullmag_ir::AdaptiveToleranceModeIR::Advanced
+            if policy.atol <= 0.0 && policy.rtol <= 0.0 =>
+        {
+            return Err(RunError {
+                message: "advanced CUDA FDM requires positive atol or rtol".to_string(),
+            })
+        }
+        _ => {}
+    }
+    if policy.max_spin_rotation.is_some() || policy.norm_tolerance.is_some() {
+        return Err(RunError { message: "adaptive CUDA FDM norm/rotation guards are transported but unsupported until native enforcement is implemented".to_string() });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn native_time_policy(
+    adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+) -> Result<ffi::fullmag_fdm_time_policy_desc_v2, RunError> {
+    let Some(policy) = adaptive else {
+        return Ok(ffi::fullmag_fdm_time_policy_desc_v2 {
+            adaptive_enabled: 0,
+            adaptive_tolerance_mode:
+                ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_MAX_ERROR,
+            adaptive_atol: 0.0,
+            adaptive_rtol: 0.0,
+            adaptive_dt_min: 0.0,
+            adaptive_dt_max: 0.0,
+            adaptive_safety: 0.0,
+            adaptive_growth_limit: 0.0,
+            adaptive_shrink_limit: 0.0,
+            has_adaptive_max_spin_rotation: 0,
+            adaptive_max_spin_rotation: 0.0,
+            has_adaptive_norm_tolerance: 0,
+            adaptive_norm_tolerance: 0.0,
+        });
+    };
+    let mode = match policy.tolerance_mode {
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError => {
+            ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_MAX_ERROR
+        }
+        fullmag_ir::AdaptiveToleranceModeIR::Advanced => {
+            ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_ADVANCED
+        }
+    };
+    Ok(ffi::fullmag_fdm_time_policy_desc_v2 {
+        adaptive_enabled: 1,
+        adaptive_tolerance_mode: mode,
+        adaptive_atol: policy.atol,
+        adaptive_rtol: policy.rtol,
+        adaptive_dt_min: policy.dt_min,
+        adaptive_dt_max: policy.dt_max.ok_or_else(|| RunError {
+            message: "adaptive CUDA FDM requires explicit dt_max".to_string(),
+        })?,
+        adaptive_safety: policy.safety,
+        adaptive_growth_limit: policy.growth_limit,
+        adaptive_shrink_limit: policy.shrink_limit,
+        has_adaptive_max_spin_rotation: i32::from(policy.max_spin_rotation.is_some()),
+        adaptive_max_spin_rotation: policy.max_spin_rotation.unwrap_or(0.0),
+        has_adaptive_norm_tolerance: i32::from(policy.norm_tolerance.is_some()),
+        adaptive_norm_tolerance: policy.norm_tolerance.unwrap_or(0.0),
+    })
+}
+
+#[cfg(test)]
+mod adaptive_policy_validation_tests {
+    use super::*;
+    fn policy(mode: fullmag_ir::AdaptiveToleranceModeIR) -> fullmag_ir::AdaptiveTimeStepIR {
+        fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: mode,
+            atol: 1e-6,
+            rtol: 0.0,
+            dt_initial: Some(1e-15),
+            dt_min: 1e-16,
+            dt_max: Some(1e-14),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        }
+    }
+    #[test]
+    fn incompatible_adaptive_cuda_policies_fail_before_ffi() {
+        assert!(validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Heun,
+            Some(&policy(fullmag_ir::AdaptiveToleranceModeIR::MaxError))
+        )
+        .is_err());
+        let absolute = policy(fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&absolute))
+            .unwrap();
+        let mut relative = absolute.clone();
+        relative.atol = 0.0;
+        relative.rtol = 1e-4;
+        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&relative))
+            .unwrap();
+        relative.rtol = 0.0;
+        assert!(validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Rk45,
+            Some(&relative)
+        )
+        .is_err());
     }
 }
 
@@ -104,6 +232,7 @@ fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunEr
 #[cfg(feature = "cuda")]
 pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
+    cell_count: usize,
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
     precession_enabled: bool,
@@ -279,7 +408,10 @@ impl NativeFdmBackend {
                         .unwrap_or(0.0),
                     uniaxial_anisotropy_k2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                     anisotropy_axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
-                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some() {
+                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some()
+                        || layer.material.cubic_anisotropy_kc2.is_some()
+                        || layer.material.cubic_anisotropy_kc3.is_some()
+                    {
                         1
                     } else {
                         0
@@ -429,8 +561,14 @@ impl NativeFdmBackend {
         }
 
         let first_material = plan.layers.first().map(|layer| &layer.material);
+        let cell_count = plan
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.len())
+            .sum();
         Ok(Self {
             handle,
+            cell_count,
             precision: plan.precision,
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -438,6 +576,11 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        validate_native_adaptive_policy(
+            plan.integrator
+                .unwrap_or(fullmag_ir::IntegratorChoice::Heun),
+            plan.adaptive_timestep.as_ref(),
+        )?;
         validate_single_grid_budget(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         if plan.material.ms_field.is_some()
@@ -525,9 +668,7 @@ impl NativeFdmBackend {
                     plan.cell_size[2],
                     plan.periodicity
                         .as_ref()
-                        .map(|pbc| {
-                            [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)]
-                        })
+                        .map(|pbc| [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)])
                         .unwrap_or([false, false, false]),
                     image_counts,
                 ))
@@ -678,7 +819,10 @@ impl NativeFdmBackend {
             ku1_field: std::ptr::null(),
             ku2_field: std::ptr::null(),
 
-            has_cubic_anisotropy: if plan.material.cubic_anisotropy_kc1.is_some() {
+            has_cubic_anisotropy: if plan.material.cubic_anisotropy_kc1.is_some()
+                || plan.material.cubic_anisotropy_kc2.is_some()
+                || plan.material.cubic_anisotropy_kc3.is_some()
+            {
                 1
             } else {
                 0
@@ -729,6 +873,11 @@ impl NativeFdmBackend {
             mel_strain: plan.mel_uniform_strain.unwrap_or([0.0; 6]),
 
             temperature: plan.temperature.unwrap_or(0.0),
+            thermal_seed: plan
+                .thermal_seed_config
+                .as_ref()
+                .and_then(|config| config.seed)
+                .unwrap_or(0),
 
             demag_kernel_xx_spectrum: demag_kernel_spectra
                 .as_ref()
@@ -887,15 +1036,21 @@ impl NativeFdmBackend {
                 .periodicity
                 .as_ref()
                 .map_or(0, |p| if p.is_periodic(2) { 1 } else { 0 }),
-            adaptive_max_error: adaptive.map_or(0.0, |cfg| cfg.atol),
-            adaptive_dt_min: adaptive.map_or(0.0, |cfg| cfg.dt_min),
-            adaptive_dt_max: adaptive.and_then(|cfg| cfg.dt_max).unwrap_or(0.0),
-            adaptive_headroom: adaptive.map_or(0.0, |cfg| cfg.safety),
+            adaptive_max_error: 0.0,
+            adaptive_dt_min: 0.0,
+            adaptive_dt_max: 0.0,
+            adaptive_headroom: 0.0,
             stats_mode: ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
             stats_stride: 1,
         };
 
-        let handle = unsafe { ffi::fullmag_fdm_backend_create(&plan_desc) };
+        let time_policy = native_time_policy(adaptive)?;
+        let plan_desc_v2 = ffi::fullmag_fdm_plan_desc_v2 {
+            base: plan_desc,
+            time_policy,
+        };
+
+        let handle = unsafe { ffi::fullmag_fdm_backend_create_time_policy_v2(&plan_desc_v2) };
         if handle.is_null() {
             return Err(RunError {
                 message: "CUDA FDM backend_create returned null".to_string(),
@@ -912,6 +1067,7 @@ impl NativeFdmBackend {
 
         Ok(Self {
             handle,
+            cell_count: m_flat.len() / 3,
             precision: plan.precision,
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -979,7 +1135,8 @@ impl NativeFdmBackend {
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
-            e_ani: stats.anisotropy_energy_joules,
+            e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
+            e_dmi: stats.dmi_energy_joules,
             e_total: stats.total_energy_joules,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
@@ -1001,6 +1158,13 @@ impl NativeFdmBackend {
         };
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(Some(step_stats))
+    }
+
+    pub fn apply_average_m_to_step_stats(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        let magnetization = self.copy_m(self.cell_count)?;
+        apply_average_m_to_step_stats(stats, &magnetization);
+        stats.per_object_scalars = single_object_scalars("free", stats);
+        Ok(())
     }
 
     /// Execute one time step.
@@ -2070,6 +2234,32 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_cuda_preserves_complete_adaptive_policy_before_ffi() {
+        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+            atol: 1e-6,
+            rtol: 0.0,
+            dt_initial: Some(1e-15),
+            dt_min: 1e-16,
+            dt_max: Some(1e-14),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        };
+        let policy = native_time_policy(Some(&adaptive)).expect("complete policy is representable");
+        assert_eq!(policy.adaptive_enabled, 1);
+        assert_eq!(policy.adaptive_atol, 1e-6);
+        assert_eq!(policy.adaptive_rtol, 0.0);
+        assert_eq!(policy.adaptive_dt_min, 1e-16);
+        assert_eq!(policy.adaptive_dt_max, 1e-14);
+        assert_eq!(policy.adaptive_safety, 0.9);
+        assert_eq!(policy.adaptive_growth_limit, 2.0);
+        assert_eq!(policy.adaptive_shrink_limit, 0.2);
+    }
+
+    #[test]
     fn native_fdm_region_exchange_pairs_reject_invalid_exchange() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.region_mask = vec![1, 2];
@@ -2082,8 +2272,10 @@ mod tests {
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {
         FdmPlanIR {
+            origin_m: [0.0, 0.0, 0.0],
             grid: GridDimensions { cells: [3, 3, 1] },
             cell_size: [5e-9, 5e-9, 10e-9],
+            grid_certificate: None,
             region_mask: vec![0; 9],
             active_mask: Some(vec![true, true, true, true, false, true, true, true, false]),
             initial_magnetization: vec![
@@ -2119,8 +2311,12 @@ mod tests {
             enable_exchange: true,
             enable_demag,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
+            field_drives: Vec::new(),
+            regional_field_drive_bases: Vec::new(),
+            time_stage: Default::default(),
             inter_region_exchange: vec![],
             periodicity: None,
+            resolved_periodic_images: None,
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
@@ -2152,6 +2348,7 @@ mod tests {
             oersted_time_dep_t_off: 0.0,
             oersted_realization: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
@@ -2181,10 +2378,12 @@ mod tests {
         }
 
         FdmPlanIR {
+            origin_m: [0.0, 0.0, 0.0],
             grid: GridDimensions {
                 cells: [nx as u32, ny as u32, nz as u32],
             },
             cell_size: [4e-9, 4e-9, 10e-9],
+            grid_certificate: None,
             region_mask: vec![0; nx * ny * nz],
             active_mask: None,
             initial_magnetization,
@@ -2206,8 +2405,12 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             external_field: Some([2.0e3, -1.0e3, 5.0e2]),
+            field_drives: Vec::new(),
+            regional_field_drive_bases: Vec::new(),
+            time_stage: Default::default(),
             inter_region_exchange: vec![],
             periodicity: None,
+            resolved_periodic_images: None,
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
@@ -2239,6 +2442,7 @@ mod tests {
             oersted_time_dep_t_off: 0.0,
             oersted_realization: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
@@ -2252,8 +2456,10 @@ mod tests {
 
     fn make_relaxation_precession_test_plan() -> FdmPlanIR {
         FdmPlanIR {
+            origin_m: [0.0, 0.0, 0.0],
             grid: GridDimensions { cells: [1, 1, 1] },
             cell_size: [5e-9, 5e-9, 5e-9],
+            grid_certificate: None,
             region_mask: vec![0],
             active_mask: None,
             initial_magnetization: vec![[1.0, 0.0, 0.0]],
@@ -2283,8 +2489,12 @@ mod tests {
             enable_exchange: false,
             enable_demag: false,
             external_field: Some([0.0, 0.0, 8.0e5]),
+            field_drives: Vec::new(),
+            regional_field_drive_bases: Vec::new(),
+            time_stage: Default::default(),
             inter_region_exchange: vec![],
             periodicity: None,
+            resolved_periodic_images: None,
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
@@ -2316,6 +2526,7 @@ mod tests {
             oersted_time_dep_t_off: 0.0,
             oersted_realization: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
@@ -2514,10 +2725,15 @@ mod tests {
                         axis: plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
                 }),
-                cubic_anisotropy: plan.material.cubic_anisotropy_kc1.map(|kc1| {
-                    CubicAnisotropyConfig {
-                        kc1,
+                cubic_anisotropy: plan
+                    .material
+                    .cubic_anisotropy_kc1
+                    .or(plan.material.cubic_anisotropy_kc2)
+                    .or(plan.material.cubic_anisotropy_kc3)
+                    .map(|_| CubicAnisotropyConfig {
+                        kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                         kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                        kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                         axis1: plan
                             .material
                             .cubic_anisotropy_axis1
@@ -2526,8 +2742,7 @@ mod tests {
                             .material
                             .cubic_anisotropy_axis2
                             .unwrap_or([0.0, 1.0, 0.0]),
-                    }
-                }),
+                    }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
@@ -3475,6 +3690,35 @@ mod exact_metric_contract_tests {
         assert!(
             !production_source.contains("approximate_max_torque("),
             "native CUDA stats must never reconstruct equilibrium torque from RHS"
+        );
+    }
+
+    #[test]
+    fn dynamic_native_stats_map_the_same_energy_components_as_snapshot_stats() {
+        let source = include_str!("native.rs");
+        let dynamic_stats = source
+            .split("pub fn step_interruptible")
+            .nth(1)
+            .and_then(|source| source.split("pub fn refresh_multilayer_demag").next())
+            .expect("dynamic native stats implementation");
+
+        assert!(
+            dynamic_stats
+                .contains("e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules"),
+            "dynamic native stats must include cubic anisotropy in e_ani"
+        );
+        assert!(
+            dynamic_stats.contains("e_dmi: stats.dmi_energy_joules"),
+            "dynamic native stats must map the native DMI energy"
+        );
+        let average_stats = source
+            .split("pub fn apply_average_m_to_step_stats(")
+            .nth(1)
+            .and_then(|source| source.split("    /// Execute one time step.").next())
+            .expect("native average-m helper");
+        assert!(
+            average_stats.contains("apply_average_m_to_step_stats(stats, &magnetization)"),
+            "native average-m helper must publish averaged magnetization components"
         );
     }
 }

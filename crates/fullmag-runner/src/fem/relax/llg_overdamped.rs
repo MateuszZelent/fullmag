@@ -26,15 +26,30 @@ use crate::interactive_runtime::{
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "fem-gpu")]
-use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
-use crate::types::ExecutionProvenance;
+use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 #[cfg(feature = "fem-gpu")]
-use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
+use crate::schedules::{advance_due_schedules, is_due, OutputSchedule};
+#[cfg(feature = "fem-gpu")]
+use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns};
+use crate::types::{ExecutionProvenance, RelaxationControllerPolicyProvenance};
+#[cfg(feature = "fem-gpu")]
+use crate::types::{FieldSnapshot, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 #[cfg(feature = "fem-gpu")]
-use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
+use super::preview::FemPreviewHandoff;
 #[cfg(feature = "fem-gpu")]
 use super::scalars::ensure_fem_object_scalars;
+
+fn convergence_controller_policy() -> RelaxationControllerPolicyProvenance {
+    RelaxationControllerPolicyProvenance {
+        policy_id: "relaxation_convergence_v1".to_string(),
+        torque_confirmation_samples: 3,
+        energy_increase_relative_tolerance: 1.0e-10,
+        energy_increase_absolute_tolerance_j: 1.0e-30,
+        tightening_factor: std::f64::consts::FRAC_1_SQRT_2,
+        max_error_floor: 1.0e-9,
+    }
+}
 
 // ── Algorithm predicate ───────────────────────────────────────────────────────
 
@@ -99,6 +114,9 @@ pub fn fill_provenance(provenance: &mut ExecutionProvenance, plan: &FemPlanIR) {
     if pure_damping {
         provenance.requested_energy_minimizer = Some("llg_overdamped".to_string());
         provenance.resolved_energy_minimizer = Some("llg_overdamped".to_string());
+        if let Some(timestep_policy) = provenance.timestep_policy.as_mut() {
+            timestep_policy.relaxation_controller = Some(convergence_controller_policy());
+        }
     }
 }
 
@@ -149,6 +167,7 @@ pub(crate) struct LlgOverdampedExecution {
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
+    pub(crate) preview_handoff: FemPreviewHandoff,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -156,6 +175,7 @@ pub(crate) fn execute_llg_overdamped(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     until_seconds: f64,
     time_event_schedule_s: &[f64],
     node_count: usize,
@@ -166,6 +186,7 @@ pub(crate) fn execute_llg_overdamped(
     artifacts: &mut ArtifactRecorder,
     steps: &mut Vec<StepStats>,
     energy_plateau: &mut RelaxationEnergyPlateauWindow,
+    field_schedules: &mut [OutputSchedule],
     mut last_preview_revision: Option<u64>,
 ) -> Result<LlgOverdampedExecution, RunError> {
     let mut latest_stats: Option<StepStats> = None;
@@ -173,11 +194,10 @@ pub(crate) fn execute_llg_overdamped(
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_cached_preview_revision = last_preview_revision;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
-    let mut live_preview_handoff = FemLivePreviewHandoff::default();
-    let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
-    let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
+    let mut preview_handoff = FemPreviewHandoff::default();
     let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
         &plan.field_drives,
         plan.time_stage.start_time_s,
@@ -226,12 +246,21 @@ pub(crate) fn execute_llg_overdamped(
                     let preview_targets_global_scalar =
                         display_is_global_scalar(&display_selection);
                     let mut live_stats = current_stats.clone();
+                    let preview_callback_cpu_started = current_thread_cpu_time_ns();
+                    preview_handoff.reset_timings();
                     let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        live_preview_handoff.request_preview(backend, &request, node_count)?
+                        preview_handoff.request_preview(
+                            backend,
+                            &request,
+                            node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )?
                     } else {
-                        live_preview_handoff.poll_completed()?
+                        preview_handoff.poll_active()?
                     };
                     live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
                     let cached_preview_due = cached_display_refresh_due(
@@ -242,30 +271,52 @@ pub(crate) fn execute_llg_overdamped(
                     );
                     let cached_start = std::time::Instant::now();
                     let cached_preview_fields = if cached_preview_due {
-                        cached_preview_handoff.request_cached_previews(
+                        preview_handoff.request_cached_previews(
                             backend,
                             engine,
                             &display_selection,
                             plan,
                             node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
                         )?
                     } else {
-                        cached_preview_handoff.poll_completed()?
+                        preview_handoff.poll_cached(
+                            backend,
+                            node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )?
                     };
+                    let magnetization_payload =
+                        preview_handoff.request_magnetization(node_count, current_stats.step)?;
+                    preview_handoff.dispatch_staged(backend);
+                    live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
+                    live_stats.field_materialization_states =
+                        preview_handoff.materialization_states();
+                    preview_handoff.take_timings().record_into(&mut live_stats);
                     live_stats.cached_preview_wall_time_ns =
                         cached_start.elapsed().as_nanos() as u64;
                     let live_preview_wall_time_ns = live_stats
                         .preview_wall_time_ns
                         .saturating_add(live_stats.cached_preview_wall_time_ns);
-                    let magnetization_payload =
-                        live_magnetization_handoff.request_magnetization(backend, node_count)?;
-                    let (magnetization, field_copy_wall_time_ns, field_copy_bytes) =
-                        match magnetization_payload {
-                            Some((payload, wall_time_ns, bytes)) => {
-                                (Some(payload), wall_time_ns, bytes)
-                            }
-                            None => (None, 0, 0),
-                        };
+                    let field_copy_wall_time_ns = magnetization_payload
+                        .as_ref()
+                        .map_or(0, |payload| payload.materialization_wall_time_ns);
+                    let field_copy_bytes = magnetization_payload
+                        .as_ref()
+                        .map_or(0, |payload| payload.field_copy_bytes);
+                    let magnetization = magnetization_payload.map(|payload| {
+                        live_stats.magnetization_source_step = Some(payload.source_step);
+                        live_stats.magnetization_source_revision = Some(payload.source_revision);
+                        live_stats.magnetization_materialized_at_unix_ms =
+                            Some(payload.materialized_at_unix_ms);
+                        live_stats.magnetization_materialization_wall_time_ns =
+                            Some(payload.materialization_wall_time_ns);
+                        payload.values
+                    });
                     live_stats.field_copy_wall_time_ns = live_stats
                         .field_copy_wall_time_ns
                         .saturating_add(field_copy_wall_time_ns);
@@ -275,10 +326,14 @@ pub(crate) fn execute_llg_overdamped(
                         .wall_time_ns
                         .saturating_add(live_preview_wall_time_ns)
                         .saturating_add(field_copy_wall_time_ns);
+                    live_stats.preview_callback_thread_cpu_time_ns =
+                        elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
+                    live_stats.preview_callback_thread_cpu_started_ns =
+                        preview_callback_cpu_started;
                     let action = (live.on_step)(StepUpdate {
                         stats: live_stats,
                         grid: live.grid,
-                        fem_mesh: (current_stats.step == 0).then_some(FemMeshPayload::from(plan)),
+                        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization,
                         preview_field,
                         cached_preview_fields,
@@ -311,12 +366,14 @@ pub(crate) fn execute_llg_overdamped(
             }
         }
 
+        let preview_schedule_fence_wall_time_ns = preview_handoff.flush_schedule_fence();
         if paused {
             break;
         }
-        if drive_discontinuities.iter().any(|event|
-            (*event - current_time).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
-        ) {
+        if drive_discontinuities
+            .iter()
+            .any(|event| (*event - current_time).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE)
+        {
             backend.invalidate_fsal()?;
         }
         let proposed_dt = dt.min(until_seconds - current_time);
@@ -341,6 +398,10 @@ pub(crate) fn execute_llg_overdamped(
                     .to_string(),
             });
         };
+        stats.preview_schedule_fence_wall_time_ns = preview_schedule_fence_wall_time_ns;
+        stats.wall_time_ns = stats
+            .wall_time_ns
+            .saturating_add(preview_schedule_fence_wall_time_ns);
         ensure_fem_object_scalars(&mut stats, plan);
         current_time = stats.time;
         if !dt_is_fixed {
@@ -363,29 +424,44 @@ pub(crate) fn execute_llg_overdamped(
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
             let mut live_stats = stats.clone();
-            let magnetization = if stats.step % heavy_payload_every == 0 {
-                live_magnetization_handoff.request_magnetization(backend, node_count)?
-            } else {
-                live_magnetization_handoff.poll_completed(node_count)?
-            };
-            let magnetization =
-                if let Some((payload, field_copy_wall_time_ns, field_copy_bytes)) = magnetization {
-                    live_stats.field_copy_wall_time_ns = live_stats
-                        .field_copy_wall_time_ns
-                        .saturating_add(field_copy_wall_time_ns);
-                    live_stats.field_copy_bytes =
-                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);
-                    Some(payload)
-                } else {
-                    None
-                };
+            let preview_callback_cpu_started = current_thread_cpu_time_ns();
+            preview_handoff.reset_timings();
             let preview_start = std::time::Instant::now();
+            let magnetization = if stats.step % heavy_payload_every == 0 {
+                preview_handoff.request_magnetization(node_count, stats.step)?
+            } else {
+                preview_handoff.poll_magnetization()?
+            };
+            let magnetization = if let Some(payload) = magnetization {
+                live_stats.field_copy_wall_time_ns = live_stats
+                    .field_copy_wall_time_ns
+                    .saturating_add(payload.materialization_wall_time_ns);
+                live_stats.field_copy_bytes = live_stats
+                    .field_copy_bytes
+                    .saturating_add(payload.field_copy_bytes);
+                live_stats.magnetization_source_step = Some(payload.source_step);
+                live_stats.magnetization_source_revision = Some(payload.source_revision);
+                live_stats.magnetization_materialized_at_unix_ms =
+                    Some(payload.materialized_at_unix_ms);
+                live_stats.magnetization_materialization_wall_time_ns =
+                    Some(payload.materialization_wall_time_ns);
+                Some(payload.values)
+            } else {
+                None
+            };
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                live_preview_handoff.request_preview(backend, &request, node_count)?
+                preview_handoff.request_preview(
+                    backend,
+                    &request,
+                    node_count,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?
             } else {
-                live_preview_handoff.poll_completed()?
+                preview_handoff.poll_active()?
             };
             live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
             let cached_preview_due = display_selection
@@ -402,13 +478,37 @@ pub(crate) fn execute_llg_overdamped(
             let cached_start = std::time::Instant::now();
             let cached_preview_fields = if cached_preview_due {
                 match display_selection.as_ref() {
-                    Some(selection) => cached_preview_handoff
-                        .request_cached_previews(backend, engine, selection, plan, node_count)?,
-                    None => cached_preview_handoff.poll_completed()?,
+                    Some(selection) => preview_handoff.request_cached_previews(
+                        backend,
+                        engine,
+                        selection,
+                        plan,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )?,
+                    None => preview_handoff.poll_cached(
+                        backend,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )?,
                 }
             } else {
-                cached_preview_handoff.poll_completed()?
+                preview_handoff.poll_cached(
+                    backend,
+                    node_count,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?
             };
+            preview_handoff.dispatch_staged(backend);
+            live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
+            live_stats.field_materialization_states = preview_handoff.materialization_states();
+            preview_handoff.take_timings().record_into(&mut live_stats);
             live_stats.cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
             let live_preview_wall_time_ns = live_stats
                 .preview_wall_time_ns
@@ -417,10 +517,13 @@ pub(crate) fn execute_llg_overdamped(
                 .wall_time_ns
                 .saturating_add(live_preview_wall_time_ns)
                 .saturating_add(live_stats.field_copy_wall_time_ns);
+            live_stats.preview_callback_thread_cpu_time_ns =
+                elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
+            live_stats.preview_callback_thread_cpu_started_ns = preview_callback_cpu_started;
             let action = (live.on_step)(StepUpdate {
                 stats: live_stats,
                 grid: live.grid,
-                fem_mesh: Some(FemMeshPayload::from(plan)),
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
                 preview_field,
                 cached_preview_fields,
@@ -462,6 +565,31 @@ pub(crate) fn execute_llg_overdamped(
             break;
         }
 
+        let due_field_names = field_schedules
+            .iter()
+            .filter(|schedule| is_due(stats.time, schedule.next_time))
+            .map(|schedule| schedule.name.clone())
+            .collect::<Vec<_>>();
+        for name in due_field_names {
+            let metrics = if artifacts.is_streaming() {
+                let snapshot =
+                    backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
+                artifacts.record_native_fem_field_snapshot(snapshot)?
+            } else {
+                let values =
+                    super::snapshots::copy_native_fem_field_snapshot(backend, &name, node_count)?;
+                artifacts.record_field_snapshot(FieldSnapshot {
+                    name,
+                    step: stats.step,
+                    time: stats.time,
+                    solver_dt: stats.dt,
+                    values,
+                })?
+            };
+            apply_artifact_enqueue_metrics(&mut stats, metrics);
+        }
+        advance_due_schedules(field_schedules, stats.time);
+
         let artifact_metrics = artifacts.record_scalar(&stats)?;
         apply_artifact_enqueue_metrics(&mut stats, artifact_metrics);
         steps.push(stats);
@@ -474,7 +602,7 @@ pub(crate) fn execute_llg_overdamped(
                 true
             } else {
                 let max_steps_hit = latest.step >= control.stop.max_steps.unwrap_or(u64::MAX);
-                let converged = relaxation_converged(
+                let converged = torque_confirmation.observe_stats(
                     control,
                     latest,
                     energy_plateau_range,
@@ -541,11 +669,25 @@ pub(crate) fn execute_llg_overdamped(
         backend_completion,
         cancelled,
         paused,
+        preview_handoff,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use super::convergence_controller_policy;
+
+    #[test]
+    fn convergence_controller_policy_is_explicit_and_versioned() {
+        let policy = convergence_controller_policy();
+        assert_eq!(policy.policy_id, "relaxation_convergence_v1");
+        assert_eq!(policy.torque_confirmation_samples, 3);
+        assert_eq!(policy.energy_increase_relative_tolerance, 1.0e-10);
+        assert_eq!(policy.energy_increase_absolute_tolerance_j, 1.0e-30);
+        assert_eq!(policy.tightening_factor, std::f64::consts::FRAC_1_SQRT_2);
+        assert_eq!(policy.max_error_floor, 1.0e-9);
+    }
+
     #[test]
     fn llg_overdamped_does_not_spin_forever_on_interrupted_step() {
         let source = include_str!("llg_overdamped.rs");

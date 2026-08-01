@@ -3,7 +3,7 @@
 import type { HysteresisAngularFamilyResource } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisAngularFamilyInspector({
@@ -14,8 +14,7 @@ export function HysteresisAngularFamilyInspector({
   const pendingCount = series.filter((entry) => entry.points.length === 0).length;
 
   return (
-    <InspectorSection
-      value="hysteresis-angular-family"
+    <InspectorGroup
       title="Angular Family"
       badge={angularFamily ? `${computedCount}/${series.length} computed` : "not available"}
     >
@@ -53,7 +52,7 @@ export function HysteresisAngularFamilyInspector({
           stage yet.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

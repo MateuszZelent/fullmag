@@ -293,17 +293,13 @@ pub fn finite_cylinder_sdf(
     move |x, y, z| {
         let point = [x - center[0], y - center[1], z - center[2]];
         let axial = point[0] * unit[0] + point[1] * unit[1] + point[2] * unit[2];
-        let radial = (point[0] * point[0]
-            + point[1] * point[1]
-            + point[2] * point[2]
+        let radial = (point[0] * point[0] + point[1] * point[1] + point[2] * point[2]
             - axial * axial)
             .max(0.0)
             .sqrt();
         let radial_distance = radial - radius;
         let axial_distance = axial.abs() - 0.5 * height;
-        let outside = (radial_distance.max(0.0).powi(2)
-            + axial_distance.max(0.0).powi(2))
-        .sqrt();
+        let outside = (radial_distance.max(0.0).powi(2) + axial_distance.max(0.0).powi(2)).sqrt();
         let inside = radial_distance.max(axial_distance).min(0.0);
         outside + inside
     }

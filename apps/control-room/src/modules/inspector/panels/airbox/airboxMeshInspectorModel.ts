@@ -24,6 +24,7 @@ export interface AirboxMeshBuildModel {
   buildMode: string | null;
   effectiveAirboxTarget: JsonRecord | null;
   fallbacks: readonly string[];
+  fallbacksPublished: boolean;
   operationStatuses: NonNullable<
     NonNullable<MeshActiveBuildResource["shared_domain_build_report"]>["operation_statuses"]
   >;
@@ -72,6 +73,7 @@ export function buildAirboxMeshBuildModel({
   const reportRecord = asJsonRecord(report?.report);
   const reportStatus = stringField(reportRecord, "status");
   const buildReport = current?.shared_domain_build_report ?? null;
+  const fallbacksPublished = Array.isArray(buildReport?.fallbacks_triggered);
   const phases = boundedItems(current?.mesh_pipeline_status ?? []);
   const operationStatuses = boundedItems(buildReport?.operation_statuses ?? []);
   const fallbacks = boundedItems(buildReport?.fallbacks_triggered ?? []);
@@ -105,6 +107,7 @@ export function buildAirboxMeshBuildModel({
       buildReport?.effective_airbox_target ?? current?.effective_airbox_target,
     ),
     fallbacks: fallbacks.map((fallback) => boundedDisplayText(fallback) ?? ""),
+    fallbacksPublished,
     operationStatuses: operationStatuses.map((operation) => ({
       ...operation,
       kind: boundedDisplayText(operation.kind) ?? "",
@@ -251,7 +254,11 @@ export interface AirboxMeshInspectorModel {
     boundaryFaceCount: number | null;
     elementCount: number | null;
     nodeCount: number | null;
+    pyramid5Count: number | null;
     surfaceFaceCount: number | null;
+    tet4Count: number | null;
+    volumeElementCountScope: "airbox-part" | "shared-domain" | "unpublished";
+    volumeElementsByType: readonly { count: number; family: string }[];
   };
   topology: {
     bounds: { max: readonly number[]; min: readonly number[] } | null;
@@ -303,6 +310,25 @@ export function buildAirboxMeshInspectorModel({
   const reportError = stringField(reportRecord, "error");
   const reportDegraded =
     isDegradedBuildStatus(reportStatus) || reportError !== null;
+  const airboxPartRecord = asJsonRecord(airboxPart);
+  const airboxElementCountsByType = asJsonRecord(
+    airboxPartRecord?.element_counts_by_type,
+  );
+  const sharedDomainElementCountsByType = asJsonRecord(
+    asJsonRecord(manifest)?.element_counts_by_type,
+  );
+  const elementCountsByType =
+    airboxElementCountsByType ?? sharedDomainElementCountsByType;
+  const volumeElementCountScope = airboxElementCountsByType
+    ? "airbox-part"
+    : sharedDomainElementCountsByType
+      ? "shared-domain"
+      : "unpublished";
+  const volumeElementsByType = Object.entries(elementCountsByType ?? {})
+    .filter((entry): entry is [string, number] =>
+      typeof entry[1] === "number" && Number.isFinite(entry[1]),
+    )
+    .map(([family, count]) => ({ count, family }));
 
   return {
     airboxPart,
@@ -342,7 +368,11 @@ export function buildAirboxMeshInspectorModel({
       boundaryFaceCount: airboxPart?.boundary_face_count ?? null,
       elementCount: airboxPart?.element_count ?? null,
       nodeCount: airboxPart?.node_count ?? null,
+      pyramid5Count: numericField(elementCountsByType, "pyramid5"),
       surfaceFaceCount: airboxPart?.surface_faces?.length ?? null,
+      tet4Count: numericField(elementCountsByType, "tet4"),
+      volumeElementCountScope,
+      volumeElementsByType,
     },
     topology: {
       bounds:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Search } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -52,6 +52,8 @@ import {
 } from "@/kernel/object-extensions/useObjectExtensionActivation";
 import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { useQuickChartWorkspaceSelector } from "@/kernel/workspace/useQuickChartWorkspace";
+import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -61,6 +63,7 @@ import {
 import {
   buildExplorerTree,
   buildModelTree,
+  collectExplorerNodeIds,
   filterExplorerNodes,
   findExplorerNodePath,
 } from "./builders/buildModelTree";
@@ -76,7 +79,9 @@ import {
 } from "./explorerCrossSections";
 import {
   activateTextureLoadNode,
+  collapseExplorerNodes,
   expandExplorerNodes,
+  ensureExplorerModelObjectDefaults,
   revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
@@ -178,10 +183,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     (explorer) => explorer.textureLoadObjectIds,
   );
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
+  const pinnedQuickChart = useQuickChartWorkspaceSelector((state) => state.pinned);
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
     { isEqual: explorerCrossSectionsEqual },
+  );
+  const planarMonitorDraft = useCrossSectionWorkspaceSelector(
+    (state) => state.planarMonitorDraft,
   );
   const crossSectionExpansionIds = useMemo(() => {
     const ids: string[] = [];
@@ -197,6 +206,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     return ids;
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
+  const planarMonitors = usePlanarMonitorsResource({ enabled: modelTabActive });
   const activeAnalysisFieldOverlay = useAnalysisFieldOverlay(
     kernel.analysisFieldOverlay,
   );
@@ -297,6 +307,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
+          meshManifest: manifest.data,
         }),
         stageExecution.data,
       ),
@@ -339,25 +350,28 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       regionCount: manifest.data?.regions?.length ?? null,
       sourceSceneRevision: revisionValue(modelResourceRecord?.revision),
       visualizationPartFallbacks: semanticTargetCatalog.entries
-        .filter((entry) => entry.targetKind === "part")
         .flatMap((entry) =>
-          entry.carrierIds.slice(0, 1).map((carrierId) => ({
+          entry.targetKind === "part"
+            ? entry.carrierIds.slice(0, 1).map((carrierId) => ({
             id: carrierId,
             label: entry.label,
             visualizationTargetId: entry.targetId,
-          })),
+              }))
+            : [],
         ),
     };
-    const objects = modelSnapshot.objects
-      ?.filter((object) => !isVisualizationAirboxIdentity(object))
-      .map((object) => ({
-        ...object,
-        extensions: resolveActiveObjectExtensionExplorerItems(
-          object.id,
-          objectExtensionActivation,
-        ),
-        textureLoadEnabled: textureLoadObjectIds.has(object.id),
-      }));
+    const objects = modelSnapshot.objects?.flatMap((object) =>
+      isVisualizationAirboxIdentity(object)
+        ? []
+        : [{
+            ...object,
+            extensions: resolveActiveObjectExtensionExplorerItems(
+              object.id,
+              objectExtensionActivation,
+            ),
+            textureLoadEnabled: textureLoadObjectIds.has(object.id),
+          }],
+    );
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
@@ -367,6 +381,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+              planarMonitorDraft,
+              planarMonitors: planarMonitors.data,
             },
           )
         : buildExplorerTree(activeTab, {
@@ -378,6 +394,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainResponseProgress: frequencyDomainResponseProgress.data,
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+            pinnedQuickChart,
           });
     return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
@@ -393,6 +410,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    planarMonitorDraft,
+    planarMonitors.data,
     regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,
@@ -408,7 +427,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseProgress.data,
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
+    pinnedQuickChart,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== "model") return;
+    ensureExplorerModelObjectDefaults(
+      nodes
+        .filter((node) => node.kind === "object.root")
+        .map((node) => node.id),
+    );
+  }, [activeTab, nodes]);
 
   useEffect(() => {
     if (!selectedNodeId?.startsWith("model:") || activeTab === "model") return;
@@ -449,6 +478,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [kernel.bus, kernel.selection]);
 
   useEffect(() => {
+    return kernel.bus.on("explorer:tab-requested", ({ tab }) => {
+      setExplorerActiveTab(tab);
+    });
+  }, [kernel.bus]);
+
+  useEffect(() => {
     if (crossSectionExpansionIds.length === 0) return;
     expandExplorerNodes("model", crossSectionExpansionIds);
   }, [crossSectionExpansionIds]);
@@ -456,37 +491,66 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
-      <header className="fm-explorer__header">
-        <div>
-          <h2>Explorer</h2>
-          <span data-resource-status={modelResource.status}>
-            {modelResource.status === "ready" ? "model resource" : modelResource.status}
-          </span>
-        </div>
-      </header>
-      <ExplorerTabBar
-        activeTab={activeTab}
-        onTabChange={setExplorerActiveTab}
-      />
-      <label className="fm-explorer-filter">
-        <Search size={13} aria-hidden="true" />
-        <input
-          aria-label="Filter explorer"
-          value={filterText}
-          onChange={(event) => setExplorerFilterText(event.target.value)}
-          placeholder="Filter"
-          type="search"
+        <ExplorerTabBar
+          activeTab={activeTab}
+          onTabChange={setExplorerActiveTab}
         />
-      </label>
-      <ExplorerTreeView
-        activeNodeId={selectedNodeId}
-        expandedIds={expandedIds}
-        keyboardRowId={keyboardRow}
-        kernel={kernel}
-        moduleId={moduleId}
-        nodes={nodes}
-        tabId={activeTab}
-      />
+        <label className="fm-explorer-filter">
+          <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
+          <input
+            aria-label="Filter explorer"
+            value={filterText}
+            onChange={(event) => setExplorerFilterText(event.target.value)}
+            placeholder="Filter nodes..."
+            type="search"
+          />
+          <SlidersHorizontal size={13} aria-hidden="true" className="fm-explorer-filter__options-icon" />
+        </label>
+        <ExplorerTreeView
+          activeNodeId={selectedNodeId}
+          expandedIds={expandedIds}
+          keyboardRowId={keyboardRow}
+          kernel={kernel}
+          moduleId={moduleId}
+          nodes={nodes}
+          tabId={activeTab}
+        />
+        <footer className="fm-explorer-toolbar">
+          <button
+            className="fm-explorer-toolbar__action"
+            title="Expand All"
+            type="button"
+            onClick={() => {
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+            }}
+          >
+            <ChevronsUpDown size={13} aria-hidden="true" />
+            <span>Expand All</span>
+          </button>
+          <button
+            className="fm-explorer-toolbar__action"
+            title="Collapse All"
+            type="button"
+            onClick={() => {
+              collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+            }}
+          >
+            <ChevronsDownUp size={13} aria-hidden="true" />
+            <span>Collapse All</span>
+          </button>
+          <button
+            className="fm-explorer-toolbar__action"
+            title="Refresh"
+            type="button"
+            onClick={() => {
+              setExplorerFilterText("");
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+            }}
+          >
+            <RefreshCw size={13} aria-hidden="true" />
+            <span>Refresh</span>
+          </button>
+        </footer>
       </section>
     </WorkspaceRenderProfiler>
   );

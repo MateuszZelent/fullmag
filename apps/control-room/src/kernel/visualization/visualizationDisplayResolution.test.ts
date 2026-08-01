@@ -9,7 +9,7 @@ import type { VisualizationTargetSettings } from "./ObjectVisualizationControlle
 
 const visibleShaderVectorSettings = {
   geometryScope: "full",
-  opacityPercent: 80,
+  surfaceOpacityPercent: 80,
   pointsVisible: true,
   renderMode: "surface",
   shaderVisible: true,

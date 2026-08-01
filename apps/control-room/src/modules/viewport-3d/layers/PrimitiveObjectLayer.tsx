@@ -22,11 +22,9 @@ import type {
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
-  opacityFromSettings,
-  shaderColorFromSettings,
   wireframeColorFromSettings,
-  wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import {
   buildPrimitiveTransformGizmoSegments,
   releasePrimitiveObjectGeometry,
@@ -146,13 +144,13 @@ function RenderablePrimitiveObject({
     event.stopPropagation();
     onSelectObject(object);
   };
-  const opacity = opacityFromSettings(settings);
-  const shaderColor = shaderColorFromSettings(
-    settings,
-    (settings.surfaceColorSource !== "solid"
-      ? object.magnetizationTexturePreview?.color
-      : null) ?? colors.mesh,
-  );
+  const renderPlan = resolveViewport3DTargetRenderPlan(settings, materialProfile);
+  const opacity = renderPlan.primitive.opacity;
+  const primitiveColor = settings.primitiveMonoColor;
+  const shaderColor =
+    primitiveColor && !primitiveColor.startsWith("var(")
+      ? primitiveColor
+      : colors.mesh;
 
   return (
     <group
@@ -164,12 +162,14 @@ function RenderablePrimitiveObject({
         primitive: true,
       }}
     >
-      {settings.shaderVisible ? (
+      {renderPlan.primitive.visible ? (
         <mesh
           onPointerDown={handlePointerDown}
-          renderOrder={surfaceMaterialPolicyProps(opacity).transparent
-            ? RENDER_POLICIES.contextSurface.renderOrder
-            : RENDER_POLICIES.solidSurface.renderOrder}
+          renderOrder={
+            surfaceMaterialPolicyProps(opacity).transparent
+              ? RENDER_POLICIES.contextSurface.renderOrder
+              : RENDER_POLICIES.solidSurface.renderOrder
+          }
           userData={{
             fallbackLabel: object.fallbackLabel,
             objectId: object.objectId,
@@ -185,7 +185,7 @@ function RenderablePrimitiveObject({
           />
         </mesh>
       ) : null}
-      {settings.wireframeVisible && edgeGeometry ? (
+      {renderPlan.wireframe.visible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           onPointerDown={handlePointerDown}
@@ -198,15 +198,12 @@ function RenderablePrimitiveObject({
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(
-              settings,
-              materialProfile.featureEdges,
-            )}
+            opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>
       ) : null}
-      {settings.boundsVisible ? (
+      {renderPlan.bounds.visible ? (
         <mesh
           onPointerDown={handlePointerDown}
           userData={{
@@ -224,7 +221,7 @@ function RenderablePrimitiveObject({
           />
           <meshBasicMaterial
             color={colors.accent}
-            opacity={Math.max(opacity, 0.35)}
+            opacity={renderPlan.bounds.opacity}
             transparent
             wireframe
           />

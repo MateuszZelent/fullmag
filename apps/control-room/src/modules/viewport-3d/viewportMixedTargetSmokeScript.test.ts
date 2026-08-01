@@ -12,6 +12,14 @@ const mixedTargetFixtureUrl = new URL(
   "../../../../../examples/viewport_3d_mixed_targets_smoke.py",
   import.meta.url,
 );
+const mixedTopologySmokeScriptUrl = new URL(
+  "../../../scripts/smoke-viewport-3d-mixed-topology.mjs",
+  import.meta.url,
+);
+const mixedTopologyFixtureUrl = new URL(
+  "../../../../../examples/viewport_3d_mixed_topology_smoke.py",
+  import.meta.url,
+);
 
 describe("viewport 3D mixed-target smoke script", () => {
   it("codifies the production mixed-target proof gate from the field-data report", () => {
@@ -71,5 +79,29 @@ describe("viewport 3D mixed-target smoke script", () => {
     expect(fixture).toContain('study.airbox.visualization(show=True, mode="vectors"');
     expect(fixture).toContain("FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS");
     expect(fixture).toContain("study.build_domain_mesh()");
+  });
+
+  it("keeps the strict mixed-P1 qualification in a separate topology smoke", () => {
+    const smokeScript = readFileSync(mixedTopologySmokeScriptUrl, "utf8");
+    const fixture = readFileSync(mixedTopologyFixtureUrl, "utf8");
+
+    expect(smokeScript).toContain("assertStrictMixedTopologyManifest");
+    expect(smokeScript).toContain("mixed_layer_topology_certificate");
+    expect(smokeScript).toContain("mixed_topology_provenance");
+    expect(smokeScript).toContain("mesh.topology.mixed_p1");
+    expect(smokeScript).toContain("__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__");
+    expect(smokeScript).toContain('carrier: "magnetic"');
+    expect(smokeScript).toContain('carrier: "airbox"');
+    expect(smokeScript).toContain("assertAirboxFullWireframeBuildEvidence");
+    expect(smokeScript).toContain("assertNoTopologyRebuildAfterFieldSwitch");
+    expect(fixture).toContain('fm.study("viewport_3d_mixed_topology_smoke")');
+    expect(fixture).toContain("study.mode(\"strict\")");
+    expect(fixture).toContain('study.device("gpu", precision="double")');
+    expect(fixture).toContain("film.mesh.thin_film(");
+    expect(fixture).toContain("layers=1");
+    expect(fixture).toContain('topology="prismatic"');
+    expect(fixture).toContain("exact_layers=True");
+    expect(fixture).toContain('transition="pyramid_to_tetrahedra"');
+    expect(fixture).not.toContain("Ku1");
   });
 });

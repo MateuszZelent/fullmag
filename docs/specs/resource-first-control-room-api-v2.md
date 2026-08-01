@@ -1,7 +1,7 @@
 # Resource-first Control Room API v2
 
 - Status: canonical control-room API contract
-- Last updated: 2026-05-31
+- Last updated: 2026-07-19
 - Compatibility reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Runtime model: `docs/specs/session-run-api-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
@@ -42,7 +42,7 @@ The API is organized by platform concepts, not by frontend screens:
 | `workspace` | UI shell state: layout, ribbon, selection, active tree node |
 | `analysis` | Analysis products such as eigenmodes and dispersion |
 | `persistence` | Checkpoints, exports, imports, recovery |
-| `diagnostics` | GPU telemetry and engine logs |
+| `diagnostics` | GPU/CPU telemetry, engine logs, and revisioned solver/publisher performance diagnostics |
 
 The default frontend base path is `/v2/sessions/current`.
 
@@ -72,6 +72,11 @@ contract has stricter ownership rules than the HTTP routes:
 
 - `resource.batch_changed` may only announce resources whose underlying payload
   freshness actually changed.
+- Simulation preparation changes use resource family `simulation` with
+  `resource_id = "preparation"` and carry only the preparation revision plus
+  the canonical HTTP fetch hint. The
+  websocket never carries the preparation stage list, execution summaries,
+  bounded log tail, or failure body.
 - UI-plane revisions and data-plane revisions must stay independent even when
   they share one websocket envelope.
 - `visualization/display`, `visualization/state`, and `workspace/*` are
@@ -119,8 +124,10 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `model/objects/*` | object create/patch/delete mutation routes; current object state is read back through `model/scene` |
 | `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
-| `simulation/stages/execution` | full stage tree and stage state |
+| `simulation/preparation` | bounded startup preparation aggregate: canonical stage order/status, current progress, stage timing, requested/resolved execution summaries, safe log tail, and safe failure correlation |
+| `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
+| `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
 | `simulation/solver/energies/*` | current and historical energy samples |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
@@ -135,6 +142,35 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+### Simulation preparation contract
+
+`GET /v2/sessions/current/simulation/preparation` returns the current
+`SimulationPreparationResource`, or `404` while no preparation snapshot is
+available. The aggregate exposes the canonical nine preparation stage ids,
+explicit aggregate/stage/log enums, optional backend-reported progress in the
+inclusive range `0..100`, monotonic-derived stage durations, requested and
+resolved execution summaries, at most 200 bounded safe log entries, and an
+optional safe failure with a diagnostics correlation id.
+
+Stage ordering is defined by the aggregate `revision` and canonical stage
+sequence, not by Unix wall-clock ordering. If the system wall clock moves
+backward while a stage is active, the transition continues, `duration_ms`
+remains monotonic-derived, the raw observed Unix timestamp is preserved, and
+the stage exposes `clock_adjustment` with the observed timestamp, stage-start
+timestamp, and backward delta. The runtime must not silently clamp or retry a
+preparation transition after a wall-clock adjustment.
+
+`GET /v2/sessions/current/status` exposes only
+`resources.simulation_preparation_revision`; it does not copy preparation
+content. Detailed mesh state remains owned by `meshing/builds/current`, and
+full engine logs remain owned by `diagnostics/engine-log`.
+
+Preparation snapshot updates emit the existing `resource.batch_changed`
+envelope with `resource = "simulation"`, `resource_id = "preparation"`, the
+new revision, and the canonical
+`recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
+remains authoritative; the event is cache invalidation only.
 
 ### Relaxation solver contract
 
@@ -153,6 +189,21 @@ The simulation resources expose one algorithm-specific relaxation contract:
   threshold, and diagnostics. Budget exhaustion is completed/non-converged;
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
+- `time_to_tolerance_seconds` uses stage start/completion timestamps only
+  when `status=completed`, `converged=true`, the reason and canonical metric
+  kind/name form a coherent torque or energy tolerance, both value and
+  threshold are finite and non-negative, and `value <= threshold`; it is absent
+  for gradient/numerical stagnation, `max_steps`, time budgets, cancellation,
+  skipped, stopped, failed, missing, mismatched, or non-finite records.
+- solver and end-to-end rates share the same closed profiler window and source
+  revision. Successful-publication rate is the accepted-step delta between
+  ordered same-run successful HTTP endpoints divided by their completion span;
+  duplicates and out-of-order endpoints are ignored, while a run change resets
+  the zero-count boundary. Each rate is
+  `{ value, window_step_count, window_wall_time_ns, source_revision }`.
+- deprecated `status.metrics.steps_per_second` is only an end-to-end scalar
+  alias. Without a closed monotonic profiler span it is null; status never
+  carries the full rate objects.
 
 The Study Explorer node and its Inspector consume these typed v2 resources
 through the generated transport, handwritten facade, and resource hooks. They
@@ -169,6 +220,30 @@ may project the current active quantity, camera, and layer policy, but it does
 not own field payload freshness; `data/fields/*` does. Conversely,
 `data/fields/*` does not own camera or workspace-shell freshness.
 
+### Field materialization freshness
+
+Field catalog descriptors and `data/fields/{quantity_id}/meta` own the
+materialization state for each quantity. Both resources expose
+`source_step`, `source_revision`, `materialized_at_unix_ms`,
+`stale_by_steps`, `materialization_wall_time_ns`, and `state`, where `state`
+is one of `complete`, `stale_complete`, `pending`, or `error`.
+
+- `complete` means the materialized payload was produced from the current
+  solver step.
+- `stale_complete` means a complete payload remains available, but its
+  `source_step` precedes the current solver step by `stale_by_steps`.
+- `pending` means the selected quantity is being materialized and no complete
+  payload for that quantity is available yet.
+- `error` is reserved for an explicit materialization failure; it must not be
+  inferred from ordinary staleness.
+
+A client must retain and render `stale_complete` data while its topology
+generation remains compatible. A quantity switch resolves to the last
+complete frame for that quantity or to explicit `pending`; waiting must not
+clear an otherwise compatible viewport payload. The thin session status owns
+only field-family revision pointers and never copies these per-quantity
+freshness fields.
+
 ## 3.2 Capability ownership
 
 Capability resources have distinct scopes:
@@ -178,6 +253,55 @@ Capability resources have distinct scopes:
 - `meshing/capabilities`: meshing policy/build feature matrix only; it must not drive global UI gating.
 
 ## 3.3 Model authoring and Geometry object lifecycle
+
+### Planar monitor model and field resources
+
+`PlanarMonitor` is canonical model state, not a visualization-only draft. It
+round-trips through `SceneDocument`, `ProblemIR`, and canonical Python:
+
+```text
+GET    /v2/sessions/current/model/planar-monitors
+POST   /v2/sessions/current/model/planar-monitors
+GET    /v2/sessions/current/model/planar-monitors/{monitor_id}
+PATCH  /v2/sessions/current/model/planar-monitors/{monitor_id}
+DELETE /v2/sessions/current/model/planar-monitors/{monitor_id}
+POST   /v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate
+```
+
+Mutations carry `expected_scene_revision`, use the canonical scene transaction
+owner, update script export, and emit invalidation. Monitor JSON contains only
+physical target, frame, extent, and operator. Quantity and presentation state
+are not model fields.
+
+Spatial data uses separate revisioned resources:
+
+```text
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/vectors
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png
+```
+
+`meta` is fetched before heavy payloads and supplies resolved frame/operator,
+shape, canonical URLs/ETags, revisions, occupancy, source/sampling execution,
+basis/integration order, and diagnostics. Scalar/vector/mask/overlay resources
+are bounded binary payloads using existing codecs where semantically valid.
+Resolution is limited to `16..2048` per axis and vector budget to
+`0..10000` before allocation.
+
+The query may select a live field or a validated stage/snapshot pair. A
+runtime-only `monitor_target | mesh_part | airbox` scope only narrows the
+physical target and is keyed by current mesh revision. Stable error reasons
+distinguish missing materialization, unsupported quantity/basis/scope,
+non-injective surface projection, stale monitor/mesh/field revisions, and
+sampling budget exhaustion.
+
+Existing `/samples/slice` and `/projection` resources remain compatibility
+adapters to the same `PlanarSamplingEngine` until a separately approved removal.
+They are not a second numerical implementation.
 
 The `model` family owns canonical authoring state. Geometry object creation is a model transaction first and a mesh build only after the scene commit succeeds.
 
@@ -463,15 +587,48 @@ Current mesh build and object-mesh resource routes:
 | `/v2/sessions/current/meshing/builds` | `GET` | Read mesh build history. |
 | `/v2/sessions/current/meshing/builds/current` | `GET` | Read the active/current mesh build projection. |
 | `/v2/sessions/current/meshing/builds/latest-successful` | `GET` | Read the latest successful mesh build projection. |
+| `/v2/sessions/current/meshing/meshes/shared-domain/quality-gates` | `GET` | Read revision-bound generic mesh gates plus typed mixed-certificate quality evidence. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element` | `GET` | Read binary `FMMQ` per-element quality arrays for heatmap overlays. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section` | `GET` | Read binary `FMCS` shared-domain cross-section geometry for statistics and advanced inspection. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality` | `GET` | Read binary `FMQS` quality values for a shared-domain cross-section. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image` | `GET` | Read a server-rendered PNG preview/export for a shared-domain cross-section. |
+
+The three cross-section resources are currently tet4-only. When the active FEM
+mesh contains prism, pyramid, or another non-tetrahedral cell, they return HTTP
+`409` with the typed `ApiErrorResponse.code` value
+`mixed_topology_not_supported`. Clients must present that state explicitly and
+must not reinterpret the first four nodes as a tetrahedron or repeatedly retry
+the unsupported request at the same mesh revision.
 | `/v2/sessions/current/meshing/meshes/universe/quality` | `GET` | Read universe/airbox mesh quality diagnostics; when the airbox scope exists, `quality.global` is the airbox quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/topology` | `GET` | Read object-scoped binary topology when available. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/report` | `GET` | Read object mesh report diagnostics. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/quality` | `GET` | Read object mesh quality diagnostics; when the object marker is known, `quality.global` is the object's mesh-quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field` | `GET` | Read object realized size-field projection. |
+
+The shared-domain quality-gates resource retains its generic `gates`
+projection for compatibility and separately owns a typed `mixed_certificate`
+sidecar. That sidecar is derived only from the accepted mixed-layer topology
+certificate and binds its evidence to the current mesh `revision` and live
+`topology_fingerprint`. Each family row names the certificate metric, family,
+fifth percentile, acceptance threshold, pass/fail result, minimum order-2
+Jacobian in cubic metres, and positive-Jacobian result. The API must not derive
+or synthesize missing per-family values from generic mesh statistics.
+
+Mixed-certificate evidence is `valid` only when the certificate is accepted,
+its fingerprint matches the live topology, every published family has complete
+finite evidence, and all current mixed-cell families are represented. Missing,
+rejected, malformed, or fingerprint-mismatched evidence returns an explicit
+`unavailable`, `rejected`, or `stale` sidecar with no family rows. Consumers
+must fail closed and must not reuse evidence from an earlier mesh revision.
+
+`meshing/builds/current.mixed_layer_topology_rejection` is the typed failure
+surface for the latest mixed-P1 attempt. It always preserves the rejection
+category and reason when published and may additionally carry backend-supplied
+missing capability IDs, requested/resolved execution tuples, explicit
+no-fallback evidence, and the explicit `free_tetrahedral` alternative. Those
+optional fields are pass-through evidence: the API and frontend must not infer
+them from prose or promote an unsupported execution lane. A rejected build is
+not a solver-accepted topology certificate.
 
 Required field sample scopes:
 
@@ -494,11 +651,12 @@ Clients must preserve `domain_generation_id` and mesh topology revision as
 exact revision tokens. JavaScript clients must not coerce FMVP v3 `u64`
 metadata into `number`, because valid backend revisions may exceed
 `Number.MAX_SAFE_INTEGER`.
-`sampled_node_indices` payloads are valid for vector glyph placement only;
-surface shaders require `full_domain` or `explicit_node_indices` data that can
-be matched to the target topology. FMVP v2 remains a legacy full-domain
-compatibility format and must not be treated as proof for scoped FEM surface
-mapping.
+`sampled_node_indices` payloads with a complete `node_indices` mapping and
+matching mesh topology are valid for vector glyph placement and the
+`surface_faces`/`thickness_average_z` surface projection modes. Raw nodal
+surface coloring still requires complete field coverage. FMVP v2 remains a
+legacy full-domain compatibility format and must not be treated as proof for
+scoped FEM surface mapping.
 
 The same rule applies to realtime fetch hints. If the active viewport consumes
 `component=magnitude&scope_kind=airbox&scope_id=part:__air__`, the invalidation

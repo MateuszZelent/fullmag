@@ -1116,7 +1116,7 @@ export function VectorFieldLayer({
   const resolvedStyle = resolveVectorFieldLayerStyle({
     colorMode,
     fallbackColor: String(colors.field),
-    opacity: opacity * (materialProfile?.opacityScale ?? 1),
+    opacity,
     style,
   });
   const vectorGlyphBuildKey = useMemo(

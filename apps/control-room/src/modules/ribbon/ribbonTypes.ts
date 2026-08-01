@@ -10,7 +10,8 @@ export interface RibbonTabDef {
   label: string;
 }
 
-interface RibbonAction {
+export interface RibbonAction {
+  type?: "checkbox" | "button";
   id: string;
   icon: ReactNode;
   label: string;

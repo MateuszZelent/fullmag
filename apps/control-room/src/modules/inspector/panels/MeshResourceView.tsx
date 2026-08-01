@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -104,27 +104,23 @@ export function MeshResourceFields({
 
 export function JsonResourceSection({
   badge,
-  defaultCollapsed = true,
   title,
   value,
-  sectionValue,
 }: {
   badge?: string;
-  defaultCollapsed?: boolean;
   title: string;
   value: unknown;
   sectionValue?: string;
 }) {
   return (
-    <InspectorSection
+    <InspectorGroup
       badge={badge}
       collapsible
-      defaultCollapsed={defaultCollapsed}
+      defaultOpen={false}
       title={title}
-      value={sectionValue}
     >
       <pre className="fm-mesh-json-preview">{formatJson(value)}</pre>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

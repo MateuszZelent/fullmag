@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -23,6 +22,7 @@ import {
   buildBoundsVolumeWireframePositions,
   resolveAirboxRuntimeVisualizationSettings,
   resolveAirboxSurfaceColorState,
+  resolveAirboxMeshPartSurfacePickIdentity,
   resolveAirboxTopologyVisualizationSettings,
   resolveAirboxWireframeEdgeIndices,
   resolveAirboxWireframePrimitive,
@@ -54,7 +54,7 @@ const visibleWireframeAirbox: VisualizationTargetSettings = {
   ...DEFAULT_AIRBOX_VISUALIZATION,
   boundsVisible: false,
   geometryScope: "surface",
-  opacityPercent: 35,
+  surfaceOpacityPercent: 35,
   pointsVisible: false,
   renderMode: "wireframe",
   shaderVisible: false,
@@ -68,7 +68,7 @@ const materialProfile = resolveViewport3DMaterialProfile(
 );
 
 const boundsLayersSource = readFileSync(
-  join(process.cwd(), "src/modules/viewport-3d/layers/BoundsLayers.tsx"),
+  new URL("./BoundsLayers.tsx", import.meta.url),
   "utf8",
 );
 
@@ -82,7 +82,7 @@ it("lets diagnostics bypass airbox field-color buffer application", () => {
   );
   expect(boundsLayersSource).toContain("useViewport3DScalarColorUpload");
   expect(boundsLayersSource).toContain(
-    "geometry && renderSettings.shaderVisible && fieldColorLayersEnabled",
+    "geometry && renderPlan.surface.visible && fieldColorLayersEnabled",
   );
 });
 
@@ -108,6 +108,52 @@ it("routes airbox mesh-part topology geometry adoption through the upload manage
   expect(airboxMeshPartLayerSource).not.toContain("const geometry = useMemo");
   expect(airboxMeshPartLayerSource).not.toContain("const edgeGeometry = useMemo");
   expect(airboxMeshPartLayerSource).not.toContain("const pointsGeometry = useMemo");
+});
+
+it("records full-airbox volume-edge hidden-edge semantics in topology telemetry", () => {
+  expect(boundsLayersSource).toContain('"volumeEdges"');
+  expect(boundsLayersSource).toContain("render-semantic=${resolveAirboxWireframeSemantic(renderSettings)}");
+});
+
+it("maps an airbox surface triangle to its canonical cell identity", () => {
+  expect(resolveAirboxMeshPartSurfacePickIdentity({
+    expandedSurfaceFaces: false,
+    faceIndex: 1,
+    part: {
+      boundary_face_count: 1,
+      boundary_face_indices: [17],
+      boundary_face_start: 17,
+    },
+    surfaceHit: true,
+    surfaceTriangleCellTypes: new Uint32Array([1, 3]),
+    surfaceTriangleFacetIndices: new Uint32Array([17, 17]),
+    surfaceTriangleGlobalCellOrdinals: new BigUint64Array([
+      BigInt(11),
+      BigInt("9007199254740993"),
+    ]),
+  })).toEqual({
+    boundaryFaceIndex: 17,
+    elementFamily: "pyramid5",
+    globalCellOrdinal: "9007199254740993",
+  });
+});
+
+it("fails closed when an airbox surface identity map is incomplete", () => {
+  expect(resolveAirboxMeshPartSurfacePickIdentity({
+    expandedSurfaceFaces: false,
+    faceIndex: 0,
+    part: {
+      boundary_face_count: 1,
+      boundary_face_start: 17,
+    },
+    surfaceHit: true,
+    surfaceTriangleCellTypes: new Uint32Array([1]),
+    surfaceTriangleFacetIndices: new Uint32Array([17]),
+  })).toEqual({
+    boundaryFaceIndex: null,
+    elementFamily: null,
+    globalCellOrdinal: null,
+  });
 });
 
 it("routes airbox vector layer input through target-pass selection", () => {
@@ -303,7 +349,7 @@ describe("AirboxLayer", () => {
 
   it("routes the airbox render branch through the parallel wireframe layers", () => {
     expect(boundsLayersSource).toContain(
-      'renderSettings.wireframeVisible && (',
+      'renderPlan.wireframe.visible && (',
     );
     expect(boundsLayersSource).toContain(
       'geometryScope === "full" || !edgeGeometry',
@@ -318,7 +364,7 @@ describe("AirboxLayer", () => {
     expect(
       airboxWireframeOpacityFromSettings({
         ...visibleWireframeAirbox,
-        opacityPercent: 20,
+        surfaceOpacityPercent: 20,
         wireframeOpacityPercent: 100,
       }),
     ).toBe(1);
@@ -326,7 +372,7 @@ describe("AirboxLayer", () => {
       airboxWireframeOpacityFromSettings(
         {
           ...visibleWireframeAirbox,
-          opacityPercent: 20,
+          surfaceOpacityPercent: 20,
           wireframeOpacityPercent: 80,
         },
         { opacity: 0.5 },
@@ -560,15 +606,13 @@ describe("SelectionHighlightLayer", () => {
     });
   });
 
-  it("passes null bounds through to the bounds renderer for no selection", () => {
+  it("does not create a selection pass when there is no selection", () => {
     const element = SelectionHighlightLayerContent({
       bounds: null,
       colors,
       materialProfile,
     });
-    const boundsBox = element as ReactElement<{ bounds: null }>;
-
-    expect(boundsBox.props.bounds).toBeNull();
+    expect(element).toBeNull();
   });
 });
 

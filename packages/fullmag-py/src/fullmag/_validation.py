@@ -3,7 +3,29 @@ from __future__ import annotations
 import math
 import numbers
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Literal, Sequence
+
+
+SamplingPeriod = float | Literal["auto"]
+AUTO_SINC_NYQUIST_GUARD_FACTOR = 1.3
+
+
+def auto_sinc_sampling_policy_ir() -> dict[str, object]:
+    return {
+        "kind": "auto_sinc_cutoff",
+        "nyquist_guard_factor": AUTO_SINC_NYQUIST_GUARD_FACTOR,
+    }
+
+
+def normalize_sampling_period(value: object, name: str) -> SamplingPeriod:
+    if isinstance(value, str) and value == "auto":
+        return "auto"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f'{name} must be positive finite number or "auto"')
+    period = float(value)
+    if not math.isfinite(period) or period <= 0.0:
+        raise ValueError(f'{name} must be positive finite number or "auto"')
+    return period
 
 
 def require_non_empty(value: str, field_name: str) -> str:

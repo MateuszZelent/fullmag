@@ -1,21 +1,27 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
+import { useCallback } from "react";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 
 import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
 import { ChangeDeviceStageInspector } from "./stages/ChangeDeviceStageInspector";
 import { AddFieldDriveStageInspector } from "./stages/AddFieldDriveStageInspector";
+import { AutosaveStageInspector } from "./stages/AutosaveStageInspector";
 import { EigenmodesStageInspector } from "./stages/EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./stages/FrequencyResponseStageInspector";
+import { FftResponseStageInspector } from "./stages/FftResponseStageInspector";
 import { HysteresisStageInspector } from "./stages/HysteresisStageInspector";
 import { resolveHysteresisInspectorView } from "./stages/hysteresis/HysteresisInspectorUtils";
 import { RelaxStageInspector } from "./stages/RelaxStageInspector";
 import { RunStageInspector } from "./stages/RunStageInspector";
 import { SaveStateStageInspector } from "./stages/SaveStateStageInspector";
+import { TableAutosaveStageInspector } from "./stages/TableAutosaveStageInspector";
+import { UnsupportedStageInspector } from "./stages/UnsupportedStageInspector";
 import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
+import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 
 export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const {
@@ -35,7 +41,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   } = useStudyInspectorPanelController(selection);
   const selectedIndex = model.selectedStage?.index ?? state.selectedDraftIndex;
   const draft = state.stageDrafts[selectedIndex] ?? null;
-  const validation = draft
+  const localValidation = draft
     ? validateStudyStageDraft(draft, {
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
@@ -45,6 +51,42 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         mode: model.requested.mode,
       })
     : [];
+  const validation = [
+    ...localValidation,
+    ...validateStudyWorkflow(state.stageDrafts).flatMap((issue) =>
+      issue.index === selectedIndex
+        ? [{ message: issue.message, severity: issue.severity }]
+        : [],
+    ),
+  ];
+  const workflowValidation = validateStudyWorkflow(state.stageDrafts);
+  const allStageValidation = state.stageDrafts.flatMap((stageDraft, index) => [
+    ...validateStudyStageDraft(stageDraft, {
+      algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+      backend: model.requested.backend,
+      demagEnabled: state.globalDraft.demagEnabled,
+      device: model.requested.device,
+      mode: model.requested.mode,
+      precision: state.globalDraft.requestedPrecision,
+    }),
+    ...workflowValidation.flatMap(({ index: issueIndex, message, severity }) =>
+      issueIndex === index ? [{ message, severity }] : [],
+    ),
+  ]);
+  const resetStageDrafts = useCallback(
+    () => dispatch({ type: "revertStageDrafts" }),
+    [dispatch],
+  );
+  useRegisterInspectorEditSession(
+    "staged",
+    state.authoringBusy,
+    JSON.stringify(state.stageDrafts) !==
+      JSON.stringify(state.baselineStageDrafts),
+    !allStageValidation.some((issue) => issue.severity === "error"),
+    state.authoringBusy ? "Study stage changes are being saved." : undefined,
+    commitStageDrafts,
+    resetStageDrafts,
+  );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
   const frequencyDomainAuthoringView =
@@ -77,50 +119,43 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   };
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
+    <div
+      className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-scene-has-payload={sceneHasPayload}
       data-scene-revision={sceneRevision ?? ""}
       data-scene-stage-count={sceneStageCount}
       data-scene-status={scene.status}
       data-stage-draft-count={state.stageDrafts.length}
-      type="multiple"
-      defaultValue={[
-        "identity",
-        "authoring",
-        "telemetry",
-        "add-field-drive",
-        "add-field-waveform",
-        "add-field-activation",
-        "eigenmodes-command-center",
-        "frequency-response-command-center",
-        "relax-results",
-        "run-results",
-        "hysteresis-results",
-        "eigenmodes-results",
-        "frequency-response-results",
-        "save-state-results",
-        "hysteresis-plan",
-        "hysteresis-protocol",
-        "hysteresis-orientation",
-        "hysteresis-saturation",
-        "hysteresis-adaptive-refinement",
-        "hysteresis-angular-family",
-        "hysteresis-settle",
-        "hysteresis-settle-trace",
-        "hysteresis-live-progress",
-        "hysteresis-branches",
-        "hysteresis-metrics",
-        "hysteresis-points",
-        "hysteresis-snapshots",
-        "hysteresis-current-field",
-      ]}
     >
-      {inspectorKind === "add_field_drive" ? (
+      {inspectorKind === "unsupported" ? (
+        <UnsupportedStageInspector
+          {...commonProps}
+          expectedKind="unsupported"
+          kindLabel="Unsupported"
+        />
+      ) : inspectorKind === "add_field_drive" ? (
         <AddFieldDriveStageInspector
           {...commonProps}
           expectedKind="add_field_drive"
           kindLabel="Add Antenna"
+        />
+      ) : inspectorKind === "table_autosave" ? (
+        <TableAutosaveStageInspector
+          {...commonProps}
+          expectedKind="table_autosave"
+          kindLabel="Table Autosave"
+        />
+      ) : inspectorKind === "autosave" ? (
+        <AutosaveStageInspector
+          {...commonProps}
+          expectedKind="autosave"
+          kindLabel="Autosave"
+        />
+      ) : inspectorKind === "fft_response" ? (
+        <FftResponseStageInspector
+          {...commonProps}
+          expectedKind="fft_response"
+          kindLabel="FFT Response"
         />
       ) : inspectorKind === "run" ? (
         <RunStageInspector
@@ -168,7 +203,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           kindLabel="Relax"
         />
       )}
-    </Accordion>
+    </div>
   );
 }
 
@@ -242,6 +277,9 @@ export function resolveStudyStageInspectorKind(
     return selectedStageKind;
   }
   if (selectionKind === "study.stage.add_field_drive") return "add_field_drive";
+  if (selectionKind === "study.stage.table_autosave") return "table_autosave";
+  if (selectionKind === "study.stage.autosave") return "autosave";
+  if (selectionKind === "study.stage.fft_response") return "fft_response";
   if (selectionKind === "study.stage.run") return "run";
   if (selectionKind === "study.stage.change_device") return "change_device";
   if (selectionKind === "study.stage.hysteresis") return "hysteresis";

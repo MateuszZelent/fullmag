@@ -7,7 +7,7 @@ from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
 
-from fullmag.model import Problem
+from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,8 @@ class LoadedStage:
     action: dict[str, object] | None = None
     stage_id: str | None = None
     output_every_seconds: float | None = None
+    table_autosave: TableAutosave | None = None
+    autosave: StageAutosave | None = None
 
     def to_ir(
         self,
@@ -32,6 +34,7 @@ class LoadedStage:
         study_pipeline: dict[str, object] | None = None,
         runtime_device_override: str | None = None,
         stage_start_time_s: float = 0.0,
+        _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         ir = self.problem.to_ir(
             requested_backend=requested_backend,
@@ -43,7 +46,16 @@ class LoadedStage:
             asset_cache=asset_cache,
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
+            _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
+        study = ir.get("study")
+        sampling = study.get("sampling") if isinstance(study, dict) else None
+        if not isinstance(sampling, dict):
+            raise ValueError("ProblemIR study.sampling must be an object")
+        if self.table_autosave is not None:
+            sampling["table_autosave"] = self.table_autosave.to_ir()
+        if self.autosave is not None:
+            sampling["stage_autosave"] = self.autosave.to_ir()
         if self.stage_id is not None:
             runtime_metadata = ir.get("problem_meta", {}).get("runtime_metadata")
             if not isinstance(runtime_metadata, dict):
@@ -68,12 +80,27 @@ def apply_ir_runtime_device_override(ir: dict[str, object], device: str) -> None
     runtime_metadata = problem_meta.get("runtime_metadata")
     if not isinstance(runtime_metadata, dict):
         return
+    if device not in {"cpu", "gpu"}:
+        raise ValueError("managed runtime device override must be 'cpu' or 'gpu'")
+    runtime_metadata["runtime_device_override"] = {
+        "device": device,
+        "source": "managed_launcher",
+    }
+
+
+def apply_ir_runtime_device_selection(ir: dict[str, object], device: str) -> None:
+    problem_meta = ir.get("problem_meta")
+    if not isinstance(problem_meta, dict):
+        return
+    runtime_metadata = problem_meta.get("runtime_metadata")
+    if not isinstance(runtime_metadata, dict):
+        return
     for runtime in _runtime_metadata_runtime_maps(runtime_metadata):
         runtime["device"] = device
         if device == "cpu":
             runtime["gpu_count"] = 0
             runtime["device_index"] = None
-        elif device.startswith("cuda"):
+        elif device == "gpu" or device.startswith("cuda"):
             runtime["gpu_count"] = max(int(runtime.get("gpu_count") or 0), 1)
             runtime["device_index"] = _cuda_device_index(device)
 
@@ -117,7 +144,7 @@ class LoadedProblem:
     auto_execute_stages: bool = False
 
     def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
-        """Return the problem state before ordered field-drive actions run."""
+        """Return persistent problem state before ordered action stages run."""
         candidate = problem or self.problem
         introduced_ids: set[str] = set()
         for stage in self.stages:
@@ -130,13 +157,33 @@ class LoadedProblem:
                 drive_id = drive.get("id")
             if isinstance(drive_id, str):
                 introduced_ids.add(drive_id)
-        if not introduced_ids:
-            return candidate
+        base_stage_problem = self.stages[0].problem if self.stages else None
+        study = candidate.study
+        runtime_metadata = dict(candidate.runtime_metadata)
+        if base_stage_problem is not None:
+            base_study = base_stage_problem.study
+            if isinstance(study, TimeEvolution) and isinstance(
+                base_study,
+                (Relaxation, TimeEvolution),
+            ):
+                study = TimeEvolution(
+                    dynamics=study.dynamics,
+                    outputs=tuple(base_study.outputs),
+                    table_autosave=base_study._table_autosave,
+                )
+            if "spin_wave_response" in base_stage_problem.runtime_metadata:
+                runtime_metadata["spin_wave_response"] = (
+                    base_stage_problem.runtime_metadata["spin_wave_response"]
+                )
+            else:
+                runtime_metadata.pop("spin_wave_response", None)
         return replace(
             candidate,
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
             ),
+            runtime_metadata=runtime_metadata,
+            study=study,
         )
 
     def study_pipeline_document(self) -> dict[str, object] | None:
@@ -152,6 +199,8 @@ class LoadedProblem:
         execution_precision,
         asset_cache: dict[str, dict[str, object] | None] | None = None,
         include_geometry_assets: bool = True,
+        runtime_device_override: str | None = None,
+        _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         study_pipeline = self.study_pipeline_document()
         base_problem = self.pipeline_base_problem()
@@ -165,6 +214,7 @@ class LoadedProblem:
             asset_cache=asset_cache,
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
+            _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
         workspace_problem = (
             self.pipeline_base_problem(self.workspace_problem)
@@ -172,6 +222,8 @@ class LoadedProblem:
             else None
         )
         if workspace_problem is None or workspace_problem == base_problem:
+            if runtime_device_override is not None:
+                apply_ir_runtime_device_override(ir, runtime_device_override)
             return ir
 
         workspace_ir = workspace_problem.to_ir(
@@ -190,6 +242,8 @@ class LoadedProblem:
         for key in ("model_builder", "script_sync", "domain_frame", "study_pipeline"):
             if key in workspace_runtime_metadata:
                 runtime_metadata[key] = workspace_runtime_metadata[key]
+        if runtime_device_override is not None:
+            apply_ir_runtime_device_override(ir, runtime_device_override)
         return ir
 
 
@@ -223,6 +277,8 @@ def load_problem_from_script(
                     action=stage.action,
                     stage_id=stage.stage_id,
                     output_every_seconds=stage.output_every_seconds,
+                    table_autosave=stage.table_autosave,
+                    autosave=stage.autosave,
                 )
                 for stage in captured_stages
             )
@@ -247,6 +303,8 @@ def load_problem_from_script(
                     action=stage.action,
                     stage_id=stage.stage_id,
                     output_every_seconds=stage.output_every_seconds,
+                    table_autosave=stage.table_autosave,
+                    autosave=stage.autosave,
                 )
                 for stage in declared_stages
             )

@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #endif
@@ -61,16 +63,21 @@ struct DeviceCsrScalar {
 };
 
 struct GpuDemagPoissonWorkspace {
+    std::string operator_fingerprint;
+    uint64_t operator_build_count = 0;
+    uint64_t operator_upload_count = 0;
     DeviceCsrTriple rhs;
     DeviceCsrScalar recovery_x;
     DeviceCsrScalar recovery_y;
     DeviceCsrScalar recovery_z;
+    DeviceCsrScalar visual_recovery_x;
+    DeviceCsrScalar visual_recovery_y;
+    DeviceCsrScalar visual_recovery_z;
     DeviceCsrScalar robin_boundary_mass;
     std::vector<uint32_t> ess_tdofs;
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint32_t *d_ess_tdofs = nullptr;
-    cudaEvent_t compute_ready_event = nullptr;
-    cudaEvent_t hypre_done_event = nullptr;
+    HypreStreamInterop stream_interop{};
 #endif
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     HYPRE_BigInt row_starts[2] = {0, 0};
@@ -79,8 +86,13 @@ struct GpuDemagPoissonWorkspace {
     std::unique_ptr<mfem::HypreSolver> solver;
     std::unique_ptr<mfem::HypreParVector> b_par;
     std::unique_ptr<mfem::HypreParVector> x_par;
+    std::unique_ptr<mfem::Vector> residual;
 #endif
     uint64_t device_bytes = 0;
+    uint64_t solver_setup_count = 0;
+    uint64_t fresh_zero_guess_count = 0;
+    uint64_t warm_start_count = 0;
+    bool solver_setup_complete = false;
     bool ready = false;
 };
 

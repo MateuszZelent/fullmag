@@ -12,6 +12,8 @@ type StudyStageSelectionKind = Extract<
 
 const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.action",
+  "study.stage.add_field_drive",
+  "study.stage.autosave",
   "study.stage.eigenmodes",
   "study.stage.eigenmodes.setup",
   "study.stage.eigenmodes.calculation_mode",
@@ -36,9 +38,11 @@ const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.frequency_response.solver",
   "study.stage.frequency_response.outputs",
   "study.stage.frequency_response.diagnostics",
+  "study.stage.fft_response",
   "study.stage.hysteresis",
   "study.stage.relax",
   "study.stage.run",
+  "study.stage.table_autosave",
   "study.stage.change_device",
   "study.stage.save_state",
 ]);
@@ -84,6 +88,24 @@ function modeVisualizationTargetId(
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (
+    node.kind === "results.quick_chart" &&
+    node.chartId &&
+    node.tableId &&
+    node.xAxisId &&
+    node.yAxisIds
+  ) {
+    return {
+      chartId: node.chartId,
+      kind: "results.quick_chart",
+      nodeId: node.id,
+      tableId: node.tableId,
+      type: "quick-chart",
+      xAxisId: node.xAxisId,
+      yAxisIds: node.yAxisIds,
+    };
+  }
+
   if (node.kind === "mesh.unassigned.part" && node.meshPartId) {
     return {
       carrierPartId: node.meshPartId,
@@ -214,6 +236,26 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       nodeId: node.id,
       type: "airbox",
       visualizationTargetId: "airbox",
+    };
+  }
+
+  if (node.kind === "model.planar.monitor" && node.monitorId) {
+    return {
+      kind: "model.planar.monitor",
+      monitorId: node.monitorId,
+      nodeId: node.id,
+      type: "planar-monitor",
+      visualizationTargetId: `planar-monitor:${node.monitorId}`,
+    };
+  }
+
+  if (node.kind === "model.planar.monitor.draft") {
+    return {
+      draftId: "draft",
+      kind: "model.planar.monitor.draft",
+      nodeId: node.id,
+      type: "planar-monitor-draft",
+      visualizationTargetId: "planar-monitor:draft",
     };
   }
 
@@ -358,6 +400,7 @@ export function selectExplorerNode(
       kind:
         ref?.type === "cross-section-draft" ||
         ref?.type === "cross-section-plot" ||
+        ref?.type === "planar-monitor-draft" ||
         ref?.type === "mesh-part"
           ? ref.kind
           : node.kind,

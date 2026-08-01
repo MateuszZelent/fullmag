@@ -9,7 +9,7 @@ use fullmag_ir::{EquilibriumSourceIR, FemEigenPlanIR, RelaxationAlgorithmIR, Rel
 
 use crate::fem::eigen_anisotropy::volume_anisotropy_field;
 use crate::fem::eigen_output::resolved_demag_realization;
-use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
+use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::types::{RunError, StepStats};
 
 /// Internal relaxation timestep for equilibrium preparation in eigen analysis.
@@ -122,6 +122,7 @@ pub(crate) fn materialize_equilibrium(
             },
         };
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         while steps_taken < RELAX_MAX_STEPS {
             let report = problem
                 .step(&mut state, RELAX_DT)
@@ -143,7 +144,7 @@ pub(crate) fn materialize_equilibrium(
                 ..StepStats::default()
             };
             let energy_plateau_range = energy_plateau.record(report.total_energy_joules);
-            if relaxation_converged(
+            if torque_confirmation.observe_stats(
                 &control,
                 &stats,
                 energy_plateau_range,

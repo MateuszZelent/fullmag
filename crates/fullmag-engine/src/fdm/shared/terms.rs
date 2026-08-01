@@ -21,23 +21,39 @@ impl RegionalFieldDriveTerm {
         let time = absolute_time_s - self.time_offset_s;
         match &self.waveform {
             TimeDependenceIR::Constant => 1.0,
-            TimeDependenceIR::Sinusoidal { frequency_hz, phase_rad, offset } => {
-                (2.0 * std::f64::consts::PI * frequency_hz * time + phase_rad).sin() + offset
-            }
+            TimeDependenceIR::Sinusoidal {
+                frequency_hz,
+                phase_rad,
+                offset,
+            } => (2.0 * std::f64::consts::PI * frequency_hz * time + phase_rad).sin() + offset,
             TimeDependenceIR::Pulse { t_on, t_off } => {
-                if time >= *t_on && time < *t_off { 1.0 } else { 0.0 }
+                if time >= *t_on && time < *t_off {
+                    1.0
+                } else {
+                    0.0
+                }
             }
             TimeDependenceIR::PiecewiseLinear { points } => {
-                let Some(first) = points.first() else { return 0.0 };
-                if time <= first[0] { return first[1] }
+                let Some(first) = points.first() else {
+                    return 0.0;
+                };
+                if time <= first[0] {
+                    return first[1];
+                }
                 let last = points.last().expect("non-empty points");
-                if time >= last[0] { return last[1] }
+                if time >= last[0] {
+                    return last[1];
+                }
                 let upper = points.partition_point(|point| point[0] < time);
                 let [t0, v0] = points[upper - 1];
                 let [t1, v1] = points[upper];
                 v0 + (time - t0) / (t1 - t0) * (v1 - v0)
             }
-            TimeDependenceIR::SincPulse { cutoff_hz, t0, amplitude } => {
+            TimeDependenceIR::SincPulse {
+                cutoff_hz,
+                t0,
+                amplitude,
+            } => {
                 let x = std::f64::consts::PI * 2.0 * cutoff_hz * (time - t0);
                 let sinc = if x.abs() <= 1e-4 {
                     let x2 = x * x;
@@ -63,7 +79,7 @@ pub struct EffectiveFieldTerms {
     pub magnetoelastic: Option<MagnetoelasticTermConfig>,
     /// Uniaxial magnetocrystalline anisotropy (Ku1 + optionally Ku2).
     pub uniaxial_anisotropy: Option<UniaxialAnisotropyConfig>,
-    /// Cubic magnetocrystalline anisotropy (Kc1 + optionally Kc2).
+    /// Cubic magnetocrystalline anisotropy (Kc1, Kc2, and optionally Kc3).
     pub cubic_anisotropy: Option<CubicAnisotropyConfig>,
     /// Interfacial (Néel) DMI constant D [J/m²]. None = disabled.
     pub interfacial_dmi: Option<f64>,
@@ -97,6 +113,8 @@ pub struct CubicAnisotropyConfig {
     pub kc1: f64,
     /// Second-order cubic constant Kc2 [J/m³].
     pub kc2: f64,
+    /// Third-order cubic constant Kc3 [J/m³].
+    pub kc3: f64,
     /// First crystal axis (unit vector). Third axis = axis1 × axis2.
     pub axis1: Vector3,
     /// Second crystal axis (unit vector).

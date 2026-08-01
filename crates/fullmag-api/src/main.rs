@@ -49,6 +49,7 @@ mod field_store;
 mod openapi_v2;
 mod orientation_color;
 mod periodic_pairs_binary;
+mod planar_sampling;
 mod preview;
 mod quantities;
 mod quantity_data_plane;
@@ -154,6 +155,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             mesh_build_revision: snapshot.mesh_build_revision,
             commands_revision,
             stages_revision: snapshot.stage_execution_revision,
+            simulation_preparation_revision: snapshot.simulation_preparation_revision,
             scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         },
     }
@@ -378,6 +380,17 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/simulation/stages/execution".to_string()),
         });
     }
+    if realtime_state.revisions.simulation_preparation_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Simulation,
+            revision: realtime_state.revisions.simulation_preparation_revision,
+            resource_id: Some("preparation".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/simulation/preparation".to_string()),
+        });
+    }
     if let Some(scene_revision) = realtime_state.revisions.scene_revision {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::SceneDocument,
@@ -387,6 +400,49 @@ fn current_live_realtime_changes(
             broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/model/scene".to_string()),
+        });
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::PlanarMonitors,
+            revision: scene_revision,
+            resource_id: Some("collection".to_string()),
+            quantity_ids: Vec::new(),
+            broad: true,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/model/planar-monitors".to_string()),
+        });
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::PlanarFields,
+            revision: scene_revision,
+            resource_id: Some("monitor".to_string()),
+            quantity_ids: Vec::new(),
+            broad: true,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: None,
+        });
+    }
+    changes.push(RealtimeResourceChange {
+        resource: RealtimeResourceName::PlanarFields,
+        revision: realtime_state.revisions.field_revision,
+        resource_id: Some("field".to_string()),
+        quantity_ids: realtime_state
+            .revisions
+            .field_quantity_revisions
+            .keys()
+            .cloned()
+            .collect(),
+        broad: true,
+        domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+        recommended_fetch: None,
+    });
+    if realtime_state.revisions.mesh_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::PlanarFields,
+            revision: realtime_state.revisions.mesh_revision,
+            resource_id: Some("mesh".to_string()),
+            quantity_ids: Vec::new(),
+            broad: true,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: None,
         });
     }
     changes
@@ -481,7 +537,17 @@ fn current_live_realtime_change_revision_changed(
             current_live_commands_effective_revision(previous) != change.revision
         }
         RealtimeResourceName::Stages => previous.stages_revision != change.revision,
+        RealtimeResourceName::Simulation => match change.resource_id.as_deref() {
+            Some("preparation") => previous.simulation_preparation_revision != change.revision,
+            _ => true,
+        },
         RealtimeResourceName::SceneDocument => previous.scene_revision != Some(change.revision),
+        RealtimeResourceName::PlanarMonitors => previous.scene_revision != Some(change.revision),
+        RealtimeResourceName::PlanarFields => match change.resource_id.as_deref() {
+            Some("monitor") => previous.scene_revision != Some(change.revision),
+            Some("mesh") => previous.mesh_revision != change.revision || domain_generation_changed,
+            _ => previous.field_revision != change.revision || domain_generation_changed,
+        },
         RealtimeResourceName::Events => true,
         RealtimeResourceName::VisualizationClientAcks => true,
     }
@@ -516,6 +582,7 @@ mod realtime_change_tests {
             mesh_build_revision: 25,
             commands_revision: 26,
             stages_revision: 27,
+            simulation_preparation_revision: 30,
             scene_revision: Some(28),
             visualization_state_revision: 29,
         }
@@ -551,11 +618,60 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/quality"));
         assert!(fetches
             .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"));
-        assert!(fetches.contains(
-            "/v2/sessions/current/meshing/mesh/periodic_pairs.v1"
-        ));
+        assert!(fetches.contains("/v2/sessions/current/meshing/mesh/periodic_pairs.v1"));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
+        assert!(fetches.contains("/v2/sessions/current/model/planar-monitors"));
         assert!(fetches.contains("/v2/sessions/current/visualization/state"));
+    }
+
+    #[test]
+    fn realtime_planar_changes_are_invalidation_only_and_revision_scoped() {
+        let changes = current_live_realtime_changes(&CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: revisions(),
+            mesh_resource_fetches: Vec::new(),
+        });
+        let monitor = changes
+            .iter()
+            .find(|change| matches!(change.resource, RealtimeResourceName::PlanarMonitors))
+            .expect("planar monitor collection invalidation");
+        assert_eq!(monitor.revision, 28);
+        assert!(monitor.quantity_ids.is_empty());
+        assert_eq!(
+            monitor.recommended_fetch.as_deref(),
+            Some("/v2/sessions/current/model/planar-monitors")
+        );
+
+        let planar_fields = changes
+            .iter()
+            .filter(|change| matches!(change.resource, RealtimeResourceName::PlanarFields))
+            .collect::<Vec<_>>();
+        assert_eq!(planar_fields.len(), 3);
+        assert!(planar_fields
+            .iter()
+            .all(|change| change.recommended_fetch.is_none()));
+        assert!(planar_fields
+            .iter()
+            .any(|change| change.resource_id.as_deref() == Some("monitor")));
+        assert!(planar_fields
+            .iter()
+            .any(|change| change.resource_id.as_deref() == Some("field")));
+        assert!(planar_fields
+            .iter()
+            .any(|change| change.resource_id.as_deref() == Some("mesh")));
+        let wire = serde_json::to_string(&planar_fields).expect("realtime changes serialize");
+        for forbidden in [
+            "scalar_values",
+            "vector_values",
+            "occupancy",
+            "mesh_overlay",
+        ] {
+            assert!(
+                !wire.contains(forbidden),
+                "realtime invalidation payload must not contain {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -710,8 +826,7 @@ mod realtime_change_tests {
             matches!(change.resource, RealtimeResourceName::Fields)
                 && change.resource_id.as_deref() == Some("samples")
                 && change.revision == previous.field_revision
-                && change.domain_generation_id
-                    == Some(previous.domain_generation_id + 1)
+                && change.domain_generation_id == Some(previous.domain_generation_id + 1)
         }));
     }
 
@@ -907,7 +1022,9 @@ fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEven
         if payload.changes.iter().any(|change| {
             matches!(
                 change.resource,
-                RealtimeResourceName::Commands | RealtimeResourceName::Stages
+                RealtimeResourceName::Commands
+                    | RealtimeResourceName::Stages
+                    | RealtimeResourceName::Simulation
             )
         }) {
             return None;
@@ -1237,7 +1354,9 @@ enum RealtimeQosLane {
 fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
     if matches!(
         change.resource,
-        RealtimeResourceName::Commands | RealtimeResourceName::Stages
+        RealtimeResourceName::Commands
+            | RealtimeResourceName::Stages
+            | RealtimeResourceName::Simulation
     ) {
         return RealtimeQosLane::Immediate;
     }
@@ -1381,6 +1500,7 @@ fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
 
 #[tokio::main]
 async fn main() {
+    fullmag_build_info::print_startup_stamp();
     if std::env::args().any(|arg| arg == "--print-openapi-v2") {
         println!(
             "{}",
@@ -2073,6 +2193,7 @@ where
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -2734,7 +2855,9 @@ pub(crate) async fn commit_current_live_scene_document(
         let previous_scene = snapshot.scene_document.clone();
         let region_impact = previous_scene
             .as_ref()
-            .map(|before| fullmag_authoring::classify_region_realization_impact(before, &scene_document))
+            .map(|before| {
+                fullmag_authoring::classify_region_realization_impact(before, &scene_document)
+            })
             .unwrap_or(fullmag_authoring::RegionRealizationImpact {
                 topology: true,
                 membership: true,
@@ -2766,9 +2889,8 @@ pub(crate) async fn commit_current_live_scene_document(
         snapshot.builder_adapter = Some(builder_state);
         let next_mesh_signature = scene_mesh_signature(&scene_document);
         snapshot.scene_document = Some(scene_document.clone());
-        snapshot.region_realization_revisions = snapshot
-            .region_realization_revisions
-            .advance(region_impact);
+        snapshot.region_realization_revisions =
+            snapshot.region_realization_revisions.advance(region_impact);
         let allow_live_magnetization_rebuild = snapshot
             .live_state
             .as_ref()
@@ -2961,8 +3083,11 @@ fn rebuild_live_scene_magnetization(
         let element_start = segment.element_start as usize;
         let element_end = element_start
             .saturating_add(segment.element_count as usize)
-            .min(mesh.elements.len());
-        for element in &mesh.elements[element_start..element_end] {
+            .min(mesh.cell_count());
+        for element_index in element_start..element_end {
+            let Some(element) = mesh.cells.item_nodes(element_index) else {
+                continue;
+            };
             for node in element {
                 let node = *node as usize;
                 if node < node_count && node_owner[node].is_none() {
@@ -3723,7 +3848,7 @@ fn build_spatial_preview_state(
             preview_grid: [vectors.len(), 1, 1],
             fem_mesh: Some(mesh.clone()),
             original_node_count: Some(mesh.nodes.len()),
-            original_face_count: Some(mesh.boundary_faces.len()),
+            original_face_count: Some(mesh.facet_count()),
             active_mask,
         }));
     }
@@ -3975,16 +4100,7 @@ fn build_preview_state_from_live_field(
     let display_kind = display_kind_for_quantity(&field.quantity).to_string();
 
     if field.spatial_kind == "mesh" {
-        let mesh = current
-            .fem_mesh
-            .as_ref()
-            .or_else(|| {
-                current
-                    .live_state
-                    .as_ref()
-                    .and_then(|state| state.latest_step.fem_mesh.as_ref())
-            })?
-            .clone();
+        let mesh = current.fem_mesh.as_ref()?.clone();
         let (min, max) = component_min_max(&vectors, component);
         let active_mask = field
             .active_mask
@@ -4024,7 +4140,7 @@ fn build_preview_state_from_live_field(
             preview_grid,
             fem_mesh: Some(mesh.clone()),
             original_node_count: Some(mesh.nodes.len()),
-            original_face_count: Some(mesh.boundary_faces.len()),
+            original_face_count: Some(mesh.facet_count()),
             active_mask,
         }));
     }

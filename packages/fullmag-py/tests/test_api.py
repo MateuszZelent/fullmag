@@ -4,6 +4,7 @@ import contextlib
 import copy
 import io
 import json
+import math
 import os
 import importlib.util
 import subprocess
@@ -34,6 +35,32 @@ from fullmag.model.problem import build_geometry_assets_for_request
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
+        cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        cache = {"cached": cached_assets}
+        with patch(
+            "fullmag.model.problem._geometry_asset_cache_key",
+            return_value="cached",
+        ):
+            copied = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[],
+                discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=1e-9)),
+                asset_cache=cache,
+            )
+            borrowed = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[],
+                discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=1e-9)),
+                asset_cache=cache,
+                _copy_cached_assets=False,
+            )
+
+        self.assertIsNot(copied, cached_assets)
+        self.assertIs(borrowed, cached_assets)
+        copied["fem_domain_mesh_asset"]["mesh"]["nodes"].append([1.0, 0.0, 0.0])
+        self.assertEqual(len(cached_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 1)
+
     def test_fdm_grid_cache_ignores_region_only_changes(self) -> None:
         geometry = fm.Cylinder(radius=10e-9, height=4e-9, name="film")
         discretization = fm.DiscretizationHints(
@@ -287,7 +314,7 @@ class ProblemApiTests(unittest.TestCase):
         problem = self._build_problem()
         ir = problem.to_ir()
 
-        self.assertEqual(ir["ir_version"], "0.2.0")
+        self.assertEqual(ir["ir_version"], "0.3.0")
         self.assertEqual(ir["problem_meta"]["script_language"], "python")
         self.assertEqual(ir["backend_policy"]["requested_backend"], "auto")
         self.assertEqual(ir["backend_policy"]["execution_precision"], "double")
@@ -305,6 +332,115 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["object_regions"], [])
         self.assertEqual(ir["material_parameter_fields"], [])
         self.assertEqual(ir["couplings"], [])
+
+    def test_legacy_anisotropy_energy_terms_migrate_to_the_single_material(self) -> None:
+        base_problem = self._build_problem()
+        material = replace(base_problem.magnets[0].material, Ku1=None, anisU=None)
+        problem = replace(
+            base_problem,
+            magnets=[replace(base_problem.magnets[0], material=material)],
+            energy=[
+                fm.Exchange(),
+                fm.UniaxialAnisotropy(ku1=0.5e6, ku2=0.1e6, axis=(0.0, 1.0, 0.0)),
+                fm.CubicAnisotropy(
+                    kc1=0.2e6,
+                    kc2=0.03e6,
+                    kc3=0.01e6,
+                    axis1=(0.0, 1.0, 0.0),
+                    axis2=(0.0, 0.0, 1.0),
+                ),
+            ],
+        )
+
+        ir = problem.to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["energy_terms"], [{"kind": "exchange"}])
+        material = ir["materials"][0]
+        self.assertEqual(material["uniaxial_anisotropy"], 0.5e6)
+        self.assertEqual(material["uniaxial_anisotropy_k2"], 0.1e6)
+        self.assertEqual(material["anisotropy_axis"], [0.0, 1.0, 0.0])
+        self.assertEqual(material["cubic_anisotropy_kc1"], 0.2e6)
+        self.assertEqual(material["cubic_anisotropy_kc2"], 0.03e6)
+        self.assertEqual(material["cubic_anisotropy_kc3"], 0.01e6)
+        self.assertEqual(material["cubic_anisotropy_axis1"], [0.0, 1.0, 0.0])
+        self.assertEqual(material["cubic_anisotropy_axis2"], [0.0, 0.0, 1.0])
+
+    def test_material_only_anisotropy_is_a_valid_problem(self) -> None:
+        problem = replace(self._build_problem(), energy=[])
+
+        ir = problem.to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["energy_terms"], [])
+        self.assertEqual(ir["materials"][0]["uniaxial_anisotropy"], 0.5e6)
+
+    def test_material_uses_signed_ku1_for_easy_plane_anisotropy(self) -> None:
+        material = replace(
+            self._build_problem().magnets[0].material,
+            Ku1=-0.5e6,
+            Ku2=-0.1e6,
+        )
+
+        self.assertEqual(material.to_ir()["uniaxial_anisotropy"], -0.5e6)
+        self.assertEqual(material.to_ir()["uniaxial_anisotropy_k2"], -0.1e6)
+
+    def test_legacy_anisotropy_energy_terms_reject_multiple_material_targets(self) -> None:
+        problem = self._build_problem()
+        second_magnet = fm.Ferromagnet(
+            name="second",
+            geometry=fm.Box(size=(100e-9, 20e-9, 5e-9), name="second"),
+            material=fm.Material(name="Co", Ms=1.4e6, A=30e-12, alpha=0.02),
+            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+        )
+
+        with self.assertRaisesRegex(ValueError, "single material"):
+            replace(
+                problem,
+                magnets=[*problem.magnets, second_magnet],
+                energy=[fm.Exchange(), fm.UniaxialAnisotropy(ku1=0.5e6)],
+            )
+
+    def test_legacy_anisotropy_script_rewrites_to_material_semantics(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            DEFAULT_UNTIL = 1e-12
+
+            def build():
+                geometry = fm.Box(size=(20e-9, 10e-9, 5e-9), name="film")
+                material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
+                magnet = fm.Ferromagnet(
+                    name="film",
+                    geometry=geometry,
+                    material=material,
+                    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+                )
+                return fm.Problem(
+                    name="legacy_anisotropy",
+                    magnets=[magnet],
+                    energy=[fm.Exchange(), fm.UniaxialAnisotropy(ku1=0.5e6, axis=(0.0, 1.0, 0.0))],
+                    study=fm.TimeEvolution(
+                        dynamics=fm.LLG(),
+                        outputs=[fm.SaveField("m", every=1e-12)],
+                    ),
+                )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "legacy_anisotropy.py"
+            source_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = Path(tmp_dir) / "rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertIn("Ku1", rendered)
+        ir = reloaded.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(ir["materials"][0]["uniaxial_anisotropy"], 0.5e6)
+        self.assertEqual(ir["materials"][0]["anisotropy_axis"], [0.0, 1.0, 0.0])
+        self.assertEqual(ir["energy_terms"], [{"kind": "exchange"}])
 
     def test_flat_api_object_region_lowers_to_ir(self) -> None:
         fm.reset()
@@ -795,6 +931,21 @@ class ProblemApiTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "endpoints must be surfaces"):
             registry.rkky("layer_a", "layer_b", J1=-0.3e-3)
 
+    def test_interlayer_exchange_lowers_to_ir(self) -> None:
+        registry = fm.CouplingRegistry()
+
+        coupling = registry.interlayer_exchange(
+            fm.couplings.surface("layer_a", "top"),
+            fm.couplings.surface("layer_b", "bottom"),
+            J1=1.0e-3,
+            J2=-1.0e-5,
+        )
+
+        self.assertEqual(
+            coupling.to_ir()["parameters"],
+            {"kind": "interlayer_exchange", "j1": 1.0e-3, "j2": -1.0e-5},
+        )
+
     def test_public_couplings_namespace_builds_surface_endpoint(self) -> None:
         self.assertEqual(
             fm.couplings.surface("layer", "top").to_ir(),
@@ -1076,6 +1227,18 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_problem_to_ir_rejects_periodic_airbox_demag_for_fdm(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            pbc=fm.FdmPbc(
+                axes=(True, False, False),
+                demag="periodic_airbox_k0",
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "periodic_airbox_k0.*FEM"):
+            problem.to_ir(requested_backend=fm.BackendTarget.FDM)
+
     def test_flat_pbc_configures_periodic_demag_images(self) -> None:
         fm.reset()
         try:
@@ -1191,7 +1354,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         study.pbc(x=True, y=True, demag="periodic_airbox_k0")
-        study.relax(max_steps=2)
+        study.relax(max_steps=2, dt=1e-15)
         """
 
         with TemporaryDirectory() as tmp_dir:
@@ -1967,6 +2130,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
 
+    def test_runtime_selection_rejects_unimplemented_multi_gpu_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "multi-GPU execution is not implemented"):
+            fm.backend.cuda(2)
+
     def test_study_execution_mode_serializes_to_ir(self) -> None:
         fm.reset()
         study = fm.study("projection_mode")
@@ -2452,6 +2619,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 1)
         relax_ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(relax_ir["kind"], "relaxation")
+        self.assertEqual(relax_ir["dynamics"]["adaptive_timestep"]["dt_max"], 1e-14)
         self.assertAlmostEqual(
             relax_ir["stop"]["torque_tolerance_apm"],
             1e-4 / 1.2566e-6,
@@ -2528,6 +2696,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(relax_dynamics["integrator"], "rk45")
         self.assertEqual(relax_dynamics["adaptive_timestep"]["atol"], 1e-4)
         self.assertEqual(relax_dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+        self.assertEqual(relax_dynamics["adaptive_timestep"]["dt_max"], 1e-14)
 
     def test_region_owned_gradient_ms_example_keeps_one_physical_object(self) -> None:
         example_path = (
@@ -2550,6 +2719,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(field_ir["parameter"], "ms")
         self.assertEqual(field_ir["value"]["kind"], "linear")
         self.assertEqual(ir["couplings"], [])
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["adaptive_timestep"]["dt_max"],
+            1e-14,
+        )
 
     def test_two_object_couplings_example_uses_explicit_exchange_and_rkky(self) -> None:
         example_path = (
@@ -2580,6 +2753,10 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "surface", "object": "reference_layer", "selector": "bottom"},
         )
         self.assertEqual(rkky["parameters"], {"kind": "rkky", "j1": -0.0003})
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["adaptive_timestep"]["dt_max"],
+            1e-14,
+        )
 
     def test_skyrmion_core_mesh_refinement_example_scopes_region_mesh_policy(self) -> None:
         example_path = (
@@ -2604,6 +2781,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(core_region["mesh_policy"]["maximum_element_size"], 1e-9)
         self.assertEqual(core_region["mesh_policy"]["minimum_element_size"], 1e-9)
         self.assertEqual(core_region["mesh_policy"]["transition_distance"], 40e-9)
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["adaptive_timestep"]["dt_max"],
+            1e-14,
+        )
 
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()
@@ -2660,6 +2841,19 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(builder["problem"]["universe"]["airbox_hmin"], 15e-9)
         self.assertEqual(builder["problem"]["universe"]["airbox_growth_rate"], 1.4)
         self.assertEqual(builder["problem"]["universe"]["airbox_grading"], "linear")
+
+    def test_study_magnet_handle_lowers_uniform_cubic_anisotropy(self) -> None:
+        fm.reset()
+        study = fm.study("study_cubic_anisotropy")
+        body = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.Kc1 = 48e3
+
+        problem = flat_world._build_problem()
+
+        self.assertEqual(problem.magnets[0].material.Kc1, 48e3)
+        self.assertEqual(problem.to_ir()["materials"][0]["cubic_anisotropy_kc1"], 48e3)
 
     def test_load_problem_from_study_script_preserves_universe_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -3161,7 +3355,7 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
 
-        stub_mesh = MeshData(
+        stub_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -3712,6 +3906,12 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(fdm.boundary_phi_floor, 0.1)
         self.assertEqual(fdm.boundary_delta_min, 0.2e-9)
 
+    def test_fdm_demag_rejects_removed_single_grid_fallback_switch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "allow_single_grid_fallback.*removed"):
+            fm.FDMDemag(allow_single_grid_fallback=True)
+
+        self.assertNotIn("allow_single_grid_fallback", fm.FDMDemag().to_ir())
+
     def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()
         simulation = fm.Simulation(
@@ -3897,7 +4097,7 @@ class ProblemApiTests(unittest.TestCase):
             discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -3943,7 +4143,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -3962,8 +4162,8 @@ class ProblemApiTests(unittest.TestCase):
         with patch.dict(os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": ""}), patch(
             "fullmag.meshing.realize_fem_mesh_asset", return_value=mesh
         ) as mocked_mesh, patch(
-            "fullmag.meshing.realize_fem_domain_mesh_asset_from_components",
-            return_value=(mesh, [{"geometry_name": "box_geom", "marker": 1}]),
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(mesh, [{"geometry_name": "box_geom", "marker": 1}], None),
         ) as mocked_domain, patch("fullmag._core.validate_mesh_ir", return_value=True):
             problem.to_ir(requested_backend=fm.BackendTarget.FEM)
 
@@ -4003,7 +4203,7 @@ class ProblemApiTests(unittest.TestCase):
         right.alpha = 0.1
         right.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4017,7 +4217,7 @@ class ProblemApiTests(unittest.TestCase):
             boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
             boundary_markers=np.asarray([1], dtype=np.int32),
         )
-        domain_mesh = MeshData(
+        domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4081,7 +4281,7 @@ class ProblemApiTests(unittest.TestCase):
             discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
-        surface_mesh = MeshData(
+        surface_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4116,7 +4316,7 @@ class ProblemApiTests(unittest.TestCase):
             ),
         )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4486,7 +4686,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.save("m", every=1e-12)
-        fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
+        fm.relax(max_steps=25, tolA=1e-5, algorithm="llg_overdamped")
         fm.run(4e-12)
         """
 
@@ -4670,7 +4870,9 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         study.save("m", every=1e-12)
-        study.stages.add_stage(fm.relax_stage(max_steps=25, tol=1e-5, algorithm="llg_overdamped"))
+        study.stages.add_stage(fm.relax_stage(
+            max_steps=25, tolA=1e-5, algorithm="llg_overdamped", dt=1e-15
+        ))
         study.stages.add_run(4e-12)
         """
 
@@ -4690,7 +4892,7 @@ class ProblemApiTests(unittest.TestCase):
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("study.stages.add_relax(", rewritten)
         self.assertIn("algorithm=\"llg_overdamped\"", rewritten)
-        self.assertIn("tol=1e-05", rewritten)
+        self.assertIn("tolA=1e-05", rewritten)
         self.assertIn("max_steps=25", rewritten)
         self.assertIn('study.stages.add_run(stage_id="run-1", until=4e-12)', rewritten)
 
@@ -4706,7 +4908,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
-        study.stages.add_relax(max_steps=25)
+        study.stages.add_relax(max_steps=25, dt=1e-15)
         study.stages.change_device("cpu")
         study.stages.add_eigenmodes(count=4)
         """
@@ -4760,6 +4962,30 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('operator="full_2x2"', rewritten)
+
+    def test_study_builder_eigenmodes_forwards_operator(self) -> None:
+        builder = flat_world.study("immediate_eigen_operator")
+
+        with patch("fullmag.world.eigenmodes", return_value="eigen-result") as mocked:
+            result = builder.eigenmodes(operator="full_2x2")
+
+        self.assertEqual(result, "eigen-result")
+        self.assertEqual(mocked.call_args.kwargs["operator"], "full_2x2")
+
+    def test_study_builder_frequency_response_forwards_solver_preconditioner(self) -> None:
+        builder = flat_world.study("immediate_frequency_preconditioner")
+
+        with patch("fullmag.world.frequency_response", return_value="response-result") as mocked:
+            result = builder.frequency_response(
+                frequencies_hz=[1.0e9],
+                solver_preconditioner="block_jacobi",
+            )
+
+        self.assertEqual(result, "response-result")
+        self.assertEqual(
+            mocked.call_args.kwargs["solver_preconditioner"],
+            "block_jacobi",
+        )
 
     def test_study_builder_relax_stage_roundtrips_solver_and_dt(self) -> None:
         script = """
@@ -4836,7 +5062,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 1)
         study_ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(study_ir["algorithm"], "nonlinear_cg")
-        self.assertEqual(study_ir["stop"]["torque_tolerance_apm"], 1e-4)
+        self.assertAlmostEqual(
+            study_ir["stop"]["torque_tolerance_apm"],
+            1e-6 / (4.0e-7 * math.pi),
+        )
         self.assertNotIn("dynamics", study_ir)
 
         stage_payload = export_builder_draft(loaded)["stages"][0]
@@ -4879,6 +5108,12 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-20e-3, 0.0, 20e-3],
+            timestep=fm.AdaptiveTimestep(
+                atol=1e-7,
+                rtol=2e-5,
+                dt_min=1e-16,
+                dt_max=1e-13,
+            ),
             direction=(1.0, 0.0, 0.0),
             settle=fm.RelaxStop(torque_tolerance_apm=5e-6, max_steps=40),
         )
@@ -4898,6 +5133,11 @@ class ProblemApiTests(unittest.TestCase):
                 stage.problem.study.to_ir()["stop"]["torque_tolerance_apm"],
                 5e-6,
             )
+            adaptive = stage.problem.study.to_ir()["dynamics"]["adaptive_timestep"]
+            self.assertEqual(adaptive["atol"], 1e-7)
+            self.assertEqual(adaptive["rtol"], 2e-5)
+            self.assertEqual(adaptive["dt_min"], 1e-16)
+            self.assertEqual(adaptive["dt_max"], 1e-13)
 
         zeeman_fields = []
         for stage in loaded.stages:
@@ -5834,6 +6074,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-10e-3, 10e-3],
+            timestep=1e-15,
             direction=(0.0, 0.0, 1.0),
             settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=25),
             save_state=True,
@@ -5850,6 +6091,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.stages[1].entrypoint_kind, "flat_save_state")
         self.assertEqual(loaded.stages[2].entrypoint_kind, "flat_relax")
         self.assertEqual(loaded.stages[3].entrypoint_kind, "flat_save_state")
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["fixed_timestep"],
+            1e-15,
+        )
         self.assertEqual(
             loaded.stages[1].action,
             {
@@ -5955,7 +6200,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         fm.save("m", every=1e-12)
-        fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
+        fm.relax(max_steps=25, tolA=1e-5, algorithm="llg_overdamped")
         fm.run(4e-12)
         """
 
@@ -5983,7 +6228,7 @@ class ProblemApiTests(unittest.TestCase):
             },
         )["rendered_source"]
 
-        self.assertIn('fm.relax(algorithm="nonlinear_cg", tol=2e-06, max_steps=250, energy_tolerance=3e-12)', rewritten)
+        self.assertIn('fm.relax(algorithm="nonlinear_cg", tolA=2e-06, max_steps=250, energy_tolerance=3e-12)', rewritten)
         self.assertIn("fm.run(9e-12)", rewritten)
 
     def test_script_rewrite_applies_eigen_k_path_override(self) -> None:
@@ -6324,6 +6569,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(metadata["demag_kind"], "periodic_airbox_k0")
         self.assertEqual(metadata["model"], "thin_film_in_plane")
         self.assertEqual(metadata["material"]["effective_magnetisation"], 800e3)
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["fixed_timestep"],
+            1e-15,
+        )
 
     def test_script_rewrite_preserves_windowed_dispersion_k_path(self) -> None:
         loaded = fm.load_problem_from_script(
@@ -6342,8 +6591,8 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("include_demag=False", rewritten)
         self.assertIn("k_sampling=fm.KPath", rewritten)
         self.assertIn('fm.KPoint("G", (0, 0, 0))', rewritten)
-        self.assertIn('fm.KPoint("X", (20000000, 0, 0))', rewritten)
-        self.assertIn('fm.KPoint("-X", (-20000000, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("X", (2000000, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("-X", (-2000000, 0, 0))', rewritten)
         self.assertIn("samples_per_segment=[1, 1, 1]", rewritten)
         self.assertIn('bc=fm.FloquetBC(["x_faces"])', rewritten)
 
@@ -6366,7 +6615,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(stage["eigen_include_demag"], False)
         self.assertEqual(
             stage["eigen_k_path"],
-            "G:0,0,0; X:20000000,0,0; G:0,0,0; -X:-20000000,0,0 | samples=1,1,1",
+            "G:0,0,0; X:2000000,0,0; G:0,0,0; -X:-2000000,0,0 | samples=1,1,1",
         )
         self.assertEqual(stage["eigen_spin_wave_bc"], "floquet")
         self.assertEqual(
@@ -6567,9 +6816,9 @@ class ProblemApiTests(unittest.TestCase):
             loaded = fm.load_problem_from_script(path, lightweight_assets=True)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("fm.solver(dt=2e-13, demag_interval_s=8e-13)", rewritten)
+        self.assertIn("fm.solver(fix_dt=2e-13, demag_interval_s=8e-13)", rewritten)
         self.assertIn(
-            'fm.relax(algorithm="llg_overdamped", stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_relaxation_time_s=4e-12))',
+            'fm.relax(algorithm="llg_overdamped", tolT=1.25663706144e-11, stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_relaxation_time_s=4e-12))',
             rewritten,
         )
 
@@ -6612,7 +6861,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=2e-13)
         fm.save("m", every=1e-12)
-        fm.relax(tol=1e-4, max_steps=250)
+        fm.relax(tolA=1e-4, max_steps=250)
         """
 
         with TemporaryDirectory() as tmp_dir:
@@ -6623,9 +6872,30 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.entrypoint_kind, "flat_relax")
         self.assertIsNone(loaded.default_until_seconds)
         self.assertEqual(loaded.problem.study.to_ir()["kind"], "relaxation")
+        self.assertEqual(loaded.problem.study.torque_tolerance_unit, "A/m")
         dynamics = loaded.problem.study.to_ir()["dynamics"]
         self.assertEqual(dynamics["integrator"], "rk23")
         self.assertIsNone(dynamics["fixed_timestep"])
+
+    def test_relax_stage_normalizes_default_tesla_and_explicit_ampere_tolerances(self) -> None:
+        expected_apm = 1e-6 / (4.0e-7 * math.pi)
+
+        default = fm.relax_stage(max_steps=20, dt=1e-15)
+        tesla = fm.relax_stage(tolT=1e-6, max_steps=20, dt=1e-15)
+        ampere = fm.relax_stage(tolA=expected_apm, max_steps=20, dt=1e-15)
+
+        self.assertAlmostEqual(default.stop.torque_tolerance_apm, expected_apm)
+        self.assertAlmostEqual(tesla.stop.torque_tolerance_apm, expected_apm)
+        self.assertAlmostEqual(ampere.stop.torque_tolerance_apm, expected_apm)
+        self.assertEqual(default.tol_unit, "T")
+        self.assertEqual(tesla.tol_unit, "T")
+        self.assertEqual(ampere.tol_unit, "A/m")
+
+    def test_relax_stage_rejects_legacy_and_ambiguous_tolerance_keywords(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tolT or tolA"):
+            fm.relax_stage(tol=1e-4, max_steps=20, dt=1e-15)
+        with self.assertRaisesRegex(ValueError, "only one"):
+            fm.relax_stage(tolT=1e-6, tolA=1.0, max_steps=20, dt=1e-15)
 
     def test_flat_relax_accepts_solver_and_dt_overrides(self) -> None:
         script = """
@@ -6825,6 +7095,7 @@ class ProblemApiTests(unittest.TestCase):
             solver="rk45",
             max_error=1e-4,
             dt_min=1e-17,
+            dt_max=1e-15,
             max_steps=5,
         )
         """
@@ -6838,6 +7109,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(dynamics["integrator"], "rk45")
         self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-4)
         self.assertEqual(dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+        self.assertEqual(dynamics["adaptive_timestep"]["dt_max"], 1e-15)
 
     def test_staged_relax_dt_max_lowers_to_adaptive_timestep(self) -> None:
         script = """
@@ -7438,6 +7710,62 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("layers=1", rewritten)
         self.assertIn("edge_transition_distance=3e-08", rewritten)
         self.assertIn("corner_transition_distance=2e-08", rewritten)
+
+    def test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.reset()
+        study = fm.study("mixed-p1-layers")
+        study.engine("fem")
+        study.mode("strict")
+        study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
+        film = study.geometry(
+            fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),
+            name="magnet",
+        )
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.1
+        film.m = fm.texture.uniform(1, 0, 0)
+        film.mesh.thin_film(
+            maximum_element_size=3e-9,
+            layers=3,
+            topology="prismatic",
+            exact_layers=True,
+            transition="pyramid_to_tetrahedra",
+            order=1,
+        )
+        study.relax(algorithm="projected_gradient_bb", max_steps=1)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "mixed_p1_publication_example.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+        problem_ir = loaded.problem.to_ir(include_geometry_assets=False)
+        mesh_workflow = problem_ir["problem_meta"]["runtime_metadata"]["mesh_workflow"]
+        self.assertEqual(
+            mesh_workflow["per_geometry"][0],
+            {
+                "geometry": "magnet",
+                "mode": "custom",
+                "hmax": 3e-9,
+                "maximum_element_size": 3e-9,
+                "order": 1,
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 3,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+                "topology": "prismatic",
+                "sweep_direction": "auto",
+                "element_family": "prism",
+                "transition_policy": "pyramid_to_tetrahedra",
+                "exact_layer_count": True,
+            },
+        )
 
     def test_thin_film_airbox_boundary_transition_token_round_trips(self) -> None:
         script = """
@@ -8853,7 +9181,215 @@ class ProblemApiTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["default_until_seconds"], 3e-12)
         self.assertEqual(payload["ir"]["problem_meta"]["name"], "runtime_config_problem")
-        self.assertIn("shared_geometry_assets", payload)
+        self.assertIsNone(payload["shared_geometry_assets"])
+        self.assertIn("geometry_assets", payload["ir"])
+
+    def test_run_config_geometry_assets_have_single_owner_without_stages(self) -> None:
+        original_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        original_ir = {"geometry_assets": original_assets}
+
+        exported_ir, shared_assets = runtime_helper._prepare_run_config_geometry_assets(
+            original_ir,
+            has_stages=False,
+        )
+
+        self.assertIs(exported_ir, original_ir)
+        self.assertIs(exported_ir["geometry_assets"], original_assets)
+        self.assertIsNone(shared_assets)
+        exported_ir["geometry_assets"]["fem_domain_mesh_asset"]["mesh"]["nodes"].append(
+            [1.0, 0.0, 0.0]
+        )
+        self.assertEqual(len(original_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 2)
+
+    def test_run_config_geometry_assets_are_isolated_for_stage_compaction(self) -> None:
+        class NoDeepcopyAssets(dict[str, object]):
+            def __deepcopy__(self, memo: dict[int, object]) -> object:
+                raise AssertionError("geometry assets must be detached before deepcopy")
+
+        original_assets = NoDeepcopyAssets(
+            {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        )
+        original_ir = {"geometry_assets": original_assets}
+
+        exported_ir, shared_assets = runtime_helper._prepare_run_config_geometry_assets(
+            original_ir,
+            has_stages=True,
+        )
+
+        self.assertIsNot(exported_ir, original_ir)
+        self.assertIsNone(exported_ir["geometry_assets"])
+        self.assertIs(shared_assets, original_assets)
+        shared_assets["fem_domain_mesh_asset"]["mesh"]["nodes"].append([1.0, 0.0, 0.0])
+        self.assertEqual(len(original_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 2)
+
+    def test_compact_stage_ir_detaches_shared_assets_before_deepcopy(self) -> None:
+        class NoDeepcopyAssets(dict[str, object]):
+            def __deepcopy__(self, memo: dict[int, object]) -> object:
+                raise AssertionError("geometry assets must be detached before deepcopy")
+
+        shared_assets = NoDeepcopyAssets(
+            {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        )
+        stage_ir = {
+            "geometry_assets": shared_assets,
+            "problem_meta": {"name": "stage"},
+        }
+
+        compacted = runtime_helper._compact_stage_ir(
+            stage_ir,
+            shared_geometry_assets=shared_assets,
+        )
+
+        self.assertIs(stage_ir["geometry_assets"], shared_assets)
+        self.assertIsNone(compacted["geometry_assets"])
+        compacted["problem_meta"]["name"] = "changed"
+        self.assertEqual(stage_ir["problem_meta"]["name"], "stage")
+
+    def test_compact_stage_ir_compacts_semantically_identical_assets(self) -> None:
+        shared_assets = {
+            "fem_domain_mesh_asset": {
+                "mesh": {"topology_fingerprint": "sha256:canonical-tet"}
+            }
+        }
+        stage_assets = {
+            "fem_domain_mesh_asset": {
+                "mesh": {"topology_fingerprint": "sha256:canonical-tet"}
+            }
+        }
+        stage_ir = {"geometry_assets": stage_assets}
+
+        compacted = runtime_helper._compact_stage_ir(
+            stage_ir,
+            shared_geometry_assets=shared_assets,
+        )
+
+        self.assertIsNot(stage_assets, shared_assets)
+        self.assertIs(stage_ir["geometry_assets"], stage_assets)
+        self.assertIsNone(compacted["geometry_assets"])
+
+    def test_compact_stage_ir_preserves_same_fingerprint_assets_with_different_markers(self) -> None:
+        shared_assets = {
+            "fem_domain_mesh_asset": {
+                "mesh": {"topology_fingerprint": "sha256:shared-topology"},
+                "region_markers": [{"geometry": "film", "marker": 1}],
+                "object_region_markers": [],
+                "build_report": {"degraded": False, "fallbacks_triggered": []},
+            }
+        }
+        stage_assets = copy.deepcopy(shared_assets)
+        stage_assets["fem_domain_mesh_asset"]["region_markers"] = [
+            {"geometry": "film", "marker": 7}
+        ]
+        stage_ir = {"geometry_assets": stage_assets}
+
+        compacted = runtime_helper._compact_stage_ir(
+            stage_ir,
+            shared_geometry_assets=shared_assets,
+        )
+
+        self.assertEqual(compacted["geometry_assets"], stage_assets)
+        self.assertIsNot(compacted["geometry_assets"], stage_assets)
+        self.assertEqual(
+            compacted["geometry_assets"]["fem_domain_mesh_asset"]["region_markers"],
+            [{"geometry": "film", "marker": 7}],
+        )
+
+    def test_helper_exports_sp4_overlay_without_real_geometry_assets(self) -> None:
+        scenario = Path(
+            "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = runtime_helper.main(
+                [
+                    "export-run-config",
+                    "--script",
+                    str(scenario),
+                    "--runtime-device",
+                    "cpu",
+                    "--skip-geometry-assets",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        base_metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(base_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            base_metadata["model_builder"]["problem"]["runtime"]["device"],
+            "auto",
+        )
+        self.assertEqual(
+            base_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+        self.assertEqual(len(payload["stages"]), 1)
+        stage_ir = payload["stages"][0]["ir"]
+        self.assertEqual(stage_ir["study"]["kind"], "relaxation")
+        stage_metadata = stage_ir["problem_meta"]["runtime_metadata"]
+        self.assertEqual(stage_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            stage_metadata["model_builder"]["problem"]["runtime"]["device"],
+            "auto",
+        )
+        self.assertEqual(
+            stage_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+        self.assertIsNone(stage_ir["geometry_assets"])
+
+    @unittest.skipUnless(
+        os.environ.get("FULLMAG_RUN_SLOW_REAL_ASSET_TESTS") == "1",
+        "set FULLMAG_RUN_SLOW_REAL_ASSET_TESTS=1 for the explicit slow real-asset export",
+    )
+    def test_slow_helper_exports_sp4_real_assets_with_cpu_override(self) -> None:
+        scenario = Path(
+            "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = runtime_helper.main(
+                [
+                    "export-run-config",
+                    "--script",
+                    str(scenario),
+                    "--runtime-device",
+                    "cpu",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        base_metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(base_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            base_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+        stage_metadata = payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(stage_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            stage_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+
+        domain_asset = payload["shared_geometry_assets"]["fem_domain_mesh_asset"]
+        report = domain_asset["build_report"]
+        certificate = report["mixed_layer_topology_certificate"]
+        self.assertEqual(
+            certificate["schema_version"], "mixed_layer_topology_certificate.v1"
+        )
+        self.assertEqual(certificate["certificate_status"], "accepted")
+        self.assertEqual(
+            certificate["topology_fingerprint"],
+            domain_asset["mesh"]["mixed_layer_topology_certificate"]
+            ["topology_fingerprint"],
+        )
+        self.assertEqual(report["fallbacks_triggered"], [])
+        self.assertFalse(report["degraded"])
+        self.assertEqual(certificate["fallbacks_triggered"], [])
 
     def test_helper_exports_run_config_with_flat_stage_sequence(self) -> None:
         script = """
@@ -8931,6 +9467,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-5e-3, 5e-3],
+            timestep=1e-15,
             settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=20),
             save_state=True,
         )

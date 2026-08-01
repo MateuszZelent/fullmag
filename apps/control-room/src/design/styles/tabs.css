@@ -3,16 +3,17 @@
   min-width: 0;
   align-items: center;
   gap: var(--fm-space-1);
+  min-height: var(--fm-inspector-tab-height);
 }
 
 .fm-tabs-trigger {
   display: inline-flex;
-  height: 24px;
+  height: var(--fm-control-height-regular);
   min-width: 0;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: transparent;
   color: var(--fm-text-muted);
   cursor: pointer;
@@ -37,7 +38,21 @@
   color: var(--fm-accent);
 }
 
+.fm-tabs-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-tabs-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .fm-tabs-content {
   min-width: 0;
   min-height: 0;
+}
+
+.fm-tabs-content:focus-visible {
+  outline: none;
 }

@@ -8,8 +8,10 @@ type WorkspaceColumnId = Extract<
 export interface WorkspaceColumnLayout {
   slotId: WorkspaceColumnId;
   label: string;
-  defaultSize: number;
-  minSize: number;
+  defaultSize: string;
+  minSize: string;
+  maxSize?: string;
+  resizeBehavior?: "preserve-pixel-size" | "preserve-relative-size";
 }
 
 export interface WorkspaceLayout {
@@ -26,26 +28,28 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
     {
       slotId: "panel-left",
       label: "Explorer",
-      defaultSize: 20,
-      minSize: 16,
+      defaultSize: "20%",
+      minSize: "16%",
     },
     {
       slotId: "viewport-main",
       label: "Viewport",
-      defaultSize: 40,
-      minSize: 32,
+      defaultSize: "40%",
+      minSize: "32%",
     },
     {
       slotId: "viewport-aux",
       label: "Section",
-      defaultSize: 22,
-      minSize: 20,
+      defaultSize: "22%",
+      minSize: "20%",
     },
     {
       slotId: "panel-right",
       label: "Inspector",
-      defaultSize: 18,
-      minSize: 18,
+      defaultSize: "416px",
+      minSize: "360px",
+      maxSize: "560px",
+      resizeBehavior: "preserve-pixel-size",
     },
   ],
   bottomDockDefaultSize: 22,

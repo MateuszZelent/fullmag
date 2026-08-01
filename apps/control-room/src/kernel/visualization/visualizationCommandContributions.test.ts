@@ -155,7 +155,7 @@ describe("visualization target commands", () => {
     });
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
       .toMatchObject({
-        wireframeVisible: true,
+        wireframeVisible: false,
       });
   });
 
@@ -227,7 +227,7 @@ describe("visualization target commands", () => {
         kind: "object",
       },
       {
-        opacityPercent: 35,
+        surfaceOpacityPercent: 35,
       },
     );
 
@@ -243,7 +243,7 @@ describe("visualization target commands", () => {
     expect(result.status).toBe("completed");
     expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
       .toMatchObject({
-        opacityPercent: 100,
+        surfaceOpacityPercent: 100,
       });
   });
 

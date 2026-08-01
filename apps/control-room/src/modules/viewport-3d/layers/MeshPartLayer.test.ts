@@ -3,7 +3,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_OBJECT_VISUALIZATION,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
+
+import {
   createMeshPartSurfaceGeometry,
+  resolveMeshPartSurfacePickIdentity,
   resolveMeshPartBoundaryFaceIndexForPick,
   resolveMeshPartVisibleScalarColorState,
   resolveRetainedMeshPartScalarColors,
@@ -13,10 +19,266 @@ import {
   resolveMeshPartPointNodeSelection,
   recordMeshPartSurfaceAdoption,
 } from "./MeshPartLayer";
+import {
+  buildMeshPartScalarColorRetentionKey,
+  resolveMeshPartCommittedScalarColorState,
+} from "./meshPartScalarTransition";
+import {
+  buildMeshPartSurfaceGeometryUploadKey,
+  resolveMeshPartSurfaceGeometryProjection,
+} from "./meshPartGeometryPlan";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
+  it("maps both render triangles of a quad back to the same global facet", () => {
+    const part = {
+      boundary_face_count: 2,
+      boundary_face_start: 7,
+    };
+    const mapping = new Uint32Array([7, 8, 8]);
+
+    expect(resolveMeshPartBoundaryFaceIndexForPick({
+      expandedSurfaceFaces: false,
+      faceIndex: 1,
+      part,
+      surfaceTriangleFacetIndices: mapping,
+    })).toBe(8);
+    expect(resolveMeshPartBoundaryFaceIndexForPick({
+      expandedSurfaceFaces: false,
+      faceIndex: 2,
+      part,
+      surfaceTriangleFacetIndices: mapping,
+    })).toBe(8);
+  });
+
+  it("resolves canonical cell identity only for actual surface hits", () => {
+    const surfacePick = resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 1,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_indices: [13],
+        boundary_face_start: 13,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes: new Uint32Array([2, 3]),
+      surfaceTriangleFacetIndices: new Uint32Array([13, 13]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([
+        BigInt(7),
+        BigInt("9007199254740993"),
+      ]),
+    });
+    expect(surfacePick).toEqual({
+      boundaryFaceIndex: 13,
+      elementFamily: "pyramid5",
+      globalCellOrdinal: "9007199254740993",
+    });
+
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 1,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_indices: [13],
+        boundary_face_start: 13,
+      },
+      surfaceHit: false,
+      surfaceTriangleCellTypes: new Uint32Array([2, 3]),
+      surfaceTriangleFacetIndices: new Uint32Array([13, 13]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(7), BigInt(8)]),
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+
+  it("fails closed for unresolved or misaligned surface cell mappings", () => {
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes: new Uint32Array([0]),
+      surfaceTriangleFacetIndices: new Uint32Array([3]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(0)]),
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 2,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes: new Uint32Array([2, 2]),
+      surfaceTriangleFacetIndices: new Uint32Array([3, 4]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(9)]),
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+
+  it.each([
+    ["facet only", new Uint32Array([3]), undefined, undefined],
+    ["type only", undefined, new Uint32Array([2]), undefined],
+    ["ordinal only", undefined, undefined, new BigUint64Array([BigInt(9)])],
+    ["facet and type", new Uint32Array([3]), new Uint32Array([2]), undefined],
+  ])("fails closed for a partial %s identity map", (
+    _variant,
+    surfaceTriangleFacetIndices,
+    surfaceTriangleCellTypes,
+    surfaceTriangleGlobalCellOrdinals,
+  ) => {
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes,
+      surfaceTriangleFacetIndices,
+      surfaceTriangleGlobalCellOrdinals,
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+
+  it("keeps the boundary-only legacy pick when all identity maps are absent", () => {
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+    })).toEqual({
+      boundaryFaceIndex: 3,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+  it("changes scalar upload retention identity when the requested field appearance changes", () => {
+    const key = ({
+      mode = "orientation",
+      palette = "viridis",
+      quantityId = "m",
+    }: {
+      mode?: string;
+      palette?: string;
+      quantityId?: string;
+    } = {}) =>
+      buildMeshPartScalarColorRetentionKey({
+        mode,
+        partId: "part:film",
+        projection: "indexed",
+        quantityId,
+        scalarColorPalette: palette,
+        topologyRevision: 7,
+        vertexCount: 12,
+      });
+
+    const initial = key();
+    expect(key({ mode: "x" })).not.toBe(initial);
+    expect(key({ palette: "magma" })).not.toBe(initial);
+    expect(key({ quantityId: "H_eff" })).not.toBe(initial);
+  });
+
+  it("does not retain a previous field texture while another quantity or component is loading", () => {
+    const previous = {
+      colorMode: "x",
+      colorPalette: "viridis",
+      colors: new Float32Array(12),
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      resolveRetainedMeshPartScalarColors({
+        current: null,
+        previous,
+        scalarColorMode: "y",
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: "H_demag",
+          scalarColorPalette: "viridis",
+          surfaceProjectionMode: "raw_nodal",
+        },
+        topologyRevision: 7,
+        vertexCount: 4,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the committed shader visible while requested vertex colors are pending", () => {
+    const committedShader = {
+      colors: new Float32Array(0),
+      colorMode: "orientation",
+      range: { max: 1, min: 0 },
+      vectorValues: new Float32Array(6),
+    };
+
+    expect(
+      resolveMeshPartCommittedScalarColorState({
+        requestedPipeline: "vertex",
+        visibleShaderColors: committedShader,
+        visibleVertexColors: null,
+      }),
+    ).toEqual({ buffer: committedShader, pipeline: "shader" });
+  });
+
+  it("keeps committed vertex colors visible while a requested shader is pending", () => {
+    const committedVertex = {
+      colors: new Float32Array(6),
+      colorMode: "orientation",
+      range: { max: 1, min: 0 },
+    };
+
+    expect(
+      resolveMeshPartCommittedScalarColorState({
+        requestedPipeline: "shader",
+        visibleShaderColors: null,
+        visibleVertexColors: committedVertex,
+      }),
+    ).toEqual({ buffer: committedVertex, pipeline: "vertex" });
+  });
+
+  it("keeps geometry upload identity stable across quantity, component, and colormap changes", () => {
+    const geometryKey = (patch: Partial<VisualizationTargetSettings>) =>
+      buildMeshPartSurfaceGeometryUploadKey({
+        indicesByteLength: 96,
+        partId: "part:film",
+        positionsByteLength: 384,
+        projection: resolveMeshPartSurfaceGeometryProjection({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "component_x",
+          ...patch,
+        }),
+        topologyRevision: 7,
+      });
+    const initial = geometryKey({});
+
+    expect(geometryKey({ activeQuantityId: "H_eff" })).toBe(initial);
+    expect(geometryKey({ surfaceColorSource: "component_y" })).toBe(initial);
+    expect(geometryKey({ scalarColorPalette: "magma" })).toBe(initial);
+  });
+
   it("uses the effective full node selection for the points pass", () => {
     const fullNodeSelection = { nodeIndices: [4, 5, 6] };
     expect(
@@ -204,25 +466,37 @@ describe("MeshPartLayer", () => {
   });
 
   it("expands surface geometry for every projected surface mode", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
-      "utf8",
-    );
-
-    expect(source).toContain('renderSettings.surfaceProjectionMode !== "raw_nodal"');
+    expect(
+      resolveMeshPartSurfaceGeometryProjection({
+        surfaceColorSource: "component_x",
+        surfaceProjectionMode: "surface_faces",
+      }),
+    ).toBe("surface_faces");
+    expect(
+      resolveMeshPartSurfaceGeometryProjection({
+        surfaceColorSource: "component_x",
+        surfaceProjectionMode: "thickness_average_z",
+      }),
+    ).toBe("thickness_average_z");
+    expect(
+      resolveMeshPartSurfaceGeometryProjection({
+        surfaceColorSource: "component_x",
+        surfaceProjectionMode: "raw_nodal",
+      }),
+    ).toBe("indexed");
   });
 
-  it("maps face-expanded picks back to canonical boundary face indices", () => {
+  it("requires positional facet mapping for face-expanded picks", () => {
     expect(
       resolveMeshPartBoundaryFaceIndexForPick({
         expandedSurfaceFaces: true,
-        faceIndex: 1,
+        faceIndex: 2,
         part: {
           boundary_face_count: 2,
           boundary_face_start: 7,
         },
       }),
-    ).toBe(8);
+    ).toBeNull();
     expect(
       resolveMeshPartBoundaryFaceIndexForPick({
         expandedSurfaceFaces: true,
@@ -232,6 +506,7 @@ describe("MeshPartLayer", () => {
           boundary_face_indices: [11, 13],
           boundary_face_start: 7,
         },
+        surfaceTriangleFacetIndices: new Uint32Array([11, 13, 13]),
       }),
     ).toBe(13);
   });
@@ -254,21 +529,17 @@ describe("MeshPartLayer", () => {
     expect(uploadEffect).not.toContain("useEffect(() => {\n    store.publish(null);");
   });
 
-  it("keys scalar color upload retention by per-part color semantics", () => {
+  it("keys scalar color upload retention by stable carrier semantics", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
 
     expect(source).toContain("const scalarColorRetentionKey = useMemo");
-    expect(source).toContain("`part=${part.id}`");
-    expect(source).toContain("`mode=${scalarColorMode}`");
-    expect(source).toContain(
-      "`quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`",
-    );
-    expect(source).toContain(
-      "`palette=${renderSettings.scalarColorPalette ?? \"default\"}`",
-    );
+    expect(source).toContain("buildMeshPartScalarColorRetentionKey({");
+    expect(source).toContain("partId: part.id");
+    expect(source).toContain("mode: scalarColorMode");
+    expect(source).toContain("quantityId: renderSettings.activeQuantityId");
     expect(source).toContain("retentionKey: scalarColorRetentionKey");
   });
 
@@ -665,7 +936,7 @@ buildReference: null,
     });
   });
 
-  it("retains the last compatible scalar texture while a different color mode is building", () => {
+  it("does not retain a scalar texture while a different color mode is building", () => {
     const previousOrientation = {
       colors: new Float32Array(0),
       colorMode: "orientation",
@@ -694,7 +965,7 @@ buildReference: null,
         },
         vertexCount: 2,
       }),
-    ).toBe(previousOrientation);
+    ).toBeNull();
     expect(
       resolveRetainedMeshPartScalarColors({
         current: replacementY,
@@ -709,7 +980,7 @@ buildReference: null,
     ).toBe(replacementY);
   });
 
-  it("does not retain a stale scalar texture from a different quantity", () => {
+  it("does not retain a scalar texture while a different quantity is pending", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
       colorMode: "y",
@@ -810,7 +1081,7 @@ buildReference: null,
     ).toBeNull();
   });
 
-  it("does not retain scalar textures across quantity or solid-color changes", () => {
+  it("does not retain scalar textures across pending quantity changes or solid color", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
       colorMode: "y",

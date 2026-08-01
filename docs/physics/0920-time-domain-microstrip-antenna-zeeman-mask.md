@@ -228,6 +228,12 @@ window `f(t)` for `0 <= t < T`; the UI must show that actual window and may
 also show the centred coordinate `tau=t-t0`. It must not silently reflect,
 extend, or recenter the waveform.
 
+Unequal left/right sinc-tail lengths are an informational truncation diagnostic,
+not an invalid workflow: a spectroscopy run normally keeps a much longer
+post-pulse interval to resolve free precession. Hard validation is reserved for
+an invalid sampling clock, a missing response observable, or a violated Nyquist
+condition.
+
 If a "dowolna funkcja czasu" UI is needed, it should lower to one of:
 
 1. `PiecewiseLinear(points=[...])` for sampled waveforms,
@@ -548,6 +554,8 @@ sources. A typical spectroscopy workflow is:
 Relax(stage_id="relax")
 AddFieldDrive(stage_id="add-k0-antenna", drive=RegionalFieldDrive(...))
 Run(stage_id="excite", ...)
+RemoveFieldDrive(stage_id="remove-antenna", drive_id="k0-sinc-antenna")
+Run(stage_id="free-evolution", ...)
 ```
 
 `AddFieldDrive` is a typed, zero-duration pipeline action. It leaves the
@@ -564,6 +572,24 @@ subsequent stages. Therefore:
 5. removing or moving the action changes exactly the downstream stages;
 6. duplicate drive ids and invalid targets fail at the action boundary.
 
+`RemoveFieldDrive` is the symmetrical typed, zero-duration action. It removes
+exactly one drive by `RegionalFieldDrive.id` from the persistent problem state
+seen by subsequent stages while preserving magnetization, mesh, materials,
+solver time, device residency, and output configuration. The public command is:
+
+```python
+study.stages.remove_field_drive(
+    "k0-sinc-antenna",
+    stage_id="remove-antenna",
+)
+```
+
+The positional `drive_id` names the physical source. The optional `stage_id`
+names only the removal action; it never identifies a Run or the earlier add
+action. Removing an unknown or already removed identifier fails at the action
+boundary. A removed identifier may be added again later. Removing one source
+does not mutate any other active source.
+
 The older global-definition plus `DriveActivation.stage_ids(...)` form remains
 valid compatibility input. It does not replace the explicit action in new UI
 pipelines. Dynamic drives remain invalid in minimize/direct-relax stages.
@@ -577,20 +603,48 @@ The stage must record whether `t` is:
 The default for new spin-wave stages should be stage-local time because users
 usually design a pulse relative to the drive stage start.
 
-### 5.1.1 Stage-local outputs and sampling
+### 5.1.1 Independent output and analysis commands
 
-Output policy belongs to the compute stage that produces the samples. A `Run`
-may define:
+The public scripting surface follows the MuMax command model: configuration
+commands mutate the persistent problem state seen by subsequent compute
+instructions, while `add_run()` only starts time integration. Table sampling,
+field/scalar autosave, and response analysis must not be nested inside
+`add_run()`. They are typed zero-duration stages because their enabled state
+may change between two time-integration intervals.
 
-- table autosave enabled/disabled, period `t_sampling`, and scalar quantities;
-- field autosave entries such as `m`, `H_drive`, `H_demag`, and `H_eff`, each
-  with its own cadence;
-- a Gamma-response analysis request (component, weighting, detrend, window,
-  and susceptibility floor).
+The canonical order is therefore:
 
-Global output settings are backward-compatible defaults only. A stage-local
-value wins when present. UI preview and script export must preserve the same
-precedence and must label which value is effective.
+```python
+t_sampling = 5e-13
+study.stages.tableautosave(t_sampling, quantities=["t", "mx", "my", "mz"])
+study.stages.autosave("m", every=2e-12)
+study.stages.autosave("H_drive", every=t_sampling)
+study.stages.fft_response("my")
+study.stages.add_run(stage_id="excite", until=2e-9)
+```
+
+`tableautosave()` defines the active response clock `t_sampling`.
+`autosave()` commands independently define field/scalar artifact cadences.
+`fft_response()` is an optional, independent post-processing request that
+selects the response component; its defaults are the physically documented
+Ms-times-lumped-volume weighting, linear detrend, Hann window, and a `1e-6`
+source-spectrum floor. The internal artifact request name
+`spin_wave_response` is not part of the normal user-facing workflow.
+
+Each command takes effect from its position in the ordered pipeline, preserves
+magnetization, mesh, materials, and solver time, and persists until another
+configuration stage changes it. An unsampled interval is therefore explicit:
+
+```python
+study.stages.tableautosave(enabled=False)
+study.stages.autosave("m", enabled=False)
+study.stages.add_run(stage_id="unsampled", until=1e-9)
+```
+
+The canonical exporter must reproduce configuration changes immediately before
+the first compute instruction that observes them. This keeps relaxation free
+of an analysis request added only after relaxation and makes state transfer
+explicit.
 
 For a planned run of duration `T` sampled every `Delta t_s`, the samples are
 
@@ -606,6 +660,74 @@ For `T=2 ns` and `Delta t_s=0.5 ps`, `N=4000`, `Delta f=0.5 GHz`, and
 `f_Nyquist=1 THz`. The integration step `dt`, table/response `t_sampling`, and
 field snapshot cadence are distinct quantities and must be displayed
 separately.
+
+### Automatic response sampling from a sinc cutoff
+
+For the active sinc-drive set `D_sinc(run)`,
+
+\[
+f_{c,max}=\max_{d\in D_{sinc}(run)} f_{c,d},\qquad
+f_{N,target}=1.3 f_{c,max},\qquad
+\Delta t_{sample}=\frac{1}{2f_{N,target}}.
+\]
+
+All frequencies are in Hz and `Delta t_sample` is in seconds. The fixed factor
+1.3 supplies a 30% Nyquist guard. For `f_c,max=5 GHz`, `f_N,target=6.5 GHz`,
+`f_sample=13 GHz`, and `Delta t_sample=76.923076923 ps`.
+
+The exact lowercase Python token `"auto"` selects this policy for
+`tableautosave()` or for an `autosave(..., every=...)` cadence. It is symbolic
+requested intent: Python and UI authoring, canonical script export, and reload
+must preserve `"auto"` rather than replacing it with a resolved float. Other
+strings and boolean values are invalid. Numeric periods retain their current
+explicit behavior and take precedence over automatic resolution for that
+instruction.
+
+ProblemIR and scene/study authoring payloads represent the requested cadence as
+a tagged policy:
+
+```text
+explicit { period_s }
+auto_sinc_cutoff { nyquist_guard_factor: 1.3 }
+```
+
+Legacy payloads containing only `sample_period_s` deserialize as `explicit`.
+Unknown future policy kinds fail closed and remain preserved losslessly as
+read-only authoring payloads. The resolved numerical period is plan/provenance
+state and must never overwrite the requested ProblemIR policy.
+
+Resolution is per `Run`, from ordered workflow state immediately before that
+run. `D_sinc(run)` contains only sinc drives that were already added, remain
+enabled, have not been removed, apply to the target run under their activation
+policy, and have a finite positive `cutoff_hz`. A persistent automatic
+instruction may therefore resolve to different periods for later runs as the
+active drive set changes.
+For one run, automatic table autosave and automatic field autosave use the same
+active-drive rule and resolve to the same period; numeric autosave cadences
+remain independent.
+
+One backend-neutral planner resolver serves FDM and FEM, on CPU and GPU, after
+ordered actions and drive activation are resolved and before output events are
+scheduled. Backends consume only the resolved positive `sample_period_s` and
+must not reimplement the cutoff or guard formula. The runtime scheduler may
+shorten integration steps to land exactly on sampling events. A fixed-step
+backend that cannot land on that clock rejects the plan instead of shifting
+output times.
+
+Run/stage provenance and sampling artifacts record the requested policy,
+resolved `sample_period_s`, source drive identifiers, maximum source
+`cutoff_hz`, guard factor, target Nyquist frequency, sampling frequency, and
+target run/stage identifier. This requested-versus-resolved split is identical
+for FDM and FEM and is retained across Python/UI round-trip.
+
+Automatic resolution fails closed during workflow validation/planning when no
+applicable active sinc drive exists, an applicable cutoff is non-finite or
+non-positive, or an automatic policy reaches backend dispatch unresolved. The
+diagnostic names the automatic instruction and target run. Resolution must not
+guess from solver `dt`, run duration, sinusoidal frequency, or a UI preview
+clock. If the selected backend cannot land on the resolved events, it also
+fails closed. Exceeding a bounded preview or analysis sample limit disables or
+decimates only that preview and does not invalidate the physical runtime clock.
 
 The source preview FFT uses the authored waveform evaluated on this planned
 clock. The response FFT uses actual artifact timestamps. Before an FFT, the
@@ -831,12 +953,17 @@ object / region target, spatial profile, waveform, stage-local/absolute clock,
 and compatibility activation metadata. It includes a live plot of the actual
 `sinc(t-t0)` window and its discrete source spectrum.
 
-The `Run` inspector owns `Sampling & outputs` and `Gamma response` sections. It
-must show, before execution, the effective integration `dt`, response
-`t_sampling`, `N`, duration, `Delta f`, Nyquist, sinc cutoff, and the provenance
-of every cadence (stage-local or inherited). After execution the analysis view
-shows actual drive and magnetization traces, source/response spectra, and peak
-table from the versioned resource
+The Study tree owns independent `Table autosave`, `Autosave quantity`, and `FFT
+response` stage inspectors, including explicit ON/OFF state. The `Run`
+inspector owns only time integration, execution progress, produced results, and
+a read-only summary of the configuration active at its position. The antenna
+inspector resolves the last active `t_sampling` stage before the target Run and
+must show, before execution,
+response `N`, duration, `Delta f`, Nyquist, sinc cutoff, the maximum legal
+`t_sampling = 1/(2 f_c)`, the guarded automatic period
+`t_sampling = 1/(2 * 1.3 * f_c)`, and an explicit pass/fail Nyquist verdict. After
+execution the analysis view shows actual drive and magnetization traces,
+source/response spectra, and peak table from the versioned resource
 `/v2/sessions/current/analysis/spin-wave/gamma.v1`.
 
 The inspector and analysis module share only pure physics/sampling models under
@@ -1131,7 +1258,8 @@ quantity metadata must expose sampling location.
 - [x] FEM CPU implementation
 - [x] FEM GPU implementation
 - [x] OpenAPI/resource implementation for regional drive and Gamma response
-- [ ] Explicit `AddFieldDrive` pipeline action and stage-local outputs
+- [x] Explicit `AddFieldDrive` pipeline action and stage-local outputs
+- [x] Explicit `RemoveFieldDrive` pipeline action and round-trip
 - [ ] Dedicated stage inspectors and complete planned/actual FFT UI
 - [ ] End-to-end browser/runtime qualification for the explicit pipeline
 

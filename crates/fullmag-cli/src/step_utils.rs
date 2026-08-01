@@ -1,7 +1,8 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use fullmag_ir::{BackendPlanIR, ProblemIR, RegionalFieldDriveIR};
+use fullmag_ir::{BackendPlanIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -19,11 +20,121 @@ use crate::types::{
     StudyPipelineDocument, StudyPipelineNode,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScriptOutputPaths {
+    pub(crate) workspace_dir: PathBuf,
+    pub(crate) artifact_dir: PathBuf,
+    pub(crate) is_sibling_zarr_bundle: bool,
+}
+
+pub(crate) fn resolve_script_output_paths(
+    script_path: &Path,
+    explicit_output_dir: Option<&Path>,
+    session_root: &Path,
+    session_id: &str,
+) -> ScriptOutputPaths {
+    if let Some(artifact_dir) = explicit_output_dir {
+        return ScriptOutputPaths {
+            workspace_dir: session_root.join(session_id),
+            artifact_dir: artifact_dir.to_path_buf(),
+            is_sibling_zarr_bundle: false,
+        };
+    }
+
+    let workspace_dir = script_path.with_extension("zarr");
+    ScriptOutputPaths {
+        artifact_dir: workspace_dir.join("artifacts"),
+        workspace_dir,
+        is_sibling_zarr_bundle: true,
+    }
+}
+
+pub(crate) fn initialize_zarr_group(path: &Path, attributes: serde_json::Value) -> Result<()> {
+    fs::create_dir_all(path)
+        .with_context(|| format!("failed to create Zarr group {}", path.display()))?;
+    fs::write(
+        path.join(".zgroup"),
+        serde_json::to_vec_pretty(&serde_json::json!({"zarr_format": 2}))?,
+    )
+    .with_context(|| format!("failed to write Zarr group metadata in {}", path.display()))?;
+    fs::write(
+        path.join(".zattrs"),
+        serde_json::to_vec_pretty(&attributes)?,
+    )
+    .with_context(|| format!("failed to write Zarr attributes in {}", path.display()))?;
+    Ok(())
+}
+
+pub(crate) fn initialize_script_result_bundle(
+    paths: &ScriptOutputPaths,
+    script_path: &Path,
+    session_id: &str,
+) -> Result<()> {
+    initialize_zarr_group(
+        &paths.workspace_dir,
+        serde_json::json!({
+            "fullmag_schema": "fullmag.script_results.v1",
+            "script_path": script_path,
+            "session_id": session_id,
+            "artifacts_group": "artifacts",
+            "stages_group": "stages",
+        }),
+    )?;
+    initialize_zarr_group(
+        &paths.artifact_dir,
+        serde_json::json!({"fullmag_role": "final_stage_artifacts"}),
+    )?;
+    initialize_zarr_group(
+        &paths.workspace_dir.join("stages"),
+        serde_json::json!({"fullmag_role": "stage_artifacts"}),
+    )?;
+    Ok(())
+}
+
+pub(crate) fn replace_and_initialize_script_result_bundle(
+    paths: &ScriptOutputPaths,
+    script_path: &Path,
+    session_id: &str,
+) -> Result<()> {
+    if !paths.is_sibling_zarr_bundle {
+        bail!("refusing to replace a non-default result directory");
+    }
+
+    if paths.workspace_dir.exists() {
+        let metadata = fs::symlink_metadata(&paths.workspace_dir).with_context(|| {
+            format!(
+                "failed to inspect existing default result bundle {}",
+                paths.workspace_dir.display()
+            )
+        })?;
+        if !metadata.file_type().is_dir() {
+            bail!(
+                "default result bundle path is not a directory: {}",
+                paths.workspace_dir.display()
+            );
+        }
+        fs::remove_dir_all(&paths.workspace_dir).with_context(|| {
+            format!(
+                "failed to replace existing default result bundle {}",
+                paths.workspace_dir.display()
+            )
+        })?;
+    }
+
+    initialize_script_result_bundle(paths, script_path, session_id)
+}
+
 pub(crate) fn emit_initial_state_warnings(
     live_workspace: Option<&LocalLiveWorkspace>,
-    backend_plan: &BackendPlanIR,
+    problem: &fullmag_ir::ProblemIR,
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<()> {
-    let diagnostic = crate::diagnostics::diagnose_initial_backend_plan(backend_plan)?;
+    let resolved_runtime = fullmag_runner::resolve_planned_runtime_engine(problem, execution_plan)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let diagnostic = crate::diagnostics::diagnose_initial_backend_plan(
+        &execution_plan.backend_plan,
+        &resolved_runtime,
+    )?;
     for warning in diagnostic.warnings {
         eprintln!("fullmag diagnostic warning: {}", warning);
         if let Some(workspace) = live_workspace {
@@ -34,16 +145,15 @@ pub(crate) fn emit_initial_state_warnings(
 }
 
 pub(crate) fn offset_step_update(
-    update: &fullmag_runner::StepUpdate,
+    mut update: fullmag_runner::StepUpdate,
     step_offset: u64,
     time_offset: f64,
     finished: bool,
 ) -> fullmag_runner::StepUpdate {
-    let mut adjusted = update.clone();
-    adjusted.stats.step += step_offset;
-    adjusted.stats.time += time_offset;
-    adjusted.finished = finished;
-    adjusted
+    update.stats.step = update.stats.step.saturating_add(step_offset);
+    update.stats.time += time_offset;
+    update.finished = finished;
+    update
 }
 
 pub(crate) fn offset_step_stats(
@@ -77,6 +187,162 @@ pub(crate) fn stage_artifact_dir(
         .join(format!("stage_{stage_index:02}_{entrypoint_kind}"))
 }
 
+#[cfg(test)]
+mod output_path_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn default_script_output_is_one_sibling_zarr_bundle() {
+        let paths = resolve_script_output_paths(
+            Path::new("/work/scenarios/case_a_rk4_fixed.py"),
+            None,
+            Path::new("/work/.fullmag/local-live/history"),
+            "session-123",
+        );
+
+        assert_eq!(
+            paths.workspace_dir,
+            PathBuf::from("/work/scenarios/case_a_rk4_fixed.zarr")
+        );
+        assert_eq!(
+            paths.artifact_dir,
+            PathBuf::from("/work/scenarios/case_a_rk4_fixed.zarr/artifacts")
+        );
+        assert_eq!(
+            stage_artifact_dir(
+                &paths.workspace_dir,
+                &paths.artifact_dir,
+                0,
+                3,
+                "flat_relax",
+            ),
+            PathBuf::from("/work/scenarios/case_a_rk4_fixed.zarr/stages/stage_00_flat_relax")
+        );
+    }
+
+    #[test]
+    fn explicit_output_dir_preserves_existing_session_workspace_contract() {
+        let paths = resolve_script_output_paths(
+            Path::new("/work/scenarios/case_a_rk4_fixed.py"),
+            Some(Path::new("/reports/sp4/artifacts")),
+            Path::new("/work/.fullmag/local-live/history"),
+            "session-123",
+        );
+
+        assert_eq!(
+            paths.workspace_dir,
+            PathBuf::from("/work/.fullmag/local-live/history/session-123")
+        );
+        assert_eq!(paths.artifact_dir, PathBuf::from("/reports/sp4/artifacts"));
+    }
+
+    #[test]
+    fn sibling_result_bundle_is_a_zarr_group_with_artifact_and_stage_groups() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must follow Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-script-result-bundle-{}-{nonce}",
+            std::process::id()
+        ));
+        let paths = ScriptOutputPaths {
+            workspace_dir: root.join("case_a.zarr"),
+            artifact_dir: root.join("case_a.zarr/artifacts"),
+            is_sibling_zarr_bundle: true,
+        };
+
+        initialize_script_result_bundle(&paths, Path::new("/work/case_a.py"), "session-123")
+            .expect("bundle metadata should be writable");
+
+        for group in [
+            paths.workspace_dir.clone(),
+            paths.artifact_dir.clone(),
+            paths.workspace_dir.join("stages"),
+        ] {
+            let zgroup: serde_json::Value = serde_json::from_slice(
+                &fs::read(group.join(".zgroup")).expect("Zarr group metadata should exist"),
+            )
+            .expect("Zarr group metadata should be JSON");
+            assert_eq!(zgroup["zarr_format"], 2);
+            assert!(group.join(".zattrs").is_file());
+        }
+        let attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(paths.workspace_dir.join(".zattrs")).expect("bundle attributes should exist"),
+        )
+        .expect("bundle attributes should be JSON");
+        assert_eq!(attrs["fullmag_schema"], "fullmag.script_results.v1");
+        assert_eq!(attrs["script_path"], "/work/case_a.py");
+
+        fs::remove_dir_all(root).expect("owned temporary bundle should be removable");
+    }
+
+    #[test]
+    fn default_sibling_bundle_replaces_the_previous_attempt() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must follow Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-script-result-replace-{}-{nonce}",
+            std::process::id()
+        ));
+        let paths = ScriptOutputPaths {
+            workspace_dir: root.join("case_a.zarr"),
+            artifact_dir: root.join("case_a.zarr/artifacts"),
+            is_sibling_zarr_bundle: true,
+        };
+        fs::create_dir_all(&paths.workspace_dir).expect("old result bundle should be creatable");
+        let stale = paths.workspace_dir.join("stale-attempt.txt");
+        fs::write(&stale, b"old attempt").expect("old result marker should be writable");
+
+        replace_and_initialize_script_result_bundle(
+            &paths,
+            Path::new("/work/case_a.py"),
+            "session-456",
+        )
+        .expect("default result bundle should be replaceable");
+
+        assert!(!stale.exists());
+        assert!(paths.workspace_dir.join(".zgroup").is_file());
+        assert!(paths.artifact_dir.join(".zgroup").is_file());
+        assert!(paths.workspace_dir.join("stages/.zgroup").is_file());
+
+        fs::remove_dir_all(root).expect("owned temporary bundle should be removable");
+    }
+
+    #[test]
+    fn default_sibling_bundle_does_not_replace_a_file() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must follow Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-script-result-file-collision-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("temporary root should be creatable");
+        let paths = ScriptOutputPaths {
+            workspace_dir: root.join("case_a.zarr"),
+            artifact_dir: root.join("case_a.zarr/artifacts"),
+            is_sibling_zarr_bundle: true,
+        };
+        fs::write(&paths.workspace_dir, b"keep me").expect("collision file should be writable");
+
+        let error = replace_and_initialize_script_result_bundle(
+            &paths,
+            Path::new("/work/case_a.py"),
+            "session-456",
+        )
+        .expect_err("a non-directory collision must fail closed");
+
+        assert!(error.to_string().contains("is not a directory"));
+        assert_eq!(fs::read(&paths.workspace_dir).unwrap(), b"keep me");
+        fs::remove_dir_all(root).expect("owned temporary root should be removable");
+    }
+}
+
 pub(crate) fn flatten_magnetization(values: &[[f64; 3]]) -> Vec<f64> {
     values
         .iter()
@@ -85,7 +351,7 @@ pub(crate) fn flatten_magnetization(values: &[[f64; 3]]) -> Vec<f64> {
 }
 
 pub(crate) fn live_state_manifest_from_update(
-    update: &fullmag_runner::StepUpdate,
+    mut update: fullmag_runner::StepUpdate,
 ) -> LiveStateManifest {
     let status_str = if update.finished {
         "completed"
@@ -114,10 +380,11 @@ pub(crate) fn live_state_manifest_from_update(
             max_torque_T: update.stats.max_torque_T,
             wall_time_ns: update.stats.wall_time_ns,
             grid: update.grid,
-            fem_mesh: update.fem_mesh.clone(),
-            magnetization: update.magnetization.clone(),
+            fem_mesh_generation_id: update.fem_mesh_generation_id.take(),
+            magnetization: update.magnetization.take(),
             per_object_scalars: update.stats.per_object_scalars.clone(),
-            preview_field: update.preview_field.clone(),
+            field_materialization_states: update.stats.field_materialization_states.clone(),
+            preview_field: update.preview_field.take(),
             finished: update.finished,
         },
     }
@@ -149,7 +416,10 @@ pub(crate) fn running_run_manifest_from_update(
     }
 }
 
-pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpdate {
+pub(crate) fn initial_step_update(
+    backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: Option<String>,
+) -> fullmag_runner::StepUpdate {
     let stats = fullmag_runner::StepStats {
         step: 0,
         time: 0.0,
@@ -169,7 +439,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(flatten_magnetization(&fdm.initial_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -188,7 +458,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
                 fdm.common_cells[1],
                 fdm.common_cells[2],
             ],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
@@ -203,7 +473,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(&fem.initial_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -218,7 +488,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -236,7 +506,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             fullmag_runner::StepUpdate {
                 stats,
                 grid: [0, 0, 0],
-                fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+                fem_mesh_generation_id,
                 magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
                 preview_field: None,
                 cached_preview_fields: None,
@@ -301,6 +571,7 @@ fn frequency_response_range_hz(frequencies_hz: &[f64]) -> Option<(f64, f64)> {
 
 pub(crate) fn final_stage_step_update(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: Option<String>,
     steps: &[fullmag_runner::StepStats],
     final_magnetization: &[[f64; 3]],
     step_offset: u64,
@@ -317,7 +588,7 @@ pub(crate) fn final_stage_step_update(
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -336,7 +607,7 @@ pub(crate) fn final_stage_step_update(
                 fdm.common_cells[1],
                 fdm.common_cells[2],
             ],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
@@ -348,10 +619,10 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -363,10 +634,10 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -378,10 +649,10 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id,
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -398,6 +669,7 @@ pub(crate) fn final_stage_step_update(
 
 pub(crate) fn snapshot_step_update_from_stats(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: Option<String>,
     stats: fullmag_runner::StepStats,
     magnetization: &[[f64; 3]],
     finished: bool,
@@ -406,7 +678,7 @@ pub(crate) fn snapshot_step_update_from_stats(
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -425,7 +697,7 @@ pub(crate) fn snapshot_step_update_from_stats(
                 fdm.common_cells[1],
                 fdm.common_cells[2],
             ],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -437,10 +709,10 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -452,10 +724,10 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -467,10 +739,10 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            fem_mesh_generation_id,
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -582,11 +854,9 @@ pub(crate) fn materialize_script_stages(
         } else {
             resolve_script_until_seconds(&ir, default_until_seconds)?
         };
-        return Ok(vec![ResolvedScriptStage::solver(
-            ir,
-            until_seconds,
-            entrypoint_kind,
-        )]);
+        let mut stage = ResolvedScriptStage::solver(ir, until_seconds, entrypoint_kind);
+        resolve_stage_auto_sampling(&mut stage)?;
+        return Ok(vec![stage]);
     }
 
     let mut materialized = Vec::with_capacity(stages.len());
@@ -612,14 +882,22 @@ pub(crate) fn materialize_script_stages(
         } else {
             let until_seconds =
                 resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
-            materialized.push(ResolvedScriptStage::solver(
-                stage.ir,
-                until_seconds,
-                stage.entrypoint_kind,
-            ));
+            let mut resolved =
+                ResolvedScriptStage::solver(stage.ir, until_seconds, stage.entrypoint_kind);
+            resolve_stage_auto_sampling(&mut resolved)?;
+            materialized.push(resolved);
         }
     }
     Ok(annotate_stage_transitions(materialized))
+}
+
+fn resolve_stage_auto_sampling(stage: &mut ResolvedScriptStage) -> Result<()> {
+    if stage.action.is_none() && matches!(stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+    {
+        fullmag_plan::resolve_auto_sampling_for_stage(&mut stage.ir)
+            .map_err(|error| anyhow::anyhow!(error.to_string().trim().to_owned()))?;
+    }
+    Ok(())
 }
 
 fn annotate_stage_transitions(mut stages: Vec<ResolvedScriptStage>) -> Vec<ResolvedScriptStage> {
@@ -690,7 +968,11 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
             StageTransitionReason::DeviceChange,
             Some(StateTransferOperatorKind::IdentityCopy),
         ),
-        ResolvedScriptStageAction::AddFieldDrive { .. } => {
+        ResolvedScriptStageAction::AddFieldDrive { .. }
+        | ResolvedScriptStageAction::RemoveFieldDrive { .. }
+        | ResolvedScriptStageAction::TableAutosave { .. }
+        | ResolvedScriptStageAction::Autosave { .. }
+        | ResolvedScriptStageAction::FftResponse { .. } => {
             StageTransitionMetadata::continue_in_place()
         }
     }
@@ -815,13 +1097,94 @@ fn resolve_explicit_stage_action(
                 ResolvedScriptStageAction::AddFieldDrive { drive },
             )
         }
+        ScriptExecutionStageAction::RemoveFieldDrive { drive_id } => {
+            remove_field_drive(&mut ir, &drive_id)?;
+            (
+                "study_pipeline_remove_field_drive",
+                ResolvedScriptStageAction::RemoveFieldDrive { drive_id },
+            )
+        }
+        ScriptExecutionStageAction::TableAutosave {
+            enabled,
+            table_autosave,
+        } => {
+            if enabled && table_autosave.is_none() {
+                bail!("enabled table_autosave action requires table_autosave payload");
+            }
+            ir.study.sampling_mut().table_autosave = if enabled {
+                table_autosave.clone()
+            } else {
+                None
+            };
+            (
+                "study_pipeline_table_autosave",
+                ResolvedScriptStageAction::TableAutosave {
+                    enabled,
+                    table_autosave,
+                },
+            )
+        }
+        ScriptExecutionStageAction::Autosave {
+            enabled,
+            quantity,
+            output,
+        } => {
+            if enabled {
+                let configured = output
+                    .as_ref()
+                    .context("enabled autosave action requires output payload")?;
+                let name = time_output_name(configured)
+                    .context("autosave action supports field, scalar, or snapshot outputs")?;
+                let outputs = &mut ir.study.sampling_mut().outputs;
+                outputs.retain(|candidate| time_output_name(candidate) != Some(name));
+                outputs.push(configured.clone());
+            } else if let Some(quantity) = quantity.as_deref() {
+                ir.study
+                    .sampling_mut()
+                    .outputs
+                    .retain(|candidate| time_output_name(candidate) != Some(quantity));
+            } else {
+                ir.study.sampling_mut().outputs.clear();
+            }
+            (
+                "study_pipeline_autosave",
+                ResolvedScriptStageAction::Autosave {
+                    enabled,
+                    quantity,
+                    output,
+                },
+            )
+        }
+        ScriptExecutionStageAction::FftResponse { enabled, request } => {
+            if enabled {
+                let request = request
+                    .as_ref()
+                    .filter(|value| value.is_object())
+                    .context("enabled fft_response action requires object request")?;
+                ir.problem_meta
+                    .runtime_metadata
+                    .insert("spin_wave_response".to_string(), request.clone());
+            } else {
+                ir.problem_meta
+                    .runtime_metadata
+                    .remove("spin_wave_response");
+            }
+            (
+                "study_pipeline_fft_response",
+                ResolvedScriptStageAction::FftResponse { enabled, request },
+            )
+        }
     };
     let entrypoint = if entrypoint_kind.trim().is_empty() {
         entrypoint_fallback.to_string()
     } else {
         entrypoint_kind
     };
-    Ok(ResolvedScriptStage::synthetic(ir, entrypoint, resolved_action))
+    Ok(ResolvedScriptStage::synthetic(
+        ir,
+        entrypoint,
+        resolved_action,
+    ))
 }
 
 fn materialize_study_pipeline(
@@ -837,6 +1200,10 @@ fn materialize_study_pipeline(
     }
     let mut stages = Vec::new();
     let mut current_ir = base_ir.clone();
+    current_ir.problem_meta.runtime_metadata.insert(
+        "study_pipeline".to_string(),
+        serde_json::to_value(document).context("failed to preserve study pipeline provenance")?,
+    );
     walk_study_pipeline_nodes(
         &document.nodes,
         &mut current_ir,
@@ -873,14 +1240,17 @@ fn walk_study_pipeline_nodes(
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?
                 {
-                    stage.ir.problem_meta.runtime_metadata.insert(
-                        "active_stage_id".to_string(),
-                        Value::String(id.clone()),
-                    );
+                    stage
+                        .ir
+                        .problem_meta
+                        .runtime_metadata
+                        .insert("active_stage_id".to_string(), Value::String(id.clone()));
+                    resolve_stage_auto_sampling(&mut stage)?;
                     out.push(stage);
                 }
             }
             StudyPipelineNode::Macro {
+                id,
                 enabled,
                 macro_kind,
                 label,
@@ -890,17 +1260,22 @@ fn walk_study_pipeline_nodes(
                 if !enabled {
                     continue;
                 }
-                out.extend(
-                    materialize_pipeline_macro(
-                        current_ir,
-                        macro_kind,
-                        config,
-                        default_until_seconds,
-                    )
-                    .with_context(|| {
-                        format!("failed to materialize study pipeline node '{label}'")
-                    })?,
-                );
+                let mut stages = materialize_pipeline_macro(
+                    current_ir,
+                    macro_kind,
+                    config,
+                    default_until_seconds,
+                )
+                .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?;
+                for stage in &mut stages {
+                    stage
+                        .ir
+                        .problem_meta
+                        .runtime_metadata
+                        .insert("active_stage_id".to_string(), Value::String(id.clone()));
+                    resolve_stage_auto_sampling(stage)?;
+                }
+                out.extend(stages);
             }
             StudyPipelineNode::Group {
                 enabled, children, ..
@@ -923,7 +1298,10 @@ fn materialize_pipeline_primitive(
 ) -> Result<Option<ResolvedScriptStage>> {
     let normalized_kind = stage_kind.trim().to_ascii_lowercase();
     match normalized_kind.as_str() {
-        "run" => materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some),
+        "run" => {
+            validate_pipeline_run_primitive_payload(payload)?;
+            materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
+        }
         "relax" => materialize_pipeline_relax(current_ir, payload).map(Some),
         "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
         "frequency_response" => {
@@ -942,6 +1320,12 @@ fn materialize_pipeline_primitive(
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
         "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
         "add_field_drive" => materialize_pipeline_add_field_drive(current_ir, payload).map(Some),
+        "remove_field_drive" => {
+            materialize_pipeline_remove_field_drive(current_ir, payload).map(Some)
+        }
+        "table_autosave" => materialize_pipeline_table_autosave(current_ir, payload).map(Some),
+        "autosave" => materialize_pipeline_autosave(current_ir, payload).map(Some),
+        "fft_response" => materialize_pipeline_fft_response(current_ir, payload).map(Some),
         other => bail!(
             "study pipeline primitive stage '{}' is not yet executable by the runtime; materialize it into explicit stages first",
             other
@@ -971,17 +1355,206 @@ fn materialize_pipeline_add_field_drive(
     ))
 }
 
+fn materialize_pipeline_remove_field_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let drive_id = payload
+        .get("drive_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("study pipeline remove_field_drive requires string payload.drive_id")?;
+    remove_field_drive(current_ir, &drive_id)?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_remove_field_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::RemoveFieldDrive { drive_id },
+    ))
+}
+
+fn materialize_pipeline_table_autosave(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let table_autosave = if enabled {
+        let value = payload
+            .get("table_autosave")
+            .cloned()
+            .context("enabled table_autosave stage requires payload.table_autosave")?;
+        let table: TableAutosaveIR = serde_json::from_value(value)
+            .context("table_autosave stage payload.table_autosave is invalid")?;
+        let explicit_is_valid = table
+            .sample_period_s
+            .is_some_and(|period| period.is_finite() && period > 0.0);
+        if !explicit_is_valid && !table.requests_auto_sinc_cutoff() {
+            bail!("table_autosave requires a positive finite sample_period_s or the auto_sinc_cutoff policy");
+        }
+        if table.quantities.is_empty() {
+            bail!("table_autosave quantities must not be empty");
+        }
+        Some(table)
+    } else {
+        None
+    };
+    current_ir.study.sampling_mut().table_autosave = table_autosave.clone();
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_table_autosave".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::TableAutosave {
+            enabled,
+            table_autosave,
+        },
+    ))
+}
+
+fn materialize_pipeline_autosave(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let quantity = payload_string(payload, "quantity");
+    let output = if enabled {
+        let value = payload
+            .get("output")
+            .cloned()
+            .context("enabled autosave stage requires payload.output")?;
+        let output: OutputIR =
+            serde_json::from_value(value).context("autosave stage payload.output is invalid")?;
+        let name = time_output_name(&output)
+            .context("autosave stage supports field, scalar, or snapshot outputs")?;
+        if quantity.as_deref().is_some_and(|quantity| quantity != name) {
+            bail!("autosave quantity must match payload.output name");
+        }
+        let outputs = &mut current_ir.study.sampling_mut().outputs;
+        outputs.retain(|candidate| time_output_name(candidate) != Some(name));
+        outputs.push(output.clone());
+        Some(output)
+    } else {
+        let outputs = &mut current_ir.study.sampling_mut().outputs;
+        if let Some(quantity) = quantity.as_deref() {
+            outputs.retain(|candidate| time_output_name(candidate) != Some(quantity));
+        } else {
+            outputs.clear();
+        }
+        None
+    };
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_autosave".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::Autosave {
+            enabled,
+            quantity,
+            output,
+        },
+    ))
+}
+
+fn materialize_pipeline_fft_response(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let request = if enabled {
+        let request = payload
+            .get("request")
+            .cloned()
+            .context("enabled fft_response stage requires payload.request")?;
+        if !request.is_object() {
+            bail!("fft_response payload.request must be an object");
+        }
+        current_ir
+            .problem_meta
+            .runtime_metadata
+            .insert("spin_wave_response".to_string(), request.clone());
+        Some(request)
+    } else {
+        current_ir
+            .problem_meta
+            .runtime_metadata
+            .remove("spin_wave_response");
+        None
+    };
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_fft_response".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::FftResponse { enabled, request },
+    ))
+}
+
+fn time_output_name(output: &OutputIR) -> Option<&str> {
+    match output {
+        OutputIR::Field { name, .. }
+        | OutputIR::FieldAuto { name, .. }
+        | OutputIR::FieldResolvedAuto { name, .. }
+        | OutputIR::Scalar { name, .. }
+        | OutputIR::ScalarAuto { name, .. }
+        | OutputIR::ScalarResolvedAuto { name, .. } => Some(name),
+        OutputIR::Snapshot { field, .. } => Some(field),
+        _ => None,
+    }
+}
+
 fn ensure_field_drive_can_be_added(ir: &ProblemIR, drive: &RegionalFieldDriveIR) -> Result<()> {
-    if ir.field_drives.iter().any(|existing| existing.id == drive.id) {
-        bail!("study pipeline field drive id '{}' already exists", drive.id);
+    if ir
+        .field_drives
+        .iter()
+        .any(|existing| existing.id == drive.id)
+    {
+        bail!(
+            "study pipeline field drive id '{}' already exists",
+            drive.id
+        );
     }
     if ir
         .field_drives
         .iter()
         .any(|existing| existing.name == drive.name)
     {
-        bail!("study pipeline field drive name '{}' already exists", drive.name);
+        bail!(
+            "study pipeline field drive name '{}' already exists",
+            drive.name
+        );
     }
+    Ok(())
+}
+
+fn remove_field_drive(ir: &mut ProblemIR, drive_id: &str) -> Result<()> {
+    if drive_id.trim().is_empty() {
+        bail!("study pipeline remove_field_drive drive_id must be non-empty");
+    }
+    let Some(index) = ir
+        .field_drives
+        .iter()
+        .position(|drive| drive.id == drive_id)
+    else {
+        bail!(
+            "study pipeline field drive id '{}' does not exist",
+            drive_id
+        );
+    };
+    ir.field_drives.remove(index);
     Ok(())
 }
 
@@ -1059,31 +1632,26 @@ fn materialize_pipeline_macro(
 }
 
 fn time_domain_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::SamplingIR {
-    let mut outputs: Vec<fullmag_ir::OutputIR> = base
+    let outputs: Vec<fullmag_ir::OutputIR> = base
         .outputs
         .iter()
         .filter(|output| {
             matches!(
                 output,
                 fullmag_ir::OutputIR::Field { .. }
+                    | fullmag_ir::OutputIR::FieldAuto { .. }
+                    | fullmag_ir::OutputIR::FieldResolvedAuto { .. }
                     | fullmag_ir::OutputIR::Scalar { .. }
+                    | fullmag_ir::OutputIR::ScalarAuto { .. }
+                    | fullmag_ir::OutputIR::ScalarResolvedAuto { .. }
                     | fullmag_ir::OutputIR::Snapshot { .. }
             )
         })
         .cloned()
         .collect();
-    if outputs.is_empty() {
-        outputs.push(fullmag_ir::OutputIR::Field {
-            name: "m".to_string(),
-            every_seconds: 1e-12,
-        });
-        outputs.push(fullmag_ir::OutputIR::Scalar {
-            name: "E_total".to_string(),
-            every_seconds: 1e-12,
-        });
-    }
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
+        stage_autosave: base.stage_autosave.clone(),
         outputs,
     }
 }
@@ -1125,6 +1693,7 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
     }
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
+        stage_autosave: None,
         outputs,
     }
 }
@@ -1132,6 +1701,7 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
 fn frequency_response_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::SamplingIR {
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
+        stage_autosave: None,
         outputs: base
             .outputs
             .iter()
@@ -1223,6 +1793,9 @@ fn reject_direct_minimizer_llg_command(
     if command.max_error.is_some() {
         rejected.push("max_error");
     }
+    if command.solver_policy.is_some() {
+        rejected.push("solver_policy");
+    }
     if command.relax_alpha.is_some() {
         rejected.push("relax_alpha");
     }
@@ -1242,30 +1815,13 @@ fn materialize_pipeline_run(
     default_until_seconds: Option<f64>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let mut dynamics = required_study_dynamics(&ir.study, "run pipeline stage")?;
-    apply_dynamics_overrides(&mut dynamics, payload)?;
-    let sampling = match payload.get("sampling") {
-        Some(value) if !value.is_null() => serde_json::from_value(value.clone())
-            .context("run pipeline stage sampling is invalid")?,
-        _ => time_domain_sampling_from(ir.study.sampling()),
-    };
+    let dynamics = required_study_dynamics(&ir.study, "run pipeline stage")?;
+    let sampling = time_domain_sampling_from(ir.study.sampling());
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_run".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
-    if let Some(request) = payload.get("spin_wave_response") {
-        if request.is_null() || request == &Value::Bool(false) {
-            ir.problem_meta
-                .runtime_metadata
-                .remove("spin_wave_response");
-        } else if request.is_object() {
-            ir.problem_meta
-                .runtime_metadata
-                .insert("spin_wave_response".to_string(), request.clone());
-        } else {
-            bail!("run pipeline stage spin_wave_response must be an object, false, or null");
-        }
-    }
     ir.study = fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling };
+    attach_stage_autosave_from_payload(&mut ir, payload, "run")?;
     let until_seconds = resolve_script_until_seconds(
         &ir,
         payload_f64(payload, "until_seconds")?.or(default_until_seconds),
@@ -1280,12 +1836,48 @@ fn materialize_pipeline_run(
     ))
 }
 
+fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) -> Result<()> {
+    let unsupported = payload
+        .keys()
+        .filter(|key| {
+            !matches!(
+                key.as_str(),
+                "entrypoint_kind"
+                    | "kind"
+                    | "stage_id"
+                    | "until_seconds"
+                    | "output_every_seconds"
+                    | "autosave"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        bail!(
+            "run pipeline stage accepts only until_seconds; configure solver, table_autosave, autosave, and fft_response independently (unsupported: {})",
+            unsupported.join(", ")
+        );
+    }
+    Ok(())
+}
+
 fn materialize_pipeline_relax(
     base_ir: &ProblemIR,
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let sampling = time_domain_sampling_from(ir.study.sampling());
+    let mut sampling = time_domain_sampling_from(ir.study.sampling());
+    if let Some(value) = payload.get("table_autosave") {
+        let table: TableAutosaveIR = serde_json::from_value(value.clone())
+            .context("relax stage table_autosave is invalid")?;
+        if table.accepted_step_cadence().is_none() {
+            bail!("relax stage table_autosave must use a positive every_steps cadence");
+        }
+        if table.quantities.is_empty() {
+            bail!("relax stage table_autosave quantities must not be empty");
+        }
+        sampling.table_autosave = Some(table);
+    }
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_relax".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
@@ -1305,12 +1897,34 @@ fn materialize_pipeline_relax(
         stop: payload_relax_stop(payload, true)?,
         sampling,
     };
+    attach_stage_autosave_from_payload(&mut ir, payload, "relax")?;
     let until_seconds = resolve_script_until_seconds(&ir, None)?;
     Ok(ResolvedScriptStage::solver(
         ir,
         until_seconds,
         entrypoint_kind,
     ))
+}
+
+fn attach_stage_autosave_from_payload(
+    ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    stage_kind: &str,
+) -> Result<()> {
+    let Some(value) = payload.get("autosave") else {
+        ir.study.sampling_mut().stage_autosave = None;
+        return Ok(());
+    };
+    let policy: fullmag_ir::StageAutosaveIR = serde_json::from_value(value.clone())
+        .with_context(|| format!("{stage_kind} stage autosave payload is invalid"))?;
+    policy.validate_for_study(&ir.study).map_err(|errors| {
+        anyhow::anyhow!(
+            "{stage_kind} stage autosave validation failed: {}",
+            errors.join("; ")
+        )
+    })?;
+    ir.study.sampling_mut().stage_autosave = Some(policy);
+    Ok(())
 }
 
 fn materialize_pipeline_eigenmodes(
@@ -1533,6 +2147,7 @@ fn materialize_pipeline_frequency_response(
         solver_policy: payload_frequency_solver_policy(payload, default_solver_policy)?,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: sampling.table_autosave,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: payload_frequency_observable(payload)?,
             }],
@@ -3058,6 +3673,120 @@ pub(crate) fn join_errors(errors: Vec<String>) -> anyhow::Error {
     anyhow::anyhow!(errors.join("; "))
 }
 
+fn resolve_interactive_llg_policy(
+    dynamics: &mut fullmag_ir::DynamicsIR,
+    command: &crate::types::SessionCommand,
+) -> Result<()> {
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    if let Some(policy) = command.solver_policy.as_ref() {
+        if command.integrator.is_some()
+            || command.fixed_timestep.is_some()
+            || command.max_error.is_some()
+        {
+            bail!("canonical solver_policy cannot be mixed with legacy integrator/fixed_timestep/max_error controls");
+        }
+        match policy {
+            crate::types::SolverPolicyRequest::Fixed {
+                integrator: requested_integrator,
+                fix_dt,
+            } => {
+                if let Some(requested_integrator) = requested_integrator {
+                    *integrator = requested_integrator.as_str().to_string();
+                }
+                *fixed_timestep = Some(*fix_dt);
+                *adaptive_timestep = None;
+            }
+            crate::types::SolverPolicyRequest::AdaptiveMaxError {
+                integrator: requested_integrator,
+                dt_initial,
+                dt_min,
+                dt_max,
+                max_err,
+            } => {
+                *integrator = requested_integrator.as_str().to_string();
+                *fixed_timestep = None;
+                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                    atol: *max_err,
+                    rtol: 0.0,
+                    dt_initial: *dt_initial,
+                    dt_min: *dt_min,
+                    dt_max: Some(*dt_max),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            crate::types::SolverPolicyRequest::AdaptiveAdvanced {
+                integrator: requested_integrator,
+                dt_initial,
+                dt_min,
+                dt_max,
+                atol,
+                rtol,
+                safety,
+                growth_limit,
+                shrink_limit,
+                max_spin_rotation,
+                norm_tolerance,
+            } => {
+                *integrator = requested_integrator.as_str().to_string();
+                *fixed_timestep = None;
+                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+                    atol: *atol,
+                    rtol: *rtol,
+                    dt_initial: *dt_initial,
+                    dt_min: *dt_min,
+                    dt_max: Some(*dt_max),
+                    safety: *safety,
+                    growth_limit: *growth_limit,
+                    shrink_limit: *shrink_limit,
+                    max_spin_rotation: *max_spin_rotation,
+                    norm_tolerance: *norm_tolerance,
+                });
+            }
+        }
+        return Ok(());
+    }
+    if let Some(value) = command.integrator.as_ref() {
+        *integrator = serde_json::from_value(serde_json::json!(value))
+            .with_context(|| format!("invalid integrator '{value}'"))?;
+    }
+    if command.max_error.is_some() {
+        bail!("legacy max_error command cannot preserve the required dt_max bound; use the canonical adaptive solver command with dt_min, dt_max, and max_err");
+    }
+    if let Some(dt) = command.fixed_timestep {
+        *fixed_timestep = Some(dt);
+        *adaptive_timestep = None;
+    } else if matches!(command.integrator.as_deref(), Some("rk23" | "rk45")) {
+        let policy = adaptive_timestep.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selecting adaptive integrator '{}' requires a complete adaptive policy with dt_min and dt_max",
+                integrator
+            )
+        })?;
+        if policy.dt_max.is_none() {
+            bail!(
+                "selecting adaptive integrator '{}' requires a complete adaptive policy with dt_min and dt_max",
+                integrator
+            );
+        }
+        *fixed_timestep = None;
+    }
+    if fixed_timestep.is_some() == adaptive_timestep.is_some() {
+        bail!("LLG solver requires exactly one of fixed_timestep or adaptive_timestep");
+    }
+    Ok(())
+}
+
 pub(crate) fn build_interactive_command_stage(
     base_problem: &ProblemIR,
     command: &crate::types::SessionCommand,
@@ -3091,28 +3820,7 @@ pub(crate) fn build_interactive_command_stage(
 
             let mut ir = base_problem.clone();
             let mut dynamics = required_study_dynamics(&ir.study, "interactive run command")?;
-            let fullmag_ir::DynamicsIR::Llg {
-                ref mut integrator,
-                ref mut fixed_timestep,
-                ..
-            } = dynamics;
-            if let Some(ref int_str) = command.integrator {
-                if let Ok(parsed_integrator) = serde_json::from_value(serde_json::json!(int_str)) {
-                    *integrator = parsed_integrator;
-                } else {
-                    eprintln!(
-                        "[fullmag] warning: failed to parse integrator '{}'",
-                        int_str
-                    );
-                }
-            }
-            if let Some(ft) = command.fixed_timestep {
-                *fixed_timestep = Some(ft);
-            } else if command.integrator.as_deref() == Some("rk45")
-                || command.integrator.as_deref() == Some("rk23")
-            {
-                *fixed_timestep = None;
-            }
+            resolve_interactive_llg_policy(&mut dynamics, command)?;
             let sampling = ir.study.sampling().clone();
             ir.problem_meta.entrypoint_kind = "interactive_run".to_string();
             ir.study = fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling };
@@ -3140,54 +3848,7 @@ pub(crate) fn build_interactive_command_stage(
                 None
             };
             if let Some(dynamics) = dynamics.as_mut() {
-                let fullmag_ir::DynamicsIR::Llg {
-                    integrator,
-                    fixed_timestep,
-                    adaptive_timestep,
-                    ..
-                } = dynamics;
-                if let Some(ref int_str) = command.integrator {
-                    *integrator = serde_json::from_value(serde_json::json!(int_str))
-                        .with_context(|| format!("invalid integrator '{int_str}'"))?;
-                }
-                if let Some(ft) = command.fixed_timestep {
-                    *fixed_timestep = Some(ft);
-                    *adaptive_timestep = None;
-                } else if let Some(atol) = command.max_error {
-                    *fixed_timestep = None;
-                    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
-                        atol,
-                        rtol: 1e-3,
-                        dt_initial: None,
-                        dt_min: 1e-15,
-                        dt_max: None,
-                        safety: 0.9,
-                        growth_limit: 2.0,
-                        shrink_limit: 0.2,
-                        max_spin_rotation: None,
-                        norm_tolerance: None,
-                    });
-                } else if command.integrator.as_deref() == Some("rk45")
-                    || command.integrator.as_deref() == Some("rk23")
-                {
-                    *fixed_timestep = None;
-                }
-                let is_adaptive_integrator = matches!(integrator.as_str(), "rk23" | "rk45");
-                if fixed_timestep.is_none() && adaptive_timestep.is_none() && is_adaptive_integrator
-                {
-                    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
-                        atol: 1e-6,
-                        rtol: 1e-3,
-                        dt_initial: None,
-                        dt_min: 1e-15,
-                        dt_max: None,
-                        safety: 0.9,
-                        growth_limit: 2.0,
-                        shrink_limit: 0.2,
-                        max_spin_rotation: None,
-                        norm_tolerance: None,
-                    });
-                }
+                resolve_interactive_llg_policy(dynamics, command)?;
             }
             let sampling = ir.study.sampling().clone();
             let stop = fullmag_ir::RelaxStopIR {
@@ -3299,6 +3960,7 @@ pub(crate) fn sequence_stage_to_session_command(
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,
@@ -3337,6 +3999,7 @@ pub(crate) fn sequence_stage_to_session_command(
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,
@@ -3442,6 +4105,142 @@ mod tests {
         .expect("sample ProblemIR should deserialize")
     }
 
+    fn solver_command(kind: &str) -> crate::types::SessionCommand {
+        serde_json::from_value(json!({
+            "command_id": format!("cmd-{kind}"),
+            "kind": kind,
+            "created_at_unix_ms": 0,
+            "until_seconds": 1e-12
+        }))
+        .expect("minimal solver command")
+    }
+
+    #[test]
+    fn interactive_fixed_clears_adaptive_and_legacy_max_error_rejects() {
+        let mut dynamics = required_study_dynamics(
+            &sample_problem_ir_with_adaptive_relax_dt(1e-15).study,
+            "test",
+        )
+        .unwrap();
+        let mut fixed = solver_command("run");
+        fixed.fixed_timestep = Some(2e-15);
+        resolve_interactive_llg_policy(&mut dynamics, &fixed).unwrap();
+        assert!(matches!(
+            dynamics,
+            fullmag_ir::DynamicsIR::Llg {
+                fixed_timestep: Some(_),
+                adaptive_timestep: None,
+                ..
+            }
+        ));
+
+        let mut legacy = solver_command("run");
+        legacy.max_error = Some(1e-6);
+        assert!(resolve_interactive_llg_policy(&mut dynamics, &legacy)
+            .unwrap_err()
+            .to_string()
+            .contains("legacy max_error"));
+    }
+
+    #[test]
+    fn interactive_adaptive_integrator_over_fixed_requires_complete_policy() {
+        let mut dynamics = required_study_dynamics(&sample_problem_ir().study, "test").unwrap();
+        let mut command = solver_command("run");
+        command.integrator = Some("rk45".into());
+        assert!(resolve_interactive_llg_policy(&mut dynamics, &command)
+            .unwrap_err()
+            .to_string()
+            .contains("complete adaptive policy"));
+    }
+
+    #[test]
+    fn interactive_command_resolves_canonical_adaptive_solver_policy() {
+        let command: crate::types::SessionCommand = serde_json::from_value(json!({
+            "command_id": "cmd-canonical-adaptive",
+            "kind": "run",
+            "created_at_unix_ms": 0,
+            "until_seconds": 1e-12,
+            "solver_policy": {
+                "kind": "adaptive_max_error",
+                "integrator": "rk45",
+                "dt_min": 1e-16,
+                "dt_max": 1e-13,
+                "max_err": 1e-6
+            }
+        }))
+        .expect("canonical solver policy command should deserialize");
+
+        let stage = build_interactive_command_stage(&sample_problem_ir(), &command)
+            .expect("canonical adaptive command should resolve")
+            .expect("run command should materialize a stage");
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = stage.ir.study else {
+            panic!("run command should materialize time evolution");
+        };
+        let fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep,
+            ..
+        } = dynamics;
+        let adaptive = adaptive_timestep.expect("canonical adaptive policy must reach execution");
+        assert_eq!(integrator, "rk45");
+        assert!(fixed_timestep.is_none());
+        assert_eq!(adaptive.dt_initial, None);
+        assert_eq!(adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive.dt_max, Some(1e-13));
+        assert_eq!(adaptive.atol, 1e-6);
+        assert_eq!(adaptive.rtol, 0.0);
+    }
+
+    #[test]
+    fn direct_minimizer_rejects_canonical_solver_policy() {
+        let command: crate::types::SessionCommand = serde_json::from_value(json!({
+            "command_id": "cmd-direct-minimizer-policy",
+            "kind": "relax",
+            "created_at_unix_ms": 0,
+            "relax_algorithm": "projected_gradient_bb",
+            "solver_policy": {
+                "kind": "fixed",
+                "integrator": "heun",
+                "fix_dt": 1e-15
+            }
+        }))
+        .expect("canonical fixed policy should deserialize");
+        let error = build_interactive_command_stage(&sample_problem_ir(), &command)
+            .expect_err("direct minimizer must reject canonical LLG policy");
+        assert!(error.to_string().contains("solver_policy"));
+    }
+
+    fn primitive_node(id: &str, stage_kind: &str, payload: Value) -> StudyPipelineNode {
+        serde_json::from_value(json!({
+            "id": id,
+            "label": id,
+            "enabled": true,
+            "source": "ui_authored",
+            "node_kind": "primitive",
+            "stage_kind": stage_kind,
+            "payload": payload
+        }))
+        .expect("primitive pipeline node")
+    }
+
+    fn sample_regional_field_drive(id: &str) -> RegionalFieldDriveIR {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": id,
+            "kind": "regional",
+            "enabled": true,
+            "target": {"kind": "global"},
+            "amplitude_B_T": 0.001,
+            "direction": [0.0, 1.0, 0.0],
+            "spatial_profile": {"kind": "uniform"},
+            "waveform": {"kind": "constant", "amplitude": 1.0},
+            "time_origin": "stage_local",
+            "activation": {"kind": "all_time_evolution"}
+        }))
+        .expect("regional field drive")
+    }
+
     fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
             mesh_build_report: None,
@@ -3450,9 +4249,9 @@ mod tests {
             mesh: fullmag_ir::MeshIR {
                 mesh_name: "unit".to_string(),
                 nodes: vec![[0.0, 0.0, 0.0]],
-                elements: Vec::new(),
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
                 element_markers: Vec::new(),
-                boundary_faces: Vec::new(),
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                 boundary_markers: Vec::new(),
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3536,7 +4335,13 @@ mod tests {
         plan.frequencies_hz.values_hz = vec![2.0e9, 3.5e9, 5.0e9];
         plan.enable_demag = true;
         plan.magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
-        let update = initial_step_update(&BackendPlanIR::FemFrequencyResponse(plan));
+        let backend_plan = BackendPlanIR::FemFrequencyResponse(plan);
+        let asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&backend_plan)
+            .expect("frequency-response FEM asset");
+        let update = initial_step_update(
+            &backend_plan,
+            Some(asset.identity.generation_id().to_string()),
+        );
 
         let progress = update
             .stats
@@ -3582,9 +4387,9 @@ mod tests {
                 mesh: Some(fullmag_ir::MeshIR {
                     mesh_name: "shared_domain".to_string(),
                     nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                    elements: Vec::new(),
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
                     element_markers: Vec::new(),
-                    boundary_faces: Vec::new(),
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                     boundary_markers: Vec::new(),
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3651,9 +4456,15 @@ mod tests {
                         [0.0, 0.0, 1.0],
                         [0.0, 0.0, -1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                        [0, 1, 2, 3],
+                        [0, 2, 1, 4],
+                    ]),
                     element_markers: vec![1, 2],
-                    boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                        [0, 1, 3],
+                        [0, 1, 4],
+                    ]),
                     boundary_markers: vec![10, 20],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3825,8 +4636,6 @@ mod tests {
                         payload: serde_json::from_value(json!({
                             "kind": "run",
                             "entrypoint_kind": "pipeline_run",
-                            "integrator": "rk45",
-                            "fixed_timestep": "",
                             "until_seconds": "5e-12"
                         }))
                         .expect("payload"),
@@ -3878,6 +4687,198 @@ mod tests {
     }
 
     #[test]
+    fn stage_local_table_autosave_is_owned_by_relaxation_only() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "relax".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "relax".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "pipeline_relax",
+                            "relax_algorithm": "projected_gradient_bb",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25",
+                            "table_autosave": {
+                                "kind": "table_autosave",
+                                "table_id": "default",
+                                "every_steps": 10,
+                                "quantities": ["step", "mx"]
+                            }
+                        }))
+                        .expect("relax payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "after".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "run",
+                            "entrypoint_kind": "pipeline_run",
+                            "until_seconds": "5e-12"
+                        }))
+                        .expect("run payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 2);
+        assert_eq!(
+            stages[0]
+                .ir
+                .study
+                .sampling()
+                .table_autosave
+                .as_ref()
+                .and_then(fullmag_ir::TableAutosaveIR::accepted_step_cadence),
+            Some(10),
+        );
+        assert!(stages[1].ir.study.sampling().table_autosave.is_none());
+    }
+
+    #[test]
+    fn stage_local_autosave_materializes_without_leaking_to_following_stage() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "relax",
+                        "relax",
+                        json!({
+                            "kind": "relax",
+                            "relax_algorithm": "projected_gradient_bb",
+                            "max_steps": "25",
+                            "autosave": {
+                                "kind": "stage_autosave",
+                                "target": "main",
+                                "layout": "continuous",
+                                "format": "zarr",
+                                "table": {"every_steps": 10, "quantities": ["step", "mx"]},
+                                "fields": [{"quantity": "m", "every_steps": 20}]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "run",
+                        "run",
+                        json!({
+                            "kind": "run",
+                            "until_seconds": "5e-12",
+                            "autosave": {
+                                "kind": "stage_autosave",
+                                "target": "main",
+                                "layout": "continuous",
+                                "format": "zarr",
+                                "table": {"sample_period_s": 1e-12, "quantities": ["step", "mx"]},
+                                "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "after",
+                        "run",
+                        json!({"kind": "run", "until_seconds": "5e-12"}),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("stage autosave should materialize");
+        assert_eq!(stages.len(), 3);
+        assert_eq!(
+            stages[0]
+                .ir
+                .study
+                .sampling()
+                .stage_autosave
+                .as_ref()
+                .unwrap()
+                .fields[0]
+                .every_steps,
+            Some(20)
+        );
+        assert_eq!(
+            stages[1]
+                .ir
+                .study
+                .sampling()
+                .stage_autosave
+                .as_ref()
+                .unwrap()
+                .fields[0]
+                .every_seconds,
+            Some(2e-12)
+        );
+        assert!(stages[2].ir.study.sampling().stage_autosave.is_none());
+    }
+
+    #[test]
+    fn stage_local_autosave_rejects_malformed_or_wrong_clock_payloads() {
+        for (stage_kind, payload, expected) in [
+            (
+                "run",
+                json!({
+                    "kind": "run",
+                    "until_seconds": "5e-12",
+                    "autosave": {
+                        "target": "main",
+                        "layout": "continuous",
+                        "format": "zarr",
+                        "fields": [{"quantity": "m", "every_steps": 10}]
+                    }
+                }),
+                "only valid for relaxation",
+            ),
+            (
+                "relax",
+                json!({
+                    "kind": "relax",
+                    "relax_algorithm": "projected_gradient_bb",
+                    "max_steps": "25",
+                    "autosave": {"target": "main", "layout": "not-a-layout"}
+                }),
+                "payload is invalid",
+            ),
+        ] {
+            let config = ScriptExecutionConfig {
+                ir: sample_problem_ir(),
+                shared_geometry_assets: None,
+                default_until_seconds: Some(5e-12),
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes: vec![primitive_node("invalid", stage_kind, payload)],
+                }),
+                stages: vec![],
+            };
+            let error = materialize_script_stages(config).expect_err("invalid policy must fail");
+            assert!(
+                format!("{error:#}").contains(expected),
+                "missing {expected:?} in {error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn materialized_compatible_solver_stages_are_marked_continue_in_place() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -3896,8 +4897,6 @@ mod tests {
                         payload: serde_json::from_value(json!({
                             "kind": "run",
                             "entrypoint_kind": "pipeline_run",
-                            "integrator": "rk45",
-                            "fixed_timestep": "",
                             "until_seconds": "5e-12"
                         }))
                         .expect("payload"),
@@ -4045,6 +5044,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
@@ -4161,6 +5161,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
@@ -4375,6 +5376,7 @@ mod tests {
             integrator: Some("rk23".to_string()),
             fixed_timestep: Some(1e-13),
             max_error: Some(1e-5),
+            solver_policy: None,
             relax_algorithm: Some("projected_gradient_bb".to_string()),
             relax_alpha: Some(0.5),
             mesh_options: None,
@@ -4457,6 +5459,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4500,6 +5503,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4543,6 +5547,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4586,6 +5591,7 @@ mod tests {
             integrator: None,
             fixed_timestep: Some(6e-13),
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4655,6 +5661,45 @@ mod tests {
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "explicit_run");
         assert!((stages[0].until_seconds - 7e-12).abs() < 1e-24);
+    }
+
+    #[test]
+    fn materialize_script_stages_preserves_explicit_stage_autosave() {
+        let mut ir = sample_problem_ir();
+        ir.study.sampling_mut().stage_autosave = Some(
+            serde_json::from_value(json!({
+                "kind": "stage_autosave",
+                "target": "main",
+                "layout": "continuous",
+                "format": "zarr",
+                "table": {"sample_period_s": 1e-12, "quantities": ["step", "mx"]},
+                "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+            }))
+            .expect("stage autosave"),
+        );
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: None,
+            stages: vec![crate::types::ScriptExecutionStage {
+                ir,
+                default_until_seconds: Some(5e-12),
+                entrypoint_kind: "explicit_run".to_string(),
+                action: None,
+            }],
+        };
+
+        let stages = materialize_script_stages(config).expect("explicit stage should materialize");
+        let autosave = stages[0]
+            .ir
+            .study
+            .sampling()
+            .stage_autosave
+            .as_ref()
+            .expect("stage-local autosave must survive sampling normalization");
+        assert_eq!(autosave.target, "main");
+        assert_eq!(autosave.fields[0].every_seconds, Some(2e-12));
     }
 
     #[test]
@@ -4770,8 +5815,7 @@ mod tests {
                         notes: None,
                         source: Some("ui_authored".to_string()),
                         stage_kind: "relax".to_string(),
-                        payload: serde_json::from_value(json!({"max_steps": 2}))
-                            .expect("payload"),
+                        payload: serde_json::from_value(json!({"max_steps": 2})).expect("payload"),
                     },
                     StudyPipelineNode::Primitive {
                         id: "add-k0-antenna".to_string(),
@@ -4813,28 +5857,7 @@ mod tests {
                         stage_kind: "run".to_string(),
                         payload: serde_json::from_value(json!({
                             "entrypoint_kind": "flat_run",
-                            "until_seconds": 2e-9,
-                            "sampling": {
-                                "outputs": [
-                                    {"kind": "field", "name": "m", "every_seconds": 2e-12},
-                                    {"kind": "field", "name": "H_drive", "every_seconds": 5e-13}
-                                ],
-                                "table_autosave": {
-                                    "kind": "table_autosave",
-                                    "table_id": "default",
-                                    "sample_period_s": 5e-13,
-                                    "quantities": ["t", "step", "mx", "my", "mz", "e_drive"]
-                                }
-                            },
-                            "spin_wave_response": {
-                                "schema_version": "spin_wave_response.request.v1",
-                                "analysis": "gamma",
-                                "response_component": "my",
-                                "weighting": "Ms_times_lumped_volume",
-                                "detrend": "linear",
-                                "window": "hann",
-                                "susceptibility_floor_fraction": 1e-6
-                            }
+                            "until_seconds": 2e-9
                         }))
                         .expect("payload"),
                     },
@@ -4855,25 +5878,6 @@ mod tests {
             Some(ResolvedScriptStageAction::AddFieldDrive { drive })
                 if drive.id == "k0-sinc"
         ));
-        let sampling = stages[2].ir.study.sampling();
-        assert_eq!(
-            sampling
-                .table_autosave
-                .as_ref()
-                .map(|table| table.sample_period_s),
-            Some(5e-13)
-        );
-        assert_eq!(sampling.outputs.len(), 2);
-        assert_eq!(
-            stages[2]
-                .ir
-                .problem_meta
-                .runtime_metadata
-                .get("spin_wave_response")
-                .and_then(|value| value.get("analysis"))
-                .and_then(Value::as_str),
-            Some("gamma")
-        );
         assert_eq!(
             stages[1]
                 .incoming_transition
@@ -4888,6 +5892,593 @@ mod tests {
                 .map(|transition| transition.kind),
             Some(StageTransitionKind::ContinueInPlace)
         );
+    }
+
+    #[test]
+    fn materialize_script_stages_removes_only_selected_field_drive() {
+        let drive = |id: &str, direction: [f64; 3]| {
+            json!({
+                "kind": "add_field_drive",
+                "drive": {
+                    "id": id,
+                    "name": id,
+                    "kind": "regional",
+                    "enabled": true,
+                    "target": {"kind": "global"},
+                    "amplitude_B_T": 0.001,
+                    "direction": direction,
+                    "spatial_profile": {"kind": "uniform"},
+                    "waveform": {"kind": "constant", "amplitude": 1.0},
+                    "time_origin": "stage_local",
+                    "activation": {"kind": "all_time_evolution"}
+                }
+            })
+        };
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "add-first",
+                        "add_field_drive",
+                        drive("first", [0.0, 1.0, 0.0]),
+                    ),
+                    primitive_node(
+                        "add-second",
+                        "add_field_drive",
+                        drive("second", [0.0, 0.0, 1.0]),
+                    ),
+                    primitive_node(
+                        "remove-first",
+                        "remove_field_drive",
+                        json!({
+                            "kind": "remove_field_drive",
+                            "entrypoint_kind": "flat_remove_field_drive",
+                            "drive_id": "first"
+                        }),
+                    ),
+                    primitive_node(
+                        "run-second-only",
+                        "run",
+                        json!({"entrypoint_kind": "flat_run", "until_seconds": 1.0e-12}),
+                    ),
+                    primitive_node(
+                        "readd-first",
+                        "add_field_drive",
+                        drive("first", [1.0, 0.0, 0.0]),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("remove pipeline should materialize");
+        assert_eq!(stages.len(), 5);
+        assert_eq!(
+            stages[2]
+                .ir
+                .field_drives
+                .iter()
+                .map(|drive| drive.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second"]
+        );
+        assert!(matches!(
+            stages[2].action.as_ref(),
+            Some(ResolvedScriptStageAction::RemoveFieldDrive { drive_id }) if drive_id == "first"
+        ));
+        assert_eq!(
+            stages[2]
+                .incoming_transition
+                .as_ref()
+                .map(|transition| transition.kind),
+            Some(StageTransitionKind::ContinueInPlace)
+        );
+        assert_eq!(
+            stages[3]
+                .ir
+                .field_drives
+                .iter()
+                .map(|drive| drive.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second"]
+        );
+        assert_eq!(
+            stages[4]
+                .ir
+                .field_drives
+                .iter()
+                .map(|drive| drive.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second", "first"]
+        );
+    }
+
+    #[test]
+    fn materialize_script_stages_rejects_unknown_or_repeated_field_drive_removal() {
+        for drive_id in ["missing", ""] {
+            let config = ScriptExecutionConfig {
+                ir: sample_problem_ir(),
+                shared_geometry_assets: None,
+                default_until_seconds: Some(1.0e-12),
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes: vec![primitive_node(
+                        "remove",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": drive_id}),
+                    )],
+                }),
+                stages: vec![],
+            };
+            let error = materialize_script_stages(config).expect_err("unknown removal must fail");
+            let diagnostic = format!("{error:#}");
+            assert!(
+                diagnostic.contains(if drive_id.is_empty() {
+                    "must be non-empty"
+                } else {
+                    "does not exist"
+                }),
+                "unexpected diagnostic: {diagnostic}"
+            );
+        }
+
+        let drive = sample_regional_field_drive("pulse");
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "add",
+                        "add_field_drive",
+                        json!({"kind": "add_field_drive", "drive": drive}),
+                    ),
+                    primitive_node(
+                        "remove-once",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": "pulse"}),
+                    ),
+                    primitive_node(
+                        "remove-twice",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": "pulse"}),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+        let error = materialize_script_stages(config).expect_err("repeated removal must fail");
+        assert!(
+            format!("{error:#}").contains("field drive id 'pulse' does not exist"),
+            "unexpected diagnostic: {error:#}"
+        );
+    }
+
+    #[test]
+    fn materialize_explicit_remove_field_drive_action_updates_following_state() {
+        let mut ir = sample_problem_ir();
+        ir.field_drives.push(sample_regional_field_drive("pulse"));
+        let config = ScriptExecutionConfig {
+            ir: ir.clone(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-12),
+            study_pipeline: None,
+            stages: vec![ScriptExecutionStage {
+                ir,
+                default_until_seconds: None,
+                entrypoint_kind: "flat_remove_field_drive".to_string(),
+                action: Some(ScriptExecutionStageAction::RemoveFieldDrive {
+                    drive_id: "pulse".to_string(),
+                }),
+            }],
+        };
+
+        let stages =
+            materialize_script_stages(config).expect("explicit removal should materialize");
+        assert_eq!(stages.len(), 1);
+        assert!(stages[0].ir.field_drives.is_empty());
+        assert!(matches!(
+            stages[0].action.as_ref(),
+            Some(ResolvedScriptStageAction::RemoveFieldDrive { drive_id }) if drive_id == "pulse"
+        ));
+    }
+
+    #[test]
+    fn materialize_script_stages_applies_visible_autosave_and_fft_actions_in_order() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(2e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "clear-initial",
+                        "autosave",
+                        json!({
+                            "kind": "autosave", "enabled": false, "quantity": null, "output": null
+                        }),
+                    ),
+                    primitive_node(
+                        "table-on",
+                        "table_autosave",
+                        json!({
+                            "kind": "table_autosave",
+                            "enabled": true,
+                            "table_autosave": {
+                                "kind": "table_autosave",
+                                "table_id": "default",
+                                "sample_period_s": 5e-13,
+                                "quantities": ["t", "mx", "my", "mz"]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "autosave-m",
+                        "autosave",
+                        json!({
+                            "kind": "autosave",
+                            "enabled": true,
+                            "quantity": "m",
+                            "output": {"kind": "field", "name": "m", "every_seconds": 2e-12}
+                        }),
+                    ),
+                    primitive_node(
+                        "fft-on",
+                        "fft_response",
+                        json!({
+                            "kind": "fft_response",
+                            "enabled": true,
+                            "request": {
+                                "schema_version": "spin_wave_response.request.v1",
+                                "analysis": "gamma",
+                                "response_component": "my",
+                                "weighting": "Ms_times_lumped_volume",
+                                "detrend": "linear",
+                                "window": "hann",
+                                "susceptibility_floor_fraction": 1e-6
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "sampled",
+                        "run",
+                        json!({
+                            "entrypoint_kind": "flat_run", "until_seconds": 2e-9
+                        }),
+                    ),
+                    primitive_node(
+                        "table-off",
+                        "table_autosave",
+                        json!({
+                            "kind": "table_autosave", "enabled": false, "table_autosave": null
+                        }),
+                    ),
+                    primitive_node(
+                        "autosave-off",
+                        "autosave",
+                        json!({
+                            "kind": "autosave", "enabled": false, "quantity": null, "output": null
+                        }),
+                    ),
+                    primitive_node(
+                        "fft-off",
+                        "fft_response",
+                        json!({
+                            "kind": "fft_response", "enabled": false, "request": null
+                        }),
+                    ),
+                    primitive_node(
+                        "unsampled",
+                        "run",
+                        json!({
+                            "entrypoint_kind": "flat_run", "until_seconds": 1e-9
+                        }),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 9);
+        assert!(matches!(
+            &stages[1].action,
+            Some(ResolvedScriptStageAction::TableAutosave { enabled: true, .. })
+        ));
+        assert!(matches!(
+            &stages[2].action,
+            Some(ResolvedScriptStageAction::Autosave { enabled: true, .. })
+        ));
+        assert!(matches!(
+            &stages[3].action,
+            Some(ResolvedScriptStageAction::FftResponse { enabled: true, .. })
+        ));
+        let sampled = stages[4].ir.study.sampling();
+        assert_eq!(
+            sampled
+                .table_autosave
+                .as_ref()
+                .and_then(|table| table.sample_period_s),
+            Some(5e-13)
+        );
+        assert_eq!(sampled.outputs.len(), 1);
+        assert!(stages[4]
+            .ir
+            .problem_meta
+            .runtime_metadata
+            .contains_key("spin_wave_response"));
+        let unsampled = stages[8].ir.study.sampling();
+        assert!(unsampled.table_autosave.is_none());
+        assert!(unsampled.outputs.is_empty());
+        assert!(!stages[8]
+            .ir
+            .problem_meta
+            .runtime_metadata
+            .contains_key("spin_wave_response"));
+        assert!(stages.iter().skip(1).all(|stage| {
+            stage
+                .incoming_transition
+                .as_ref()
+                .is_some_and(|transition| transition.kind == StageTransitionKind::ContinueInPlace)
+        }));
+    }
+
+    #[test]
+    fn materialize_pipeline_resolves_auto_sampling_independently_for_each_run() {
+        let drive = |id: &str, cutoff_hz: f64, stage_id: &str| {
+            json!({
+                "kind": "add_field_drive",
+                "drive": {
+                    "id": id,
+                    "name": id,
+                    "kind": "regional",
+                    "enabled": true,
+                    "target": {"kind": "global"},
+                    "amplitude_B_T": 0.001,
+                    "direction": [0.0, 1.0, 0.0],
+                    "spatial_profile": {"kind": "uniform"},
+                    "waveform": {
+                        "kind": "sinc_pulse",
+                        "cutoff_hz": cutoff_hz,
+                        "t0": 5e-11,
+                        "amplitude": 1.0
+                    },
+                    "time_origin": "stage_local",
+                    "activation": {"kind": "stage_ids", "stage_ids": [stage_id]}
+                }
+            })
+        };
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(2e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node("add-3", "add_field_drive", drive("drive-3", 3e9, "run-3")),
+                    primitive_node("add-5", "add_field_drive", drive("drive-5", 5e9, "run-5")),
+                    primitive_node(
+                        "table-auto",
+                        "table_autosave",
+                        json!({
+                            "kind": "table_autosave",
+                            "enabled": true,
+                            "table_autosave": {
+                                "kind": "table_autosave",
+                                "table_id": "default",
+                                "sample_period_policy": {
+                                    "kind": "auto_sinc_cutoff",
+                                    "nyquist_guard_factor": 1.3
+                                },
+                                "quantities": ["t", "my"]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "m-auto",
+                        "autosave",
+                        json!({
+                            "kind": "autosave",
+                            "enabled": true,
+                            "quantity": "m",
+                            "output": {
+                                "kind": "field_auto",
+                                "name": "m",
+                                "sample_period_policy": {
+                                    "kind": "auto_sinc_cutoff",
+                                    "nyquist_guard_factor": 1.3
+                                }
+                            }
+                        }),
+                    ),
+                    primitive_node("run-3", "run", json!({"until_seconds": 1e-9})),
+                    primitive_node("run-5", "run", json!({"until_seconds": 1e-9})),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages =
+            materialize_script_stages(config).expect("pipeline should resolve auto sampling");
+        let run_3 = &stages[4].ir;
+        let run_5 = &stages[5].ir;
+        run_3.validate().expect("first resolved Run must be valid");
+        run_5.validate().expect("second resolved Run must be valid");
+        assert_eq!(
+            run_3.problem_meta.runtime_metadata["sampling_resolution"]["sample_period_s"],
+            json!(1.0 / (2.0 * 1.3 * 3e9))
+        );
+        assert_eq!(
+            run_5.problem_meta.runtime_metadata["sampling_resolution"]["sample_period_s"],
+            json!(1.0 / (2.0 * 1.3 * 5e9))
+        );
+        assert!(matches!(
+            run_3.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::FieldResolvedAuto { .. }]
+        ));
+        assert!(matches!(
+            run_5.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::FieldResolvedAuto { .. }]
+        ));
+    }
+
+    #[test]
+    fn materialize_pipeline_auto_sampling_fails_after_sinc_drive_removal() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "add-sinc",
+                        "add_field_drive",
+                        json!({
+                            "kind": "add_field_drive",
+                            "drive": {
+                                "id": "sinc", "name": "sinc", "kind": "regional",
+                                "enabled": true, "target": {"kind": "global"},
+                                "amplitude_B_T": 0.001, "direction": [0.0, 1.0, 0.0],
+                                "spatial_profile": {"kind": "uniform"},
+                                "waveform": {"kind": "sinc_pulse", "cutoff_hz": 5e9, "t0": 5e-11},
+                                "time_origin": "stage_local",
+                                "activation": {"kind": "all_time_evolution"}
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "table-auto",
+                        "table_autosave",
+                        json!({
+                            "kind": "table_autosave", "enabled": true,
+                            "table_autosave": {
+                                "kind": "table_autosave", "table_id": "default",
+                                "sample_period_policy": {
+                                    "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3
+                                },
+                                "quantities": ["t", "my"]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "remove-sinc",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": "sinc"}),
+                    ),
+                    primitive_node("run-after-removal", "run", json!({"until_seconds": 1e-9})),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let error = materialize_script_stages(config)
+            .expect_err("automatic sampling without an active sinc drive must fail");
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains(
+                "automatic sampling for Run stage 'run-after-removal' requires at least one enabled active sinc drive"
+            ),
+            "unexpected diagnostic: {diagnostic}"
+        );
+    }
+
+    #[test]
+    fn materialize_flat_stage_resolves_auto_sampling_from_its_active_stage_id() {
+        let mut ir = sample_problem_ir();
+        ir.problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), json!("excite"));
+        ir.study.sampling_mut().outputs = vec![fullmag_ir::OutputIR::ScalarAuto {
+            name: "my".into(),
+            sample_period_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: 1.3,
+            },
+        }];
+        ir.field_drives.push(
+            serde_json::from_value(json!({
+                "id": "pulse", "name": "Pulse", "kind": "regional", "enabled": true,
+                "target": {"kind": "global"}, "amplitude_B_T": 0.001,
+                "direction": [0.0, 1.0, 0.0], "spatial_profile": {"kind": "uniform"},
+                "waveform": {"kind": "sinc_pulse", "cutoff_hz": 5e9, "t0": 5e-11},
+                "time_origin": "stage_local",
+                "activation": {"kind": "stage_ids", "stage_ids": ["excite"]}
+            }))
+            .expect("drive"),
+        );
+        let stages = materialize_script_stages(ScriptExecutionConfig {
+            ir: ir.clone(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-9),
+            study_pipeline: None,
+            stages: vec![ScriptExecutionStage {
+                ir,
+                default_until_seconds: Some(1e-9),
+                entrypoint_kind: "flat_run".into(),
+                action: None,
+            }],
+        })
+        .expect("flat stage should resolve auto sampling");
+        assert!(matches!(
+            stages[0].ir.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::ScalarResolvedAuto { every_seconds, .. }]
+                if *every_seconds == 1.0 / 13e9
+        ));
+    }
+
+    #[test]
+    fn standalone_auto_sampling_reports_missing_stage_context() {
+        let mut ir = sample_problem_ir();
+        ir.study.sampling_mut().outputs = vec![fullmag_ir::OutputIR::FieldAuto {
+            name: "m".into(),
+            sample_period_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: 1.3,
+            },
+        }];
+        let error = materialize_script_stages(ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-9),
+            study_pipeline: None,
+            stages: vec![],
+        })
+        .expect_err("standalone auto sampling must fail closed");
+        assert!(error.to_string().contains("active_stage_id"));
+    }
+
+    #[test]
+    fn materialize_script_stages_rejects_hidden_configuration_inside_plain_run() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(2e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![primitive_node(
+                    "run",
+                    "run",
+                    json!({
+                        "entrypoint_kind": "flat_run",
+                        "until_seconds": 2e-9,
+                        "fixed_timestep": 1e-13
+                    }),
+                )],
+            }),
+            stages: vec![],
+        };
+
+        let error = materialize_script_stages(config)
+            .expect_err("plain Run must reject hidden solver/output configuration");
+        let error = format!("{error:#}");
+        assert!(error.contains("run pipeline stage accepts only until_seconds"));
+        assert!(error.contains("fixed_timestep"));
     }
 
     #[test]
@@ -5497,9 +7088,9 @@ mod tests {
         fullmag_ir::MeshIR {
             mesh_name: "test_cube".to_string(),
             nodes,
-            elements,
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
             element_markers,
-            boundary_faces,
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(boundary_faces),
             boundary_markers,
             periodic_boundary_pairs: vec![],
             periodic_node_pairs: vec![],

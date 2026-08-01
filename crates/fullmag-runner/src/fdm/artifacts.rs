@@ -7,9 +7,7 @@ use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
 ///
 /// The runner never reconstructs certificate values from geometry; it only
 /// publishes the validated resolved certificate carried by the execution plan.
-pub(crate) fn grid_certificate_artifacts(
-    plan: &ExecutionPlanIR,
-) -> Vec<AuxiliaryArtifact> {
+pub(crate) fn grid_certificate_artifacts(plan: &ExecutionPlanIR) -> Vec<AuxiliaryArtifact> {
     let certificate = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => fdm.grid_certificate.as_ref(),
         BackendPlanIR::FdmMultilayer(multilayer) => multilayer.grid_certificate.as_ref(),
@@ -59,15 +57,16 @@ pub(crate) fn region_membership_artifacts(
     if fdm.region_mask.len() != expected_cells {
         return Err(format!(
             "FDM region membership mask length {} disagrees with grid cell count {}",
-            fdm.region_mask.len(), expected_cells
+            fdm.region_mask.len(),
+            expected_cells
         ));
     }
 
     let fingerprint = decode_grid_fingerprint(&certificate.grid_fingerprint)?;
     let mut binary = Vec::with_capacity(64 + fdm.region_mask.len() * std::mem::size_of::<u32>());
     binary.extend_from_slice(b"FMRM");
-    binary.push(1); // format version
-    binary.push(1); // payload kind: u32 region IDs
+    binary.push(2); // format version
+    binary.push(2); // payload kind: u32 membership (MAX = inactive, 0 = active/unassigned)
     binary.extend_from_slice(&0u16.to_le_bytes());
     for count in fdm.grid.cells {
         binary.extend_from_slice(&count.to_le_bytes());
@@ -76,30 +75,36 @@ pub(crate) fn region_membership_artifacts(
     binary.extend_from_slice(&(certificate.region_legend.len() as u32).to_le_bytes());
     binary.extend_from_slice(&fingerprint);
     binary.extend_from_slice(&[0u8; 4]);
-    for region_id in &fdm.region_mask {
-        binary.extend_from_slice(&region_id.to_le_bytes());
+    for (index, region_id) in fdm.region_mask.iter().enumerate() {
+        let membership = if fdm.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+            u32::MAX
+        } else {
+            *region_id
+        };
+        binary.extend_from_slice(&membership.to_le_bytes());
     }
 
     let descriptor = serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": "fdm_region_membership.v1",
-        "binary_path": "mesh/fdm_region_membership.v1.bin",
+        "schema_version": "fdm_region_membership.v2",
+        "binary_path": "mesh/fdm_region_membership.v2.bin",
         "grid_fingerprint": certificate.grid_fingerprint,
         "region_legend_fingerprint": certificate.region_legend_fingerprint,
         "origin_m": certificate.origin_m,
         "counts": certificate.counts,
         "cell_m": certificate.cell_m,
         "cell_count": fdm.region_mask.len(),
+        "object_ids": certificate.object_ids,
         "region_legend": certificate.region_legend,
-        "encoding": "FMRM:u32_le",
+        "encoding": "FMRM:u32_membership_le",
     }))
     .map_err(|error| format!("FDM region membership descriptor serialization failed: {error}"))?;
     Ok(vec![
         AuxiliaryArtifact {
-            relative_path: "mesh/fdm_region_membership.v1.json".to_string(),
+            relative_path: "mesh/fdm_region_membership.v2.json".to_string(),
             bytes: descriptor,
         },
         AuxiliaryArtifact {
-            relative_path: "mesh/fdm_region_membership.v1.bin".to_string(),
+            relative_path: "mesh/fdm_region_membership.v2.bin".to_string(),
             bytes: binary,
         },
     ])
@@ -128,9 +133,7 @@ fn decode_grid_fingerprint(value: &str) -> Result<[u8; 32], String> {
 /// Persist the resolved native-to-convolution transfer contract for a
 /// multilayer FDM run.  The artifact is intentionally derived from the
 /// planner certificate and periodicity, never from runtime-local grid state.
-pub(crate) fn transfer_provenance_artifacts(
-    plan: &ExecutionPlanIR,
-) -> Vec<AuxiliaryArtifact> {
+pub(crate) fn transfer_provenance_artifacts(plan: &ExecutionPlanIR) -> Vec<AuxiliaryArtifact> {
     let BackendPlanIR::FdmMultilayer(multilayer) = &plan.backend_plan else {
         return Vec::new();
     };
@@ -225,9 +228,7 @@ pub(crate) fn pbc_provenance_artifacts(
         grid_fingerprint,
         enable_demag,
         resolved_periodic_images,
-    ) = match
-        &plan.backend_plan
-    {
+    ) = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => (
             fdm.periodicity.as_ref(),
             fdm.origin_m,
@@ -266,8 +267,8 @@ pub(crate) fn pbc_provenance_artifacts(
         f64::from(counts[1]) * cell_m[1],
         f64::from(counts[2]) * cell_m[2],
     ];
-    let resolved_demag_boundary = requested_periodicity
-        .and_then(|pbc| pbc.resolve_demag_boundary(enable_demag).ok());
+    let resolved_demag_boundary =
+        requested_periodicity.and_then(|pbc| pbc.resolve_demag_boundary(enable_demag).ok());
     let resolved_periodic_images = resolved_periodic_images.cloned();
     let padded_counts = resolved_periodic_images
         .as_ref()

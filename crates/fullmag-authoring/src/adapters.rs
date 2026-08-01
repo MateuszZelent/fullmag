@@ -61,6 +61,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         field_drives: crate::SceneFieldDrivesState {
             drives: builder.field_drives.clone(),
         },
+        monitors: crate::SceneMonitorState {
+            planar: builder.planar_monitors.clone(),
+        },
         current_modules: SceneCurrentModulesState {
             modules: builder.current_modules.clone(),
             excitation_analysis: builder.excitation_analysis.clone(),
@@ -73,7 +76,10 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
                 .unwrap_or_else(|| "auto".to_string()),
             requested_device: "auto".to_string(),
             requested_precision: "double".to_string(),
-            requested_mode: "strict".to_string(),
+            requested_mode: builder
+                .requested_mode
+                .clone()
+                .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             exchange_enabled: builder.exchange_enabled,
@@ -193,6 +199,7 @@ pub fn scene_document_to_script_builder(
     Ok(ScriptBuilderState {
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
+        requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
@@ -218,6 +225,7 @@ pub fn scene_document_to_script_builder(
             .map(builder_mesh_interface_from_scene)
             .collect(),
         field_drives: normalized_scene.field_drives.drives.clone(),
+        planar_monitors: normalized_scene.monitors.planar.clone(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
@@ -247,16 +255,7 @@ pub fn scene_document_to_script_builder_overrides(
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
             .unwrap_or(Value::Null),
-        "solver": {
-            "integrator": string_or_null(&builder.solver.integrator),
-            "fixed_timestep": parse_optional_text_f64(&builder.solver.fixed_timestep),
-            "relax": {
-                "algorithm": string_or_null(&builder.solver.relax_algorithm),
-                "torque_tolerance": parse_optional_text_f64(&builder.solver.torque_tolerance),
-                "energy_tolerance": parse_optional_text_f64(&builder.solver.energy_tolerance),
-                "max_steps": parse_optional_text_u64(&builder.solver.max_relax_steps),
-            },
-        },
+        "solver": solver_override_value(&builder.solver),
         "mesh": {
             "algorithm_2d": builder.mesh.algorithm_2d,
             "algorithm_3d": builder.mesh.algorithm_3d,
@@ -284,7 +283,7 @@ pub fn scene_document_to_script_builder_overrides(
             "per_element_quality": builder.mesh.per_element_quality,
             "interface_hmax": builder.mesh.interface_hmax.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "interface_thickness": builder.mesh.interface_thickness.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
-            "transition_distance": builder.mesh.transition_distance.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "transition_distance": builder.mesh.transition_distance.as_deref().map(parse_transition_distance_value).unwrap_or(Value::Null),
             "transition_growth": builder.mesh.transition_growth.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "adaptive_mesh": if !builder.mesh.adaptive_enabled {
                 Value::Null
@@ -329,6 +328,7 @@ pub fn scene_document_to_script_builder_overrides(
             "entrypoint_kind": stage.entrypoint_kind,
             "integrator": string_or_null(&stage.integrator),
             "fixed_timestep": parse_optional_text_f64(&stage.fixed_timestep),
+            "adaptive_timestep": stage.adaptive_timestep.as_ref().map(adaptive_timestep_override_value).unwrap_or(Value::Null),
             "until_seconds": parse_optional_text_f64(&stage.until_seconds),
             "relax_algorithm": string_or_null(&stage.relax_algorithm),
             "torque_tolerance": parse_optional_text_f64(&stage.torque_tolerance),
@@ -360,6 +360,7 @@ pub fn scene_document_to_script_builder_overrides(
             .iter()
             .map(|coupling| serde_json::to_value(coupling).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
+        "planar_monitors": builder.planar_monitors,
         "current_modules": builder.current_modules.iter().map(|module| serde_json::json!({
             "kind": module.kind,
             "name": module.name,
@@ -382,6 +383,88 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     }))
+}
+
+fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
+    let mut value = Map::new();
+    value.insert("integrator".to_string(), string_or_null(&solver.integrator));
+    value.insert(
+        "demag_interval_s".to_string(),
+        parse_optional_text_f64(&solver.demag_interval_s),
+    );
+    if !solver.fixed_timestep.trim().is_empty() {
+        value.insert(
+            "fixed_timestep".to_string(),
+            parse_optional_text_f64(&solver.fixed_timestep),
+        );
+    } else if let Some(adaptive) = solver.adaptive_timestep.as_ref() {
+        value.insert(
+            "adaptive_timestep".to_string(),
+            serde_json::json!({
+                "atol": parse_optional_text_f64(&adaptive.atol),
+                "rtol": parse_optional_text_f64(&adaptive.rtol),
+                "dt_initial": parse_optional_text_f64(&adaptive.dt_initial),
+                "dt_min": parse_optional_text_f64(&adaptive.dt_min),
+                "dt_max": parse_optional_text_f64(&adaptive.dt_max),
+                "safety": parse_optional_text_f64(&adaptive.safety),
+                "growth_limit": parse_optional_text_f64(&adaptive.growth_limit),
+                "shrink_limit": parse_optional_text_f64(&adaptive.shrink_limit),
+                "max_spin_rotation": parse_optional_text_f64(&adaptive.max_spin_rotation),
+                "norm_tolerance": parse_optional_text_f64(&adaptive.norm_tolerance),
+            }),
+        );
+    } else if [
+        &solver.dt_initial,
+        &solver.dt_min,
+        &solver.dt_max,
+        &solver.max_err,
+    ]
+    .iter()
+    .any(|entry| !entry.trim().is_empty())
+    {
+        value.insert(
+            "dt_initial".to_string(),
+            parse_optional_text_f64(&solver.dt_initial),
+        );
+        value.insert(
+            "dt_min".to_string(),
+            parse_optional_text_f64(&solver.dt_min),
+        );
+        value.insert(
+            "dt_max".to_string(),
+            parse_optional_text_f64(&solver.dt_max),
+        );
+        value.insert(
+            "max_err".to_string(),
+            parse_optional_text_f64(&solver.max_err),
+        );
+    }
+    value.insert(
+        "relax".to_string(),
+        serde_json::json!({
+            "algorithm": string_or_null(&solver.relax_algorithm),
+            "torque_tolerance": parse_optional_text_f64(&solver.torque_tolerance),
+            "energy_tolerance": parse_optional_text_f64(&solver.energy_tolerance),
+            "max_steps": parse_optional_text_u64(&solver.max_relax_steps),
+        }),
+    );
+    Value::Object(value)
+}
+
+fn adaptive_timestep_override_value(adaptive: &crate::ScriptBuilderAdaptiveTimestepState) -> Value {
+    serde_json::json!({
+        "tolerance_mode": adaptive.tolerance_mode,
+        "atol": parse_optional_text_f64(&adaptive.atol),
+        "rtol": parse_optional_text_f64(&adaptive.rtol),
+        "dt_initial": parse_optional_text_f64(&adaptive.dt_initial),
+        "dt_min": parse_optional_text_f64(&adaptive.dt_min),
+        "dt_max": parse_optional_text_f64(&adaptive.dt_max),
+        "safety": parse_optional_text_f64(&adaptive.safety),
+        "growth_limit": parse_optional_text_f64(&adaptive.growth_limit),
+        "shrink_limit": parse_optional_text_f64(&adaptive.shrink_limit),
+        "max_spin_rotation": parse_optional_text_f64(&adaptive.max_spin_rotation),
+        "norm_tolerance": parse_optional_text_f64(&adaptive.norm_tolerance),
+    })
 }
 
 fn scene_mesh_interface_from_builder(
@@ -616,6 +699,38 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .unwrap_or(Value::Null),
     );
     map.insert(
+        "topology".to_string(),
+        mesh.topology
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "sweep_direction".to_string(),
+        mesh.sweep_direction
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "element_family".to_string(),
+        mesh.element_family
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "transition_policy".to_string(),
+        mesh.transition_policy
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "exact_layer_count".to_string(),
+        serde_json::to_value(mesh.exact_layer_count).unwrap_or(Value::Null),
+    );
+    map.insert(
         "source".to_string(),
         mesh.source
             .clone()
@@ -737,6 +852,13 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .map(parse_optional_text_f64)
             .unwrap_or(Value::Null),
     );
+    map.insert(
+        "edge_transition_distance".to_string(),
+        mesh.edge_transition_distance
+            .as_deref()
+            .map(parse_transition_distance_value)
+            .unwrap_or(Value::Null),
+    );
     let corner_hmax = mesh
         .corner_hmax
         .as_deref()
@@ -752,10 +874,17 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .unwrap_or(Value::Null),
     );
     map.insert(
+        "corner_transition_distance".to_string(),
+        mesh.corner_transition_distance
+            .as_deref()
+            .map(parse_transition_distance_value)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
         "transition_distance".to_string(),
         mesh.transition_distance
             .as_deref()
-            .map(parse_optional_text_f64)
+            .map(parse_transition_distance_value)
             .unwrap_or(Value::Null),
     );
     map.insert(
@@ -1365,6 +1494,14 @@ fn parse_optional_text_f64(raw: &str) -> Value {
         .map_or(Value::Null, Value::from)
 }
 
+fn parse_transition_distance_value(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("airbox_boundary") {
+        return Value::String("airbox_boundary".to_string());
+    }
+    parse_optional_text_f64(trimmed)
+}
+
 fn parse_optional_text_f64_or_auto(raw: &str) -> Value {
     let trimmed = raw.trim();
     if trimmed.eq_ignore_ascii_case("auto") {
@@ -1781,14 +1918,30 @@ impl From<crate::SceneCoupling> for fullmag_ir::CouplingIR {
 mod tests {
     use super::*;
     use crate::{
-        MacroStageNode, PrimitiveStageNode, ScriptBuilderCurrentModuleState,
-        ScriptBuilderDriveState, ScriptBuilderInitialState, ScriptBuilderMagneticInteractionEntry,
-        ScriptBuilderMagneticInteractionKind, ScriptBuilderMaterialState,
-        ScriptBuilderMeshOperationState, ScriptBuilderMeshSizeFieldState, ScriptBuilderMeshState,
-        ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, ScriptBuilderStageState,
-        ScriptBuilderUniverseState, StudyMacroStageKind, StudyPipelineDocument, StudyPipelineNode,
-        StudyPipelineNodeSource, StudyPrimitiveStageKind,
+        MacroStageNode, PrimitiveStageNode, ScriptBuilderAdaptiveTimestepState,
+        ScriptBuilderCurrentModuleState, ScriptBuilderDriveState, ScriptBuilderInitialState,
+        ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+        ScriptBuilderMaterialState, ScriptBuilderMeshOperationState,
+        ScriptBuilderMeshSizeFieldState, ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState,
+        ScriptBuilderSolverState, ScriptBuilderStageState, ScriptBuilderUniverseState,
+        StudyMacroStageKind, StudyPipelineDocument, StudyPipelineNode, StudyPipelineNodeSource,
+        StudyPrimitiveStageKind,
     };
+
+    #[test]
+    fn per_geometry_transition_distance_sentinels_survive_override_projection() {
+        let mesh = ScriptBuilderPerGeometryMeshState {
+            transition_distance: Some("airbox_boundary".to_string()),
+            edge_transition_distance: Some("airbox_boundary".to_string()),
+            corner_transition_distance: Some("airbox_boundary".to_string()),
+            ..ScriptBuilderPerGeometryMeshState::default()
+        };
+
+        let projected = geometry_mesh_override_value(&mesh);
+        assert_eq!(projected["transition_distance"], "airbox_boundary");
+        assert_eq!(projected["edge_transition_distance"], "airbox_boundary");
+        assert_eq!(projected["corner_transition_distance"], "airbox_boundary");
+    }
 
     #[test]
     fn scene_document_round_trips_typed_regional_field_drives() {
@@ -1813,13 +1966,17 @@ mod tests {
         let scene: SceneDocument = serde_json::from_value(value).expect("typed scene should parse");
         assert_eq!(scene.field_drives.drives[0].id, "pulse");
         let encoded = serde_json::to_value(scene).expect("typed scene should serialize");
-        assert_eq!(encoded["field_drives"]["drives"][0]["target"]["kind"], "global");
+        assert_eq!(
+            encoded["field_drives"]["drives"][0]["target"]["kind"],
+            "global"
+        );
     }
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
             backend: Some("fem".to_string()),
+            requested_mode: Some("strict".to_string()),
             cpu_threads: Some(8),
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             exchange_enabled: true,
@@ -1833,6 +1990,7 @@ mod tests {
                 torque_tolerance: "1e-6".to_string(),
                 energy_tolerance: String::new(),
                 max_relax_steps: "1000".to_string(),
+                ..ScriptBuilderSolverState::default()
             },
             mesh: ScriptBuilderMeshState {
                 algorithm_2d: 6,
@@ -1890,6 +2048,7 @@ mod tests {
                 entrypoint_kind: "study".to_string(),
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),
+                adaptive_timestep: None,
                 until_seconds: "1e-9".to_string(),
                 relax_algorithm: String::new(),
                 torque_tolerance: String::new(),
@@ -2020,6 +2179,11 @@ mod tests {
                     through_thickness_element_ratio: None,
                     through_thickness_symmetric: None,
                     sweep_face_meshing: Some("triangular".to_string()),
+                    topology: None,
+                    sweep_direction: Some("auto".to_string()),
+                    element_family: Some("prism".to_string()),
+                    transition_policy: Some("reject".to_string()),
+                    exact_layer_count: Some(true),
                     source: None,
                     algorithm_2d: Some(6),
                     algorithm_3d: Some(10),
@@ -2044,8 +2208,10 @@ mod tests {
                     interface_thickness: None,
                     edge_hmax: Some("8e-9".to_string()),
                     edge_thickness: Some("20e-9".to_string()),
+                    edge_transition_distance: Some("30e-9".to_string()),
                     corner_hmax: Some("5e-9".to_string()),
                     corner_extent: Some("12e-9".to_string()),
+                    corner_transition_distance: Some("24e-9".to_string()),
                     transition_distance: None,
                     transition_growth: None,
                     size_fields: vec![ScriptBuilderMeshSizeFieldState {
@@ -2105,6 +2271,11 @@ mod tests {
                     through_thickness_element_ratio: None,
                     through_thickness_symmetric: None,
                     sweep_face_meshing: None,
+                    topology: None,
+                    sweep_direction: None,
+                    element_family: None,
+                    transition_policy: None,
+                    exact_layer_count: None,
                     source: None,
                     algorithm_2d: None,
                     algorithm_3d: None,
@@ -2129,8 +2300,10 @@ mod tests {
                     interface_thickness: Some("8e-9".to_string()),
                     edge_hmax: None,
                     edge_thickness: None,
+                    edge_transition_distance: None,
                     corner_hmax: None,
                     corner_extent: None,
+                    corner_transition_distance: None,
                     transition_distance: Some("24e-9".to_string()),
                     transition_growth: Some(1.2),
                     size_fields: Vec::new(),
@@ -2139,6 +2312,7 @@ mod tests {
                 },
             }],
             field_drives: Vec::new(),
+            planar_monitors: Vec::new(),
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),
                 name: "cpw_1".to_string(),
@@ -2234,6 +2408,307 @@ mod tests {
     }
 
     #[test]
+    fn scene_document_round_trips_requested_prismatic_layered_mesh_fields() {
+        let mut builder = sample_builder();
+        let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+        mesh.topology = Some("prismatic".to_string());
+        mesh.sweep_direction = Some("auto".to_string());
+        mesh.element_family = Some("prism".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(true);
+        mesh.order = Some(1);
+        mesh.through_thickness_distribution = Some("fixed".to_string());
+        mesh.through_thickness_element_ratio = Some(1.0);
+        mesh.through_thickness_symmetric = Some(false);
+        mesh.sweep_face_meshing = Some("triangular".to_string());
+
+        let scene = scene_document_from_script_builder(&builder);
+        let projection = scene_document_problem_projection(&scene)
+            .expect("requested layered mesh should project");
+        let mesh = projection.builder.geometries[0].mesh.as_ref().unwrap();
+
+        assert_eq!(mesh.topology.as_deref(), Some("prismatic"));
+        assert_eq!(mesh.sweep_direction.as_deref(), Some("auto"));
+        assert_eq!(mesh.element_family.as_deref(), Some("prism"));
+        assert_eq!(
+            mesh.transition_policy.as_deref(),
+            Some("pyramid_to_tetrahedra")
+        );
+        assert_eq!(mesh.exact_layer_count, Some(true));
+        assert_eq!(mesh.order, Some(1));
+        assert_eq!(mesh.through_thickness_elements, Some(1));
+        assert_eq!(
+            mesh.through_thickness_distribution.as_deref(),
+            Some("fixed")
+        );
+        assert_eq!(mesh.through_thickness_element_ratio, Some(1.0));
+        assert_eq!(mesh.through_thickness_symmetric, Some(false));
+        assert_eq!(mesh.sweep_face_meshing.as_deref(), Some("triangular"));
+        assert_eq!(
+            projection.rewrite_overrides["geometries"][0]["mesh"]["exact_layer_count"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn scene_document_round_trips_free_tetra_without_layered_intent() {
+        let mut builder = sample_builder();
+        let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+        mesh.mesh_strategy = Some("free_tetrahedral".to_string());
+        mesh.topology = None;
+        mesh.through_thickness_elements = None;
+        mesh.through_thickness_distribution = None;
+        mesh.through_thickness_element_ratio = None;
+        mesh.through_thickness_symmetric = None;
+        mesh.sweep_face_meshing = None;
+        mesh.sweep_direction = None;
+        mesh.element_family = None;
+        mesh.transition_policy = None;
+        mesh.exact_layer_count = None;
+
+        let scene = scene_document_from_script_builder(&builder);
+        let projection = scene_document_problem_projection(&scene)
+            .expect("free tetrahedral scene should project");
+        let mesh = projection.builder.geometries[0].mesh.as_ref().unwrap();
+
+        assert_eq!(mesh.mesh_strategy.as_deref(), Some("free_tetrahedral"));
+        assert_eq!(mesh.topology, None);
+        assert_eq!(mesh.through_thickness_elements, None);
+        assert_eq!(mesh.through_thickness_distribution, None);
+        assert_eq!(mesh.sweep_face_meshing, None);
+        assert_eq!(mesh.sweep_direction, None);
+        assert_eq!(mesh.element_family, None);
+        assert_eq!(mesh.transition_policy, None);
+        assert_eq!(mesh.exact_layer_count, None);
+        assert!(projection.rewrite_overrides["geometries"][0]["mesh"]["topology"].is_null());
+    }
+
+    #[test]
+    fn scene_document_rejects_invalid_requested_layered_mesh_before_projection() {
+        let mut cases = Vec::new();
+
+        let mut zero_layers = sample_builder();
+        zero_layers.geometries[0]
+            .mesh
+            .as_mut()
+            .unwrap()
+            .through_thickness_elements = Some(0);
+        cases.push(zero_layers);
+
+        let mut high_order = sample_builder();
+        let mesh = high_order.geometries[0].mesh.as_mut().unwrap();
+        mesh.topology = Some("prismatic".to_string());
+        mesh.element_family = Some("prism".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(true);
+        mesh.order = Some(2);
+        cases.push(high_order);
+
+        let mut contradictory_hex = sample_builder();
+        let mesh = contradictory_hex.geometries[0].mesh.as_mut().unwrap();
+        mesh.element_family = Some("hex".to_string());
+        mesh.sweep_face_meshing = Some("quadrilateral".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(true);
+        cases.push(contradictory_hex);
+
+        let mut unknown_transition = sample_builder();
+        unknown_transition.geometries[0]
+            .mesh
+            .as_mut()
+            .unwrap()
+            .transition_policy = Some("unknown".to_string());
+        cases.push(unknown_transition);
+
+        for builder in cases {
+            let scene = scene_document_from_script_builder(&builder);
+            let error = scene_document_problem_projection(&scene)
+                .expect_err("invalid requested layered mesh must fail before projection");
+            assert!(error.message.contains("mesh"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn scene_document_only_rejects_inexact_prismatic_intent_in_explicit_strict_mode() {
+        let mut builder = sample_builder();
+        let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+        mesh.topology = Some("prismatic".to_string());
+        mesh.element_family = Some("prism".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(false);
+
+        let mut scene = scene_document_from_script_builder(&builder);
+        scene.study.requested_mode = "extended".to_string();
+        scene_document_problem_projection(&scene)
+            .expect("extended mode should preserve inexact requested prism intent");
+
+        scene.study.requested_mode = "strict".to_string();
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("explicit strict mode should reject inexact requested prism intent");
+        assert!(
+            error.message.contains("exact_layer_count=true"),
+            "{}",
+            error.message
+        );
+
+        scene.study.requested_mode = "hybrid".to_string();
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("hybrid mode should reject inexact requested prism intent");
+        assert!(
+            error.message.contains("exact_layer_count=true"),
+            "{}",
+            error.message
+        );
+
+        scene.study.requested_mode = "unknown".to_string();
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("unknown requested mode must fail closed");
+        assert!(
+            error.message.contains("requested_mode"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn scene_projection_preserves_canonical_fixed_and_adaptive_solver_policies() {
+        let mut fixed = sample_builder();
+        fixed.solver.fixed_timestep = "2e-15".to_string();
+        fixed.solver.dt_initial.clear();
+        fixed.solver.dt_min.clear();
+        fixed.solver.dt_max.clear();
+        fixed.solver.max_err.clear();
+        fixed.solver.adaptive_timestep = None;
+
+        let fixed_scene = scene_document_from_script_builder(&fixed);
+        let fixed_projection = scene_document_problem_projection(&fixed_scene)
+            .expect("fixed solver policy should project");
+        assert_eq!(
+            fixed_projection.rewrite_overrides["solver"]["fixed_timestep"],
+            serde_json::json!(2e-15)
+        );
+        assert_eq!(
+            scene_document_to_script_builder(&fixed_scene)
+                .expect("fixed scene should round-trip")
+                .solver,
+            fixed.solver
+        );
+
+        let mut adaptive = sample_builder();
+        adaptive.solver.integrator = "rk45".to_string();
+        adaptive.solver.fixed_timestep.clear();
+        adaptive.solver.dt_initial.clear();
+        adaptive.solver.dt_min = "1e-16".to_string();
+        adaptive.solver.dt_max.clear();
+        adaptive.solver.max_err = "1e-6".to_string();
+        adaptive.solver.adaptive_timestep = None;
+
+        let adaptive_scene = scene_document_from_script_builder(&adaptive);
+        let adaptive_projection = scene_document_problem_projection(&adaptive_scene)
+            .expect("adaptive solver policy should project");
+        assert_eq!(
+            adaptive_projection.rewrite_overrides["solver"]["dt_initial"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            adaptive_projection.rewrite_overrides["solver"]["dt_max"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            adaptive_projection.rewrite_overrides["solver"]["max_err"],
+            serde_json::json!(1e-6)
+        );
+        assert_eq!(
+            scene_document_to_script_builder(&adaptive_scene)
+                .expect("adaptive scene should round-trip")
+                .solver,
+            adaptive.solver
+        );
+
+        let mut advanced = sample_builder();
+        advanced.solver.integrator = "rk45".to_string();
+        advanced.solver.fixed_timestep.clear();
+        advanced.solver.adaptive_timestep = Some(ScriptBuilderAdaptiveTimestepState {
+            tolerance_mode: "advanced".to_string(),
+            atol: "1e-8".to_string(),
+            rtol: "1e-5".to_string(),
+            dt_initial: String::new(),
+            dt_min: "1e-16".to_string(),
+            dt_max: "1e-13".to_string(),
+            safety: "0.9".to_string(),
+            growth_limit: "2".to_string(),
+            shrink_limit: "0.2".to_string(),
+            max_spin_rotation: String::new(),
+            norm_tolerance: String::new(),
+        });
+        let advanced_scene = scene_document_from_script_builder(&advanced);
+        let advanced_projection = scene_document_problem_projection(&advanced_scene)
+            .expect("advanced solver policy should project");
+        assert_eq!(
+            advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["dt_initial"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["atol"],
+            serde_json::json!(1e-8)
+        );
+        assert_eq!(
+            advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["rtol"],
+            serde_json::json!(1e-5)
+        );
+    }
+
+    #[test]
+    fn scene_projection_rejects_conflicting_and_malformed_solver_policy() {
+        let mut conflict = sample_builder();
+        conflict.solver.fixed_timestep = "1e-15".to_string();
+        conflict.solver.dt_min = "1e-16".to_string();
+        conflict.solver.dt_max = "1e-14".to_string();
+        conflict.solver.max_err = "1e-6".to_string();
+        let error =
+            scene_document_problem_projection(&scene_document_from_script_builder(&conflict))
+                .expect_err("fixed and adaptive scene state must fail closed");
+        assert!(error.message.contains("mutually exclusive"));
+
+        let mut malformed = sample_builder();
+        malformed.solver.fixed_timestep = "not-a-number".to_string();
+        let error =
+            scene_document_problem_projection(&scene_document_from_script_builder(&malformed))
+                .expect_err("malformed present numerics must not normalize to null");
+        assert!(error.message.contains("fixed_timestep"));
+    }
+
+    #[test]
+    fn scene_projection_exports_edited_stage_adaptive_policy() {
+        let builder = sample_builder();
+        let mut encoded = serde_json::to_value(builder).unwrap();
+        encoded["stages"][0]["integrator"] = serde_json::json!("rk45");
+        encoded["stages"][0]["fixed_timestep"] = serde_json::json!("");
+        encoded["stages"][0]["adaptive_timestep"] = serde_json::json!({
+            "atol": "1e-8",
+            "rtol": "1e-5",
+            "dt_initial": "",
+            "dt_min": "1e-16",
+            "dt_max": "1e-13",
+            "safety": "0.9",
+            "growth_limit": "2.0",
+            "shrink_limit": "0.2"
+        });
+        let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+        let projection =
+            scene_document_problem_projection(&scene_document_from_script_builder(&builder))
+                .expect("valid stage adaptive policy should project");
+        assert_eq!(
+            projection.rewrite_overrides["stages"][0]["adaptive_timestep"]["dt_max"],
+            serde_json::json!(1e-13)
+        );
+        assert_eq!(
+            projection.rewrite_overrides["stages"][0]["adaptive_timestep"]["rtol"],
+            serde_json::json!(1e-5)
+        );
+    }
+
+    #[test]
     fn scene_document_validation_rejects_missing_refs() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
         scene.objects[0].material_ref = "missing".to_string();
@@ -2253,11 +2728,14 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_owner_rotation_and_scale_until_fdm_support_exists() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
-        scene.objects[0].transform.rotation_quat = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
+        scene.objects[0].transform.rotation_quat =
+            [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
         scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
         let error = scene_document_to_script_builder(&scene)
             .expect_err("owner rotation/scale must not be silently dropped");
-        assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
+        assert!(error
+            .message
+            .contains("owner_transform_rotation_scale_unsupported"));
     }
 
     #[test]
@@ -2597,5 +3075,33 @@ mod tests {
             panic!("first projected study node should be primitive");
         };
         assert_eq!(projected_first_node.label, expected_id);
+    }
+
+    #[test]
+    fn scene_document_round_trips_planar_monitors_without_view_state() {
+        let mut builder = sample_builder();
+        builder.planar_monitors = vec![fullmag_ir::PlanarMonitorIR {
+            id: "midplane".into(),
+            name: "Midplane".into(),
+            target: fullmag_ir::MonitorTargetIR::Object {
+                object_id: builder.geometries[0].name.clone(),
+            },
+            frame: fullmag_ir::PlanarFrameIR::axis_preset(
+                fullmag_ir::PlanarFramePresetIR::Xy,
+                0.0,
+                fullmag_ir::PlanarExtentIR::TargetBounds { padding_m: 1e-9 },
+            ),
+            operator: fullmag_ir::PlanarOperatorIR::SlabAverage { thickness_m: 5e-9 },
+        }];
+
+        let scene = scene_document_from_script_builder(&builder);
+        let round_trip =
+            scene_document_to_script_builder(&scene).expect("monitor scene must validate");
+
+        assert_eq!(scene.monitors.planar, builder.planar_monitors);
+        assert_eq!(round_trip.planar_monitors, builder.planar_monitors);
+        let encoded = serde_json::to_value(scene).unwrap();
+        assert!(encoded["monitors"]["planar"][0].get("quantity").is_none());
+        assert!(encoded["monitors"]["planar"][0].get("resolution").is_none());
     }
 }

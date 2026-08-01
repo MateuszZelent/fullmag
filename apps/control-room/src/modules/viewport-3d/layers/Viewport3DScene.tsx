@@ -2,6 +2,7 @@
 
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
   viewport3DAirboxLayerEnabledFromBrowserConfig,
@@ -114,7 +115,11 @@ import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
-import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
+import {
+  ClipPlaneFramePreviewLayer,
+  ClipPlaneLayer,
+  PlanarMonitorFramePreviewLayer,
+} from "./ClipPlaneLayer";
 import { pickRegionOverlayFromRay } from "./regionOverlayPicking";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import {
@@ -148,6 +153,7 @@ interface Viewport3DSceneProps {
   clipIntersectionMarkers: ClipPlaneIntersectionMarkerBuffers | null;
   crossSectionFrameClip: VisualizationStateResource["clip"] | null;
   crossSectionFrameRotationDegrees: number;
+  planarMonitorFramePreview: PlanarMonitorFramePreview | null;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   airboxSettings: VisualizationTargetSettings;
@@ -189,7 +195,6 @@ interface Viewport3DSceneProps {
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
   fallbackSettings: VisualizationTargetSettings;
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
@@ -651,6 +656,7 @@ function Viewport3DOverlayLayerStack({
   colors,
   crossSectionFrameClip,
   crossSectionFrameRotationDegrees,
+  planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
   fdmSettings,
@@ -671,6 +677,7 @@ function Viewport3DOverlayLayerStack({
   | "colors"
   | "crossSectionFrameClip"
   | "crossSectionFrameRotationDegrees"
+  | "planarMonitorFramePreview"
   | "dimensionFrameDensity"
   | "dimensionFrameMode"
   | "fdmSettings"
@@ -698,12 +705,22 @@ function Viewport3DOverlayLayerStack({
       ) : null}
       {viewport3DClipLayersEnabledFromBrowserConfig() &&
       crossSectionFrameClip?.enabled &&
-      !clip?.enabled ? (
+      !clip?.enabled &&
+      !planarMonitorFramePreview ? (
         <ClipPlaneFramePreviewLayer
           bounds={bounds}
           clip={crossSectionFrameClip}
           colors={colors}
           frameRotationDegrees={crossSectionFrameRotationDegrees}
+          tracker={tracker}
+        />
+      ) : null}
+      {viewport3DClipLayersEnabledFromBrowserConfig() &&
+      planarMonitorFramePreview &&
+      !clip?.enabled ? (
+        <PlanarMonitorFramePreviewLayer
+          colors={colors}
+          preview={planarMonitorFramePreview}
           tracker={tracker}
         />
       ) : null}
@@ -764,7 +781,6 @@ function Viewport3DModelLayerStack({
   fieldVector,
   fallbackSettings,
   femDomain,
-  getRegionSettings,
   hysteresisReplayGlyphModel,
   getObjectSettings,
   getPartSettings,
@@ -811,7 +827,6 @@ function Viewport3DModelLayerStack({
   | "fieldVector"
   | "fallbackSettings"
   | "femDomain"
-  | "getRegionSettings"
   | "getObjectSettings"
   | "getPartSettings"
   | "hysteresisReplayGlyphModel"
@@ -861,21 +876,6 @@ function Viewport3DModelLayerStack({
   });
   const stageVisibility =
     resolveViewport3DModelLayerStageVisibility(modelLayerStage);
-  const renderedMeshRegionSurfacePartIds = useMemo(
-    () =>
-      new Set(
-        femDomain.magneticParts.flatMap((part) => (part.id ? [part.id] : [])),
-    ),
-    [femDomain.magneticParts],
-  );
-  const renderedMeshRegionSurfacePartIdList = useMemo(
-    () => [...renderedMeshRegionSurfacePartIds].toSorted(),
-    [renderedMeshRegionSurfacePartIds],
-  );
-  const meshRegionOverlaySettingsByRegionId = useMemo(
-    () => resolveRegionSettingsEntries(meshRegionOverlays, getRegionSettings),
-    [getRegionSettings, meshRegionOverlays],
-  );
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
   const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
   const realizedRegionOverlaysVisible =
@@ -889,11 +889,8 @@ function Viewport3DModelLayerStack({
     enabled: realizedRegionOverlaysVisible,
     magneticParts: meshRegionOverlayParts,
     regions: meshRegionOverlays,
-    renderedSurfacePartIds: renderedMeshRegionSurfacePartIdList,
     selectedObjectId,
     selectedRegionId,
-    settingsByRegionId: meshRegionOverlaySettingsByRegionId,
-    targetVisualizationRevision: visualizationRevision,
     topology,
     topologyRevision,
   });
@@ -925,7 +922,6 @@ function Viewport3DModelLayerStack({
     <>
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayNativePickingLayer
-          getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
           regions={regionOverlays}
           selectedObjectId={selectedObjectId}
@@ -1018,7 +1014,6 @@ function Viewport3DModelLayerStack({
       <PeriodicPairsOverlayLayer model={periodicOverlayModel} tracker={tracker} />
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayLayer
-          getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
           regions={regionOverlays}
           selectedObjectId={selectedObjectId}
@@ -1045,13 +1040,11 @@ function Viewport3DModelLayerStack({
 }
 
 function RegionOverlayNativePickingLayer({
-  getRegionSettings,
   onSelectRegion,
   regions,
   selectedObjectId,
   selectedRegionId,
 }: {
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   regions: readonly RegionOverlayInput[];
   selectedObjectId: string | null;
@@ -1061,11 +1054,10 @@ function RegionOverlayNativePickingLayer({
   const regionPickModels = useMemo(
     () =>
       buildRegionOverlayModels(regions, {
-        resolveSettings: getRegionSettings,
         selectedObjectId,
         selectedRegionId,
       }),
-    [getRegionSettings, regions, selectedObjectId, selectedRegionId],
+    [regions, selectedObjectId, selectedRegionId],
   );
   const handleSelectRegion = useEffectEvent(onSelectRegion);
 
@@ -1104,23 +1096,6 @@ function RegionOverlayNativePickingLayer({
   }, [camera, gl, regionPickModels]);
 
   return null;
-}
-
-function resolveRegionSettingsEntries(
-  regions: readonly RegionOverlayInput[],
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings,
-): Array<readonly [string, VisualizationTargetSettings]> {
-  return regions.flatMap((region) =>
-    typeof region.region_id === "string"
-      ? [[region.region_id, getRegionSettings(region)] as const]
-      : [],
-  );
-}
-
-export function hasExplicitVisibleRegionSettings(
-  entries: readonly (readonly [string, VisualizationTargetSettings])[],
-): boolean {
-  return entries.some(([, settings]) => settings.visible);
 }
 
 function Viewport3DInteractionAndHudStack({
@@ -1205,6 +1180,7 @@ export function Viewport3DScene({
   clipIntersectionMarkers,
   crossSectionFrameClip,
   crossSectionFrameRotationDegrees,
+  planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
   airboxSettings,
@@ -1219,7 +1195,6 @@ export function Viewport3DScene({
   fallbackSettings,
   getObjectSettings,
   getPartSettings,
-  getRegionSettings,
   hysteresisReplayGlyphModel,
   magnetizationTexturePreviews,
   meshQualityColors,
@@ -1359,6 +1334,7 @@ export function Viewport3DScene({
         colors={colors}
         crossSectionFrameClip={crossSectionFrameClip}
         crossSectionFrameRotationDegrees={crossSectionFrameRotationDegrees}
+        planarMonitorFramePreview={planarMonitorFramePreview}
         dimensionFrameDensity={dimensionFrameDensity}
         dimensionFrameMode={dimensionFrameMode}
         fdmSettings={fdmSettings}
@@ -1386,7 +1362,6 @@ export function Viewport3DScene({
         femDomain={femDomain}
         getObjectSettings={getObjectSettings}
         getPartSettings={getPartSettings}
-        getRegionSettings={getRegionSettings}
         hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         materialProfile={materialProfile}

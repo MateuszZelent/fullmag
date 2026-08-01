@@ -1,9 +1,9 @@
 use crate::{SceneDocument, StudyPipelineDocument, StudyPipelineNode};
 use fullmag_ir::{
-    CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
-    DriveActivationIR, FieldSpatialProfileIR, FieldTargetIR,
-    MaterialParameterAssignmentIR, MaterialParameterFieldIR, MaterialParameterNameIR,
-    MaterialTransitionSpecIR, ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
+    CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
+    ExchangeCouplingModeIR, FieldSpatialProfileIR, FieldTargetIR, MaterialParameterAssignmentIR,
+    MaterialParameterFieldIR, MaterialParameterNameIR, MaterialTransitionSpecIR, MonitorTargetIR,
+    ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +39,19 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     }
     if scene.version == "scene.v1" {
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
+    }
+    if !matches!(
+        scene.study.requested_mode.as_str(),
+        "" | "strict" | "extended" | "hybrid"
+    ) {
+        return Err(SceneDocumentValidationError::new(format!(
+            "study.requested_mode must be 'strict', 'extended', or 'hybrid'; got '{}'",
+            scene.study.requested_mode
+        )));
+    }
+    validate_solver_state(&scene.study.solver, false, "study.solver")?;
+    for (index, stage) in scene.study.stages.iter().enumerate() {
+        validate_stage_solver_state(stage, index)?;
     }
 
     let mut object_ids = BTreeSet::new();
@@ -94,6 +107,20 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
                 object.id
             )));
         }
+        if let Some(mesh) = object.object_mesh.as_ref() {
+            validate_requested_layered_mesh(
+                &format!("object '{}'.object_mesh", object.id),
+                mesh,
+                scene.study.requested_mode != "extended",
+            )?;
+        }
+        if let Some(mesh) = object.mesh_override.as_ref() {
+            validate_requested_layered_mesh(
+                &format!("object '{}'.mesh_override", object.id),
+                mesh,
+                scene.study.requested_mode != "extended",
+            )?;
+        }
         if object.role != "magnet" {
             continue;
         }
@@ -121,13 +148,469 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
         }
     }
     validate_region_owned_scene_payloads(scene, &object_ids)?;
+    for interface in &scene.study.mesh_interfaces {
+        validate_requested_layered_mesh(
+            &format!("mesh interface '{}'.config", interface.interface_id),
+            &interface.config,
+            scene.study.requested_mode != "extended",
+        )?;
+    }
 
     if let Some(document) = &scene.study.study_pipeline {
         validate_study_pipeline_document(document)?;
     }
     validate_scene_field_drives(scene, &object_ids)?;
+    validate_scene_planar_monitors(scene, &object_ids)?;
 
     Ok(())
+}
+
+fn validate_requested_layered_mesh(
+    path: &str,
+    mesh: &crate::ScriptBuilderPerGeometryMeshState,
+    strict_mode: bool,
+) -> Result<(), SceneDocumentValidationError> {
+    if mesh
+        .through_thickness_elements
+        .is_some_and(|layers| layers < 1)
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path}.through_thickness_elements must be >= 1"
+        )));
+    }
+    if let Some(topology) = mesh.topology.as_deref() {
+        if !matches!(topology, "tetrahedral" | "prismatic") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.topology must be 'tetrahedral' or 'prismatic'"
+            )));
+        }
+    }
+    if let Some(direction) = mesh.sweep_direction.as_deref() {
+        if !matches!(direction, "auto" | "x" | "y" | "z") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.sweep_direction must be 'auto', 'x', 'y', or 'z'"
+            )));
+        }
+    }
+    if let Some(family) = mesh.element_family.as_deref() {
+        if !matches!(family, "prism" | "hex") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.element_family must be 'prism' or 'hex'"
+            )));
+        }
+    }
+    if let Some(transition) = mesh.transition_policy.as_deref() {
+        if !matches!(transition, "pyramid_to_tetrahedra" | "reject") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+            )));
+        }
+    }
+
+    if let Some(strategy) = mesh.mesh_strategy.as_deref() {
+        if !matches!(
+            strategy,
+            "auto" | "free_tetrahedral" | "thin_film_tetrahedral" | "swept_prism" | "swept_hex"
+        ) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.mesh_strategy is unsupported"
+            )));
+        }
+    }
+    if let Some(distribution) = mesh.through_thickness_distribution.as_deref() {
+        if !matches!(distribution, "fixed" | "linear" | "exponential") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.through_thickness_distribution is invalid"
+            )));
+        }
+    }
+    if let Some(face) = mesh.sweep_face_meshing.as_deref() {
+        if !matches!(face, "triangular" | "quadrilateral") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.sweep_face_meshing must be 'triangular' or 'quadrilateral'"
+            )));
+        }
+    }
+
+    if mesh.topology.as_deref() == Some("tetrahedral")
+        && (mesh.sweep_direction.is_some()
+            || mesh.element_family.is_some()
+            || mesh.transition_policy.is_some()
+            || mesh.exact_layer_count.is_some())
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} tetrahedral topology contradicts swept element intent"
+        )));
+    }
+
+    let prism_requested = mesh.topology.as_deref() == Some("prismatic")
+        || mesh.element_family.as_deref() == Some("prism")
+        || mesh.mesh_strategy.as_deref() == Some("swept_prism");
+    if prism_requested {
+        if mesh.order.is_some_and(|order| order != 1) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prismatic mesh supports order=1 only"
+            )));
+        }
+        if strict_mode && mesh.exact_layer_count == Some(false) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} strict prismatic mesh requires exact_layer_count=true"
+            )));
+        }
+        if mesh
+            .through_thickness_distribution
+            .as_deref()
+            .is_some_and(|distribution| distribution != "fixed")
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} strict prismatic mesh requires fixed layer distribution"
+            )));
+        }
+        if mesh
+            .sweep_face_meshing
+            .as_deref()
+            .is_some_and(|face| face != "triangular")
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prismatic mesh requires triangular source faces"
+            )));
+        }
+        if mesh
+            .element_family
+            .as_deref()
+            .is_some_and(|family| family != "prism")
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prismatic topology contradicts non-prism element family"
+            )));
+        }
+        if mesh.mesh_strategy.as_deref() != Some("swept_prism") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prism element family requires mesh_strategy='swept_prism'"
+            )));
+        }
+    }
+
+    if mesh.topology.as_deref() == Some("prismatic")
+        && mesh.transition_policy.as_deref() != Some("pyramid_to_tetrahedra")
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} explicit prismatic topology requires pyramid_to_tetrahedra transition"
+        )));
+    }
+
+    if mesh.element_family.as_deref() == Some("hex") {
+        if mesh.mesh_strategy.as_deref() != Some("swept_hex") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} hex element family requires mesh_strategy='swept_hex'"
+            )));
+        }
+        if mesh.sweep_face_meshing.as_deref() != Some("quadrilateral") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} hex element family requires quadrilateral source faces"
+            )));
+        }
+        if mesh.transition_policy.as_deref() == Some("pyramid_to_tetrahedra") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} hex element family contradicts pyramid_to_tetrahedra transition"
+            )));
+        }
+    }
+
+    let layered_requested = matches!(
+        mesh.mesh_strategy.as_deref(),
+        Some("swept_prism" | "swept_hex")
+    ) || mesh.topology.is_some()
+        || mesh.sweep_direction.is_some()
+        || mesh.element_family.is_some()
+        || mesh.transition_policy.is_some()
+        || mesh.exact_layer_count.is_some();
+    if layered_requested {
+        let missing = [
+            (
+                "through_thickness_elements",
+                mesh.through_thickness_elements.is_none(),
+            ),
+            (
+                "through_thickness_distribution",
+                mesh.through_thickness_distribution.is_none(),
+            ),
+            ("sweep_face_meshing", mesh.sweep_face_meshing.is_none()),
+            ("sweep_direction", mesh.sweep_direction.is_none()),
+            ("element_family", mesh.element_family.is_none()),
+            ("transition_policy", mesh.transition_policy.is_none()),
+            ("exact_layer_count", mesh.exact_layer_count.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(name, absent)| absent.then_some(name))
+        .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} layered mesh intent is incomplete: {}",
+                missing.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_scene_planar_monitors(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let region_ids = scene
+        .objects
+        .iter()
+        .flat_map(|object| {
+            object
+                .regions
+                .iter()
+                .map(move |region| (object.id.as_str(), region.region_id.as_str()))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+
+    for (index, monitor) in scene.monitors.planar.iter().enumerate() {
+        if monitor.id.trim().is_empty() || !ids.insert(monitor.id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "monitors.planar[{index}] id must be non-empty and unique"
+            )));
+        }
+        if monitor.name.trim().is_empty() || !names.insert(monitor.name.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "monitors.planar[{index}] name must be non-empty and unique"
+            )));
+        }
+        match &monitor.target {
+            MonitorTargetIR::MagneticDomain | MonitorTargetIR::Domain => {}
+            MonitorTargetIR::Object { object_id } => {
+                if !object_ids.contains(object_id) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "monitors.planar[{index}] target object '{object_id}' does not exist"
+                    )));
+                }
+            }
+            MonitorTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
+                if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "monitors.planar[{index}] target region '{object_id}/{region_id}' does not exist"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_stage_solver_state(
+    stage: &crate::ScriptBuilderStageState,
+    index: usize,
+) -> Result<(), SceneDocumentValidationError> {
+    let context = format!("study.stages[{index}]");
+    if !stage.fixed_timestep.trim().is_empty() && stage.adaptive_timestep.is_some() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} fixed and adaptive timestep policies are mutually exclusive"
+        )));
+    }
+    let relax_algorithm = stage.relax_algorithm.trim();
+    if stage.kind == "relax"
+        && (relax_algorithm.is_empty() || relax_algorithm == "llg_overdamped")
+        && stage.fixed_timestep.trim().is_empty()
+        && stage.adaptive_timestep.is_none()
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} LLG relaxation requires an explicit fixed or adaptive timestep policy"
+        )));
+    }
+    validate_present_positive(&stage.fixed_timestep, &format!("{context}.fixed_timestep"))?;
+    if let Some(adaptive) = stage.adaptive_timestep.as_ref() {
+        validate_adaptive_state(adaptive, true, &context, &stage.integrator)?;
+    }
+    Ok(())
+}
+
+fn validate_solver_state(
+    solver: &crate::ScriptBuilderSolverState,
+    executable: bool,
+    context: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    let convenience = [
+        &solver.dt_initial,
+        &solver.dt_min,
+        &solver.dt_max,
+        &solver.max_err,
+    ]
+    .iter()
+    .any(|value| !value.trim().is_empty());
+    let active = usize::from(!solver.fixed_timestep.trim().is_empty())
+        + usize::from(convenience)
+        + usize::from(solver.adaptive_timestep.is_some());
+    if active > 1 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} fixed, convenience-adaptive, and advanced-adaptive policies are mutually exclusive"
+        )));
+    }
+    validate_present_positive(&solver.fixed_timestep, &format!("{context}.fixed_timestep"))?;
+    validate_present_positive(
+        &solver.demag_interval_s,
+        &format!("{context}.demag_interval_s"),
+    )?;
+    if convenience {
+        validate_adaptive_values(
+            &solver.dt_initial,
+            &solver.dt_min,
+            &solver.dt_max,
+            executable,
+            context,
+            &solver.integrator,
+        )?;
+        validate_required_positive(&solver.max_err, &format!("{context}.max_err"))?;
+    }
+    if let Some(adaptive) = solver.adaptive_timestep.as_ref() {
+        validate_adaptive_state(adaptive, executable, context, &solver.integrator)?;
+    }
+    Ok(())
+}
+
+fn validate_adaptive_state(
+    adaptive: &crate::ScriptBuilderAdaptiveTimestepState,
+    executable: bool,
+    context: &str,
+    integrator: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    validate_adaptive_values(
+        &adaptive.dt_initial,
+        &adaptive.dt_min,
+        &adaptive.dt_max,
+        executable,
+        context,
+        integrator,
+    )?;
+    let atol = parse_required_nonnegative(&adaptive.atol, &format!("{context}.atol"))?;
+    let rtol = parse_required_nonnegative(&adaptive.rtol, &format!("{context}.rtol"))?;
+    if atol == 0.0 && rtol == 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} requires at least one positive adaptive tolerance"
+        )));
+    }
+    match adaptive.tolerance_mode.as_str() {
+        "max_error" if rtol == 0.0 && atol > 0.0 => {}
+        "advanced" => {
+            let safety = parse_required_positive(&adaptive.safety, &format!("{context}.safety"))?;
+            let growth = parse_required_positive(
+                &adaptive.growth_limit,
+                &format!("{context}.growth_limit"),
+            )?;
+            let shrink = parse_required_positive(
+                &adaptive.shrink_limit,
+                &format!("{context}.shrink_limit"),
+            )?;
+            if safety > 1.0 || growth <= 1.0 || shrink >= 1.0 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{context} controller requires safety<=1, growth_limit>1, and shrink_limit<1"
+                )));
+            }
+        }
+        "max_error" => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} max_error mode requires atol>0 and rtol=0"
+            )))
+        }
+        other => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} has unsupported tolerance_mode '{other}'"
+            )))
+        }
+    }
+    validate_present_positive(
+        &adaptive.max_spin_rotation,
+        &format!("{context}.max_spin_rotation"),
+    )?;
+    validate_present_positive(
+        &adaptive.norm_tolerance,
+        &format!("{context}.norm_tolerance"),
+    )?;
+    Ok(())
+}
+
+fn validate_adaptive_values(
+    initial: &str,
+    minimum: &str,
+    maximum: &str,
+    require_maximum: bool,
+    context: &str,
+    integrator: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    if !matches!(integrator.trim(), "rk23" | "rk45") {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} adaptive policy requires RK23 or RK45"
+        )));
+    }
+    let minimum = parse_required_positive(minimum, &format!("{context}.dt_min"))?;
+    let maximum = if maximum.trim().is_empty() && !require_maximum {
+        None
+    } else {
+        Some(parse_required_positive(
+            maximum,
+            &format!("{context}.dt_max"),
+        )?)
+    };
+    if maximum.is_some_and(|value| value < minimum) {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context}.dt_max must be greater than or equal to dt_min"
+        )));
+    }
+    if !initial.trim().is_empty() {
+        let initial = parse_required_positive(initial, &format!("{context}.dt_initial"))?;
+        if initial < minimum || maximum.is_some_and(|value| initial > value) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context}.dt_initial must lie within adaptive bounds"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_required_positive(value: &str, name: &str) -> Result<f64, SceneDocumentValidationError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        SceneDocumentValidationError::new(format!("{name} must be a finite positive number"))
+    })?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{name} must be a finite positive number"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn parse_required_nonnegative(
+    value: &str,
+    name: &str,
+) -> Result<f64, SceneDocumentValidationError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        SceneDocumentValidationError::new(format!("{name} must be finite and nonnegative"))
+    })?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{name} must be finite and nonnegative"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn validate_required_positive(value: &str, name: &str) -> Result<(), SceneDocumentValidationError> {
+    parse_required_positive(value, name).map(|_| ())
+}
+
+fn validate_present_positive(value: &str, name: &str) -> Result<(), SceneDocumentValidationError> {
+    if value.trim().is_empty() {
+        return Ok(());
+    }
+    validate_required_positive(value, name)
 }
 
 fn collect_stage_ids(nodes: &[StudyPipelineNode], ids: &mut BTreeSet<String>) {
@@ -198,9 +681,16 @@ fn validate_scene_field_drives(
                 region_id,
             } => {
                 require_object(object_id)?;
-                let object = scene.objects.iter().find(|object| object.id == *object_id).unwrap();
+                let object = scene
+                    .objects
+                    .iter()
+                    .find(|object| object.id == *object_id)
+                    .unwrap();
                 let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
-                    || object.regions.iter().any(|region| region.region_id == *region_id);
+                    || object
+                        .regions
+                        .iter()
+                        .any(|region| region.region_id == *region_id);
                 if !exists {
                     return Err(SceneDocumentValidationError::new(format!(
                         "regional field drive '{}' references missing region '{}' on object '{}'",
@@ -346,6 +836,182 @@ fn validate_study_pipeline_nodes(
 mod tests {
     use super::*;
 
+    fn valid_generic_swept_prism() -> crate::ScriptBuilderPerGeometryMeshState {
+        crate::ScriptBuilderPerGeometryMeshState {
+            mesh_strategy: Some("swept_prism".to_string()),
+            order: Some(1),
+            through_thickness_elements: Some(1),
+            through_thickness_distribution: Some("fixed".to_string()),
+            sweep_face_meshing: Some("triangular".to_string()),
+            sweep_direction: Some("auto".to_string()),
+            element_family: Some("prism".to_string()),
+            transition_policy: Some("reject".to_string()),
+            exact_layer_count: Some(true),
+            ..crate::ScriptBuilderPerGeometryMeshState::default()
+        }
+    }
+
+    #[test]
+    fn layered_mesh_validation_rejects_contradictory_or_incomplete_intent() {
+        let mut tetrahedral_prism = valid_generic_swept_prism();
+        tetrahedral_prism.topology = Some("tetrahedral".to_string());
+        tetrahedral_prism.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        let error = validate_requested_layered_mesh("mesh", &tetrahedral_prism, true)
+            .expect_err("tetrahedral topology with prism family must fail closed");
+        assert!(error.message.contains("tetrahedral"), "{}", error.message);
+
+        let mut inexact = valid_generic_swept_prism();
+        inexact.exact_layer_count = Some(false);
+        let error = validate_requested_layered_mesh("mesh", &inexact, true)
+            .expect_err("strict swept prism with exact=false must fail closed");
+        assert!(
+            error.message.contains("exact_layer_count"),
+            "{}",
+            error.message
+        );
+
+        let incomplete = crate::ScriptBuilderPerGeometryMeshState {
+            mesh_strategy: Some("swept_prism".to_string()),
+            ..crate::ScriptBuilderPerGeometryMeshState::default()
+        };
+        validate_requested_layered_mesh("mesh", &incomplete, true)
+            .expect_err("incomplete swept intent must fail before lowering");
+    }
+
+    #[test]
+    fn generic_swept_prism_allows_reject_transition_policy() {
+        validate_requested_layered_mesh("mesh", &valid_generic_swept_prism(), true)
+            .expect("generic swept prism must preserve transition='reject'");
+    }
+
+    #[test]
+    fn llg_stage_requires_explicit_timestep_policy() {
+        let mut stage: crate::ScriptBuilderStageState = serde_json::from_value(serde_json::json!({
+            "kind": "relax",
+            "entrypoint_kind": "flat_relax",
+            "relax_algorithm": "llg_overdamped"
+        }))
+        .expect("stage fixture should deserialize");
+
+        let error = validate_stage_solver_state(&stage, 0)
+            .expect_err("LLG stage without a timestep policy must fail closed");
+        assert!(
+            error
+                .message
+                .contains("explicit fixed or adaptive timestep policy"),
+            "{}",
+            error.message
+        );
+
+        stage.relax_algorithm = "projected_gradient_bb".to_string();
+        validate_stage_solver_state(&stage, 0)
+            .expect("direct minimization does not require an LLG timestep policy");
+
+        let mut global_solver = crate::ScriptBuilderSolverState::default();
+        global_solver.fixed_timestep.clear();
+        validate_solver_state(&global_solver, false, "study.solver")
+            .expect("non-executable global solver state may omit a timestep policy");
+    }
+
+    #[test]
+    fn public_scene_stage_algorithm_vocabulary_enforces_llg_timestep_policy() {
+        let explicit_llg: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "algorithm": "llg_overdamped",
+                "fixed_timestep": "",
+                "adaptive_timestep": null
+            }]}
+        }))
+        .expect("public scene algorithm fixture should deserialize");
+        assert_eq!(
+            explicit_llg.study.stages[0].relax_algorithm,
+            "llg_overdamped"
+        );
+        assert!(!explicit_llg.study.stages[0].extra.contains_key("algorithm"));
+        let serialized = serde_json::to_value(&explicit_llg)
+            .expect("the public scene should serialize with the canonical algorithm spelling");
+        assert_eq!(
+            serialized["study"]["stages"][0]["algorithm"],
+            "llg_overdamped"
+        );
+        assert!(
+            serialized["study"]["stages"][0]
+                .get("relax_algorithm")
+                .is_none(),
+            "legacy relax_algorithm must not be emitted"
+        );
+        let error = validate_scene_document(&explicit_llg)
+            .expect_err("public LLG stage without a timestep policy must fail closed");
+        assert!(
+            error
+                .message
+                .contains("explicit fixed or adaptive timestep policy"),
+            "{}",
+            error.message
+        );
+        crate::scene_document_to_script_builder_overrides(&explicit_llg)
+            .expect_err("public adaptation must enforce the same LLG policy requirement");
+
+        let omitted_algorithm: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "fixed_timestep": "",
+                "adaptive_timestep": null
+            }]}
+        }))
+        .expect("omitted algorithm fixture should deserialize");
+        let error = validate_scene_document(&omitted_algorithm)
+            .expect_err("the public default LLG stage must also require a timestep policy");
+        assert!(
+            error
+                .message
+                .contains("explicit fixed or adaptive timestep policy"),
+            "{}",
+            error.message
+        );
+        crate::scene_document_to_script_builder_overrides(&omitted_algorithm)
+            .expect_err("public adaptation must resolve an omitted algorithm as LLG");
+
+        let direct_minimizer: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "algorithm": "projected_gradient_bb",
+                "fixed_timestep": "",
+                "adaptive_timestep": null
+            }]}
+        }))
+        .expect("direct-minimizer fixture should deserialize");
+        validate_scene_document(&direct_minimizer)
+            .expect("a direct minimizer does not require an LLG timestep policy");
+        let overrides = crate::scene_document_to_script_builder_overrides(&direct_minimizer)
+            .expect("a valid direct minimizer should adapt");
+        assert_eq!(
+            overrides["stages"][0]["relax_algorithm"],
+            "projected_gradient_bb"
+        );
+
+        let conflicting_spellings = serde_json::from_value::<SceneDocument>(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "algorithm": "projected_gradient_bb",
+                "relax_algorithm": "llg_overdamped"
+            }]}
+        }));
+        assert!(
+            conflicting_spellings.is_err(),
+            "conflicting public and legacy algorithm spellings must fail closed"
+        );
+    }
+
     #[test]
     fn regional_field_drive_rejects_missing_scene_target() {
         let scene: SceneDocument = serde_json::from_value(serde_json::json!({
@@ -359,10 +1025,15 @@ mod tests {
                 "time_origin": "stage_local",
                 "activation": { "kind": "all_time_evolution" }
             }]}
-        })).expect("scene fixture should deserialize");
+        }))
+        .expect("scene fixture should deserialize");
 
         let error = validate_scene_document(&scene).expect_err("missing target must fail closed");
-        assert!(error.message.contains("missing object 'missing'"), "{}", error.message);
+        assert!(
+            error.message.contains("missing object 'missing'"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
@@ -378,10 +1049,15 @@ mod tests {
                 "time_origin": "stage_local",
                 "activation": { "kind": "stage_ids", "stage_ids": ["missing-stage"] }
             }]}
-        })).expect("scene fixture should deserialize");
+        }))
+        .expect("scene fixture should deserialize");
 
         let error = validate_scene_document(&scene).expect_err("missing stage must fail closed");
-        assert!(error.message.contains("missing stage 'missing-stage'"), "{}", error.message);
+        assert!(
+            error.message.contains("missing stage 'missing-stage'"),
+            "{}",
+            error.message
+        );
     }
 
     fn region_owned_scene() -> SceneDocument {
@@ -445,6 +1121,21 @@ mod tests {
     #[test]
     fn scene_document_validation_accepts_region_owned_payloads() {
         validate_scene_document(&region_owned_scene()).expect("region-owned scene should validate");
+    }
+
+    #[test]
+    fn scene_solver_rejects_malformed_present_demag_interval() {
+        for value in ["not-a-number", "NaN", "inf", "0", "-1e-12"] {
+            let mut scene = region_owned_scene();
+            scene.study.solver.demag_interval_s = value.to_string();
+            let error = validate_scene_document(&scene)
+                .expect_err("present malformed demag_interval_s must fail closed");
+            assert!(
+                error.message.contains("demag_interval_s"),
+                "unexpected validation error for {value}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

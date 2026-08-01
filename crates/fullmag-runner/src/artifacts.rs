@@ -2,7 +2,7 @@
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
-    requested_registry_device_for_fdm, requested_registry_device_for_fem, runtime_device,
+    effective_fem_device_request, requested_registry_device_for_fdm, runtime_device,
     runtime_precision,
 };
 use fullmag_ir::BackendPlanIR;
@@ -16,12 +16,55 @@ use crate::types::{
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::env;
 use std::fs;
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 
 const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
+
+fn execution_provenance_json(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution_provenance: &crate::types::ExecutionProvenance,
+) -> std::io::Result<serde_json::Value> {
+    if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && execution_provenance.execution_engine == "fem_native_gpu"
+        && (execution_provenance.mfem_version.is_none()
+            || execution_provenance.hypre_version.is_none())
+    {
+        return Err(Error::new(
+            ErrorKind::Other,
+            "strict native FEM GPU artifacts require MFEM and HYPRE versions from the loaded runtime",
+        ));
+    }
+    Ok(serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize"))
+}
+
+pub(crate) fn artifact_provenance_json(
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(provenance).expect("ExecutionProvenance must serialize");
+    let object = value
+        .as_object_mut()
+        .expect("ExecutionProvenance must serialize to an object");
+    object.insert(
+        "problem_name".to_string(),
+        serde_json::Value::String(context.problem_name.clone()),
+    );
+    object.insert(
+        "ir_version".to_string(),
+        serde_json::Value::String(context.ir_version.clone()),
+    );
+    object.insert(
+        "source_hash".to_string(),
+        serde_json::to_value(&context.source_hash).expect("source hash must serialize"),
+    );
+    object.insert(
+        "execution_mode".to_string(),
+        serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
+    );
+    value
+}
 
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
@@ -50,7 +93,7 @@ fn requested_execution_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::
         fullmag_ir::BackendTarget::Hybrid => "hybrid",
     };
     let device = match backend {
-        "fem" => requested_registry_device_for_fem(problem),
+        "fem" => effective_fem_device_request(problem),
         "fdm" => requested_registry_device_for_fdm(problem),
         _ => runtime_device(problem)
             .unwrap_or("auto")
@@ -162,10 +205,10 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
-            "element_count": fem.mesh.elements.len(),
-            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "element_count": fem.mesh.cell_count(),
+            "boundary_face_count": fem.mesh.facet_count(),
             "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
             "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
             "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
@@ -181,10 +224,10 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::FemEigen(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
-            "element_count": fem.mesh.elements.len(),
-            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "element_count": fem.mesh.cell_count(),
+            "boundary_face_count": fem.mesh.facet_count(),
             "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
             "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
             "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
@@ -200,10 +243,10 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
-            "element_count": fem.mesh.elements.len(),
-            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "element_count": fem.mesh.cell_count(),
+            "boundary_face_count": fem.mesh.facet_count(),
             "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
             "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
             "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
@@ -242,57 +285,54 @@ fn provenance_with_runtime_threading(
     enriched
 }
 
-fn thermal_execution_provenance(plan: &fullmag_ir::ExecutionPlanIR, steps: &[StepStats]) -> Option<serde_json::Value> {
-    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
-        return None;
+fn thermal_execution_provenance(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    steps: &[StepStats],
+    provenance: &crate::types::ExecutionProvenance,
+) -> Option<serde_json::Value> {
+    let (seed, is_fdm) = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => (fem.thermal_seed_config.as_ref()?, false),
+        BackendPlanIR::Fdm(fdm) => (fdm.thermal_seed_config.as_ref()?, true),
+        _ => return None,
     };
-    let seed = fem.thermal_seed_config.as_ref()?;
+    let resolved_seed = if is_fdm {
+        provenance.random_seed.or(seed.seed)
+    } else {
+        seed.seed
+    };
+    let resolved_policy = if is_fdm && resolved_seed.is_some() {
+        fullmag_ir::SeedPolicy::Fixed
+    } else {
+        seed.policy
+    };
     Some(serde_json::json!({
         "requested_seed_policy": seed.policy,
-        "resolved_seed_policy": seed.policy,
-        "resolved_seed": seed.seed,
+        "resolved_seed_policy": resolved_policy,
+        "resolved_seed": resolved_seed,
         "accepted_interval_index": steps.len(),
     }))
 }
 
-fn demag_amg_env_i64(name: &str, default_value: i64) -> i64 {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<i64>().ok())
-        .filter(|value| *value >= 0)
-        .unwrap_or(default_value)
-}
-
-fn demag_amg_env_i64_optional(name: &str) -> serde_json::Value {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<i64>().ok())
-        .filter(|value| *value >= 0)
-        .map(serde_json::Value::from)
-        .unwrap_or(serde_json::Value::Null)
-}
-
-fn demag_amg_env_f64_optional(name: &str) -> serde_json::Value {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<f64>().ok())
-        .filter(|value| *value >= 0.0)
-        .map(serde_json::Value::from)
-        .unwrap_or(serde_json::Value::Null)
-}
-
-fn demag_amg_profile_metadata(preconditioner: &str) -> serde_json::Value {
+fn demag_amg_profile_metadata(
+    preconditioner: &str,
+    stats: Option<&StepStats>,
+) -> serde_json::Value {
     if preconditioner != "AMG" {
         return serde_json::Value::Null;
     }
+    let Some(stats) = stats else {
+        return serde_json::Value::Null;
+    };
     serde_json::json!({
         "provider": "mfem_hypre_boomeramg",
-        "relax_type": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE", 18),
-        "coarsening": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_COARSENING", 8),
-        "interpolation": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION", 6),
-        "aggressive_coarsening": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING", 1),
-        "strength_threshold": demag_amg_env_f64_optional("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD"),
-        "max_levels": demag_amg_env_i64_optional("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS"),
+        "relax_type": stats.demag_amg_relax_type,
+        "coarsening": stats.demag_amg_coarsening,
+        "interpolation": stats.demag_amg_interpolation,
+        "aggressive_coarsening": stats.demag_amg_aggressive_coarsening,
+        "strength_threshold": stats.demag_amg_strength_threshold_is_set
+            .then_some(stats.demag_amg_strength_threshold),
+        "max_levels": stats.demag_amg_max_levels_is_set
+            .then_some(stats.demag_amg_max_levels),
     })
 }
 
@@ -364,7 +404,27 @@ fn demag_runtime_metadata(
             let relative_tolerance = resolved_policy.map_or(policy.rtol, |entry| entry.rtol);
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
-            let amg_profile = demag_amg_profile_metadata(&preconditioner);
+            let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
+            let (runtime_solver, runtime_preconditioner) = if provenance
+                .fem_demag_operator_mode
+                .as_deref()
+                == Some("device_hypre_poisson")
+            {
+                let solver = match linear_solver.as_str() {
+                    "CG" => Some("HyprePCG"),
+                    "GMRES" => Some("HypreGMRES"),
+                    _ => None,
+                };
+                let preconditioner = match preconditioner.as_str() {
+                    "AMG" => Some("HypreBoomerAMG"),
+                    "JACOBI" => Some("HypreDiagScale"),
+                    "NONE" => Some("HypreIdentity"),
+                    _ => None,
+                };
+                (solver, preconditioner)
+            } else {
+                (None, None)
+            };
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
@@ -388,6 +448,8 @@ fn demag_runtime_metadata(
                 },
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
+                "runtime_solver": runtime_solver,
+                "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
                 "relative_tolerance": relative_tolerance,
                 "absolute_tolerance": policy.atol,
@@ -405,6 +467,7 @@ fn demag_runtime_metadata(
                 "solver_setup_reused": last.map(|entry| entry.demag_solver_setup_reused),
                 "timings_ns": timings_ns,
                 "mfem_device": provenance.mfem_device,
+                "hypre_version": provenance.hypre_version,
                 "fem_assembly_mode": provenance.fem_assembly_mode,
                 "requested_fem_omp_threads": provenance.requested_fem_omp_threads,
                 "effective_fem_omp_threads": provenance.effective_fem_omp_threads,
@@ -909,9 +972,9 @@ fn fem_physics_terms(fem: &fullmag_ir::FemPlanIR) -> Vec<String> {
 fn solver_mesh_signature(mesh: &fullmag_ir::MeshIR) -> String {
     let payload = serde_json::json!({
         "nodes": mesh.nodes,
-        "elements": mesh.elements,
+        "cells": mesh.cells,
         "element_markers": mesh.element_markers,
-        "boundary_faces": mesh.boundary_faces,
+        "facets": mesh.facets,
         "boundary_markers": mesh.boundary_markers,
         "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
         "periodic_node_pairs": mesh.periodic_node_pairs,
@@ -1000,6 +1063,11 @@ pub(crate) fn write_artifacts(
     streamed: Option<&ArtifactPipelineSummary>,
 ) -> std::io::Result<()> {
     fs::create_dir_all(output_dir)?;
+    let sampling_resolution = problem
+        .problem_meta
+        .runtime_metadata
+        .get("sampling_resolution");
+    write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
     let field_context = build_field_context(problem, plan);
     let requested_execution = requested_execution_metadata(problem);
     let runtime_threading = runtime_threading_summary(problem);
@@ -1023,16 +1091,17 @@ pub(crate) fn write_artifacts(
     let mesh_metadata = mesh_runtime_metadata(plan);
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
-    let mut execution_provenance_json = serde_json::to_value(&execution_provenance)
-        .expect("ExecutionProvenance must serialize");
-    if let Some(thermal) = thermal_execution_provenance(plan, &executed.result.steps) {
+    let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
+    if let Some(thermal) =
+        thermal_execution_provenance(plan, &executed.result.steps, &execution_provenance)
+    {
         execution_provenance_json
             .as_object_mut()
             .expect("ExecutionProvenance must serialize to an object")
             .insert("thermal".to_string(), thermal);
     }
 
-    let metadata = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
         "ir_version": problem.ir_version,
         "source_hash": problem.problem_meta.source_hash,
@@ -1064,6 +1133,12 @@ pub(crate) fn write_artifacts(
         })),
         "material_field_assets": material_field_assets,
     });
+    if let Some(sampling_resolution) = sampling_resolution {
+        metadata
+            .as_object_mut()
+            .expect("run metadata must be an object")
+            .insert("sampling_resolution".into(), sampling_resolution.clone());
+    }
     let metadata_path = output_dir.join("metadata.json");
     let mut metadata_file = fs::File::create(&metadata_path)?;
     metadata_file.write_all(serde_json::to_string_pretty(&metadata).unwrap().as_bytes())?;
@@ -1072,6 +1147,14 @@ pub(crate) fn write_artifacts(
         write_scalars_csv(&output_dir.join("scalars.csv"), &executed.result.steps)?;
     }
     write_table_autosave_artifacts(output_dir, problem, &executed.result.steps)?;
+    if should_write_solver_diagnostics(plan, execution_provenance.timestep_policy.as_ref()) {
+        write_solver_diagnostics_artifacts(
+            output_dir,
+            plan,
+            execution_provenance.timestep_policy.as_ref(),
+            &executed.result.steps,
+        )?;
+    }
 
     write_field_file(
         &output_dir.join("m_initial.json"),
@@ -1141,11 +1224,7 @@ pub(crate) fn write_artifacts(
     }
 
     if should_write_plan_periodic_pairs_artifact(plan, executed) {
-        write_periodic_pairs_artifact(
-            output_dir,
-            plan,
-            problem_source_scene_revision(problem),
-        )?;
+        write_periodic_pairs_artifact(output_dir, plan, problem_source_scene_revision(problem))?;
     }
     write_fem_supercell_node_geometry_artifact(output_dir, problem, plan)?;
     write_static_pbc_demag_seam_diagnostics_artifact(
@@ -1164,6 +1243,147 @@ pub(crate) fn write_artifacts(
         &execution_provenance,
     )?;
 
+    Ok(())
+}
+
+fn should_write_solver_diagnostics(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    timestep_policy: Option<&crate::types::TimestepPolicyProvenance>,
+) -> bool {
+    timestep_policy.is_some()
+        || matches!(
+            &plan.backend_plan,
+            BackendPlanIR::Fem(fem)
+                if fem.relaxation.as_ref().is_some_and(|control| matches!(
+                    control.algorithm,
+                    fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                        | fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+                ))
+        )
+}
+
+fn write_solver_diagnostics_artifacts(
+    output_dir: &Path,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    timestep_policy: Option<&crate::types::TimestepPolicyProvenance>,
+    steps: &[StepStats],
+) -> std::io::Result<()> {
+    let policy = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => serde_json::json!({
+            "backend": "fem",
+            "integrator": fem.integrator,
+            "fixed_timestep": fem.fixed_timestep,
+            "adaptive_timestep": fem.adaptive_timestep,
+            "gyromagnetic_ratio": fem.gyromagnetic_ratio,
+        }),
+        BackendPlanIR::Fdm(fdm) => serde_json::json!({
+            "backend": "fdm",
+            "integrator": fdm.integrator,
+            "fixed_timestep": fdm.fixed_timestep,
+            "adaptive_timestep": fdm.adaptive_timestep,
+            "gyromagnetic_ratio": fdm.gyromagnetic_ratio,
+        }),
+        _ => serde_json::json!({"backend": "not_time_domain"}),
+    };
+    let (requested_policy, resolved_policy, execution_identity) = timestep_policy.map_or_else(
+        || (policy.clone(), policy, serde_json::Value::Null),
+        |provenance| {
+            (
+                serde_json::to_value(&provenance.requested).unwrap(),
+                serde_json::to_value(&provenance.resolved).unwrap(),
+                serde_json::to_value(&provenance.execution_identity).unwrap(),
+            )
+        },
+    );
+    fs::write(
+        output_dir.join("solver_config.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "LLG-TD-SOLVER-CONFIG-V1",
+            "requested_policy": requested_policy,
+            "resolved_policy": resolved_policy,
+            "execution_identity": execution_identity,
+        }))
+        .unwrap(),
+    )?;
+
+    let mut attempts = fs::File::create(output_dir.join("solver_attempts.csv"))?;
+    writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order")?;
+    for step in steps {
+        for record in &step.solver_attempts {
+            writeln!(
+                attempts,
+                "{},{},{:.17e},{:.17e},{:.17e},{},{},{},{},{:.17e},{},{},{:.17e},{},{}",
+                record.attempt,
+                record.target_step,
+                record.time,
+                record.dt_attempt,
+                record.eta,
+                record
+                    .max_norm_defect
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record
+                    .max_spin_rotation
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record.decision,
+                record.reason,
+                record.dt_next,
+                record.demag_solves,
+                record.demag_iterations,
+                record.demag_residual,
+                record.rhs_evals,
+                record.estimator_order,
+            )?;
+        }
+    }
+
+    let mut accepted = fs::File::create(output_dir.join("solver_steps.csv"))?;
+    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j")?;
+    for step in steps {
+        writeln!(
+            accepted,
+            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{}",
+            step.step,
+            step.time,
+            step.dt,
+            step.error_estimate.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.max_error.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.dt_suggested.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.rejected_attempts,
+            step.rhs_evals,
+            step.demag_solves,
+            step.poisson_iterations,
+            step.poisson_final_residual,
+            step.e_ex,
+            step.e_demag,
+            step.e_ext,
+            step.e_drive,
+            step.e_ani,
+            step.e_dmi,
+            step.e_total,
+            step.max_rhs_norm_per_s.max(step.max_dm_dt),
+            step.max_torque_Apm,
+            step.accepted_energy_proof_available,
+            step.accepted_energy_delta_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.accepted_energy_roundoff_bound_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.accepted_energy_delta_upper_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.armijo_increment_rhs_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+        )?;
+    }
+
+    fs::write(
+        output_dir.join("qualification.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "LLG-TD-QUALIFICATION-V1",
+            "status": "not_evaluated",
+            "reason": "Scientific qualification is produced by the dedicated qualification gate; artifact creation alone is not evidence of validation.",
+            "accepted_steps": steps.len(),
+            "attempt_records": steps.iter().map(|step| step.solver_attempts.len()).sum::<usize>(),
+            "checks": [],
+        })).unwrap(),
+    )?;
     Ok(())
 }
 
@@ -1258,7 +1478,7 @@ fn write_fem_supercell_node_geometry_artifact(
         "artifact_path": "mesh/node_geometry.v1.json",
         "mesh_name": fem.mesh.mesh_name,
         "node_count": fem.mesh.nodes.len(),
-        "element_count": fem.mesh.elements.len(),
+        "element_count": fem.mesh.cell_count(),
         "nodes_m": fem.mesh.nodes,
         "magnetic_node_mask": magnetic_node_mask,
         "magnetic_node_count": magnetic_node_count,
@@ -1563,8 +1783,8 @@ fn write_periodic_pairs_artifact(
         });
     let validation_status = if certificate.is_ok()
         && pairs
-        .iter()
-        .all(|pair| pair.get("status").and_then(serde_json::Value::as_str) == Some("valid"))
+            .iter()
+            .all(|pair| pair.get("status").and_then(serde_json::Value::as_str) == Some("valid"))
     {
         "ok"
     } else {
@@ -2022,12 +2242,12 @@ fn mesh_periodic_pair_residuals(
 
 fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTreeSet<u32>> {
     let mut nodes_by_marker = HashMap::<u32, BTreeSet<u32>>::new();
-    for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
-        let Some(marker) = mesh.boundary_markers.get(face_index).copied() else {
+    for facet in mesh.facets.iter() {
+        let Some(marker) = mesh.boundary_markers.get(facet.ordinal).copied() else {
             continue;
         };
         let nodes = nodes_by_marker.entry(marker).or_default();
-        nodes.extend(face.iter().copied());
+        nodes.extend(facet.nodes.iter().copied());
     }
     nodes_by_marker
 }
@@ -2035,18 +2255,14 @@ fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTre
 fn mesh_node_domain_sets(mesh: &fullmag_ir::MeshIR) -> (BTreeSet<u32>, BTreeSet<u32>) {
     let mut magnetic_nodes = BTreeSet::new();
     let mut airbox_nodes = BTreeSet::new();
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        let marker = mesh
-            .element_markers
-            .get(element_index)
-            .copied()
-            .unwrap_or(1);
+    for cell in mesh.cells.iter() {
+        let marker = mesh.element_markers.get(cell.ordinal).copied().unwrap_or(1);
         let target = if marker == 0 {
             &mut airbox_nodes
         } else {
             &mut magnetic_nodes
         };
-        target.extend(element.iter().copied());
+        target.extend(cell.nodes.iter().copied());
     }
     (magnetic_nodes, airbox_nodes)
 }
@@ -2157,14 +2373,13 @@ fn mesh_periodic_boundary_face_index_pairs(
     let mut pairs = Vec::new();
     let mut used_destinations = BTreeSet::new();
     for source_face_index in source_faces {
-        let Some(source_face) = mesh.boundary_faces.get(source_face_index) else {
+        let Some(source_face) = mesh.facets.item_nodes(source_face_index) else {
             continue;
         };
         let Some(mapped_face) = source_face
             .iter()
             .map(|node| node_map.get(node).copied())
             .collect::<Option<Vec<_>>>()
-            .and_then(|nodes| <[u32; 3]>::try_from(nodes).ok())
         else {
             continue;
         };
@@ -2173,10 +2388,10 @@ fn mesh_periodic_boundary_face_index_pairs(
         let Some(destination_face_index) = destination_faces.iter().copied().find(|index| {
             !used_destinations.contains(index)
                 && mesh
-                    .boundary_faces
-                    .get(*index)
+                    .facets
+                    .item_nodes(*index)
                     .map(|face| {
-                        let mut actual = *face;
+                        let mut actual = face.to_vec();
                         actual.sort_unstable();
                         actual == expected
                     })
@@ -2199,23 +2414,32 @@ fn mesh_boundary_face_indices_by_marker(mesh: &fullmag_ir::MeshIR, marker: u32) 
 }
 
 fn mesh_boundary_face_area(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<f64> {
-    let face = mesh.boundary_faces.get(face_index)?;
-    let a = mesh.nodes.get(face[0] as usize)?;
-    let b = mesh.nodes.get(face[1] as usize)?;
-    let c = mesh.nodes.get(face[2] as usize)?;
-    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let cross = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    Some(0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+    let face = mesh.facets.item_nodes(face_index)?;
+    let &origin_index = face.first()?;
+    let origin = mesh.nodes.get(origin_index as usize)?;
+    face[1..].windows(2).try_fold(0.0, |area, edge| {
+        let b = mesh.nodes.get(edge[0] as usize)?;
+        let c = mesh.nodes.get(edge[1] as usize)?;
+        let ab = [b[0] - origin[0], b[1] - origin[1], b[2] - origin[2]];
+        let ac = [c[0] - origin[0], c[1] - origin[1], c[2] - origin[2]];
+        let cross = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        Some(area + 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+    })
 }
 
 #[cfg(test)]
-fn mesh_boundary_face_unit_normal(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<[f64; 3]> {
-    let face = mesh.boundary_faces.get(face_index)?;
+fn mesh_boundary_face_unit_normal(
+    mesh: &fullmag_ir::MeshIR,
+    face_index: usize,
+) -> Option<[f64; 3]> {
+    let face = mesh.facets.item_nodes(face_index)?;
+    if face.len() != 3 {
+        return None;
+    }
     let a = mesh.nodes.get(face[0] as usize)?;
     let b = mesh.nodes.get(face[1] as usize)?;
     let c = mesh.nodes.get(face[2] as usize)?;
@@ -2313,7 +2537,7 @@ fn face_magnetic_charge_integral(
     normal: [f64; 3],
     magnetization: &[[f64; 3]],
 ) -> Option<f64> {
-    let face = fem.mesh.boundary_faces.get(face_index)?;
+    let face = fem.mesh.facets.item_nodes(face_index)?;
     let area = mesh_boundary_face_area(&fem.mesh, face_index)?;
     let mut average_m_dot_n = 0.0f64;
     for node in face {
@@ -2376,21 +2600,23 @@ fn fem_part_node_indices_for_artifact(
             let start = *start as usize;
             let end = start
                 .saturating_add(*count as usize)
-                .min(fem.mesh.elements.len());
-            for element in &fem.mesh.elements[start..end] {
-                nodes.extend(element.iter().map(|index| *index as usize));
+                .min(fem.mesh.cell_count());
+            for index in start..end {
+                if let Some(cell_nodes) = fem.mesh.cells.item_nodes(index) {
+                    nodes.extend(cell_nodes.iter().map(|index| *index as usize));
+                }
             }
         }
         fullmag_ir::FemMeshPartSelector::ElementMarkerSet { markers } => {
             let markers = markers.iter().copied().collect::<BTreeSet<_>>();
-            for (index, element) in fem.mesh.elements.iter().enumerate() {
+            for cell in fem.mesh.cells.iter() {
                 if fem
                     .mesh
                     .element_markers
-                    .get(index)
+                    .get(cell.ordinal)
                     .is_some_and(|marker| markers.contains(marker))
                 {
-                    nodes.extend(element.iter().map(|index| *index as usize));
+                    nodes.extend(cell.nodes.iter().map(|index| *index as usize));
                 }
             }
         }
@@ -2398,7 +2624,7 @@ fn fem_part_node_indices_for_artifact(
     }
 
     for face_index in &part.boundary_face_indices {
-        if let Some(face) = fem.mesh.boundary_faces.get(*face_index as usize) {
+        if let Some(face) = fem.mesh.facets.item_nodes(*face_index as usize) {
             nodes.extend(face.iter().map(|index| *index as usize));
         }
     }
@@ -2409,15 +2635,27 @@ fn fem_part_node_indices_for_artifact(
             let start = *start as usize;
             let end = start
                 .saturating_add(*count as usize)
-                .min(fem.mesh.boundary_faces.len());
-            for face in &fem.mesh.boundary_faces[start..end] {
-                nodes.extend(face.iter().map(|index| *index as usize));
+                .min(fem.mesh.facet_count());
+            for index in start..end {
+                if let Some(face) = fem.mesh.facets.item_nodes(index) {
+                    nodes.extend(face.iter().map(|index| *index as usize));
+                }
             }
         }
         _ => {}
     }
-    for face in &part.surface_faces {
-        nodes.extend(face.iter().map(|index| *index as usize));
+    for global_ordinal in &part.facet_global_ordinals {
+        if let Some(face_index) = fem
+            .mesh
+            .facets
+            .global_ordinals
+            .iter()
+            .position(|candidate| candidate == global_ordinal)
+        {
+            if let Some(face) = fem.mesh.facets.item_nodes(face_index) {
+                nodes.extend(face.iter().map(|index| *index as usize));
+            }
+        }
     }
 
     nodes
@@ -2531,14 +2769,7 @@ fn write_prescribed_current_transport_artifacts(
             "coverage": coverage,
             "solve_region": solve_region,
             "layout": context.layout.clone(),
-            "provenance": {
-                "problem_name": context.problem_name,
-                "ir_version": context.ir_version,
-                "source_hash": context.source_hash,
-                "execution_mode": context.execution_mode,
-                "execution_engine": provenance.execution_engine,
-                "precision": provenance.precision,
-            },
+            "provenance": artifact_provenance_json(context, provenance),
             "values": values,
         });
         let artifact_path = output_dir
@@ -2623,20 +2854,52 @@ fn write_table_autosave_artifacts(
     let Some(config_ir) = problem.study.sampling().table_autosave.as_ref() else {
         return Ok(());
     };
-    let config =
-        crate::table_autosave::TableAutosaveConfig::from_ir(config_ir).map_err(|error| {
+    let config = crate::table_autosave::TableAutosaveConfig::from_ir(config_ir)
+        .map_err(|error| {
             Error::new(
                 ErrorKind::InvalidInput,
                 format!("invalid table_autosave config: {error}"),
             )
-        })?;
+        })?
+        .with_sampling_resolution(
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get("sampling_resolution")
+                .cloned(),
+        );
     let mut store = crate::table_autosave::TableStore::new(config);
     for step in steps {
         store
             .append_if_due(step)
             .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
     }
+    if matches!(problem.study, fullmag_ir::StudyIR::Relaxation { .. }) {
+        if let Some(final_step) = steps.last() {
+            store
+                .append_final_if_needed(final_step)
+                .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+        }
+    }
     store.write_artifacts(output_dir)
+}
+
+fn write_sampling_resolution_artifact(
+    output_dir: &Path,
+    sampling_resolution: Option<&serde_json::Value>,
+) -> std::io::Result<()> {
+    let Some(sampling_resolution) = sampling_resolution else {
+        return Ok(());
+    };
+    let sampling_dir = output_dir.join("sampling");
+    fs::create_dir_all(&sampling_dir)?;
+    fs::write(
+        sampling_dir.join("sampling_resolution.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "sampling_resolution.v1",
+            "sampling_resolution": sampling_resolution,
+        }))?,
+    )
 }
 
 pub(crate) fn write_field_file(
@@ -2656,14 +2919,7 @@ pub(crate) fn write_field_file(
         "time": time,
         "solver_dt": solver_dt,
         "layout": context.layout,
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
+        "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
@@ -2848,14 +3104,7 @@ fn write_layer_field_file(
         "solver_dt": solver_dt,
         "layer": layer.manifest_entry.clone(),
         "layout": context.layout.clone(),
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
+        "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
@@ -2962,7 +3211,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
             "n_nodes": fem.mesh.nodes.len(),
-            "n_elements": fem.mesh.elements.len(),
+            "n_elements": fem.mesh.cell_count(),
         }),
         BackendPlanIR::FemEigen(fem) => serde_json::json!({
             "backend": "fem_eigen",
@@ -2971,7 +3220,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
             "n_nodes": fem.mesh.nodes.len(),
-            "n_elements": fem.mesh.elements.len(),
+            "n_elements": fem.mesh.cell_count(),
             "mode_count": fem.count,
             "operator": fem.operator,
             "material": {
@@ -2988,7 +3237,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
             "n_nodes": fem.mesh.nodes.len(),
-            "n_elements": fem.mesh.elements.len(),
+            "n_elements": fem.mesh.cell_count(),
             "frequency_count": fem.frequencies_hz.values_hz.len(),
             "operator": fem.operator,
         }),
@@ -3007,8 +3256,164 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_gpu_artifact_provenance_requires_loaded_mfem_version() {
+        let plan = test_fem_execution_plan();
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            ..ExecutionProvenance::default()
+        };
+
+        assert!(execution_provenance_json(&plan, &provenance).is_err());
+    }
+
+    #[test]
+    fn field_and_current_artifact_provenance_preserves_optional_mfem_version() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(&problem, &plan);
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            mfem_version: Some("4.9".to_string()),
+            hypre_version: Some("3.1.0".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        assert_eq!(
+            artifact_provenance_json(&context, &provenance)["mfem_version"],
+            "4.9"
+        );
+        assert!(artifact_provenance_json(&context, &provenance)
+            .as_object()
+            .expect("artifact provenance must be an object")
+            .contains_key("hypre_version"));
+
+        provenance.mfem_version = None;
+        assert!(!artifact_provenance_json(&context, &provenance)
+            .as_object()
+            .expect("artifact provenance must be an object")
+            .contains_key("mfem_version"));
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_keeps_loaded_hypre_identity_and_provider_labels() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            hypre_version: Some("3.1.0".to_string()),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["hypre_version"], "3.1.0");
+        assert_eq!(metadata["linear_solver"], "CG");
+        assert_eq!(metadata["preconditioner"], "AMG");
+        assert_eq!(metadata["runtime_solver"], "HyprePCG");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreBoomerAMG");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_maps_resolved_nondefault_hypre_provider_labels() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "GMRES".to_string(),
+                preconditioner: "JACOBI".to_string(),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["linear_solver"], "GMRES");
+        assert_eq!(metadata["preconditioner"], "JACOBI");
+        assert_eq!(metadata["runtime_solver"], "HypreGMRES");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreDiagScale");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_maps_no_preconditioner_to_hypre_identity() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "CG".to_string(),
+                preconditioner: "NONE".to_string(),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["runtime_solver"], "HyprePCG");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreIdentity");
+    }
+
+    #[test]
+    fn artifact_node_selection_resolves_quad_interface_by_global_ordinal() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        fem.mesh.facets = fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 4],
+            nodes: vec![0, 1, 2, 3],
+            global_ordinals: vec![700],
+        };
+        fem.mesh.boundary_markers = vec![27];
+        let part = FemMeshPartIR {
+            id: "part:interface:0:1".into(),
+            label: "Air ↔ film".into(),
+            role: FemMeshPartRole::Interface,
+            object_id: Some("film".into()),
+            geometry_id: Some("film".into()),
+            material_id: None,
+            element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 0 },
+            node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
+            boundary_face_indices: Vec::new(),
+            node_indices: Vec::new(),
+            facet_global_ordinals: vec![700],
+            bounds_min: None,
+            bounds_max: None,
+            parent_id: None,
+        };
+        assert_eq!(
+            fem_part_node_indices_for_artifact(fem, &part),
+            vec![0, 1, 2, 3]
+        );
+    }
     use crate::types::{
         ExecutedRun, ExecutionProvenance, FieldSnapshot, ResolvedFallback, RunResult, RunStatus,
+        SolverAttemptRecord,
     };
     use fullmag_ir::{
         BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
@@ -3038,6 +3443,9 @@ mod tests {
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
+        let active_cells = active_mask.as_deref().map_or(8, |mask| {
+            mask.iter().filter(|active| **active).count() as u64
+        });
         ExecutionPlanIR {
             common: CommonPlanMeta {
                 ir_version: "v0".to_string(),
@@ -3054,7 +3462,7 @@ mod tests {
                         [0.0, 0.0, 0.0],
                         [4, 2, 1],
                         [2e-9, 2e-9, 5e-9],
-                        8,
+                        active_cells,
                         8 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
                         active_mask.as_deref(),
                         &[0; 8],
@@ -3114,7 +3522,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         }
     }
 
@@ -3133,15 +3544,15 @@ mod tests {
             demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
             image_counts: Some([4, 0, 0]),
         });
-        fdm.resolved_periodic_images = fdm
-            .periodicity
-            .as_ref()
-            .and_then(|pbc| {
-                pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
-                    .expect("test PBC workspace should resolve")
-            });
+        fdm.resolved_periodic_images = fdm.periodicity.as_ref().and_then(|pbc| {
+            pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
+                .expect("test PBC workspace should resolve")
+        });
         let metadata = mesh_runtime_metadata(&plan);
-        assert_eq!(metadata["requested_periodicity"]["demag"], "truncated_images");
+        assert_eq!(
+            metadata["requested_periodicity"]["demag"],
+            "truncated_images"
+        );
         assert_eq!(
             metadata["resolved_demag_boundary"]["periodic_truncated_images"]["image_counts"],
             serde_json::json!([4, 0, 0])
@@ -3154,6 +3565,37 @@ mod tests {
             metadata["resolved_periodic_images"]["padded_counts"],
             serde_json::json!([4, 4, 2])
         );
+    }
+
+    #[test]
+    fn auto_sampling_writes_versioned_resolution_artifact_without_recomputing_values() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-auto-sampling-artifact-{}",
+            std::process::id()
+        ));
+        let resolution = serde_json::json!({
+            "schema_version": "sampling_resolution.v1",
+            "requested_policy": {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+            "sample_period_s": 7.692307692307691e-11,
+            "maximum_cutoff_hz": 5.0e9,
+            "nyquist_guard_factor": 1.3,
+            "target_nyquist_hz": 6.5e9,
+            "sampling_frequency_hz": 13.0e9,
+            "source_drive_ids": ["drive-5"],
+            "target_stage_id": "excite"
+        });
+
+        write_sampling_resolution_artifact(&output_dir, Some(&resolution))
+            .expect("sampling artifact should write");
+
+        let artifact: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("sampling/sampling_resolution.v1.json"))
+                .expect("sampling artifact should be readable"),
+        )
+        .expect("sampling artifact should be JSON");
+        assert_eq!(artifact["schema_version"], "sampling_resolution.v1");
+        assert_eq!(artifact["sampling_resolution"], resolution);
+        let _ = fs::remove_dir_all(output_dir);
     }
 
     #[test]
@@ -3181,13 +3623,10 @@ mod tests {
             )
             .expect("FDM grid certificate should be valid"),
         );
-        fdm.resolved_periodic_images = fdm
-            .periodicity
-            .as_ref()
-            .and_then(|pbc| {
-                pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
-                    .expect("test PBC workspace should resolve")
-            });
+        fdm.resolved_periodic_images = fdm.periodicity.as_ref().and_then(|pbc| {
+            pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
+                .expect("test PBC workspace should resolve")
+        });
         let provenance = ExecutionProvenance {
             demag_operator_kind: Some("tensor_fft_newell".to_string()),
             fft_backend: Some("rustfft".to_string()),
@@ -3206,16 +3645,25 @@ mod tests {
             value["requested_periodicity"]["axes"],
             serde_json::json!(["periodic", "open", "open"])
         );
-        assert_eq!(value["resolved"]["origin_m"], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(
+            value["resolved"]["origin_m"],
+            serde_json::json!([0.0, 0.0, 0.0])
+        );
         assert_eq!(value["resolved"]["counts"], serde_json::json!([4, 2, 1]));
         assert!(value["resolved"]["grid_fingerprint"].as_str().is_some());
         assert_eq!(
             value["resolved"]["period_m"],
             serde_json::json!([8e-9, 4e-9, 5e-9])
         );
-        assert_eq!(value["resolved"]["padded_counts"], serde_json::json!([4, 4, 2]));
+        assert_eq!(
+            value["resolved"]["padded_counts"],
+            serde_json::json!([4, 4, 2])
+        );
         assert_eq!(value["resolved"]["fft_backend"], "rustfft");
-        assert_eq!(value["resolved"]["periodic_images"]["kernel"], "newell_truncated_images_fft");
+        assert_eq!(
+            value["resolved"]["periodic_images"]["kernel"],
+            "newell_truncated_images_fft"
+        );
     }
 
     #[test]
@@ -3225,17 +3673,19 @@ mod tests {
             panic!("expected FDM plan");
         };
         fdm.region_mask = vec![1, 1, 2, 2, 0, 0, 1, 2];
+        fdm.active_mask = Some(vec![true, true, true, true, true, false, true, true]);
         fdm.grid_certificate = Some(
             fullmag_ir::FdmGridCertificateIR::new_with_masks(
                 fdm.origin_m,
                 fdm.grid.cells,
                 fdm.cell_size,
-                8,
+                7,
                 1024,
-                None,
+                fdm.active_mask.as_deref(),
                 &fdm.region_mask,
             )
             .expect("FDM region certificate should be valid")
+            .with_object_ids(vec!["body".to_string()])
             .with_region_legend(vec![
                 fullmag_ir::FdmRegionLegendEntryIR {
                     numeric_id: 1,
@@ -3255,42 +3705,72 @@ mod tests {
         let artifacts = crate::fdm::artifacts::region_membership_artifacts(&plan)
             .expect("membership artifacts should be produced");
         assert_eq!(artifacts.len(), 2);
-        assert_eq!(artifacts[0].relative_path, "mesh/fdm_region_membership.v1.json");
-        assert_eq!(artifacts[1].relative_path, "mesh/fdm_region_membership.v1.bin");
+        assert_eq!(
+            artifacts[0].relative_path,
+            "mesh/fdm_region_membership.v2.json"
+        );
+        assert_eq!(
+            artifacts[1].relative_path,
+            "mesh/fdm_region_membership.v2.bin"
+        );
         let descriptor: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
             .expect("membership descriptor should be JSON");
-        assert_eq!(descriptor["schema_version"], "fdm_region_membership.v1");
+        assert_eq!(descriptor["schema_version"], "fdm_region_membership.v2");
+        assert_eq!(descriptor["object_ids"], serde_json::json!(["body"]));
         assert_eq!(descriptor["cell_count"], 8);
         assert_eq!(descriptor["region_legend"].as_array().unwrap().len(), 2);
         assert_eq!(&artifacts[1].bytes[..4], b"FMRM");
-        assert_eq!(artifacts[1].bytes[4], 1);
-        assert_eq!(artifacts[1].bytes.len(), 64 + 8 * std::mem::size_of::<u32>());
+        assert_eq!(artifacts[1].bytes[4], 2);
+        assert_eq!(
+            u32::from_le_bytes(artifacts[1].bytes[84..88].try_into().unwrap()),
+            u32::MAX,
+            "inactive cells must remain distinguishable from active cells without an authored region"
+        );
+        assert_eq!(
+            artifacts[1].bytes.len(),
+            64 + 8 * std::mem::size_of::<u32>()
+        );
     }
 
     #[test]
     fn fem_mesh_metadata_preserves_shared_domain_build_report() {
         let mut plan = test_fem_execution_plan();
-        let report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(
-            serde_json::json!({
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
                 "build_mode": "generated_shared_domain_mesh",
                 "degraded": false,
                 "authored_regions_count": 2,
                 "realized_regions_count": 2
-            }),
-        )
-        .expect("minimal FEM build report should deserialize");
+            }))
+            .expect("minimal FEM build report should deserialize");
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             panic!("expected FEM plan");
         };
         fem.mesh_build_report = Some(report.clone());
+        let expected_topology_fingerprint = fem.mesh.topology_fingerprint_v6();
 
         let metadata = mesh_runtime_metadata(&plan);
         assert_eq!(metadata["mesh_generation_id"].as_str().unwrap().len(), 64);
         assert_eq!(
             metadata["topology_fingerprint"],
-            metadata["mesh_generation_id"]
+            serde_json::Value::String(expected_topology_fingerprint)
         );
-        assert_eq!(metadata["mesh_build_report"], serde_json::to_value(report).unwrap());
+        assert!(metadata["topology_fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert_ne!(
+            metadata["topology_fingerprint"],
+            metadata["mesh_generation_id"],
+            "canonical topology identity and solver-mesh generation identity are distinct contracts"
+        );
+        assert_eq!(
+            metadata["mesh_build_report"],
+            serde_json::to_value(report).unwrap()
+        );
+        assert_eq!(
+            metadata["mesh_build_report"]["orphan_entities"],
+            serde_json::json!([]),
+        );
     }
 
     fn test_multilayer_execution_plan() -> ExecutionPlanIR {
@@ -3368,7 +3848,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         }
     }
 
@@ -3403,12 +3886,17 @@ mod tests {
             metadata["transfer_boundary_policy"],
             serde_json::json!(["periodic", "open", "periodic"])
         );
-        assert_eq!(metadata["periodic_axes"], serde_json::json!([true, false, true]));
+        assert_eq!(
+            metadata["periodic_axes"],
+            serde_json::json!([true, false, true])
+        );
         assert!(metadata["target_grid_fingerprint"].as_str().is_some());
         assert_eq!(metadata["transfer_provenance"].as_array().unwrap().len(), 2);
-        assert!(metadata["transfer_provenance"][0]["source_grid_fingerprint"]
-            .as_str()
-            .is_some());
+        assert!(
+            metadata["transfer_provenance"][0]["source_grid_fingerprint"]
+                .as_str()
+                .is_some()
+        );
     }
 
     #[test]
@@ -3480,9 +3968,9 @@ mod tests {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3591,7 +4079,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         }
     }
 
@@ -3638,6 +4129,151 @@ mod tests {
             ];
         }
         plan
+    }
+
+    #[test]
+    fn direct_fem_minimizers_require_solver_diagnostics_without_a_timestep_policy() {
+        for algorithm in [
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+            fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = test_fem_execution_plan();
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("test plan must use FEM");
+            };
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+            assert!(should_write_solver_diagnostics(&plan, None));
+        }
+    }
+
+    #[test]
+    fn solver_diagnostics_keep_attempts_separate_from_accepted_steps() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-solver-diagnostics-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let replay_root = root.with_extension("replay");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&replay_root).unwrap();
+        let mut step = StepStats {
+            step: 1,
+            time: 2.0e-15,
+            dt: 1.0e-15,
+            accepted_energy_proof_available: true,
+            accepted_energy_delta_j: Some(-2.0e-20),
+            accepted_energy_roundoff_bound_j: Some(1.0e-21),
+            accepted_energy_delta_upper_j: Some(-1.9e-20),
+            armijo_increment_rhs_j: Some(-1.0e-20),
+            error_estimate: Some(0.25),
+            max_error: Some(1.0e-6),
+            dt_suggested: Some(2.0e-15),
+            rejected_attempts: 1,
+            ..StepStats::default()
+        };
+        let rejected_attempt = SolverAttemptRecord {
+            attempt: 0,
+            target_step: 1,
+            time: 0.0,
+            dt_attempt: 4.0e-15,
+            eta: 4.0,
+            max_norm_defect: Some(2.0e-8),
+            max_spin_rotation: Some(0.02),
+            decision: "retry".to_string(),
+            reason: "error_above_tolerance".to_string(),
+            dt_next: 1.0e-15,
+            demag_solves: 7,
+            demag_iterations: 11,
+            demag_residual: 1.0e-9,
+            rhs_evals: 7,
+            estimator_order: 4,
+        };
+        step.solver_attempts = vec![
+            rejected_attempt.clone(),
+            SolverAttemptRecord {
+                attempt: 1,
+                dt_attempt: 1.0e-15,
+                eta: 0.25,
+                decision: "accepted".to_string(),
+                reason: "within_tolerance".to_string(),
+                dt_next: 2.0e-15,
+                ..rejected_attempt
+            },
+        ];
+        let steps = vec![
+            step,
+            StepStats {
+                step: 2,
+                ..StepStats::default()
+            },
+        ];
+        write_solver_diagnostics_artifacts(&root, &test_fem_execution_plan(), None, &steps)
+            .unwrap();
+        write_solver_diagnostics_artifacts(&replay_root, &test_fem_execution_plan(), None, &steps)
+            .unwrap();
+        let attempts = fs::read_to_string(root.join("solver_attempts.csv")).unwrap();
+        let accepted = fs::read_to_string(root.join("solver_steps.csv")).unwrap();
+        assert_eq!(
+            attempts.lines().count(),
+            3,
+            "header plus one row per attempted step"
+        );
+        assert_eq!(
+            accepted.lines().count(),
+            3,
+            "header plus one row per accepted step"
+        );
+        assert!(attempts.contains("error_above_tolerance"));
+        let accepted_rows = accepted.lines().collect::<Vec<_>>();
+        let proof = accepted_rows[1].split(',').collect::<Vec<_>>();
+        assert_eq!(proof[20], "true");
+        let delta: f64 = proof[21].parse().unwrap();
+        let bound: f64 = proof[22].parse().unwrap();
+        let upper: f64 = proof[23].parse().unwrap();
+        let rhs: f64 = proof[24].parse().unwrap();
+        assert_eq!(upper, delta + bound);
+        assert!(upper <= rhs && rhs <= 0.0);
+        let unavailable = accepted_rows[2].split(',').collect::<Vec<_>>();
+        assert_eq!(unavailable[20], "false");
+        assert!(unavailable[21..=24].iter().all(|value| value.is_empty()));
+        let max_error: f64 = accepted
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .nth(4)
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((max_error - 1.0e-6).abs() < 1.0e-20);
+        let qualification: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("qualification.json")).unwrap()).unwrap();
+        assert_eq!(qualification["status"], "not_evaluated");
+        for artifact in [
+            "solver_config.json",
+            "solver_attempts.csv",
+            "solver_steps.csv",
+            "qualification.json",
+        ] {
+            assert_eq!(
+                fs::read(root.join(artifact)).unwrap(),
+                fs::read(replay_root.join(artifact)).unwrap(),
+                "solver diagnostics must replay byte-for-byte deterministically: {artifact}",
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(replay_root).unwrap();
     }
 
     #[test]
@@ -3701,6 +4337,10 @@ mod tests {
         assert_eq!(fallback["original_engine"], "fem_native_gpu");
         assert_eq!(fallback["fallback_engine"], "fem_cpu_native");
         assert_eq!(fallback["reason"], "native_fem_gpu_unavailable");
+        assert!(
+            metadata.get("sampling_resolution").is_none(),
+            "explicit legacy runs must omit automatic sampling provenance"
+        );
         assert_eq!(
             metadata["region_realization_revisions"],
             serde_json::json!({
@@ -3876,6 +4516,14 @@ mod tests {
                 demag_solver_setup_wall_time_ns: 17,
                 demag_solver_apply_wall_time_ns: 19,
                 demag_solver_setup_reused: true,
+                demag_amg_relax_type: 6,
+                demag_amg_coarsening: 10,
+                demag_amg_interpolation: 7,
+                demag_amg_aggressive_coarsening: 2,
+                demag_amg_strength_threshold: 0.25,
+                demag_amg_strength_threshold_is_set: true,
+                demag_amg_max_levels: 42,
+                demag_amg_max_levels_is_set: true,
                 demag_recover_wall_time_ns: 7,
                 demag_energy_wall_time_ns: 11,
                 poisson_iterations: 13,
@@ -3900,18 +4548,29 @@ mod tests {
         assert_eq!(metadata["print_level"], 0);
         assert_eq!(metadata["policy_source"], "resolved_default");
         assert_eq!(metadata["amg_profile"]["provider"], "mfem_hypre_boomeramg");
-        assert_eq!(metadata["amg_profile"]["relax_type"], 18);
-        assert_eq!(metadata["amg_profile"]["coarsening"], 8);
-        assert_eq!(metadata["amg_profile"]["interpolation"], 6);
-        assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 1);
-        assert_eq!(
-            metadata["amg_profile"]["strength_threshold"],
-            serde_json::Value::Null
+        assert_eq!(metadata["amg_profile"]["relax_type"], 6);
+        assert_eq!(metadata["amg_profile"]["coarsening"], 10);
+        assert_eq!(metadata["amg_profile"]["interpolation"], 7);
+        assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 2);
+        assert_eq!(metadata["amg_profile"]["strength_threshold"], 0.25);
+        assert_eq!(metadata["amg_profile"]["max_levels"], 42);
+
+        let explicit_zero = demag_amg_profile_metadata(
+            "AMG",
+            Some(&StepStats {
+                demag_amg_strength_threshold: 0.0,
+                demag_amg_strength_threshold_is_set: true,
+                demag_amg_max_levels: 0,
+                demag_amg_max_levels_is_set: true,
+                ..StepStats::default()
+            }),
         );
-        assert_eq!(
-            metadata["amg_profile"]["max_levels"],
-            serde_json::Value::Null
-        );
+        assert_eq!(explicit_zero["strength_threshold"], 0.0);
+        assert_eq!(explicit_zero["max_levels"], 0);
+
+        let unset = demag_amg_profile_metadata("AMG", Some(&StepStats::default()));
+        assert_eq!(unset["strength_threshold"], serde_json::Value::Null);
+        assert_eq!(unset["max_levels"], serde_json::Value::Null);
         assert_eq!(metadata["requested_linear_solver"], serde_json::Value::Null);
         assert_eq!(
             metadata["requested_preconditioner"],
@@ -4450,7 +5109,7 @@ mod tests {
                     node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 1 },
                     boundary_face_indices: Vec::new(),
                     node_indices: vec![0],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                     parent_id: None,
@@ -4470,7 +5129,7 @@ mod tests {
                     node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 3 },
                     boundary_face_indices: Vec::new(),
                     node_indices: vec![1, 2, 3],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                     parent_id: None,
@@ -4536,6 +5195,7 @@ mod tests {
                 },
             });
         }
+        plan.common.execution_mode = ExecutionMode::Extended;
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             precision: "double".to_string(),
@@ -4679,6 +5339,7 @@ mod tests {
                 },
             });
         }
+        gpu_plan.common.execution_mode = ExecutionMode::Extended;
         let executed = ExecutedRun {
             result: RunResult {
                 status: RunStatus::Completed,
@@ -4908,6 +5569,7 @@ mod tests {
             ignored_terms: Vec::new(),
             random_seed: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             requested_integrator: None,
             resolved_integrator: None,
             requested_energy_minimizer: None,
@@ -4915,9 +5577,13 @@ mod tests {
             energy_minimizer_realization: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
+            timestep_policy: None,
+            fdm_multilayer_transfer_telemetry: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
+            mfem_version: None,
+            hypre_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,
@@ -5017,8 +5683,8 @@ mod tests {
             [1.0, 1.0, 0.0],
             [1.0, 0.0, 1.0],
         ];
-        fem.mesh.elements = vec![[1, 3, 5, 4]];
-        fem.mesh.boundary_faces = vec![[1, 3, 5]];
+        fem.mesh.set_tet4_cells(vec![[1, 3, 5, 4]]);
+        fem.mesh.set_tri3_facets(vec![[1, 3, 5]]);
         fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; 6];
         fem.object_segments[0].node_start = 0;
         fem.object_segments[0].node_count = 3;
@@ -5034,7 +5700,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
             boundary_face_indices: vec![0],
             node_indices: vec![1, 3, 4, 5],
-            surface_faces: vec![[1, 3, 5]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.0, 0.0, 0.0]),
             bounds_max: Some([1.0, 1.0, 1.0]),
             parent_id: None,
@@ -5096,9 +5762,10 @@ mod tests {
             [1.0e-6, 0.0, 1.0e-6],
             [1.0e-6, 1.0e-6, 0.0],
         ];
-        fem.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5], [1, 4, 5, 6]];
+        fem.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5], [1, 4, 5, 6]]);
         fem.mesh.element_markers = vec![1, 0, 0];
-        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
+        fem.mesh.set_tri3_facets(vec![[0, 2, 4], [1, 5, 3]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
@@ -5174,7 +5841,10 @@ mod tests {
         let face_pair = &artifact["pairs"][0]["boundary_face_pairs"][0];
         assert_eq!(face_pair["face_a"], 0);
         assert_eq!(face_pair["face_b"], 1);
-        assert_eq!(face_pair["translation_m"], serde_json::json!([1.0e-6, 0.0, 0.0]));
+        assert_eq!(
+            face_pair["translation_m"],
+            serde_json::json!([1.0e-6, 0.0, 0.0])
+        );
         assert_eq!(face_pair["normal_dot"], -1.0);
         assert_eq!(face_pair["orientation"], "opposed_normals");
         assert_eq!(
@@ -5202,9 +5872,9 @@ mod tests {
         let mesh = fullmag_ir::MeshIR {
             mesh_name: "identity-test".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -5259,8 +5929,8 @@ mod tests {
             [2.0, 1.0, 0.0],
             [3.0, 0.0, 1.0],
         ];
-        fem.mesh.elements.clear();
-        fem.mesh.boundary_faces = vec![[0, 1, 2], [3, 4, 5]];
+        fem.mesh.set_tet4_cells(Vec::new());
+        fem.mesh.set_tri3_facets(vec![[0, 1, 2], [3, 4, 5]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "diagonal_faces".to_string(),
@@ -5316,7 +5986,10 @@ mod tests {
         assert_eq!(artifact["validation_status"], "failed");
         assert_eq!(artifact["certificate_status"], "rejected");
         assert_ne!(artifact["pairs"][0]["status"], "valid");
-        assert!(artifact["pairs"][0]["boundary_face_pairs"].as_array().unwrap().is_empty());
+        assert!(artifact["pairs"][0]["boundary_face_pairs"]
+            .as_array()
+            .unwrap()
+            .is_empty());
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
@@ -5338,7 +6011,8 @@ mod tests {
             [2.3, 0.5, 0.5],
             [2.5, 0.5, 0.5],
         ];
-        fem.mesh.boundary_faces = vec![[0, 1, 2], [6, 7, 8], [3, 5, 4]];
+        fem.mesh
+            .set_tri3_facets(vec![[0, 1, 2], [6, 7, 8], [3, 5, 4]]);
         fem.mesh.boundary_markers = vec![10, 11, 11];
         let boundary_pair = fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "diagonal_faces".to_string(),
@@ -5392,7 +6066,7 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 6, 2]];
+        fem.mesh.set_tri3_facets(vec![[0, 3, 7], [1, 6, 2]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -5541,7 +6215,7 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 6, 2]];
+        fem.mesh.set_tri3_facets(vec![[0, 3, 7], [1, 6, 2]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -5770,6 +6444,7 @@ mod tests {
             ignored_terms: Vec::new(),
             random_seed: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             requested_integrator: None,
             resolved_integrator: None,
             requested_energy_minimizer: None,
@@ -5777,9 +6452,13 @@ mod tests {
             energy_minimizer_realization: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
+            timestep_policy: None,
+            fdm_multilayer_transfer_telemetry: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
+            mfem_version: None,
+            hypre_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,
@@ -6333,9 +7012,9 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.elements = vec![[0, 1, 2, 4], [3, 5, 6, 7]];
+        fem.mesh.set_tet4_cells(vec![[0, 1, 2, 4], [3, 5, 6, 7]]);
         fem.mesh.element_markers = vec![1, 1];
-        fem.mesh.boundary_faces = vec![
+        fem.mesh.set_tri3_facets(vec![
             [0, 3, 7],
             [0, 7, 4],
             [1, 5, 6],
@@ -6344,7 +7023,7 @@ mod tests {
             [0, 5, 1],
             [3, 2, 6],
             [3, 6, 7],
-        ];
+        ]);
         fem.mesh.boundary_markers = vec![1, 1, 2, 2, 3, 3, 4, 4];
         fem.mesh.periodic_boundary_pairs = vec![
             fullmag_ir::MeshPeriodicBoundaryPairIR {

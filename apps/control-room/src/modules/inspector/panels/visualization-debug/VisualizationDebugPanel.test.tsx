@@ -50,7 +50,7 @@ describe("VisualizationDebugPanelView", () => {
     expect(html).toContain("Shared bytes are excluded from target-owned total");
     expect(html).toContain("viewport-wide");
     expect(html).toContain("Raw bounded JSON");
-    expect(html).toContain("data-collapsed=\"true\"");
+    expect(html).toContain("data-open=\"false\"");
   });
 
   it("keeps memory row identities unique across carriers with local entry IDs", () => {
@@ -290,7 +290,13 @@ function readyModel(): VisualizationDebugPanelModel {
     kind: "vector",
     label: "Magnetization",
     location: "node",
+    materialization_wall_time_ns: 0,
+    materialized_at_unix_ms: 0,
     quantity_id: "m",
+    source_revision: 42,
+    source_step: 0,
+    stale_by_steps: 0,
+    state: "complete",
     stats: { min: -1, max: 1, mean: 0.125 },
     unit: "A/m",
   };

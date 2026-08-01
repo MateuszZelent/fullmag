@@ -5,6 +5,7 @@ import {
   clearChartDispatchSeriesRequest,
   recordChartRangeSelectedEvent,
   recordChartDispatchSeriesRequest,
+  recordChartModelBuilt,
   recordChartSeriesSelectedEvent,
 } from "./chartDiagnostics";
 
@@ -74,5 +75,33 @@ describe("chartDiagnostics", () => {
     expect(events).toHaveLength(8);
     expect(events?.[0]?.seriesId).toBe("series-2");
     expect(events?.at(-1)?.seriesId).toBe("series-9");
+  });
+
+  it("measures model builds and point counts only when diagnostics are enabled", () => {
+    vi.stubGlobal("window", {
+      __FULLMAG_ENABLE_CHART_DIAGNOSTICS__: true,
+    });
+
+    recordChartModelBuilt([
+      { points: [[0, 1], [1, 2]] },
+      { points: [[0, 3]] },
+    ]);
+    recordChartModelBuilt([{ points: [[0, 4]] }]);
+
+    expect(window.__FULLMAG_CHART_DIAGNOSTICS__).toMatchObject({
+      modelBuilds: 2,
+      plannedPoints: 4,
+      renderedPoints: 1,
+    });
+  });
+
+  it("does not allocate diagnostics when model measurement is disabled", () => {
+    vi.stubGlobal("window", {
+      __FULLMAG_ENABLE_CHART_DIAGNOSTICS__: false,
+    });
+
+    recordChartModelBuilt([{ points: [[0, 1]] }]);
+
+    expect(window.__FULLMAG_CHART_DIAGNOSTICS__).toBeUndefined();
   });
 });

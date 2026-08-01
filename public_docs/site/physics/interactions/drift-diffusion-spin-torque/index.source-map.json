@@ -1,0 +1,38 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md",
+    "title": "Drift-diffusion spin torque",
+    "interaction": "drift-diffusion spin torque"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No FDM CPU drift-diffusion transport state or torque assembly exists."},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No CUDA transport solve or spin-accumulation reduction exists."},
+    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "No FEM CPU weak transport form or coupled solve exists."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No FEM GPU transport operator or runtime evidence exists."}
+  ],
+  "sources": [
+    {"id": "class", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class DriftDiffusionSpinTorque", "responsibility": "semantic constructor and state"},
+    {"id": "degree", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "_validated_degree", "responsibility": "polarization range"},
+    {"id": "beta", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "_validated_beta", "responsibility": "beta lower bound"},
+    {"id": "binding", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "_resolve_current_binding", "responsibility": "exclusive current input binding"},
+    {"id": "ir", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class DriftDiffusionSpinTorque", "responsibility": "drift_diffusion module payload"}
+  ],
+  "symbols": [
+    {"id": "s", "latex": "$\\mathbf s$", "meaning": "spin-accumulation state", "si_unit": "$\\mathrm{A\\,s\\,m^{-3}}$"},
+    {"id": "Js", "latex": "$\\mathbf J_s$", "meaning": "spin-current tensor", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "tsf", "latex": "$\\tau_{\\mathrm{sf}}$", "meaning": "spin-flip relaxation time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "tex", "latex": "$\\tau_{\\mathrm{ex}}$", "meaning": "exchange-transfer time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "qsrc", "latex": "$\\mathbf q_{\\mathrm{src}}$", "meaning": "spin-source density", "si_unit": "$\\mathrm{A\\,s\\,m^{-3}\\,s^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "tau", "latex": "$\\boldsymbol{\\tau}_{\\mathrm{DD}}$", "meaning": "intended drift-diffusion torque density", "si_unit": "$\\mathrm{A\\,s\\,m^{-3}\\,s^{-1}}$"},
+    {"id": "lambda", "latex": "$\\lambda_{\\mathrm{sf}}$", "meaning": "spin-diffusion length", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Ds", "latex": "$D_{\\mathrm{s}}$", "meaning": "spin-diffusion coefficient", "si_unit": "$\\mathrm{m^2\\,s^{-1}}$"},
+    {"id": "nabla", "latex": "$\\nabla$", "meaning": "spatial differential operator", "si_unit": "$\\mathrm{m^{-1}}$"}
+  ],
+  "equations": [
+    {"id": "eq-ddst-transport", "symbols": ["s", "Js", "tsf", "tex", "m", "qsrc"], "sources": ["class"]},
+    {"id": "eq-ddst-torque", "symbols": ["tau", "tex", "s", "m"], "sources": ["class"]},
+    {"id": "eq-ddst-length", "symbols": ["lambda", "Ds", "tsf"], "sources": ["class"]}
+  ],
+  "public_api": {"constructors": [], "parameters": []}
+}

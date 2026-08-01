@@ -1,6 +1,7 @@
 import type { DecodedCrossSection } from "./types";
 
 export const FMCS_HEADER_LEN = 64;
+export const FMCS_V3_HEADER_LEN = 160;
 
 const MAGIC = "FMCS";
 const SUPPORTED_VERSION = 2;
@@ -143,4 +144,70 @@ export function decodeCrossSection(buffer: ArrayBuffer): DecodedCrossSection {
     vertexCount,
     vertices,
   };
+}
+
+export interface PlanarMeshOverlay {
+  bounds: readonly number[];
+  frame: {
+    normal: readonly number[];
+    origin: readonly number[];
+    uAxis: readonly number[];
+    vAxis: readonly number[];
+  };
+  segmentCount: number;
+  segments: Float32Array;
+  truncated: boolean;
+}
+
+export function decodePlanarMeshOverlay(
+  buffer: ArrayBuffer,
+  segmentCap = 200_000,
+): PlanarMeshOverlay {
+  if (buffer.byteLength < FMCS_V3_HEADER_LEN) {
+    throw new Error("FMCS v3 planar overlay header is truncated");
+  }
+  const view = new DataView(buffer);
+  const magic = readMagic(view);
+  const version = view.getUint32(4, true);
+  if (magic !== MAGIC || version !== 3) {
+    throw new Error("Expected FMCS v3 planar overlay");
+  }
+  const polygonCount = view.getUint32(8, true);
+  const vertexCount = view.getUint32(12, true);
+  const segmentCount = view.getUint32(16, true);
+  const segmentsOffset =
+    FMCS_V3_HEADER_LEN +
+    vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT +
+    (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT +
+    polygonCount * Uint32Array.BYTES_PER_ELEMENT;
+  const expectedByteLength =
+    segmentsOffset + segmentCount * 4 * Float32Array.BYTES_PER_ELEMENT;
+  if (buffer.byteLength !== expectedByteLength) {
+    throw new Error(
+      `FMCS v3 planar overlay size mismatch: expected ${expectedByteLength}, got ${buffer.byteLength}`,
+    );
+  }
+  const retained = Math.min(segmentCount, Math.max(0, segmentCap));
+  return {
+    bounds: readFloat64Vector(view, 32, 4),
+    frame: {
+      normal: readFloat64Vector(view, 136, 3),
+      origin: readFloat64Vector(view, 64, 3),
+      uAxis: readFloat64Vector(view, 88, 3),
+      vAxis: readFloat64Vector(view, 112, 3),
+    },
+    segmentCount,
+    segments: new Float32Array(buffer, segmentsOffset, retained * 4),
+    truncated: retained < segmentCount,
+  };
+}
+
+function readFloat64Vector(
+  view: DataView,
+  offset: number,
+  count: number,
+): number[] {
+  return Array.from({ length: count }, (_, index) =>
+    view.getFloat64(offset + index * Float64Array.BYTES_PER_ELEMENT, true),
+  );
 }

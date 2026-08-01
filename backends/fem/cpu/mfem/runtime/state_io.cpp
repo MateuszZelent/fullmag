@@ -408,6 +408,7 @@ int context_upload_magnetization_f64(
     ctx.relaxation.cached_current_stats_valid = false;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.adaptive_dt.has_prev_error_norm = false;
     ctx.demag.cache_valid = false;
     ctx.demag.last_refresh_time = -1.0;
 

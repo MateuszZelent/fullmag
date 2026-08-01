@@ -259,6 +259,7 @@ __global__ void combine_effective_field_fp32_kernel(
     float inv_2dx, float inv_2dy, float inv_2dz,
     float thermal_sigma,
     uint64_t thermal_seed,
+    uint64_t thermal_step,
     // Magnetoelastic (prescribed strain B1/B2)
     int has_magnetoelastic,
     float mel_b1,
@@ -375,9 +376,9 @@ __global__ void combine_effective_field_fp32_kernel(
             float dmy_dx = (m_y[xp] - m_y[xm]) * inv_2dx;
             float dmx_dy = (m_x[yp] - m_x[ym]) * inv_2dy;
 
-            hx += dmi_pf * D_bulk * (dmz_dy - dmy_dz);
-            hy += dmi_pf * D_bulk * (dmx_dz - dmz_dx);
-            hz += dmi_pf * D_bulk * (dmy_dx - dmx_dy);
+            hx -= dmi_pf * D_bulk * (dmz_dy - dmy_dz);
+            hy -= dmi_pf * D_bulk * (dmx_dz - dmz_dx);
+            hz -= dmi_pf * D_bulk * (dmy_dx - dmx_dy);
         }
     }
 
@@ -404,7 +405,7 @@ __global__ void combine_effective_field_fp32_kernel(
     // --- Thermal noise ---
     if (thermal_sigma > 0.0f) {
         curandStatePhilox4_32_10_t state;
-        curand_init(thermal_seed, idx, 0, &state);
+        curand_init(thermal_seed, idx, thermal_step, &state);
         hx += thermal_sigma * curand_normal(&state);
         hy += thermal_sigma * curand_normal(&state);
         hz += thermal_sigma * curand_normal(&state);
@@ -637,8 +638,7 @@ void launch_effective_field_fp32(Context &ctx) {
         double MU0 = 4.0 * M_PI * 1e-7;
         double KB = 1.380649e-23;
         double V = ctx.dx * ctx.dy * ctx.dz;
-        double gamma0 = ctx.gamma * MU0;
-        ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (gamma0 * MU0 * ctx.Ms * V * ctx.current_dt));
+        ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (ctx.gamma * MU0 * ctx.Ms * V * ctx.current_dt));
     } else {
         ctx.thermal_sigma = 0.0;
     }
@@ -690,6 +690,7 @@ void launch_effective_field_fp32(Context &ctx) {
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         static_cast<float>(0.5 / ctx.dx), static_cast<float>(0.5 / ctx.dy), static_cast<float>(0.5 / ctx.dz),
         static_cast<float>(ctx.thermal_sigma),
+        ctx.thermal_seed,
         ctx.step_count,
         ctx.has_magnetoelastic ? 1 : 0,
         static_cast<float>(ctx.mel_b1),

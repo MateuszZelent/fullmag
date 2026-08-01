@@ -4,6 +4,7 @@ import type { ModuleId, SlotId } from "../types";
 
 import {
   DEFAULT_LAYOUT,
+  type BottomPanelTabId,
   type LayoutState,
   type PanelPosition,
   type RibbonTabId,
@@ -28,14 +29,24 @@ export class LayoutController {
 
   replace(nextState: LayoutState): void {
     const next: LayoutState = {
+      activeBottomPanelTab:
+        nextState.activeBottomPanelTab ?? DEFAULT_LAYOUT.activeBottomPanelTab,
       activeModuleTab: nextState.activeModuleTab,
       activeViewportMainModuleId: nextState.activeViewportMainModuleId,
+      lastSpatialViewportMainModuleId:
+        spatialViewportModule(nextState.activeViewportMainModuleId) ??
+        nextState.lastSpatialViewportMainModuleId ??
+        this.state.lastSpatialViewportMainModuleId ??
+        "viewport-3d",
       focusedSlot: nextState.focusedSlot,
       panelVisible: { ...nextState.panelVisible },
     };
     const layoutChanged =
+      this.state.activeBottomPanelTab !== next.activeBottomPanelTab ||
       this.state.activeModuleTab !== next.activeModuleTab ||
       this.state.activeViewportMainModuleId !== next.activeViewportMainModuleId ||
+      this.state.lastSpatialViewportMainModuleId !==
+        next.lastSpatialViewportMainModuleId ||
       this.state.panelVisible.left !== next.panelVisible.left ||
       this.state.panelVisible.right !== next.panelVisible.right ||
       this.state.panelVisible.bottom !== next.panelVisible.bottom;
@@ -53,9 +64,41 @@ export class LayoutController {
     this.notify("workspace:layout-changed");
   }
 
+  setBottomPanelTab(tabId: BottomPanelTabId): void {
+    if (this.state.activeBottomPanelTab === tabId) return;
+    this.state = { ...this.state, activeBottomPanelTab: tabId };
+    this.notify("workspace:layout-changed");
+  }
+
+  openBottomPanel(tabId: BottomPanelTabId): void {
+    const layoutChanged =
+      !this.state.panelVisible.bottom ||
+      this.state.activeBottomPanelTab !== tabId;
+    const focusChanged = this.state.focusedSlot !== "panel-bottom";
+    if (!layoutChanged && !focusChanged) return;
+
+    this.state = {
+      ...this.state,
+      activeBottomPanelTab: tabId,
+      focusedSlot: "panel-bottom",
+      panelVisible: this.state.panelVisible.bottom
+        ? this.state.panelVisible
+        : { ...this.state.panelVisible, bottom: true },
+    };
+    if (layoutChanged) this.notify("workspace:layout-changed");
+    if (focusChanged) this.notify("workspace:focus-changed");
+  }
+
   setActiveViewportMainModule(moduleId: ModuleId): void {
     if (this.state.activeViewportMainModuleId === moduleId) return;
-    this.state = { ...this.state, activeViewportMainModuleId: moduleId };
+    this.state = {
+      ...this.state,
+      activeViewportMainModuleId: moduleId,
+      lastSpatialViewportMainModuleId:
+        spatialViewportModule(moduleId) ??
+        this.state.lastSpatialViewportMainModuleId ??
+        "viewport-3d",
+    };
     this.notify("workspace:layout-changed");
   }
 
@@ -93,4 +136,11 @@ export class LayoutController {
       listener(this.state);
     }
   }
+}
+
+function spatialViewportModule(
+  moduleId: ModuleId,
+): "field-map" | "viewport-3d" | null {
+  if (moduleId === "field-map" || moduleId === "viewport-3d") return moduleId;
+  return null;
 }

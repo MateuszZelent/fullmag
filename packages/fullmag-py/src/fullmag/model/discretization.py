@@ -54,9 +54,6 @@ class FDMDemag:
             ``"three_d"`` for full 3-D stacks.
         common_cells: Explicit 3-D common convolution grid size.
         common_cells_xy: Explicit 2-D common grid (for ``two_d_stack``).
-        allow_single_grid_fallback: If ``True`` the planner may silently
-            fall back to ``single_grid`` when multilayer is ineligible.
-            Default ``False`` — an error is raised instead.
         explain: Print a human-readable plan summary before running.
 
     Example::
@@ -72,10 +69,17 @@ class FDMDemag:
     mode: Literal["auto", "two_d_stack", "three_d"] = "auto"
     common_cells: tuple[int, int, int] | None = None
     common_cells_xy: tuple[int, int] | None = None
-    allow_single_grid_fallback: bool = False
+    # Compatibility-only input. It is never lowered because silent fallback
+    # is not a public execution contract.
+    allow_single_grid_fallback: bool | None = field(default=None, repr=False)
     explain: bool = True
 
     def __post_init__(self) -> None:
+        if self.allow_single_grid_fallback is not None:
+            raise ValueError(
+                "allow_single_grid_fallback has been removed; choose "
+                "strategy='single_grid' or 'multilayer_convolution' explicitly"
+            )
         if self.strategy not in _DEMAG_STRATEGIES:
             raise ValueError(
                 f"strategy must be one of {_DEMAG_STRATEGIES!r}, "
@@ -102,7 +106,6 @@ class FDMDemag:
         ir: dict[str, object] = {
             "strategy": self.strategy,
             "mode": self.mode,
-            "allow_single_grid_fallback": self.allow_single_grid_fallback,
         }
         if self.common_cells is not None:
             ir["common_cells"] = list(self.common_cells)
@@ -284,6 +287,8 @@ class FDM:
 # ---------------------------------------------------------------------------
 _SWEEP_KINDS = ("uniform", "arithmetic", "geometric")
 _SWEEP_DIRECTIONS = ("auto", "x", "y", "z")
+_SWEEP_ELEMENT_FAMILIES = ("prism", "hex")
+_SWEEP_TRANSITION_POLICIES = ("pyramid_to_tetrahedra", "reject")
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +316,8 @@ class SweepDistribution:
             raise ValueError(
                 f"kind must be one of {_SWEEP_KINDS!r}, got {self.kind!r}"
             )
+        if isinstance(self.num_layers, bool) or not isinstance(self.num_layers, int):
+            raise TypeError("num_layers must be an integer element-layer count")
         if self.num_layers < 1:
             raise ValueError(f"num_layers must be >= 1, got {self.num_layers}")
         if self.kind != "uniform" and self.growth_rate <= 0.0:
@@ -355,6 +362,9 @@ class SweptMeshControls:
 
     distribution: SweepDistribution = field(default_factory=SweepDistribution)
     sweep_direction: Literal["auto", "x", "y", "z"] = "auto"
+    element_family: Literal["prism", "hex"] = "prism"
+    transition_policy: Literal["pyramid_to_tetrahedra", "reject"] = "reject"
+    exact_layer_count: bool = False
 
     def __post_init__(self) -> None:
         if self.sweep_direction not in _SWEEP_DIRECTIONS:
@@ -367,11 +377,30 @@ class SweptMeshControls:
                 f"distribution must be a SweepDistribution, "
                 f"got {type(self.distribution).__name__}"
             )
+        if self.element_family not in _SWEEP_ELEMENT_FAMILIES:
+            raise ValueError(
+                f"element_family must be one of {_SWEEP_ELEMENT_FAMILIES!r}, "
+                f"got {self.element_family!r}"
+            )
+        if self.transition_policy not in _SWEEP_TRANSITION_POLICIES:
+            raise ValueError(
+                f"transition_policy must be one of {_SWEEP_TRANSITION_POLICIES!r}, "
+                f"got {self.transition_policy!r}"
+            )
+        if not isinstance(self.exact_layer_count, bool):
+            raise TypeError("exact_layer_count must be bool")
+        if self.element_family == "hex" and self.transition_policy == "pyramid_to_tetrahedra":
+            raise ValueError("hex element_family contradicts pyramid_to_tetrahedra transition")
+        if self.exact_layer_count and self.distribution.kind != "uniform":
+            raise ValueError("exact_layer_count requires a uniform distribution")
 
     def to_ir(self) -> dict[str, object]:
         return {
             "sweep_direction": self.sweep_direction,
             "distribution": self.distribution.to_ir(),
+            "element_family": self.element_family,
+            "transition_policy": self.transition_policy,
+            "exact_layer_count": self.exact_layer_count,
         }
 
 
@@ -584,6 +613,11 @@ class PerObjectMeshRecipe:
     through_thickness_element_ratio: float | None = None
     through_thickness_symmetric: bool = False
     sweep_face_meshing: str | None = None  # "triangular" | "quadrilateral"
+    topology: str | None = None
+    sweep_direction: str | None = None
+    element_family: str | None = None
+    transition_policy: str | None = None
+    exact_layer_count: bool | None = None
 
     # ── quality assessment ──
     compute_quality: bool = False
@@ -594,6 +628,105 @@ class PerObjectMeshRecipe:
 
     # ── operation sequence (COMSOL-like) ──
     operations: list[MeshOperation] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.through_thickness_elements is not None:
+            if (
+                isinstance(self.through_thickness_elements, bool)
+                or not isinstance(self.through_thickness_elements, int)
+            ):
+                raise TypeError("through_thickness_elements must be an integer")
+            if self.through_thickness_elements < 1:
+                raise ValueError("through_thickness_elements must be >= 1")
+        if self.mesh_strategy not in {
+            None,
+            "auto",
+            "free_tetrahedral",
+            "thin_film_tetrahedral",
+            "swept_prism",
+            "swept_hex",
+        }:
+            raise ValueError("mesh_strategy is not a supported mesh recipe")
+        if self.through_thickness_distribution not in {
+            None,
+            "fixed",
+            "linear",
+            "exponential",
+        }:
+            raise ValueError("through_thickness_distribution is invalid")
+        if self.sweep_face_meshing not in {None, "triangular", "quadrilateral"}:
+            raise ValueError("sweep_face_meshing must be 'triangular' or 'quadrilateral'")
+        if self.topology not in {None, "tetrahedral", "prismatic"}:
+            raise ValueError("topology must be 'tetrahedral' or 'prismatic'")
+        if self.sweep_direction not in {None, "auto", "x", "y", "z"}:
+            raise ValueError("sweep_direction must be 'auto', 'x', 'y', or 'z'")
+        if self.element_family not in {None, "prism", "hex"}:
+            raise ValueError("element_family must be 'prism' or 'hex'")
+        if self.transition_policy not in {None, "pyramid_to_tetrahedra", "reject"}:
+            raise ValueError(
+                "transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+            )
+        if self.exact_layer_count is not None and not isinstance(
+            self.exact_layer_count, bool
+        ):
+            raise TypeError("exact_layer_count must be bool")
+
+        if self.topology == "tetrahedral" and any(
+            value is not None
+            for value in (
+                self.sweep_direction,
+                self.element_family,
+                self.transition_policy,
+                self.exact_layer_count,
+            )
+        ):
+            raise ValueError("tetrahedral topology contradicts swept element intent")
+        if self.element_family == "prism" or self.topology == "prismatic":
+            if self.order not in {None, 1}:
+                raise ValueError("prismatic mesh supports order=1 only")
+            if self.mesh_strategy != "swept_prism":
+                raise ValueError("prismatic mesh requires mesh_strategy='swept_prism'")
+            if self.sweep_face_meshing != "triangular":
+                raise ValueError("prismatic mesh requires triangular source faces")
+            if self.exact_layer_count is False:
+                raise ValueError("strict prismatic mesh requires exact_layer_count=True")
+        if self.topology == "prismatic" and self.transition_policy != "pyramid_to_tetrahedra":
+            raise ValueError(
+                "prismatic thin-film topology requires pyramid_to_tetrahedra transition"
+            )
+        if self.element_family == "hex":
+            if self.mesh_strategy != "swept_hex":
+                raise ValueError("hex mesh requires mesh_strategy='swept_hex'")
+            if self.sweep_face_meshing != "quadrilateral":
+                raise ValueError("hex mesh requires quadrilateral source faces")
+            if self.transition_policy == "pyramid_to_tetrahedra":
+                raise ValueError("hex mesh contradicts pyramid_to_tetrahedra transition")
+
+        layered_requested = self.mesh_strategy in {"swept_prism", "swept_hex"} or any(
+            value is not None
+            for value in (
+                self.topology,
+                self.sweep_direction,
+                self.element_family,
+                self.transition_policy,
+                self.exact_layer_count,
+            )
+        )
+        if layered_requested:
+            required = {
+                "through_thickness_elements": self.through_thickness_elements,
+                "through_thickness_distribution": self.through_thickness_distribution,
+                "sweep_face_meshing": self.sweep_face_meshing,
+                "sweep_direction": self.sweep_direction,
+                "element_family": self.element_family,
+                "transition_policy": self.transition_policy,
+                "exact_layer_count": self.exact_layer_count,
+            }
+            missing = [name for name, value in required.items() if value is None]
+            if missing:
+                raise ValueError(
+                    "layered mesh recipe is incomplete: " + ", ".join(missing)
+                )
 
     def to_ir(self) -> dict[str, Any]:
         resolved_maximum_element_size = (
@@ -631,6 +764,11 @@ class PerObjectMeshRecipe:
             "through_thickness_element_ratio": self.through_thickness_element_ratio,
             "through_thickness_symmetric": self.through_thickness_symmetric,
             "sweep_face_meshing": self.sweep_face_meshing,
+            "topology": self.topology,
+            "sweep_direction": self.sweep_direction,
+            "element_family": self.element_family,
+            "transition_policy": self.transition_policy,
+            "exact_layer_count": self.exact_layer_count,
             "compute_quality": self.compute_quality,
             "per_element_quality": self.per_element_quality,
             "size_fields": list(self.size_fields),

@@ -19,9 +19,10 @@ bool initialize_demag_poisson_hypre_device_solver(
     GpuDemagPoissonWorkspace &workspace,
     std::string &error);
 
-bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
-    Context &ctx,
+bool prepare_demag_poisson_hypre_device_solver_apply(
+    const Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
+    bool fresh_zero,
     std::string &error);
 
 bool set_demag_poisson_hypre_solver_iterative_mode(
@@ -34,6 +35,14 @@ void read_demag_poisson_hypre_solver_stats(
     const Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     int &iterations,
-    double &residual);
+    double &residual,
+    bool &solver_reported_converged);
+
+bool validate_demag_poisson_hypre_device_solve(
+    const Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    int &iterations,
+    double &residual,
+    std::string &error);
 
 } // namespace fullmag::fem

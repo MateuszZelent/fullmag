@@ -2,11 +2,12 @@
 
 - Status: release-gate convention document for native FEM CPU
 - Last updated: 2026-05-18
-- Implementation: `native/backends/fem/cpu/mfem/integrators/llg_rhs.hpp/.cpp`,
-  `native/backends/fem/src/mfem_bridge.cpp`, and interaction modules under
-  `native/backends/fem/cpu/mfem/interactions/`
-- Test: `native/backends/fem/tests/llg_rhs_contract.cpp`,
-  `native/backends/fem/tests/interaction_docs_contract.cpp`
+- Implementation: `backends/fem/cpu/mfem/integrators/llg_rhs.hpp/.cpp` and
+  interaction modules under `backends/fem/cpu/mfem/interactions/`
+- Test: `backends/fem/tests/llg_rhs_contract.cpp`,
+  `backends/fem/tests/interaction_docs_contract.cpp`
+- Canonical time policy:
+  `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
 
 ## Equation
 
@@ -87,6 +88,22 @@ Accepted magnetization states must be normalized on magnetic nodes after every
 step. Nonmagnetic FEM airbox nodes can exist for field recovery and
 visualization, but they must not contribute to magnetic RHS terms unless an
 interaction explicitly documents that behavior.
+
+## Fixed, adaptive, and stiff time-domain policies
+
+Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`,
+`LLG-TD-FIRST-DT-V1`, `LLG-TD-MAX-ERR-V1`, `LLG-TD-ATOMIC-V1`.
+
+`fix_dt` selects a true fixed physical timestep. `fix_dt` cannot be combined
+with `dt_initial`, `dt_min`, `dt_max`, `max_err`, or the advanced adaptive
+object. Adaptive mode preserves an omitted `dt_initial` and resolves the first
+attempt to exactly `dt_min`; no floating-point equality is a sentinel.
+
+The convenience `max_err` is the absolute maximum node/cell embedded vector
+error. Advanced `atol`/`rtol` is a distinct mode. A failed adaptive attempt at
+the floor returns typed `dt_min_exhausted` and cannot be accepted. A stiff
+time-domain lane must be selected explicitly and qualified independently; the
+existing tangent-plane relaxation minimizer does not advance full LLG time.
 
 ## Validation Status
 

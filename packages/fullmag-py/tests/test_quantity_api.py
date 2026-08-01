@@ -224,6 +224,47 @@ class QuantityApiTests(unittest.TestCase):
         self.assertTrue(all(limit > 0 for limit in step_limits))
         self.assertAlmostEqual(result.last("E_total"), 0.5)
 
+    def test_run_while_direct_minimizer_does_not_inject_relax_alpha(self) -> None:
+        self._prepare_single_magnet()
+        relax_alpha_values: list[object] = []
+
+        def fake_relax(**kwargs: object):
+            relax_alpha_values.append(kwargs.get("relax_alpha"))
+            result = _result(_step(step=1, time=1e-12, e_total=0.5))
+            flat_world._record_result(result)
+            return result
+
+        with patch("fullmag.world.relax", side_effect=fake_relax):
+            fm.RunWhile(
+                True,
+                chunk_time=2e-12,
+                max_steps=1,
+                relax=True,
+                algorithm="projected_gradient_bb",
+            )
+
+        self.assertEqual(relax_alpha_values, [None])
+
+    def test_run_while_llg_relaxation_preserves_default_relax_alpha(self) -> None:
+        self._prepare_single_magnet()
+        relax_alpha_values: list[object] = []
+
+        def fake_relax(**kwargs: object):
+            relax_alpha_values.append(kwargs.get("relax_alpha"))
+            result = _result(_step(step=1, time=1e-12, e_total=0.5))
+            flat_world._record_result(result)
+            return result
+
+        with patch("fullmag.world.relax", side_effect=fake_relax):
+            fm.RunWhile(
+                True,
+                chunk_time=2e-12,
+                max_steps=1,
+                relax=True,
+            )
+
+        self.assertEqual(relax_alpha_values, [1.0])
+
 
 if __name__ == "__main__":
     unittest.main()

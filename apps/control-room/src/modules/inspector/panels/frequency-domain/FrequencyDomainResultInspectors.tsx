@@ -10,7 +10,7 @@
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FmrPeakInspector } from "./FmrPeakInspector";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StudyProgressBar } from "../StudyProgressBar";
 import { Activity, Download, Eye, Play, RotateCw } from "lucide-react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -73,6 +73,7 @@ import {
   formatFrequencyRangeHz,
 } from "@/shared/domain/analysis/frequencyUnits";
 import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
+import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
@@ -115,7 +116,7 @@ export function FrequencyDomainCalculationModesInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-calculation-modes">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Workflow Router"
         badge={summary.activeMode}
       >
@@ -135,8 +136,8 @@ export function FrequencyDomainCalculationModesInspectorPanel(
         <FieldRow label="Response-map gate" value={summary.responseMapGate} />
         <FieldRow label="Required artifacts" value={summary.requiredArtifacts} />
         <FieldRow label="Capability route" value={summary.capabilityRoute} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Calculation Mode Matrix"
         badge={`${summary.modeRows.length} mode(s)`}
       >
@@ -144,13 +145,13 @@ export function FrequencyDomainCalculationModesInspectorPanel(
           activeMode={summary.activeMode}
           rows={summary.modeRows}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Calculation Mode Result Shortcuts"
         badge={summary.activeMode}
       >
         <CalculationModeActions />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -412,7 +413,7 @@ export function FrequencyDomainRunInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="frequency-domain-run-provenance">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Run Provenance"
         badge={summary.badge}
       >
@@ -429,8 +430,8 @@ export function FrequencyDomainRunInspectorPanel(props: InspectorPanelProps) {
           label="Namespace compatibility"
           value={summary.namespaceCompatibility}
         />
-      </InspectorSection>
-      <InspectorSection title="Run Resource Links" badge={summary.calculationMode}>
+      </InspectorGroup>
+      <InspectorGroup title="Run Resource Links" badge={summary.calculationMode}>
         <ResultShortcutActions
           actions={[
             {
@@ -449,7 +450,7 @@ export function FrequencyDomainRunInspectorPanel(props: InspectorPanelProps) {
             },
           ]}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -462,7 +463,7 @@ export function FrequencyDomainOverviewInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-overview">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Results Overview"
         badge={summary.badge}
       >
@@ -480,8 +481,8 @@ export function FrequencyDomainOverviewInspectorPanel(
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />
         <FieldRow label="Resources" value={summary.resources} />
         <FieldRow label="Next action" value={summary.nextAction} />
-      </InspectorSection>
-      <InspectorSection title="Result Family Shortcuts" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Result Family Shortcuts" badge={summary.badge}>
         <ResultShortcutActions
           actions={[
             {
@@ -507,7 +508,7 @@ export function FrequencyDomainOverviewInspectorPanel(
             },
           ]}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -518,7 +519,7 @@ export function EigenProvenanceInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-provenance">
-      <InspectorSection title="Eigen Provenance" badge={summary.calculationMode}>
+      <InspectorGroup title="Eigen Provenance" badge={summary.calculationMode}>
         <FieldRow label="Canonical family" value="Eigenmodes modal lane" />
         <FieldRow label="Manifest resource" value={summary.manifestResource} />
         <FieldRow label="Manifest artifact" value={summary.manifestArtifact} />
@@ -535,8 +536,8 @@ export function EigenProvenanceInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Branch artifact" value={summary.branchArtifact} />
         <FieldRow label="Mode field artifacts" value={summary.modeFieldArtifacts} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
-      </InspectorSection>
-      <InspectorSection title="Eigen Provenance Links" badge="modal">
+      </InspectorGroup>
+      <InspectorGroup title="Eigen Provenance Links" badge="modal">
         <ResultShortcutActions
           actions={[
             {
@@ -555,7 +556,7 @@ export function EigenProvenanceInspectorPanel(props: InspectorPanelProps) {
             },
           ]}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -566,15 +567,15 @@ export function EigenOverviewInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-overview">
-      <InspectorSection title="Eigen Results Overview" badge={summary.badge}>
+      <InspectorGroup title="Eigen Results Overview" badge={summary.badge}>
         <FieldRow label="Spectrum" value={summary.spectrum} />
         <FieldRow label="Frequency coverage" value={summary.frequencyCoverage} />
         <FieldRow label="Dispersion" value={summary.dispersion} />
         <FieldRow label="Branches" value={summary.branches} />
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />
         <FieldRow label="3D handoff" value={summary.handoff} />
-      </InspectorSection>
-      <InspectorSection title="Eigen Result Shortcuts" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Eigen Result Shortcuts" badge={summary.badge}>
         <ResultShortcutActions
           actions={[
             {
@@ -600,7 +601,7 @@ export function EigenOverviewInspectorPanel(props: InspectorPanelProps) {
             },
           ]}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -611,7 +612,7 @@ export function EigenStudyInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-study">
-      <InspectorSection
+      <InspectorGroup
         title="Eigenmodes Study Contract"
         badge={summary.badge}
       >
@@ -621,8 +622,8 @@ export function EigenStudyInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Artifacts" value={summary.artifacts} />
         <FieldRow label="Mode fields" value={summary.modeFields} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
-      </InspectorSection>
-      <InspectorSection title="Eigen Study Readback" badge="ProblemIR">
+      </InspectorGroup>
+      <InspectorGroup title="Eigen Study Readback" badge="ProblemIR">
         <FieldRow
           label="Authoring source"
           value="StudyIR::Eigenmodes stage; inspector is a result readback surface"
@@ -631,7 +632,7 @@ export function EigenStudyInspectorPanel(props: InspectorPanelProps) {
           label="Round-trip action"
           value="edit the source stage in Study; this result panel preserves provenance"
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -644,7 +645,7 @@ export function FrequencyResponseProvenanceInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-provenance">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Provenance"
         badge={summary.calculationMode}
       >
@@ -672,8 +673,8 @@ export function FrequencyResponseProvenanceInspectorPanel(
         />
         <FieldRow label="Cancel artifact" value={summary.cancelArtifact} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
-      </InspectorSection>
-      <InspectorSection title="Response Provenance Links" badge="driven">
+      </InspectorGroup>
+      <InspectorGroup title="Response Provenance Links" badge="driven">
         <ResultShortcutActions
           actions={[
             {
@@ -692,7 +693,7 @@ export function FrequencyResponseProvenanceInspectorPanel(
             },
           ]}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -710,21 +711,21 @@ export function FrequencyResponseOverviewInspectorPanel(
   if (missingExcitation) {
     return (
       <div data-inspector-surface="frequency-response-overview">
-        <InspectorSection title="Driven Response Validation" badge="blocking">
+        <InspectorGroup title="Driven Response Validation" badge="blocking">
           <div className="fm-inspector-alert fm-alert-danger">
-            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>Drive source: missing</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> blocking</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Action:</strong> Add drive source</div>
+            <div className="fm-fd-alert__title">Drive source: missing</div>
+            <div className="fm-fd-alert__row"><strong>Severity:</strong> blocking</div>
+            <div className="fm-fd-alert__row"><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
+            <div className="fm-fd-alert__row"><strong>Action:</strong> Add drive source</div>
           </div>
-        </InspectorSection>
+        </InspectorGroup>
       </div>
     );
   }
 
   return (
     <div data-inspector-surface="frequency-response-overview">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Results Overview"
         badge={summary.badge}
       >
@@ -735,8 +736,8 @@ export function FrequencyResponseOverviewInspectorPanel(
         <FieldRow label="Response fields" value={summary.responseFields} />
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />
         <FieldRow label="3D handoff" value={summary.handoff} />
-      </InspectorSection>
-      <InspectorSection title="Response Result Shortcuts" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Response Result Shortcuts" badge={summary.badge}>
         <ResultShortcutActions
           actions={[
             {
@@ -762,7 +763,7 @@ export function FrequencyResponseOverviewInspectorPanel(
             },
           ]}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -775,7 +776,7 @@ export function FrequencyResponseStudyInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-study">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Study Contract"
         badge={summary.badge}
       >
@@ -790,8 +791,8 @@ export function FrequencyResponseStudyInspectorPanel(
         <FieldRow label="Sweep contract" value={summary.sweepContract} />
         <FieldRow label="Artifacts" value={summary.artifacts} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
-      </InspectorSection>
-      <InspectorSection title="Response Study Readback" badge="ProblemIR">
+      </InspectorGroup>
+      <InspectorGroup title="Response Study Readback" badge="ProblemIR">
         <FieldRow
           label="Authoring source"
           value="StudyIR::FrequencyResponse stage; inspector is a result readback surface"
@@ -800,7 +801,7 @@ export function FrequencyResponseStudyInspectorPanel(
           label="Round-trip action"
           value="edit excitation, sweep, solver, and outputs in the source Study stage"
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -919,7 +920,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="fmr-overview">
-      <InspectorSection title="FMR Workbench" badge={summary.workflowMode}>
+      <InspectorGroup title="FMR Workbench" badge={summary.workflowMode}>
         <FieldRow
           label="Canonical workflows"
           value="Eigenmodes modal FMR + FrequencyResponse driven FMR"
@@ -950,14 +951,14 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
           value={summary.capabilitySummary}
         />
         <FieldRow label="Resources" value={summary.resources} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR workflow actions"
         badge="selection"
       >
         <FmrWorkflowActions />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Modal Spectrum Preview"
         badge={`${summary.modalModeCount} mode(s)`}
       >
@@ -966,8 +967,8 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
           onPlotMode={plotMode}
           onSelectMode={selectMode}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Driven Response Preview"
         badge={`${summary.responsePointCount} point(s)`}
       >
@@ -976,8 +977,8 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
           onPlotPoint={plotResponsePoint}
           onSelectPoint={selectResponsePoint}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Peak Snapshot"
         badge={summary.peakBadge}
       >
@@ -986,13 +987,13 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
           onSelectPeak={selectPeak}
           peaks={summary.peaks}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Modal-Driven Comparison Snapshot"
         badge={summary.comparisonState}
       >
         <FmrComparisonPairTable pairs={summary.comparisonPairs} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1117,7 +1118,7 @@ export function FrequencyDomainDispersionInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-dispersion">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Dispersion Workbench"
         badge={summary.badge}
       >
@@ -1160,11 +1161,11 @@ export function FrequencyDomainDispersionInspectorPanel(
           value={summary.capabilitySummary}
         />
         <FieldRow label="Floquet gate" value={summary.floquetGate} />
-      </InspectorSection>
-      <InspectorSection title="Dispersion Chart" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Dispersion Chart" badge={summary.badge}>
         <FrequencyDomainDispersionChart model={summary.dispersionModel} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Dispersion Branch Table"
         badge={`${summary.branchCount} branch(es)`}
       >
@@ -1172,7 +1173,7 @@ export function FrequencyDomainDispersionInspectorPanel(
           branches={summary.branchesModel.branches}
           onSelectBranch={selectBranch}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1183,7 +1184,7 @@ export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-k-path">
-      <InspectorSection title="Eigen k-Path Inspector" badge={summary.badge}>
+      <InspectorGroup title="Eigen k-Path Inspector" badge={summary.badge}>
         <FieldRow
           label="Canonical workflow"
           value="dispersion_modal -> StudyIR::Eigenmodes"
@@ -1225,10 +1226,10 @@ export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
           label="3D workflow"
           value="select dispersion point -> inspect branch/mode -> plot mode field"
         />
-      </InspectorSection>
-      <InspectorSection title="Dispersion Chart" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Dispersion Chart" badge={summary.badge}>
         <FrequencyDomainDispersionChart model={summary.dispersionModel} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1239,7 +1240,7 @@ export function EigenDispersionInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-dispersion">
-      <InspectorSection title="Eigen Dispersion Inspector" badge={summary.badge}>
+      <InspectorGroup title="Eigen Dispersion Inspector" badge={summary.badge}>
         <FieldRow
           label="Dispersion resource"
           value={summary.dispersionResource}
@@ -1264,7 +1265,7 @@ export function EigenDispersionInspectorPanel(props: InspectorPanelProps) {
           value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
         />
         <FieldRow label="Floquet gate" value={summary.floquetGate} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1275,7 +1276,7 @@ export function EigenBranchesInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-branches-table">
-      <InspectorSection title="Eigen Branch Table" badge={summary.badge}>
+      <InspectorGroup title="Eigen Branch Table" badge={summary.badge}>
         <FieldRow
           label="Canonical object"
           value="tracked modal branches from StudyIR::Eigenmodes dispersion"
@@ -1293,7 +1294,7 @@ export function EigenBranchesInspectorPanel(props: InspectorPanelProps) {
           label="Dispersion workflow"
           value="select branch -> inspect tracked modes -> plot mode field"
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1304,7 +1305,7 @@ export function EigenBranchInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-branch-detail">
-      <InspectorSection title="Eigen Branch Detail" badge={summary.badge}>
+      <InspectorGroup title="Eigen Branch Detail" badge={summary.badge}>
         <FieldRow label="Branch identity" value={summary.branchIdentity} />
         <FieldRow label="Branch resource" value={summary.branchResource} />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
@@ -1312,19 +1313,19 @@ export function EigenBranchInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Continuity" value={summary.continuity} />
         <FieldRow label="Representative mode" value={summary.representativeMode} />
         <FieldRow label="3D handoff" value={summary.handoff} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Branch Continuity Charts"
         badge={summary.chartBadge}
       >
         <BranchContinuityCharts branch={summary.branch} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Tracked Branch Samples"
         badge={summary.sampleTableBadge}
       >
         <BranchSampleTable branch={summary.branch} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1568,7 +1569,7 @@ export function FrequencyDomainResponseMapInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-response-map">
-      <InspectorSection title="Response Map Control" badge={summary.badge}>
+      <InspectorGroup title="Response Map Control" badge={summary.badge}>
         <FieldRow
           label="Canonical workflow"
           value="nonzero-k FrequencyResponse response map"
@@ -1586,7 +1587,7 @@ export function FrequencyDomainResponseMapInspectorPanel(
           value={summary.currentResponseEvidence}
         />
         <FieldRow label="UI fallback" value={summary.uiFallback} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1617,7 +1618,7 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-spectrum">
-      <InspectorSection title="Eigen Spectrum Workbench" badge={summary.badge}>
+      <InspectorGroup title="Eigen Spectrum Workbench" badge={summary.badge}>
         <FieldRow
           label="Canonical object"
           value="StudyIR::Eigenmodes spectrum"
@@ -1639,19 +1640,19 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
           label="Capability summary"
           value={summary.capabilitySummary}
         />
-      </InspectorSection>
-      <InspectorSection title="Spectrum Chart" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Spectrum Chart" badge={summary.badge}>
         <FrequencyDomainSpectrumChart
           model={summary.spectrumModel}
           onPlotMode={(point) => plotMode(point)}
         />
-      </InspectorSection>
-      <InspectorSection title="Mode Table" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Mode Table" badge={summary.badge}>
         <FrequencyDomainModeTable
           onPlotMode={plotMode}
           points={summary.spectrumModel.points}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1707,7 +1708,7 @@ export function EigenModesInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-modes-browser">
-      <InspectorSection title="Eigen Modes Browser" badge={summary.badge}>
+      <InspectorGroup title="Eigen Modes Browser" badge={summary.badge}>
         <FieldRow
           label="Canonical collection"
           value="mode rows from StudyIR::Eigenmodes spectrum"
@@ -1728,13 +1729,13 @@ export function EigenModesInspectorPanel(props: InspectorPanelProps) {
           label="Capability summary"
           value={summary.capabilitySummary}
         />
-      </InspectorSection>
-      <InspectorSection title="Eigen Mode Browser" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Eigen Mode Browser" badge={summary.badge}>
         <FrequencyDomainModeTable
           onPlotMode={plotMode}
           points={summary.spectrumModel.points}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1747,7 +1748,7 @@ export function EigenModesVisualizationInspectorPanel(
 
   return (
     <div data-inspector-surface="eigen-modes-visualization">
-      <InspectorSection title="Eigen Modes Visualization" badge={summary.badge}>
+      <InspectorGroup title="Eigen Modes Visualization" badge={summary.badge}>
         <FieldRow
           label="Shared style scope"
           value="one visualization preset for the modes collection"
@@ -1770,7 +1771,7 @@ export function EigenModesVisualizationInspectorPanel(
           label="Capability summary"
           value={summary.capabilitySummary}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1781,7 +1782,7 @@ export function EigenDiagnosticsInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-diagnostics">
-      <InspectorSection title="Eigen Diagnostics" badge={summary.badge}>
+      <InspectorGroup title="Eigen Diagnostics" badge={summary.badge}>
         <FieldRow
           label="Modal availability"
           value={summary.modalAvailability}
@@ -1800,7 +1801,7 @@ export function EigenDiagnosticsInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Dispersion samples" value={summary.dispersionSamples} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
         <FieldRow label="Demag-k gate" value={summary.demagKGate} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1856,7 +1857,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="fmr-modal-spectrum">
-      <InspectorSection
+      <InspectorGroup
         title="FMR Modal Spectrum Control"
         badge={summary.modalBadge}
       >
@@ -1892,8 +1893,8 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
         />
         <FieldRow label="Chart route" value={summary.modalChartRoute} />
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Modal Spectrum Chart"
         badge={`${summary.modalModeCount} mode(s)`}
       >
@@ -1902,8 +1903,8 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
           onPlotMode={(point) => plotMode(point)}
           onSelectMode={selectMode}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Resonance Browser"
         badge={`${summary.modalModeCount} mode(s)`}
       >
@@ -1912,8 +1913,8 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
           onSelectMode={selectMode}
           points={summary.spectrumModel.points}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Modal Mode Table"
         badge={`${summary.modalFieldCount} field(s)`}
       >
@@ -1921,7 +1922,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
           onPlotMode={plotMode}
           points={summary.spectrumModel.points}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -1968,9 +1969,9 @@ function FmrResonanceBrowser({
               </span>
               <h4>{formatFrequency(point.frequencyHz)}</h4>
             </div>
-            <span className="fm-inspector-section__badge">
+            <Badge variant="secondary">
               {point.modeFieldId ? "3D-ready" : "field missing"}
-            </span>
+            </Badge>
           </div>
           <div className="fm-frequency-domain-resonance-card__grid">
             <FieldRow
@@ -2116,7 +2117,7 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="fmr-response-sweep">
-      <InspectorSection
+      <InspectorGroup
         title="FMR Response Sweep Control"
         badge={summary.responseBadge}
       >
@@ -2145,8 +2146,8 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           label="3D handoff"
           value={`${summary.responseLinkedPointCount}/${summary.responsePointCount} frequency points are directly linked; ${summary.responseFieldCount} field payloads published`}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Response Sweep Chart"
         badge={`${summary.responseSeriesCount} series`}
       >
@@ -2155,8 +2156,8 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           onPlotPoint={(point) => plotResponsePoint(point)}
           onSelectPoint={selectResponsePoint}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Response Point Browser"
         badge={`${summary.responsePointCount} point(s)`}
       >
@@ -2165,8 +2166,8 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           onSelectResponsePoint={selectResponsePoint}
           points={summary.responseModel.points}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Response Point Table"
         badge={`${summary.responsePointCount} point(s)`}
       >
@@ -2174,8 +2175,8 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           onPlotResponsePoint={plotResponsePoint}
           points={summary.responseModel.points}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Driven FMR Peak Table"
         badge={`${drivenPeaks.length} peak(s)`}
       >
@@ -2184,7 +2185,7 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           onSelectPeak={selectPeak}
           peaks={drivenPeaks}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -2233,9 +2234,9 @@ function FmrResponsePointBrowser({
               </span>
               <h4>{formatFrequency(point.frequencyHz)}</h4>
             </div>
-            <span className="fm-inspector-section__badge">
+            <Badge variant="secondary">
               {point.fieldId ? "3D-ready" : "field missing"}
-            </span>
+            </Badge>
           </div>
           <div className="fm-frequency-domain-response-card__grid">
             <FieldRow
@@ -2345,7 +2346,7 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="fmr-peaks">
-      <InspectorSection title="FMR Peak Control" badge={summary.peakBadge}>
+      <InspectorGroup title="FMR Peak Control" badge={summary.peakBadge}>
         <FieldRow
           label="Peak workflow"
           value="select peak -> compare modal/driven provenance -> plot field"
@@ -2378,15 +2379,15 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
           label="Linked field handoff"
           value={summary.linkedFieldHandoff}
         />
-      </InspectorSection>
-      <InspectorSection title="FMR Peak Browser" badge={summary.peakBadge}>
+      </InspectorGroup>
+      <InspectorGroup title="FMR Peak Browser" badge={summary.peakBadge}>
         <FmrPeakBrowser
           onPlotPeak={plotPeak}
           onSelectPeak={selectPeak}
           peaks={summary.peaks}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Peak Table"
         badge={`${summary.peakCount} peak(s)`}
       >
@@ -2395,13 +2396,13 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
           onSelectPeak={selectPeak}
           peaks={summary.peaks}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Modal-Driven Difference Table"
         badge={summary.comparisonState}
       >
         <FmrComparisonPairTable pairs={summary.comparisonPairs} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -2443,9 +2444,9 @@ function FmrPeakBrowser({
               </span>
               <h4>{formatFrequency(peak.frequencyHz)}</h4>
             </div>
-            <span className="fm-inspector-section__badge">
+            <Badge variant="secondary">
               {peak.validationStatus}
-            </span>
+            </Badge>
           </div>
           <div className="fm-frequency-domain-peak-card__grid">
             <FieldRow label="Target" value={formatFmrPeakTarget(peak)} />
@@ -2723,7 +2724,7 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="fmr-comparison">
-      <InspectorSection
+      <InspectorGroup
         title="FMR Modal vs Driven Comparison"
         badge={summary.badge}
       >
@@ -2741,8 +2742,8 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Driven field" value={summary.drivenOverlay} />
         <FieldRow label="Validation state" value={summary.validationState} />
         <FieldRow label="Resources" value={summary.resources} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Comparison Browser"
         badge={`${summary.pairs.length} pair(s)`}
       >
@@ -2753,21 +2754,21 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
           onPlotModal={plotModalPair}
           pairs={summary.pairs}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Modal-Driven Pair Table"
         badge={`${summary.pairs.length} pair(s)`}
       >
         <FmrComparisonPairTable pairs={summary.pairs} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="FMR Comparison Actions"
         badge={summary.actionBadge}
       >
         <FieldRow label="Modal target" value={summary.modalActionTarget} />
         <FieldRow label="Driven target" value={summary.drivenActionTarget} />
         <FmrComparisonActions summary={summary} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -2966,9 +2967,9 @@ function FmrComparisonPairBrowser({
               </span>
               <h4>{formatFrequency(pair.detuningHz)}</h4>
             </div>
-            <span className="fm-inspector-section__badge">
+            <Badge variant="secondary">
               {pair.modalPeak.validationStatus}/{pair.drivenPeak.validationStatus}
-            </span>
+            </Badge>
           </div>
           <div className="fm-frequency-domain-comparison-card__grid">
             <FieldRow label="Modal" value={formatFmrModalPairLabel(pair)} />
@@ -3070,7 +3071,7 @@ export function FrequencyDomainExportsInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-exports">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Exports"
         badge={summary.badge}
       >
@@ -3084,7 +3085,7 @@ export function FrequencyDomainExportsInspectorPanel(
         <FieldRow label="Export formats" value={summary.exportFormats} />
         <FieldRow label="Python round-trip" value={summary.pythonRoundTrip} />
         <FieldRow label="API resources" value={summary.apiResources} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3108,7 +3109,7 @@ export const EigenModeInspectorPanel =
 
     return (
       <div data-inspector-surface="eigen-mode">
-        <InspectorSection title="Eigen Mode Control" badge={summary.badge}>
+        <InspectorGroup title="Eigen Mode Control" badge={summary.badge}>
           <FieldRow label="Canonical object" value="Eigenmodes mode" />
           <FieldRow label="Mode identity" value={summary.modeIdentity} />
           <FieldRow label="Frequency" value={summary.frequencyDisplay} />
@@ -3130,8 +3131,8 @@ export const EigenModeInspectorPanel =
             value={summary.dominantPolarization}
           />
           <FieldRow label="3D workflow" value={summary.workflow} />
-        </InspectorSection>
-        <InspectorSection
+        </InspectorGroup>
+        <InspectorGroup
           title="Eigen Mode 3D Visualization"
           badge={summary.actionBadge}
         >
@@ -3155,7 +3156,7 @@ export const EigenModeInspectorPanel =
             viewOptions={summary.availableViewValues}
           />
           <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
-        </InspectorSection>
+        </InspectorGroup>
       </div>
     );
   };
@@ -3328,7 +3329,7 @@ export function FrequencyResponsePointInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-point">
-      <InspectorSection
+      <InspectorGroup
         title="Response Frequency Point Control"
         badge={summary.badge}
       >
@@ -3347,8 +3348,8 @@ export function FrequencyResponsePointInspectorPanel(
         <FieldRow label="3D field" value={summary.fieldStatus} />
         <FieldRow label="Available field views" value={summary.availableViews} />
         <FieldRow label="Provenance" value={summary.provenance} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Response Point 3D Visualization"
         badge={summary.actionBadge}
       >
@@ -3371,7 +3372,7 @@ export function FrequencyResponsePointInspectorPanel(
           settings={modeDisplaySettings}
           summary={summary}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3546,7 +3547,7 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-frequency-points">
-      <InspectorSection
+      <InspectorGroup
         title="Response Frequency Points Table"
         badge={summary.badge}
       >
@@ -3563,8 +3564,8 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
         <FieldRow label="Progress state" value={summary.progressState} />
         <FieldRow label="Cancellation state" value={summary.cancellationState} />
         <FieldRow label="3D workflow" value={summary.workflow} />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Response Frequency Point Table"
         badge={summary.badge}
       >
@@ -3572,7 +3573,7 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
           onPlotResponsePoint={plotPoint}
           points={summary.responseModel.points}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3585,7 +3586,7 @@ export function FrequencyResponseProgressInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-progress">
-      <InspectorSection title="Response Sweep Progress" badge={summary.badge}>
+      <InspectorGroup title="Response Sweep Progress" badge={summary.badge}>
         <StudyProgressBar
           label="Frequency response sweep progress"
           statusLabel={summary.progressLabel}
@@ -3605,7 +3606,7 @@ export function FrequencyResponseProgressInspectorPanel(
         />
         <FieldRow label="Latest manifest" value={summary.latestManifest} />
         <FieldRow label="Reason" value={summary.reason} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3618,7 +3619,7 @@ export function FrequencyResponseCancelRequestedInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-cancel-requested">
-      <InspectorSection
+      <InspectorGroup
         title="Response Sweep Cancellation"
         badge={summary.badge}
       >
@@ -3636,7 +3637,7 @@ export function FrequencyResponseCancelRequestedInspectorPanel(
         />
         <FieldRow label="Latest manifest" value={summary.latestManifest} />
         <FieldRow label="Reason" value={summary.reason} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3649,7 +3650,7 @@ export function FrequencyResponseObservableInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-observable">
-      <InspectorSection
+      <InspectorGroup
         title="Response Observable Control"
         badge={summary.badge}
       >
@@ -3668,7 +3669,7 @@ export function FrequencyResponseObservableInspectorPanel(
         />
         <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />
         <FieldRow label="Chart series" value={summary.chartSeriesStatus} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3681,7 +3682,7 @@ export function FrequencyResponseObservablesInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-observables">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Observables"
         badge={summary.seriesStatus}
       >
@@ -3690,7 +3691,7 @@ export function FrequencyResponseObservablesInspectorPanel(
         <FieldRow label="Frequency points" value={summary.pointCount} />
         <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />
         <FieldRow label="Peak response" value={summary.peakResponse} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3723,21 +3724,21 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
   if (missingExcitation) {
     return (
       <div data-inspector-surface="frequency-response-sweep">
-        <InspectorSection title="Driven Response Validation" badge="blocking">
+        <InspectorGroup title="Driven Response Validation" badge="blocking">
           <div className="fm-inspector-alert fm-alert-danger">
-            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>Drive source: missing</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> blocking</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Action:</strong> Add drive source</div>
+            <div className="fm-fd-alert__title">Drive source: missing</div>
+            <div className="fm-fd-alert__row"><strong>Severity:</strong> blocking</div>
+            <div className="fm-fd-alert__row"><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
+            <div className="fm-fd-alert__row"><strong>Action:</strong> Add drive source</div>
           </div>
-        </InspectorSection>
+        </InspectorGroup>
       </div>
     );
   }
 
   return (
     <div data-inspector-surface="frequency-response-sweep">
-      <InspectorSection
+      <InspectorGroup
         title="Driven Response Sweep Control"
         badge={summary.badge}
       >
@@ -3767,14 +3768,14 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
         <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />
         <FieldRow label="Progress state" value={summary.progressState} />
         <FieldRow label="Cancellation state" value={summary.cancellationState} />
-      </InspectorSection>
-      <InspectorSection title="Driven Response Chart" badge={summary.badge}>
+      </InspectorGroup>
+      <InspectorGroup title="Driven Response Chart" badge={summary.badge}>
         <FrequencyDomainResponseChart
           model={summary.responseModel}
           onPlotPoint={plotPoint}
         />
-      </InspectorSection>
-      <InspectorSection
+      </InspectorGroup>
+      <InspectorGroup
         title="Driven Response Point Table"
         badge={summary.badge}
       >
@@ -3797,7 +3798,7 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
           }}
           points={summary.responseModel.points}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3810,7 +3811,7 @@ export function FrequencyResponseDiagnosticsInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-diagnostics">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Diagnostics"
         badge={summary.badge}
       >
@@ -3828,7 +3829,7 @@ export function FrequencyResponseDiagnosticsInspectorPanel(
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
         <FieldRow label="Response artifact" value={summary.responseArtifact} />
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3841,14 +3842,14 @@ export function FrequencyDomainJobsOverviewInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-jobs-overview">
-      <InspectorSection title="Frequency-Domain Job Queue" badge={summary.badge}>
+      <InspectorGroup title="Frequency-Domain Job Queue" badge={summary.badge}>
         <FieldRow label="Stage run" value={summary.stageRun} />
         <FieldRow label="Eigen samples" value={summary.eigenSamples} />
         <FieldRow label="Response frequencies" value={summary.responseFrequencies} />
         <FieldRow label="Response progress" value={summary.responseProgress} />
         <FieldRow label="Cancel checkpoint" value={summary.cancelCheckpoint} />
         <FieldRow label="Artifact export" value={summary.artifactExport} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3861,7 +3862,7 @@ export function FrequencyDomainStageRunJobInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-stage-run-job">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Stage Run Job"
         badge={summary.calculationMode}
       >
@@ -3874,7 +3875,7 @@ export function FrequencyDomainStageRunJobInspectorPanel(
           label="Run handoff"
           value="publish manifest and stage artifacts"
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3885,13 +3886,13 @@ export function EigenSampleJobInspectorPanel(props: InspectorPanelProps) {
 
   return (
     <div data-inspector-surface="eigen-sample-job">
-      <InspectorSection title="Eigen k-Sample Job" badge={summary.badge}>
+      <InspectorGroup title="Eigen k-Sample Job" badge={summary.badge}>
         <FieldRow label="k-path samples" value={summary.kPathSamples} />
         <FieldRow label="Branch tracking" value={summary.branchTracking} />
         <FieldRow label="Mode fields" value={summary.modeFields} />
         <FieldRow label="Solver lane" value={summary.solverLane} />
         <FieldRow label="Output resources" value={summary.outputResources} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3904,7 +3905,7 @@ export function FrequencyResponseFrequencyJobInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-frequency-job">
-      <InspectorSection
+      <InspectorGroup
         title="Response Frequency Solve Job"
         badge={summary.badge}
       >
@@ -3918,7 +3919,7 @@ export function FrequencyResponseFrequencyJobInspectorPanel(
         <FieldRow label="Field artifacts" value={summary.fieldArtifacts} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
         <FieldRow label="Solver lane" value={summary.solverLane} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3931,7 +3932,7 @@ export function FrequencyResponseProgressJobInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-progress-job">
-      <InspectorSection
+      <InspectorGroup
         title="Response Sweep Progress Job"
         badge={summary.badge}
       >
@@ -3953,7 +3954,7 @@ export function FrequencyResponseProgressJobInspectorPanel(
           value={summary.writtenArtifacts}
         />
         <FieldRow label="Latest manifest" value={summary.latestManifest} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3966,7 +3967,7 @@ export function FrequencyDomainArtifactExportJobInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-artifact-export-job">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Artifact Export Job"
         badge={summary.badge}
       >
@@ -3977,7 +3978,7 @@ export function FrequencyDomainArtifactExportJobInspectorPanel(
         <FieldRow label="Driven sweep" value={summary.drivenSweep} />
         <FieldRow label="Field payloads" value={summary.fieldPayloads} />
         <FieldRow label="API resources" value={summary.apiResources} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -3990,7 +3991,7 @@ export function FrequencyDomainDiagnosticsOverviewInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-diagnostics-overview">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Diagnostics Overview"
         badge={summary.badge}
       >
@@ -3999,7 +4000,7 @@ export function FrequencyDomainDiagnosticsOverviewInspectorPanel(
         <FieldRow label="Artifacts" value={summary.artifacts} />
         <FieldRow label="API resources" value={summary.apiResources} />
         <FieldRow label="Visualization" value={summary.visualization} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4012,7 +4013,7 @@ export function FrequencyDomainCapabilitiesDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-capabilities-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Capability Diagnostics"
         badge={summary.badge}
       >
@@ -4021,7 +4022,7 @@ export function FrequencyDomainCapabilitiesDiagnosticInspectorPanel(
         <FieldRow label="Boundary gates" value={summary.boundaryGates} />
         <FieldRow label="Demag gates" value={summary.demagGates} />
         <FieldRow label="Visualization gates" value={summary.visualizationGates} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4034,7 +4035,7 @@ export function FrequencyDomainEquilibriumDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-equilibrium-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Equilibrium Diagnostics"
         badge={summary.badge}
       >
@@ -4043,7 +4044,7 @@ export function FrequencyDomainEquilibriumDiagnosticInspectorPanel(
         <FieldRow label="Modal readiness" value={summary.modalReadiness} />
         <FieldRow label="Response readiness" value={summary.responseReadiness} />
         <FieldRow label="Tangent contract" value={summary.tangentContract} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4060,16 +4061,16 @@ export function FrequencyDomainOperatorDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-operator-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Operator Diagnostics"
         badge={summary.badge}
       >
         {dmiWarning && (
           <div className="fm-inspector-alert fm-alert-warning">
-            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>DMI BC uncertain</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> warning</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain DMI boundary conditions are not yet fully resolved. Use with caution.</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>ID:</strong> frequency_domain.dmi_boundary_condition_uncertain</div>
+            <div className="fm-fd-alert__title">DMI BC uncertain</div>
+            <div className="fm-fd-alert__row"><strong>Severity:</strong> warning</div>
+            <div className="fm-fd-alert__row"><strong>Message:</strong> Frequency-domain DMI boundary conditions are not yet fully resolved. Use with caution.</div>
+            <div className="fm-fd-alert__row"><strong>ID:</strong> frequency_domain.dmi_boundary_condition_uncertain</div>
           </div>
         )}
         <FieldRow label="Operator family" value={summary.operatorFamily} />
@@ -4077,7 +4078,7 @@ export function FrequencyDomainOperatorDiagnosticInspectorPanel(
         <FieldRow label="Phase convention" value={summary.phaseConvention} />
         <FieldRow label="Demag-k gate" value={summary.demagKGate} />
         <FieldRow label="Boundary policy" value={summary.boundaryPolicy} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4090,7 +4091,7 @@ export function FrequencyDomainSolverDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-solver-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Solver Diagnostics"
         badge={summary.badge}
       >
@@ -4104,7 +4105,7 @@ export function FrequencyDomainSolverDiagnosticInspectorPanel(
         <FieldRow label="Modal residuals" value={summary.modalResiduals} />
         <FieldRow label="Progress" value={summary.progress} />
         <FieldRow label="Cancel state" value={summary.cancelState} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4117,7 +4118,7 @@ export function FrequencyDomainArtifactsDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-artifacts-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Artifact Diagnostics"
         badge={summary.badge}
       >
@@ -4127,7 +4128,7 @@ export function FrequencyDomainArtifactsDiagnosticInspectorPanel(
         <FieldRow label="Modal dispersion" value={summary.modalDispersion} />
         <FieldRow label="Driven sweep" value={summary.drivenSweep} />
         <FieldRow label="Field payloads" value={summary.fieldPayloads} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4140,7 +4141,7 @@ export function FrequencyDomainApiResourcesDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-api-resources-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain API Resource Diagnostics"
         badge={summary.badge}
       >
@@ -4156,7 +4157,7 @@ export function FrequencyDomainApiResourcesDiagnosticInspectorPanel(
           value={summary.progressEndpoint}
         />
         <FieldRow label="Field endpoint" value={summary.fieldEndpoint} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4169,7 +4170,7 @@ export function FrequencyDomainVisualizationDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-visualization-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Visualization Diagnostics"
         badge={summary.badge}
       >
@@ -4178,7 +4179,7 @@ export function FrequencyDomainVisualizationDiagnosticInspectorPanel(
         <FieldRow label="Chart readiness" value={summary.chartReadiness} />
         <FieldRow label="Animation" value={summary.animation} />
         <FieldRow label="Viewport handoff" value={summary.viewportHandoff} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4191,7 +4192,7 @@ export function FrequencyDomainPeriodicPairsResourceInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-periodic-pairs-resource">
-      <InspectorSection
+      <InspectorGroup
         title="Periodic/Floquet Pair Resource"
         badge={summary.badge}
       >
@@ -4200,7 +4201,7 @@ export function FrequencyDomainPeriodicPairsResourceInspectorPanel(
         <FieldRow label="Representative pair" value={summary.representativePair} />
         <FieldRow label="Max residual" value={summary.maxResidual} />
         <FieldRow label="Invalid pairs" value={summary.invalidPairs} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4213,7 +4214,7 @@ export function FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-periodic-floquet-diagnostic">
-      <InspectorSection
+      <InspectorGroup
         title="Periodic/Floquet Diagnostics"
         badge={summary.badge}
       >
@@ -4222,7 +4223,7 @@ export function FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel(
         <FieldRow label="Dynamic demag-k" value={summary.dynamicDemagK} />
         <FieldRow label="Phase convention" value={summary.phaseConvention} />
         <FieldRow label="Mesh residual" value={summary.meshResidual} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4235,13 +4236,13 @@ export function FrequencyDomainResourceFamilyInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-resource-family">
-      <InspectorSection title="Frequency-Domain Resource Family" badge="resources">
+      <InspectorGroup title="Frequency-Domain Resource Family" badge="resources">
         <FieldRow label="Manifest resource" value={summary.manifestResource} />
         <FieldRow label="Available resources" value={summary.availableResources} />
         <FieldRow label="Modal artifacts" value={summary.modalArtifacts} />
         <FieldRow label="Driven artifacts" value={summary.drivenArtifacts} />
         <FieldRow label="Field payloads" value={summary.fieldPayloads} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4254,7 +4255,7 @@ export function FrequencyDomainManifestResourceInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-domain-manifest-resource">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency-Domain Manifest Resource"
         badge={summary.schema}
       >
@@ -4263,7 +4264,7 @@ export function FrequencyDomainManifestResourceInspectorPanel(
         <FieldRow label="Artifact" value={summary.artifact} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
         <FieldRow label="Stage kind" value={summary.stageKind} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4298,7 +4299,7 @@ export function EigenSpectrumResourceInspectorPanel(props: InspectorPanelProps) 
 
   return (
     <div data-inspector-surface="eigen-spectrum-resource">
-      <InspectorSection title="Eigen Spectrum Resource" badge={summary.badge}>
+      <InspectorGroup title="Eigen Spectrum Resource" badge={summary.badge}>
         <FieldRow label="Resource endpoint" value={summary.spectrumResource} />
         <FieldRow
           label="Mode rows"
@@ -4306,7 +4307,7 @@ export function EigenSpectrumResourceInspectorPanel(props: InspectorPanelProps) 
         />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4341,7 +4342,7 @@ export function EigenModeFieldResourceInspectorPanel(
 
   return (
     <div data-inspector-surface="eigen-mode-field-resource">
-      <InspectorSection title="Eigen Mode Field Resource" badge={summary.modeFields}>
+      <InspectorGroup title="Eigen Mode Field Resource" badge={summary.modeFields}>
         <FieldRow
           label="Field payload contract"
           value="phase-rotated real / real / imag / abs / phase"
@@ -4349,7 +4350,7 @@ export function EigenModeFieldResourceInspectorPanel(
         <FieldRow label="Mode fields" value={summary.modeFields} />
         <FieldRow label="Output resources" value={summary.outputResources} />
         <FieldRow label="Viewport handoff" value="mode selection -> 3D field" />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4362,7 +4363,7 @@ export function FrequencyResponseSweepResourceInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-sweep-resource">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Sweep Resource"
         badge={summary.badge}
       >
@@ -4374,7 +4375,7 @@ export function FrequencyResponseSweepResourceInspectorPanel(
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Frequency points" value={summary.pointCount} />
         <FieldRow label="Observable series" value={summary.seriesStatus} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4387,7 +4388,7 @@ export function FrequencyResponseProgressResourceInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-progress-resource">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Progress Resource"
         badge={summary.badge}
       >
@@ -4412,7 +4413,7 @@ export function FrequencyResponseProgressResourceInspectorPanel(
         />
         <FieldRow label="Latest manifest" value={summary.latestManifest} />
         <FieldRow label="Reason" value={summary.reason} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }
@@ -4437,7 +4438,7 @@ export function FrequencyResponseFieldResourceInspectorPanel(
 
   return (
     <div data-inspector-surface="frequency-response-field-resource">
-      <InspectorSection
+      <InspectorGroup
         title="Frequency Response Field Resource"
         badge={summary.fieldOverlays}
       >
@@ -4447,7 +4448,7 @@ export function FrequencyResponseFieldResourceInspectorPanel(
         />
         <FieldRow label="Response fields" value={summary.fieldOverlays} />
         <FieldRow label="3D workflow" value={summary.workflow} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 .fm-diagnostic-recorder.fm-dialog {
-  width: min(1120px, calc(100vw - 32px));
-  max-height: min(820px, calc(100vh - 32px));
+  width: min(1120px, calc(100vw - var(--fm-space-8)));
+  max-height: min(820px, calc(100vh - var(--fm-space-8)));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -9,11 +9,11 @@
 
 .fm-diagnostic-recorder__close {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
+  width: var(--fm-field-row-min-height);
+  height: var(--fm-field-row-min-height);
   place-items: center;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-muted);
   background: var(--fm-bg-elevated);
 }
@@ -27,29 +27,29 @@
 .fm-diagnostic-recorder__panel {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: 8px;
+  gap: var(--fm-space-2);
 }
 
 .fm-diagnostic-recorder__metric {
   display: grid;
-  gap: 4px;
+  gap: var(--fm-space-1);
   min-width: 0;
-  padding: 10px;
+  padding: var(--fm-space-3);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-surface);
 }
 
 .fm-diagnostic-recorder__metric span,
 .fm-diagnostic-recorder__profile span {
   color: var(--fm-text-muted);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
 }
 
 .fm-diagnostic-recorder__metric strong {
   overflow: hidden;
   color: var(--fm-text-primary);
-  font-size: 16px;
+  font-size: var(--fm-font-size-xl);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -63,8 +63,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
+  gap: var(--fm-space-3);
+  margin-top: var(--fm-space-3);
 }
 
 .fm-diagnostic-recorder__toolbar-actions {
@@ -72,34 +72,34 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--fm-space-2);
 }
 
 .fm-diagnostic-recorder__toolbar-actions .fm-button {
-  gap: 6px;
+  gap: var(--fm-space-1);
   white-space: nowrap;
 }
 
 .fm-diagnostic-recorder__profile {
   display: grid;
-  gap: 4px;
+  gap: var(--fm-space-1);
 }
 
 .fm-diagnostic-recorder__profile select {
   min-width: 150px;
-  height: 32px;
+  height: var(--fm-control-height-regular);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-primary);
   background: var(--fm-bg-surface);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fm-font-size-md);
 }
 
 .fm-diagnostic-recorder__tabs {
   display: grid;
-  gap: 10px;
-  margin-top: 12px;
+  gap: var(--fm-space-3);
+  margin-top: var(--fm-space-3);
 }
 
 .fm-diagnostic-recorder__table {
@@ -107,21 +107,21 @@
   max-height: 360px;
   overflow: auto;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-surface);
 }
 
 .fm-diagnostic-recorder__row {
   display: grid;
   grid-template-columns: minmax(178px, 0.9fr) 110px 82px minmax(220px, 1.4fr) 92px;
-  gap: 8px;
+  gap: var(--fm-space-2);
   align-items: center;
-  min-width: 720px;
-  min-height: 34px;
-  padding: 6px 10px;
+  min-width: var(--fm-dialog-recorder-min-width);
+  min-height: var(--fm-ribbon-tabs-height);
+  padding: var(--fm-space-1) var(--fm-space-3);
   border-top: 1px solid var(--fm-border-subtle);
   color: var(--fm-text-secondary);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
 }
 
 .fm-diagnostic-recorder__row:first-child {
@@ -131,10 +131,10 @@
 .fm-diagnostic-recorder__row--header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   color: var(--fm-text-muted);
   background: var(--fm-bg-elevated);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 650;
   text-transform: uppercase;
 }
@@ -159,12 +159,12 @@
 .fm-diagnostic-recorder__empty,
 .fm-diagnostic-recorder__json,
 .fm-diagnostic-recorder__report {
-  padding: 12px;
+  padding: var(--fm-space-3);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-secondary);
   background: var(--fm-bg-surface);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
 }
 
 .fm-diagnostic-recorder__json,

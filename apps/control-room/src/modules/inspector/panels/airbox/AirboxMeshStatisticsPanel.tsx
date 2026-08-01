@@ -1,6 +1,5 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
 import {
   useMeshSharedDomainManifestResource,
   useMeshUniverseQualityResource,
@@ -14,7 +13,7 @@ import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStat
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow, boundedItems } from "./airboxDisplay";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { formatCount } from "../MeshResourceView";
 import { buildAirboxMeshInspectorModel } from "./airboxMeshInspectorModel";
 import { useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
@@ -38,16 +37,27 @@ export function AirboxMeshStatisticsPanel({ selection }: InspectorPanelProps) {
   const statistics = normalizeMeshQualityStatistics(quality.data?.quality);
 
   return (
-    <Accordion className="fm-inspector-panel" type="multiple" defaultValue={["counts", "distributions"]}>
-      <InspectorSection value="counts" title="Airbox Mesh Statistics" badge={manifest.status}>
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="Airbox Mesh Statistics" badge={manifest.status}>
         <FieldRow label="Points / nodes" value={formatCount(model.statistics.nodeCount)} />
-        <FieldRow label="Tetrahedra" value={formatCount(model.statistics.elementCount)} />
+        <FieldRow label="Volume elements" value={formatCount(model.statistics.elementCount)} />
+        {model.statistics.volumeElementsByType.map(({ count, family }) => (
+          <FieldRow
+            key={family}
+            label={
+              model.statistics.volumeElementCountScope === "shared-domain"
+                ? `${family} (shared-domain)`
+                : family
+            }
+            value={formatCount(count)}
+          />
+        ))}
         <FieldRow label="Boundary faces" value={formatCount(model.statistics.boundaryFaceCount)} />
         <FieldRow label="Surface faces" value={formatCount(model.statistics.surfaceFaceCount)} />
         <FieldRow label="Shared interface nodes" value={formatCount(model.topology.sharedInterfaceNodes.count)} />
         <FieldRow label="Ownership" value="shared, not exclusive Airbox memory" />
-      </InspectorSection>
-      <InspectorSection value="distributions" title="Shared-domain Quality Distributions" badge={statistics ? String(statistics.elementCount) : "missing"}>
+      </InspectorGroup>
+      <InspectorGroup title="Shared-domain Quality Distributions" badge={statistics ? String(statistics.elementCount) : "missing"}>
         <FieldRow label="Scope" value="Shared-domain cross-reference, not Airbox-scoped" />
         <FieldRow label="Quality source" value={statistics?.qualitySource ?? "not published"} />
         <FieldRow label="Cross-reference elements" value={formatCount(statistics?.elementCount ?? null)} />
@@ -65,7 +75,7 @@ export function AirboxMeshStatisticsPanel({ selection }: InspectorPanelProps) {
         {boundedItems(statistics?.warnings ?? []).map((warning, index) => (
           <FieldRow key={index} label={`Warning ${index + 1}`} value={warning} />
         ))}
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

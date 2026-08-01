@@ -148,10 +148,10 @@ void add_zhang_li_stt_rhs_aos(
             continue;
         }
         const size_t ebase = element_index * 4u;
-        const uint32_t n0 = ctx.mesh.elements[ebase + 0];
-        const uint32_t n1 = ctx.mesh.elements[ebase + 1];
-        const uint32_t n2 = ctx.mesh.elements[ebase + 2];
-        const uint32_t n3 = ctx.mesh.elements[ebase + 3];
+        const uint32_t n0 = ctx.mesh.cell_nodes[ebase + 0];
+        const uint32_t n1 = ctx.mesh.cell_nodes[ebase + 1];
+        const uint32_t n2 = ctx.mesh.cell_nodes[ebase + 2];
+        const uint32_t n3 = ctx.mesh.cell_nodes[ebase + 3];
         Vec3 grads[4];
         double volume = 0.0;
         if (!tetrahedron_gradients(

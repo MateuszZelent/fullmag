@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scientific Documentation Contract"
+  short_description: "Verify publication-grade Fullmag science docs"
+  default_prompt: "Use $scientific-documentation-contract to create or review hierarchical Fullmag scientific documentation with equations, API/ProblemIR mapping, and source evidence."

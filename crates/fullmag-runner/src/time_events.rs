@@ -29,7 +29,9 @@ fn waveform_event_offsets(waveform: &TimeDependenceIR) -> Vec<f64> {
 fn drive_active_in_stage(drive: &RegionalFieldDriveIR, stage_id: &str) -> bool {
     match &drive.activation {
         fullmag_ir::DriveActivationIR::AllTimeEvolution {} => true,
-        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => stage_ids.iter().any(|id| id == stage_id),
+        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => {
+            stage_ids.iter().any(|id| id == stage_id)
+        }
     }
 }
 
@@ -42,7 +44,10 @@ pub(crate) fn build_time_event_schedule(
 ) -> TimeEventSchedule {
     let mut times = output_times_s.to_vec();
     for stage in stages {
-        if drives.iter().any(|drive| drive.enabled && drive_active_in_stage(drive, &stage.stage_id)) {
+        if drives
+            .iter()
+            .any(|drive| drive.enabled && drive_active_in_stage(drive, &stage.stage_id))
+        {
             times.push(stage.start_s);
             times.push(stage.end_s);
         }
@@ -52,10 +57,14 @@ pub(crate) fn build_time_event_schedule(
         match drive.time_origin {
             FieldTimeOriginIR::Absolute => times.extend(offsets),
             FieldTimeOriginIR::StageLocal => {
-                for stage in stages.iter().filter(|stage| drive_active_in_stage(drive, &stage.stage_id)) {
+                for stage in stages
+                    .iter()
+                    .filter(|stage| drive_active_in_stage(drive, &stage.stage_id))
+                {
                     for offset in &offsets {
                         let time = stage.start_s + offset;
-                        if time >= stage.start_s - tolerance_s && time <= stage.end_s + tolerance_s {
+                        if time >= stage.start_s - tolerance_s && time <= stage.end_s + tolerance_s
+                        {
                             times.push(time.clamp(stage.start_s, stage.end_s));
                         }
                     }
@@ -67,11 +76,16 @@ pub(crate) fn build_time_event_schedule(
     times.sort_by(f64::total_cmp);
     let mut deduplicated: Vec<f64> = Vec::with_capacity(times.len());
     for time in times {
-        if deduplicated.last().is_none_or(|previous| (time - *previous).abs() > tolerance_s) {
+        if deduplicated
+            .last()
+            .is_none_or(|previous| (time - *previous).abs() > tolerance_s)
+        {
             deduplicated.push(time);
         }
     }
-    TimeEventSchedule { times_s: deduplicated }
+    TimeEventSchedule {
+        times_s: deduplicated,
+    }
 }
 
 /// Builds the executable schedule for one already-resolved stage. The planner
@@ -96,16 +110,21 @@ pub(crate) fn build_resolved_stage_event_schedule(
             }
         }
     }
-    for every_s in outputs.iter().filter_map(|output| match output {
-        OutputIR::Scalar { every_seconds, .. }
-        | OutputIR::Field { every_seconds, .. }
-        | OutputIR::Snapshot { every_seconds, .. } => Some(*every_seconds),
-        _ => None,
-    }) {
-        if every_s.is_finite() && every_s > 0.0 {
-            let count = ((stage_end_s - stage_start_s) / every_s).floor() as u64;
-            for index in 0..=count {
-                times.push(stage_start_s + index as f64 * every_s);
+    let finite_stage_span = stage_end_s - stage_start_s;
+    if finite_stage_span.is_finite() && finite_stage_span >= 0.0 {
+        for every_s in outputs.iter().filter_map(|output| match output {
+            OutputIR::Scalar { every_seconds, .. }
+            | OutputIR::ScalarResolvedAuto { every_seconds, .. }
+            | OutputIR::Field { every_seconds, .. }
+            | OutputIR::FieldResolvedAuto { every_seconds, .. }
+            | OutputIR::Snapshot { every_seconds, .. } => Some(*every_seconds),
+            _ => None,
+        }) {
+            if every_s.is_finite() && every_s > 0.0 {
+                let count = (finite_stage_span / every_s).floor() as u64;
+                for index in 0..=count {
+                    times.push(stage_start_s + index as f64 * every_s);
+                }
             }
         }
     }
@@ -144,13 +163,20 @@ pub(crate) fn resolved_stage_drive_discontinuities(
     stage_end_s: f64,
     tolerance_s: f64,
 ) -> Vec<f64> {
-    let mut times = drives.iter().filter(|drive| drive.enabled).flat_map(|drive| {
-        waveform_event_offsets(&drive.waveform).into_iter().map(|offset| match drive.time_origin {
-            FieldTimeOriginIR::StageLocal => stage_start_s + offset,
-            FieldTimeOriginIR::Absolute => offset,
-        }).collect::<Vec<_>>()
-    }).filter(|time| *time > stage_start_s + tolerance_s && *time < stage_end_s - tolerance_s)
-      .collect::<Vec<_>>();
+    let mut times = drives
+        .iter()
+        .filter(|drive| drive.enabled)
+        .flat_map(|drive| {
+            waveform_event_offsets(&drive.waveform)
+                .into_iter()
+                .map(|offset| match drive.time_origin {
+                    FieldTimeOriginIR::StageLocal => stage_start_s + offset,
+                    FieldTimeOriginIR::Absolute => offset,
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|time| *time > stage_start_s + tolerance_s && *time < stage_end_s - tolerance_s)
+        .collect::<Vec<_>>();
     times.sort_by(f64::total_cmp);
     times.dedup_by(|right, left| (*right - *left).abs() <= tolerance_s);
     times
@@ -180,11 +206,21 @@ mod tests {
 
     fn pulse(origin: FieldTimeOriginIR, activation: DriveActivationIR) -> RegionalFieldDriveIR {
         RegionalFieldDriveIR {
-            id: "pulse".into(), name: "Pulse".into(), kind: FieldDriveKindIR::Regional,
-            enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-            direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-            waveform: TimeDependenceIR::Pulse { t_on: 1.0, t_off: 2.0 },
-            time_origin: origin, activation, migration: None,
+            id: "pulse".into(),
+            name: "Pulse".into(),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::Pulse {
+                t_on: 1.0,
+                t_off: 2.0,
+            },
+            time_origin: origin,
+            activation,
+            migration: None,
         }
     }
 
@@ -192,11 +228,21 @@ mod tests {
     fn stage_local_events_are_shifted_and_activation_filtered() {
         let drives = vec![pulse(
             FieldTimeOriginIR::StageLocal,
-            DriveActivationIR::StageIds { stage_ids: vec!["run-b".into()] },
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["run-b".into()],
+            },
         )];
         let stages = vec![
-            StageTimeWindow { stage_id: "run-a".into(), start_s: 0.0, end_s: 5.0 },
-            StageTimeWindow { stage_id: "run-b".into(), start_s: 10.0, end_s: 15.0 },
+            StageTimeWindow {
+                stage_id: "run-a".into(),
+                start_s: 0.0,
+                end_s: 5.0,
+            },
+            StageTimeWindow {
+                stage_id: "run-b".into(),
+                start_s: 10.0,
+                end_s: 15.0,
+            },
         ];
         let schedule = build_time_event_schedule(&drives, &stages, &[], 1e-12);
         assert_eq!(schedule.times_s, vec![10.0, 11.0, 12.0, 15.0]);
@@ -204,8 +250,15 @@ mod tests {
 
     #[test]
     fn events_and_output_times_are_sorted_and_deduplicated() {
-        let drives = vec![pulse(FieldTimeOriginIR::Absolute, DriveActivationIR::AllTimeEvolution {})];
-        let stages = vec![StageTimeWindow { stage_id: "run".into(), start_s: 0.0, end_s: 3.0 }];
+        let drives = vec![pulse(
+            FieldTimeOriginIR::Absolute,
+            DriveActivationIR::AllTimeEvolution {},
+        )];
+        let stages = vec![StageTimeWindow {
+            stage_id: "run".into(),
+            start_s: 0.0,
+            end_s: 3.0,
+        }];
         let schedule = build_time_event_schedule(&drives, &stages, &[1.0 + 1e-14, 2.5], 1e-12);
         assert_eq!(schedule.times_s, vec![0.0, 1.0, 2.0, 2.5, 3.0]);
     }
@@ -214,19 +267,52 @@ mod tests {
     fn cap_step_lands_exactly_on_next_event() {
         let capped = cap_timestep_to_next_event(0.8, 0.5, &[1.0, 2.0], 1e-12);
         assert_eq!(0.8 + capped, 1.0);
-        assert_eq!(cap_timestep_to_next_event(1.0, 0.5, &[1.0, 2.0], 1e-12), 0.5);
+        assert_eq!(
+            cap_timestep_to_next_event(1.0, 0.5, &[1.0, 2.0], 1e-12),
+            0.5
+        );
     }
-
 
     #[test]
     fn resolved_stage_schedule_contains_waveform_and_exact_output_events() {
         let drives = vec![pulse(
             FieldTimeOriginIR::StageLocal,
-            DriveActivationIR::StageIds { stage_ids: vec!["run".into()] },
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["run".into()],
+            },
         )];
-        let outputs = vec![OutputIR::Scalar { name: "mx".into(), every_seconds: 0.75 }];
+        let outputs = vec![OutputIR::Scalar {
+            name: "mx".into(),
+            every_seconds: 0.75,
+        }];
         let schedule = build_resolved_stage_event_schedule(&drives, 10.0, 13.0, &outputs, 1e-12);
-        assert_eq!(schedule.times_s, vec![10.0, 10.75, 11.0, 11.5, 12.0, 12.25, 13.0]);
+        assert_eq!(
+            schedule.times_s,
+            vec![10.0, 10.75, 11.0, 11.5, 12.0, 12.25, 13.0]
+        );
+    }
+
+    #[test]
+    fn auto_sampling_resolved_5ghz_clock_lands_on_ticks_and_stage_boundary() {
+        let sample_period_s = 1.0 / 13.0e9;
+        let outputs = vec![OutputIR::Field {
+            name: "m".into(),
+            every_seconds: sample_period_s,
+        }];
+
+        let schedule =
+            build_resolved_stage_event_schedule(&[], 0.0, 4.0 * sample_period_s, &outputs, 1e-24);
+
+        assert_eq!(
+            schedule.times_s,
+            vec![
+                0.0,
+                sample_period_s,
+                2.0 * sample_period_s,
+                3.0 * sample_period_s,
+                4.0 * sample_period_s,
+            ]
+        );
     }
 
     #[test]
@@ -246,10 +332,35 @@ mod tests {
         assert!(schedule.is_none());
     }
 
+    #[test]
+    fn unbounded_llg_relaxation_does_not_materialize_infinite_periodic_outputs() {
+        let outputs = vec![OutputIR::Scalar {
+            name: "mx".into(),
+            every_seconds: 1.0e-14,
+        }];
+
+        let schedule = build_native_fem_stage_event_schedule(
+            &[],
+            0.0,
+            f64::INFINITY,
+            &outputs,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+            true,
+        )
+        .expect("LLG relaxation keeps a finite event schedule");
+
+        assert_eq!(schedule.times_s, vec![0.0]);
+    }
 
     #[test]
     fn discontinuity_schedule_excludes_stage_boundaries_and_is_exact() {
-        let drives = vec![pulse(FieldTimeOriginIR::StageLocal, DriveActivationIR::AllTimeEvolution {})];
-        assert_eq!(resolved_stage_drive_discontinuities(&drives, 10.0, 13.0, 1e-12), vec![11.0, 12.0]);
+        let drives = vec![pulse(
+            FieldTimeOriginIR::StageLocal,
+            DriveActivationIR::AllTimeEvolution {},
+        )];
+        assert_eq!(
+            resolved_stage_drive_discontinuities(&drives, 10.0, 13.0, 1e-12),
+            vec![11.0, 12.0]
+        );
     }
 }

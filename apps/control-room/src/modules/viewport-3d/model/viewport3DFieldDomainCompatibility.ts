@@ -69,7 +69,8 @@ export function resolveViewport3DFieldDomainCompatibility({
     field.meshTopologyHash !== null &&
     field.meshTopologyHash !== undefined &&
     domain.meshTopologyHash !== null &&
-    field.meshTopologyHash !== domain.meshTopologyHash
+    canonicalMeshTopologyHash(field.meshTopologyHash) !==
+      canonicalMeshTopologyHash(domain.meshTopologyHash)
   ) {
     return { reason: "mesh-topology-hash-mismatch", status: "mismatch" };
   }
@@ -93,4 +94,9 @@ export function resolveViewport3DFieldDomainCompatibility({
   return field.formatVersion === 2
     ? { reason: "fmvp-v2-legacy", status: "degraded" }
     : { reason: "compatible", status: "compatible" };
+}
+
+function canonicalMeshTopologyHash(value: string): string {
+  const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
+  return match?.[1]?.toLowerCase() ?? value;
 }

@@ -10,27 +10,76 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
-use crate::schedules::OutputSchedule;
+use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
     ExecutedRun, FieldSnapshot, LiveStepConsumer, RunError, RunResult, RunStatus, StepStats,
     StepUpdate,
 };
 
-use super::preview::build_fem_final_cached_preview_fields;
+use super::preview::FemPreviewHandoff;
 use super::scalars::ensure_fem_object_scalars;
 use super::snapshots::copy_native_fem_field_snapshot;
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_scheduled_field_actions;
+    use crate::schedules::OutputSchedule;
+
+    fn schedule(name: &str, last_sampled_time: Option<f64>) -> OutputSchedule {
+        OutputSchedule {
+            name: name.to_string(),
+            every_seconds: 1.0e-14,
+            next_time: 2.0e-14,
+            last_sampled_time,
+        }
+    }
+
+    #[test]
+    fn terminal_actions_deduplicate_payload_but_retain_streaming_demag_diagnostics() {
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("m", Some(2.0e-14)), 2.0e-14, true),
+            (false, false)
+        );
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("H_demag", Some(2.0e-14)), 2.0e-14, true,),
+            (false, true)
+        );
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("demag_phi", None), 2.0e-14, true),
+            (true, true)
+        );
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("m", None), 2.0e-14, false),
+            (true, false)
+        );
+    }
+}
 
 pub(crate) struct NativeFemRelaxationFinalization {
     pub(crate) latest_stats: Option<StepStats>,
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
+    pub(crate) preview_handoff: FemPreviewHandoff,
+}
+
+fn terminal_scheduled_field_actions(
+    schedule: &OutputSchedule,
+    final_time: f64,
+    streaming: bool,
+) -> (bool, bool) {
+    let payload_already_sampled = schedule
+        .last_sampled_time
+        .is_some_and(|time| same_time(time, final_time));
+    let diagnostic_copy = streaming && matches!(schedule.name.as_str(), "H_demag" | "demag_phi");
+    (!payload_already_sampled, diagnostic_copy)
 }
 
 pub(crate) fn finalize_native_fem_relaxation(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     node_count: usize,
     initial_magnetization: Vec<[f64; 3]>,
     mut field_schedules: Vec<OutputSchedule>,
@@ -61,59 +110,163 @@ pub(crate) fn finalize_native_fem_relaxation(
     let mut finalization_field_copy_bytes = 0_u64;
     let mut diagnostic_field_snapshots = Vec::<FieldSnapshot>::new();
 
+    let terminal_preview_started = std::time::Instant::now();
+    let terminal_preview_deadline = terminal_preview_started + std::time::Duration::from_secs(5);
+    let mut preview_handoff = finalization.preview_handoff;
+    let initial_drain_started = std::time::Instant::now();
+    let pending_preview_completed =
+        preview_handoff.finalize_pending_until(terminal_preview_deadline);
+    eprintln!(
+        "[fullmag-runner] native-fem terminal preview phase: phase=initial_pending_drain completed={} wall_time_ns={} deadline_remaining_ms={}",
+        pending_preview_completed,
+        elapsed_ns(initial_drain_started),
+        terminal_preview_deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis(),
+    );
+
     // Refresh device-resident component fields at the accepted final state
     // before any synchronous or asynchronous field snapshot selects H_eff.
     // This is required for strict GPU runs without device Poisson demag too.
-    let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
-
-    // Flush a final cached-preview update so H_demag/H_eff land in preview_cache
-    // regardless of whether the last loop iteration had preview_due = true.
-    if let Some(live) = live.as_mut() {
-        if let Some(display_selection) = live.display_selection.map(|get| get()) {
-            let cached_start = std::time::Instant::now();
-            if let Some(cached) = build_fem_final_cached_preview_fields(
-                backend,
-                engine,
-                &display_selection,
-                plan,
-                node_count,
-            ) {
-                let cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
-                let mut live_stats = final_stats.clone();
-                live_stats.cached_preview_wall_time_ns = cached_preview_wall_time_ns;
-                live_stats.wall_time_ns = live_stats
-                    .wall_time_ns
-                    .saturating_add(cached_preview_wall_time_ns);
-                let _ = (live.on_step)(StepUpdate {
-                    stats: live_stats,
-                    grid: live.grid,
-                    fem_mesh: None,
-                    magnetization: None,
-                    preview_field: None,
-                    cached_preview_fields: Some(cached),
-                    hysteresis_field_m_t: None,
-                    hysteresis_point_index: None,
-                    hysteresis_settle_step_index: None,
-                    hysteresis_settle_step_kind: None,
-                    hysteresis_settle_step_method: None,
-                    scalar_row_due: false,
-                    finished: false,
-                });
-            }
-        }
+    if pending_preview_completed {
+        let refresh_started = std::time::Instant::now();
+        let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
+        eprintln!(
+            "[fullmag-runner] native-fem terminal preview phase: phase=backend_refresh completed=true wall_time_ns={} deadline_remaining_ms={}",
+            elapsed_ns(refresh_started),
+            terminal_preview_deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis(),
+        );
     }
 
-    for schedule in &mut field_schedules {
+    if let Some(live) = live.as_mut() {
+        if let Some(display_selection) = live.display_selection.map(|get| get()) {
+            let publication = if pending_preview_completed {
+                preview_handoff.finalize_terminal_cache(
+                    backend,
+                    engine,
+                    &display_selection,
+                    plan,
+                    node_count,
+                    final_stats.step,
+                    final_stats.time,
+                    final_stats.dt,
+                    terminal_preview_deadline,
+                )
+            } else {
+                preview_handoff.take_terminal_publication(elapsed_ns(terminal_preview_started))
+            };
+            let mut live_stats = final_stats.clone();
+            live_stats.cached_preview_wall_time_ns = publication.wall_time_ns;
+            live_stats.field_materialization_states = publication.materialization_states;
+            live_stats.wall_time_ns = live_stats
+                .wall_time_ns
+                .saturating_add(publication.wall_time_ns);
+            let magnetization = publication.magnetization.map(|payload| {
+                live_stats.magnetization_source_step = Some(payload.source_step);
+                live_stats.magnetization_source_revision = Some(payload.source_revision);
+                live_stats.magnetization_materialized_at_unix_ms =
+                    Some(payload.materialized_at_unix_ms);
+                live_stats.magnetization_materialization_wall_time_ns =
+                    Some(payload.materialization_wall_time_ns);
+                live_stats.field_copy_wall_time_ns = live_stats
+                    .field_copy_wall_time_ns
+                    .saturating_add(payload.materialization_wall_time_ns);
+                live_stats.field_copy_bytes = live_stats
+                    .field_copy_bytes
+                    .saturating_add(payload.field_copy_bytes);
+                payload.values
+            });
+            eprintln!(
+                "[fullmag-runner] native-fem terminal preview phase: phase=publication cached_fields={} magnetization={} states={} wall_time_ns={} deadline_remaining_ms={}",
+                publication
+                    .cached_fields
+                    .as_ref()
+                    .map_or(0, |fields| fields.len()),
+                magnetization.is_some(),
+                live_stats.field_materialization_states.len(),
+                publication.wall_time_ns,
+                terminal_preview_deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis(),
+            );
+            if let Some(last_step) = steps.last_mut() {
+                *last_step = live_stats.clone();
+            }
+            let _ = (live.on_step)(StepUpdate {
+                stats: live_stats,
+                grid: live.grid,
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
+                magnetization,
+                preview_field: None,
+                cached_preview_fields: publication.cached_fields,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                finished: false,
+            });
+        }
+    }
+    drop(preview_handoff);
+
+    if !pending_preview_completed {
+        let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
+    }
+
+    let scheduled_names = field_schedules
+        .iter()
+        .map(|schedule| schedule.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for name in artifacts
+        .due_accepted_step_fields(final_stats.step, true)
+        .into_iter()
+        .filter(|name| !scheduled_names.contains(name.as_str()))
+    {
         let copy_start = std::time::Instant::now();
         if artifacts.is_streaming() {
             let snapshot = backend.begin_field_snapshot(
-                &schedule.name,
+                &name,
                 final_stats.step,
                 final_stats.time,
                 final_stats.dt,
             )?;
             artifacts.record_native_fem_field_snapshot(snapshot)?;
-            if matches!(schedule.name.as_str(), "H_demag" | "demag_phi") {
+        } else {
+            let values = copy_native_fem_field_snapshot(backend, &name, node_count)?;
+            artifacts.record_field_snapshot(FieldSnapshot {
+                name,
+                step: final_stats.step,
+                time: final_stats.time,
+                solver_dt: final_stats.dt,
+                values,
+            })?;
+        }
+        finalization_field_copy_wall_time_ns =
+            finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
+    }
+
+    for schedule in &mut field_schedules {
+        let (enqueue_payload, copy_diagnostic) =
+            terminal_scheduled_field_actions(schedule, final_stats.time, artifacts.is_streaming());
+        if !enqueue_payload && !copy_diagnostic {
+            continue;
+        }
+        let copy_start = std::time::Instant::now();
+        if artifacts.is_streaming() {
+            if enqueue_payload {
+                let snapshot = backend.begin_field_snapshot(
+                    &schedule.name,
+                    final_stats.step,
+                    final_stats.time,
+                    final_stats.dt,
+                )?;
+                artifacts.record_native_fem_field_snapshot(snapshot)?;
+            }
+            if copy_diagnostic {
                 let values = copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?;
                 diagnostic_field_snapshots.push(FieldSnapshot {
                     name: schedule.name.clone(),
@@ -198,6 +351,7 @@ pub(crate) fn finalize_native_fem_relaxation(
             plan.relaxation.as_ref(),
             RelaxationCompletionMetrics {
                 max_torque_apm: None,
+                torque_confirmed: false,
                 accepted_energy_plateau_range_j: None,
                 steps: final_stats.step,
                 relaxation_time_s: Some(final_stats.time),

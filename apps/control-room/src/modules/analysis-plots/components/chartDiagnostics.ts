@@ -20,6 +20,9 @@ interface ChartDiagnosticsSnapshot {
     seriesId: string;
     tableId: string;
   }>;
+  modelBuilds: number;
+  plannedPoints: number;
+  renderedPoints: number;
   resizeCalls: number;
   setOptionCalls: number;
 }
@@ -42,6 +45,9 @@ function chartDiagnostics(): ChartDiagnosticsSnapshot | null {
     activeInstances: 0,
     createdInstances: 0,
     disposedInstances: 0,
+    modelBuilds: 0,
+    plannedPoints: 0,
+    renderedPoints: 0,
     resizeCalls: 0,
     setOptionCalls: 0,
   };
@@ -140,6 +146,20 @@ export function recordChartResize(): void {
   const diagnostics = chartDiagnostics();
   if (!diagnostics) return;
   diagnostics.resizeCalls += 1;
+}
+
+export function recordChartModelBuilt(
+  input:
+    | readonly { points: readonly unknown[] }[]
+    | { series: readonly { points: readonly unknown[] }[] },
+): void {
+  const series = "series" in input ? input.series : input;
+  const diagnostics = chartDiagnostics();
+  if (!diagnostics) return;
+  const pointCount = series.reduce((sum, item) => sum + item.points.length, 0);
+  diagnostics.modelBuilds += 1;
+  diagnostics.plannedPoints += pointCount;
+  diagnostics.renderedPoints = pointCount;
 }
 
 export function recordChartSetOption(): void {

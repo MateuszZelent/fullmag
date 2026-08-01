@@ -15,14 +15,37 @@ pub(crate) struct OutputSchedule {
     pub last_sampled_time: Option<f64>,
 }
 
+pub(crate) fn require_resolved_periodic_outputs(outputs: &[OutputIR]) -> Result<(), String> {
+    let unresolved = outputs.iter().find_map(|output| match output {
+        OutputIR::FieldAuto { name, .. } | OutputIR::ScalarAuto { name, .. } => Some(name),
+        _ => None,
+    });
+    if let Some(name) = unresolved {
+        return Err(format!(
+            "output '{name}' has unresolved automatic sampling; the planner must resolve it before runtime dispatch"
+        ));
+    }
+    Ok(())
+}
+
+fn require_resolved_periodic_outputs_for_runtime(outputs: &[OutputIR]) -> Result<(), RunError> {
+    require_resolved_periodic_outputs(outputs).map_err(|message| RunError { message })
+}
+
 pub(crate) fn collect_scalar_schedules(
     outputs: &[OutputIR],
 ) -> Result<Vec<OutputSchedule>, RunError> {
+    require_resolved_periodic_outputs_for_runtime(outputs)?;
     let mut schedules = Vec::new();
     for output in outputs {
         if let OutputIR::Scalar {
             name,
             every_seconds,
+        }
+        | OutputIR::ScalarResolvedAuto {
+            name,
+            every_seconds,
+            ..
         } = output
         {
             if !matches!(
@@ -71,12 +94,18 @@ fn is_supported_field_quantity(name: &str) -> bool {
 pub(crate) fn collect_field_schedules(
     outputs: &[OutputIR],
 ) -> Result<Vec<OutputSchedule>, RunError> {
+    require_resolved_periodic_outputs_for_runtime(outputs)?;
     let mut schedules = Vec::new();
     for output in outputs {
         match output {
             OutputIR::Field {
                 name,
                 every_seconds,
+            }
+            | OutputIR::FieldResolvedAuto {
+                name,
+                every_seconds,
+                ..
             } => {
                 if !is_supported_field_quantity(name) {
                     return Err(RunError {
@@ -145,5 +174,26 @@ pub(crate) fn advance_due_schedules(schedules: &mut [OutputSchedule], current_ti
         if advanced {
             schedule.last_sampled_time = Some(current_time);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_ir::SamplingPeriodPolicyIR;
+
+    #[test]
+    fn auto_sampling_unresolved_output_is_rejected_before_schedule_collection() {
+        let outputs = vec![OutputIR::FieldAuto {
+            name: "m".into(),
+            sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        }];
+
+        let error = require_resolved_periodic_outputs(&outputs)
+            .expect_err("unresolved automatic output must fail closed");
+
+        assert!(error.contains("unresolved automatic sampling"));
     }
 }

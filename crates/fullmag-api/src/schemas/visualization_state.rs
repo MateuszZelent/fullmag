@@ -26,6 +26,9 @@ pub struct VisualizationStateResource {
     pub fem: FemVisualizationState,
     /// 2-D slice toolbar and overlay controls.
     pub slice: SliceVisualizationState,
+    /// Independent canonical 2-D planar-monitor visualization profile.
+    #[serde(default = "default_planar_visualization_state")]
+    pub planar: PlanarVisualizationState,
     /// Canonical 3-D trim controls for topology-aware viewports.
     pub trim: TrimVisualizationState,
     /// Session-wide viewport camera. All connected clients should converge to this view.
@@ -159,6 +162,8 @@ pub struct VisualizationStatePatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slice: Option<SliceVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub planar: Option<PlanarVisualizationPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub trim: Option<TrimVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub camera: Option<VisualizationCameraPatch>,
@@ -194,6 +199,152 @@ pub struct QuantityVisualizationPatch {
     pub contrast_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contrast_max: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct PlanarVisualizationState {
+    pub active_monitor_id: Option<String>,
+    pub view_scope: PlanarViewScopeState,
+    pub quantity_id: String,
+    pub component: PlanarFieldComponent,
+    pub colormap: String,
+    pub auto_contrast: bool,
+    pub contrast_min: Option<f64>,
+    pub contrast_max: Option<f64>,
+    pub display_unit: Option<String>,
+    pub resolution: PlanarResolutionPolicy,
+    pub quality: PlanarRenderQuality,
+    pub layers: PlanarLayerState,
+    pub vector_style: PlanarVectorStyleState,
+    pub interaction: PlanarInteractionState,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Default)]
+pub struct PlanarVisualizationPatch {
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub active_monitor_id: Option<Option<String>>,
+    pub view_scope: Option<PlanarViewScopeState>,
+    pub quantity_id: Option<String>,
+    pub component: Option<PlanarFieldComponent>,
+    pub colormap: Option<String>,
+    pub auto_contrast: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub contrast_min: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub contrast_max: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub display_unit: Option<Option<String>>,
+    pub resolution: Option<PlanarResolutionPolicy>,
+    pub quality: Option<PlanarRenderQuality>,
+    pub layers: Option<PlanarLayerState>,
+    pub vector_style: Option<PlanarVectorStyleState>,
+    pub interaction: Option<PlanarInteractionState>,
+}
+
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlanarViewScopeState {
+    MonitorTarget,
+    MeshPart { scope_id: String },
+    Airbox,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanarFieldComponent {
+    X,
+    Y,
+    Z,
+    U,
+    V,
+    Normal,
+    Magnitude,
+    InPlaneMagnitude,
+    Orientation,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
+pub struct PlanarResolutionPolicy {
+    pub width: u32,
+    pub height: u32,
+    pub vector_budget: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanarRenderQuality {
+    Interactive,
+    Export,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
+pub struct PlanarLayerState {
+    pub raster: bool,
+    pub contours: bool,
+    pub mesh: bool,
+    pub boundaries: bool,
+    pub vectors: bool,
+    pub probes: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct PlanarVectorStyleState {
+    pub length_mode: String,
+    pub color_mode: String,
+    pub scale: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct PlanarInteractionState {
+    pub zoom: f64,
+    pub pan_u_m: f64,
+    pub pan_v_m: f64,
+}
+
+pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
+    PlanarVisualizationState {
+        active_monitor_id: None,
+        view_scope: PlanarViewScopeState::MonitorTarget,
+        quantity_id: "m".to_string(),
+        component: PlanarFieldComponent::Magnitude,
+        colormap: "viridis".to_string(),
+        auto_contrast: true,
+        contrast_min: None,
+        contrast_max: None,
+        display_unit: None,
+        resolution: PlanarResolutionPolicy {
+            width: 512,
+            height: 512,
+            vector_budget: 2_000,
+        },
+        quality: PlanarRenderQuality::Interactive,
+        layers: PlanarLayerState {
+            raster: true,
+            contours: false,
+            mesh: true,
+            boundaries: true,
+            vectors: false,
+            probes: true,
+        },
+        vector_style: PlanarVectorStyleState {
+            length_mode: "uniform".to_string(),
+            color_mode: "orientation".to_string(),
+            scale: 1.0,
+        },
+        interaction: PlanarInteractionState {
+            zoom: 1.0,
+            pan_u_m: 0.0,
+            pan_v_m: 0.0,
+        },
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -737,16 +888,19 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
             source: VisualizationTargetSource::Airbox,
             settings: VisualizationResolvedTargetSettings {
                 active_quantity_id: "H_demag".to_string(),
-                visible: false,
+                visible: true,
                 bounds_visible: false,
+                bounds_opacity: 1.0,
                 geometry_scope: VisualizationTargetGeometryScope::Full,
                 opacity: 0.18,
                 point_color: "var(--fm-info)".to_string(),
+                point_opacity: 1.0,
                 points_visible: false,
-                render_mode: VisualizationTargetRenderMode::Wireframe,
+                render_mode: VisualizationTargetRenderMode::Off,
                 scalar_color_palette: "viridis".to_string(),
                 surface_color_source: SurfaceColorSource::Solid,
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+                surface_opacity: 0.18,
                 surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
                 surface_visible: false,
                 viewport_colorbar_visible: false,
@@ -792,14 +946,18 @@ pub struct VisualizationResolvedTargetSettings {
     pub active_quantity_id: String,
     pub visible: bool,
     pub bounds_visible: bool,
+    pub bounds_opacity: f64,
     pub geometry_scope: VisualizationTargetGeometryScope,
+    /// Legacy compatibility projection of `surface_opacity`.
     pub opacity: f64,
     pub point_color: String,
+    pub point_opacity: f64,
     pub points_visible: bool,
     pub render_mode: VisualizationTargetRenderMode,
     pub scalar_color_palette: String,
     pub surface_color_source: SurfaceColorSource,
     pub surface_mono_color: String,
+    pub surface_opacity: f64,
     pub surface_projection_mode: SurfaceFieldProjectionMode,
     pub surface_visible: bool,
     pub viewport_colorbar_visible: bool,
@@ -818,6 +976,7 @@ pub struct VisualizationResolvedTargetSettings {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VisualizationTargetRenderMode {
+    Off,
     Points,
     Surface,
     #[serde(rename = "surface+edges")]

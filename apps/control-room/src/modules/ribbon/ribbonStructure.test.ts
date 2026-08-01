@@ -410,6 +410,9 @@ describe("ribbon structure", () => {
     const workspaceGroup = content?.groups.find(
       (group) => group.id === "workspace",
     );
+    const threeDimensionalAction = workspaceGroup?.actions.find(
+      (action) => action.id === "viewport-3d.open",
+    );
     const twoDimensionalAction = workspaceGroup?.actions.find(
       (action) => action.id === "ws-2d",
     );
@@ -421,8 +424,12 @@ describe("ribbon structure", () => {
     );
 
     expect(twoDimensionalAction).toMatchObject({
-      commandId: "cross-section-image.open",
+      commandId: "field-map.open",
       disabled: false,
+    });
+    expect(threeDimensionalAction).toMatchObject({
+      id: "viewport-3d.open",
+      splitButton: true,
     });
     expect(analysisAction).toMatchObject({
       commandId: "analysis-plots.open",
@@ -628,16 +635,21 @@ describe("ribbon structure", () => {
     );
 
     expect(result).toMatchObject({ status: "completed" });
-    expect(crossSectionWorkspaceStore.getSnapshot().draft).toMatchObject({
+    expect(
+      crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft,
+    ).toEqual({
       frameExtent: "universe",
-      metric: "skewness",
+      id: "draft",
+      name: "Midplane",
       plane: "xy",
       positionPercent: 62.5,
+      rotationDegrees: 0,
     });
+    expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
     expect(selectionSet).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "mesh.cross-section.draft",
-        nodeId: "model:visualizations-2d:draft",
+        kind: "model.planar.monitor.draft",
+        nodeId: "model:definitions:planar-monitors:draft",
       }),
       "test",
     );
@@ -1595,7 +1607,7 @@ describe("ribbon structure", () => {
           airbox: {
             opacity: 0.28,
             points: { opacity: 1, visible: true },
-            surface: { opacity: 1, visible: true },
+            surface: { opacity: 1, visible: false },
             vectors: { density: 128, domain: "airbox_only", visible: true },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -1644,10 +1656,7 @@ describe("ribbon structure", () => {
       (node) => node.type === "checkbox" && node.id === "selected:visible",
     );
 
-    expect(surfaceColoringNode).toMatchObject({
-      disabled: false,
-      value: "inherit",
-    });
+    expect(surfaceColoringNode).toBeUndefined();
     expect(vectorThicknessNode).toMatchObject({ disabled: false, value: 1 });
     expect(wireframeColorNode).toMatchObject({
       disabled: false,
@@ -1659,7 +1668,6 @@ describe("ribbon structure", () => {
     });
 
     if (
-      surfaceColoringNode?.type !== "radio-group" ||
       vectorThicknessNode?.type !== "slider" ||
       wireframeColorNode?.type !== "color" ||
       pointColorNode?.type !== "color" ||
@@ -1669,15 +1677,13 @@ describe("ribbon structure", () => {
     }
 
     const commandContext = { ...context, selection };
-    await runRibbonNode(surfaceColoringNode, "component_x", commandContext);
     await runRibbonNode(vectorThicknessNode, 2.4, commandContext);
     await runRibbonNode(wireframeColorNode, "#ffffff", commandContext);
     await runRibbonNode(pointColorNode, "#66eeff", commandContext);
     await runRibbonNode(visibleNode, false, commandContext);
 
-    expect(patches).toHaveLength(5);
+    expect(patches).toHaveLength(4);
     expect(patches).toMatchObject([
-      { overrides: [{ style: { surface_color_source: "component_x" } }] },
       { overrides: [{ style: { vector_thickness: 2.4 } }] },
       { overrides: [{ style: { wireframe_color: "#ffffff" } }] },
       { overrides: [{ style: { point_color: "#66eeff" } }] },
@@ -1689,7 +1695,6 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 42],
         [VISUALIZATION_STATE_PATH, 43],
         [VISUALIZATION_STATE_PATH, 44],
-        [VISUALIZATION_STATE_PATH, 45],
       ]),
     );
   });
@@ -1772,9 +1777,8 @@ describe("ribbon structure", () => {
       createVisualizationRibbonContext({
         layers: {
           airbox: {
-            opacity: 0.28,
             points: { opacity: 1, visible: false },
-            surface: { opacity: 1, visible: false },
+            surface: { opacity: 0.28, visible: false },
             vectors: { density: 128, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -1792,25 +1796,44 @@ describe("ribbon structure", () => {
     const vectorsNode = airboxAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "airbox:vectors",
     );
-    const wireframeScopeNode = airboxAction?.menu?.find(
-      (node) => node.type === "radio-group" && node.id === "airbox:wireframe-scope",
+    const extentNode = airboxAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:extent",
+    );
+    const renderModeNode = airboxAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:render-mode",
     );
 
     expect(visibleNode).toMatchObject({ checked: true });
     expect(vectorsNode).toMatchObject({ checked: false });
-    expect(wireframeScopeNode).toMatchObject({
+    expect(extentNode).toMatchObject({
       disabled: false,
       value: "full",
     });
+    expect(renderModeNode).toMatchObject({
+      disabled: false,
+      value: "wireframe",
+    });
+    expect(airboxAction?.menu?.some((node) =>
+      [
+        "airbox:shaded",
+        "airbox:wireframe",
+        "airbox:frame",
+        "airbox:points",
+        "airbox:wireframe-scope",
+        "airbox:points-scope",
+        "airbox:vectors-scope",
+      ].includes(node.id)
+    )).toBe(false);
     if (
       visibleNode?.type !== "checkbox" ||
       vectorsNode?.type !== "checkbox" ||
-      wireframeScopeNode?.type !== "radio-group"
+      extentNode?.type !== "radio-group" ||
+      renderModeNode?.type !== "radio-group"
     ) {
       throw new Error("Expected airbox display controls");
     }
 
-    await runRibbonNode(wireframeScopeNode, "surface", context);
+    await runRibbonNode(extentNode, "surface", context);
     await runRibbonNode(visibleNode, false, context);
     await runRibbonNode(vectorsNode, true, context);
 
@@ -1892,9 +1915,8 @@ describe("ribbon structure", () => {
         layers: {
           airbox: {
             bounds: { opacity: 1, visible: false },
-            opacity: 0.28,
             points: { opacity: 1, visible: false },
-            surface: { opacity: 1, visible: true },
+            surface: { opacity: 0.28, visible: false },
             vectors: { density: 1200, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: false },
@@ -1944,8 +1966,8 @@ describe("ribbon structure", () => {
     const airboxAction = content?.groups
       .find((group) => group.id === "view-global-display")
       ?.actions.find((action) => action.id === "view-airbox");
-    const vectorScopeNode = airboxAction?.menu?.find(
-      (node) => node.type === "radio-group" && node.id === "airbox:vectors-scope",
+    const extentNode = airboxAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:extent",
     );
     const vectorSizeNode = airboxAction?.menu?.find(
       (node) => node.type === "submenu" && node.id === "airbox:vectors-submenu",
@@ -1972,7 +1994,7 @@ describe("ribbon structure", () => {
     );
 
     expect(densityNode).toMatchObject({ value: 128 });
-    expect(vectorScopeNode).toMatchObject({ disabled: false, value: "full" });
+    expect(extentNode).toMatchObject({ disabled: false, value: "full" });
     expect(lengthNode).toMatchObject({ value: 1.8 });
     expect(thicknessNode).toMatchObject({ value: 1.2 });
     expect(coloringNode).toMatchObject({ value: "orientation" });
@@ -1980,14 +2002,14 @@ describe("ribbon structure", () => {
     if (
       densityNode?.type !== "slider" ||
       lengthNode?.type !== "slider" ||
-      vectorScopeNode?.type !== "radio-group" ||
+      extentNode?.type !== "radio-group" ||
       thicknessNode?.type !== "slider" ||
       coloringNode?.type !== "radio-group"
     ) {
       throw new Error("Expected airbox vector controls");
     }
 
-    await runRibbonNode(vectorScopeNode, "surface", context);
+    await runRibbonNode(extentNode, "surface", context);
     await runRibbonNode(densityNode, 256, context);
     await runRibbonNode(lengthNode, 2.4, context);
     await runRibbonNode(thicknessNode, 1.6, context);
@@ -2088,39 +2110,33 @@ describe("ribbon structure", () => {
     const visibleNode = renderAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "selected:visible",
     );
-    const frameNode = renderAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "selected:frame",
-    );
-    const wireframeNode = renderAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "selected:wireframe",
+    const renderModeNode = renderAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "selected:render-mode",
     );
 
     expect(visibleNode).toMatchObject({ checked: false });
-    expect(frameNode).toMatchObject({ checked: false });
-    expect(wireframeNode).toMatchObject({
-      checked: false,
+    expect(renderModeNode).toMatchObject({
+      value: "wireframe",
       disabled: true,
     });
+    expect(renderAction?.menu?.some((node) =>
+      ["selected:frame", "selected:wireframe", "selected:points"].includes(node.id)
+    )).toBe(false);
 
     if (
       visibleNode?.type !== "checkbox" ||
-      frameNode?.type !== "checkbox" ||
-      wireframeNode?.type !== "checkbox"
+      renderModeNode?.type !== "radio-group"
     ) {
       throw new Error("Expected selected airbox display controls");
     }
 
     const commandContext = { ...context, selection };
     await runRibbonNode(visibleNode, true, commandContext);
-    expect(frameNode).toMatchObject({ disabled: true });
 
     expect(patches).toMatchObject([
       {
         layers: {
           airbox: {
-            surface: {
-              visible: true,
-            },
             visible: true,
           },
         },
@@ -2153,19 +2169,15 @@ describe("ribbon structure", () => {
     const visibleNode = airboxAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "airbox:visible",
     );
-    const wireframeNode = airboxAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "airbox:wireframe",
-    );
-    const shadedNode = airboxAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "airbox:shaded",
+    const renderModeNode = airboxAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:render-mode",
     );
     const vectorsNode = airboxAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "airbox:vectors",
     );
 
     expect(visibleNode).toMatchObject({ checked: false, disabled: false });
-    expect(wireframeNode).toMatchObject({ checked: false, disabled: true });
-    expect(shadedNode).toMatchObject({ checked: false, disabled: true });
+    expect(renderModeNode).toMatchObject({ value: "points", disabled: true });
     expect(vectorsNode).toMatchObject({ checked: false, disabled: true });
   });
 
@@ -2863,7 +2875,7 @@ describe("ribbon structure", () => {
     ]);
   });
 
-  it("keeps the View Cross-Section group scoped to image workflows", () => {
+  it("routes the View 2D group through the field-map command source", () => {
     const { context } = createVisualizationRibbonContext({});
     const content = buildRibbonTabContent("view", context);
     const sliceGroup = content?.groups.find((group) => group.id === "view-slice-2d");
@@ -2874,13 +2886,13 @@ describe("ribbon structure", () => {
       ) ?? [];
 
     expect(sliceGroup).toMatchObject({
-      subtitle: "image tabs",
-      title: "Cross-Section",
+      subtitle: "planar monitor",
+      title: "2D View",
     });
     expect(actionIds).toEqual([
       RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
-      "cross-section-image.open",
-      "analysis-plots.open",
+      "field-map.open",
+      "field-map.export-png",
     ]);
     expect(menuNodeIds).not.toEqual(
       expect.arrayContaining([
@@ -4051,11 +4063,22 @@ describe("ribbon structure", () => {
     );
   });
 
+  it("routes Thin Film to the enabled geometry command", () => {
+    const thinFilmAction = ALL_TAB_CONTENT.geometry.groups
+      .find((group) => group.id === "builder-create")
+      ?.actions.find((action) => action.id === "geometry.add-thin-film");
+
+    expect(thinFilmAction).toMatchObject({
+      id: "geometry.add-thin-film",
+      label: "Thin Film",
+    });
+    expect(thinFilmAction).not.toHaveProperty("disabled");
+  });
+
   it("keeps unsupported Geometry builder controls explicitly disabled", () => {
     const unsupportedIds = new Set([
       "builder-add-ellipsoid",
       "builder-add-disk",
-      "builder-add-thin_film",
       "builder-add-pillar",
       "builder-add-nanowire",
       "builder-add-ring",
@@ -4103,6 +4126,9 @@ describe("ribbon structure", () => {
       expect.arrayContaining([
         "study.add-relax-stage",
         "study.add-field-drive-stage",
+        "study.add-table-autosave-stage",
+        "study.add-autosave-stage",
+        "study.add-fft-response-stage",
         "study.add-run-stage",
         "study.add-hysteresis-stage",
         "study.add-eigenmodes-stage",

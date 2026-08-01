@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const appRoot = process.cwd();
 const runtimeCommandsPath = path.join(
@@ -120,6 +121,14 @@ const objectVisualizationPanelPath = path.join(
   appRoot,
   "src/modules/inspector/panels/ObjectVisualizationPanel.tsx",
 );
+const objectVisualizationHelpersPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/ObjectVisualizationHelpers.ts",
+);
+const objectVisualizationTargetSectionPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx",
+);
 const objectGeneralPanelPath = path.join(
   appRoot,
   "src/modules/inspector/panels/ObjectGeneralPanel.tsx",
@@ -171,6 +180,22 @@ const analysisPlotsModelPath = path.join(
 const analysisPlotsViewPath = path.join(
   appRoot,
   "src/modules/analysis-plots/AnalysisPlotsView.tsx",
+);
+const analysisTableDataHookPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/hooks/useAnalysisTableData.ts",
+);
+const analysisEnergyDataHookPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/hooks/useAnalysisEnergyData.ts",
+);
+const analysisFrequencyDataHookPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/hooks/useAnalysisFrequencyData.ts",
+);
+const analysisTableSurfacePath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/components/AnalysisTableSurface.tsx",
 );
 const analysisTableRowsAdapterPath = path.join(
   appRoot,
@@ -283,61 +308,72 @@ const binaryResourcePerformanceMeasureNames = [
 
 const failures = [];
 
-checkComputeCommandInvalidationScope();
-checkStudyRunCommandInvalidationScope();
-checkRealtimeSessionStatusFanout();
-checkBinaryDecodeScheduler();
-checkControlRoomApiBinaryPerformanceMarks();
-checkSessionStatusSelectors();
-checkExplorerModuleSessionStatusSelector();
-checkRibbonModuleSessionStatusSelector();
-checkHeaderSessionStatusSelector();
-checkSimulationStartupOverlaySessionStatusSelector();
-checkRuntimeControlSessionStatusSelector();
-checkStudyRuntimeCommandResourceDataSessionStatusSelector();
-checkFieldCatalogResourceSeparation();
-checkObjectVisualizationPanelSessionStatusSelector();
-checkObjectVisualizationPanelVisualizationSelector();
-checkObjectVisualizationPanelNumberFieldCommitBoundary();
-checkMeshDetailsPanelSessionStatusSelector();
-checkAirboxInspectorPanelsResourceOwnership();
-checkStudyInspectorPanelSessionStatusSelector();
-checkMeshBuildDialogSessionStatusSelector();
-checkShellSelectorHooks();
-checkSelectionComparatorHotPath();
-checkObjectVisualizationSelectorHooks();
-checkViewport3DObjectVisualizationSelector();
-checkObjectGeneralPanelVisualizationSelector();
-checkCommandShortcutConnector();
-checkFooterDiagnosticsBatching();
-checkPerformanceDiagnosticsExport();
-checkReactRenderProfilerInstrumentation();
-checkVisualizationPatchHotPath();
-checkVisualizationDebugLifecycleBudgets();
-checkRibbonSliderCommandDebounce();
-checkViewportPerformanceMarks();
-checkPrimitiveGeometryKeyHotPath();
-checkTopologyPositionConversionCache();
-checkTopologyIndexBufferCache();
-checkVectorSurfaceNormalCache();
-checkMeshQualityVertexColorCache();
-checkFdmCuboidChunkedUpload();
-checkVectorGlyphChunkedUpload();
-checkFdmVectorSegmentCache();
-checkFdmCuboidSceneModelReuse();
-checkFooterTelemetryIsOptIn();
-checkViewportSmokeComputeMetrics();
-checkComputePerformanceSmokeScript();
-checkComputePerformanceMicrobenchCoverage();
-checkAnalysisPlotsStableResourceInputs();
-checkAnalysisPlotDecimation();
+export function runComputePerformanceAudit() {
+  failures.length = 0;
+  checkComputeCommandInvalidationScope();
+  checkStudyRunCommandInvalidationScope();
+  checkRealtimeSessionStatusFanout();
+  checkBinaryDecodeScheduler();
+  checkControlRoomApiBinaryPerformanceMarks();
+  checkSessionStatusSelectors();
+  checkExplorerModuleSessionStatusSelector();
+  checkRibbonModuleSessionStatusSelector();
+  checkHeaderSessionStatusSelector();
+  checkSimulationStartupOverlaySessionStatusSelector();
+  checkRuntimeControlSessionStatusSelector();
+  checkStudyRuntimeCommandResourceDataSessionStatusSelector();
+  checkFieldCatalogResourceSeparation();
+  checkObjectVisualizationPanelSessionStatusSelector();
+  checkObjectVisualizationPanelVisualizationSelector();
+  checkObjectVisualizationPanelNumberFieldCommitBoundary();
+  checkMeshDetailsPanelSessionStatusSelector();
+  checkAirboxInspectorPanelsResourceOwnership();
+  checkStudyInspectorPanelSessionStatusSelector();
+  checkMeshBuildDialogSessionStatusSelector();
+  checkShellSelectorHooks();
+  checkSelectionComparatorHotPath();
+  checkObjectVisualizationSelectorHooks();
+  checkViewport3DObjectVisualizationSelector();
+  checkObjectGeneralPanelVisualizationSelector();
+  checkCommandShortcutConnector();
+  checkFooterDiagnosticsBatching();
+  checkPerformanceDiagnosticsExport();
+  checkReactRenderProfilerInstrumentation();
+  checkVisualizationPatchHotPath();
+  checkVisualizationDebugLifecycleBudgets();
+  checkRibbonSliderCommandDebounce();
+  checkViewportPerformanceMarks();
+  checkPrimitiveGeometryKeyHotPath();
+  checkTopologyPositionConversionCache();
+  checkTopologyIndexBufferCache();
+  checkVectorSurfaceNormalCache();
+  checkMeshQualityVertexColorCache();
+  checkFdmCuboidChunkedUpload();
+  checkVectorGlyphChunkedUpload();
+  checkFdmVectorSegmentCache();
+  checkFdmCuboidSceneModelReuse();
+  checkFooterTelemetryIsOptIn();
+  checkViewportSmokeComputeMetrics();
+  checkComputePerformanceSmokeScript();
+  checkComputePerformanceMicrobenchCoverage();
+  checkAnalysisPlotsStableResourceInputs();
+  checkAnalysisPlotDecimation();
 
-if (failures.length > 0) {
-  console.error(`Compute performance audit failed:\n${failures.join("\n")}`);
-  process.exit(1);
+  if (failures.length > 0) {
+    throw new Error(`Compute performance audit failed:\n${failures.join("\n")}`);
+  }
+
+  return "Compute performance audit passed.";
 }
 
-console.log("Compute performance audit passed.");
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    console.log(runComputePerformanceAudit());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
 
 function checkComputeCommandInvalidationScope() {
   const source = readFileSync(runtimeCommandsPath, "utf8");
@@ -722,6 +758,12 @@ function checkFieldCatalogResourceSeparation() {
     objectVisualizationPanelPath,
     "utf8",
   );
+  const objectVisualizationTargetSection = readFileSync(
+    objectVisualizationTargetSectionPath,
+    "utf8",
+  );
+  const objectVisualizationSources =
+    objectVisualizationPanel + objectVisualizationTargetSection;
 
   requireTokens(controlRoomApi, "ControlRoomApi field catalog facade", [
     "DATA_FIELDS_PATH",
@@ -734,7 +776,7 @@ function checkFieldCatalogResourceSeparation() {
     "api.data.fields.catalog({ signal })",
     "resourceKey: DATA_FIELDS_PATH",
   ]);
-  requireTokens(objectVisualizationPanel, "ObjectVisualizationPanel field catalog separation", [
+  requireTokens(objectVisualizationSources, "ObjectVisualizationPanel field catalog separation", [
     "useFieldCatalogResource",
     "fieldCatalog.data",
     "fieldCatalog.status",
@@ -764,13 +806,17 @@ function checkObjectVisualizationPanelSessionStatusSelector() {
 
 function checkObjectVisualizationPanelVisualizationSelector() {
   const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  const helperSource = readFileSync(objectVisualizationHelpersPath, "utf8");
   requireTokens(source, "ObjectVisualizationPanel visualization selector", [
     "useObjectVisualizationController",
     "useObjectVisualizationSelector",
     "selectObjectVisualizationPanelSnapshot",
     "objectVisualizationPanelSnapshotEquals",
-    "visualizationTargetPatchEquals",
     "visualizationTargetKey",
+  ]);
+  requireTokens(helperSource, "ObjectVisualizationPanel selector equality", [
+    "visualizationTargetPatchEquals",
+    "objectVisualizationPanelSnapshotEquals",
   ]);
   forbidTokens(source, "ObjectVisualizationPanel visualization selector", [
     "useObjectVisualizationRegistry()",
@@ -778,41 +824,39 @@ function checkObjectVisualizationPanelVisualizationSelector() {
 }
 
 function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
-  const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  const source = readFileSync(objectVisualizationTargetSectionPath, "utf8");
   const numberField = blockBetween(
     source,
-    "function NumberField",
-    "function displayControlDisabledDescription",
+    "export function NumberField",
+    "export function VisualizationToggleButton",
   );
   const wireframeSection = blockBetween(
     source,
-    "function VisualizationWireframeSection",
-    "function VisualizationVectorsSection",
+    "export function VisualizationWireframeSection",
+    "export function VisualizationVectorsSection",
   );
   const vectorsSection = blockBetween(
     source,
-    "function VisualizationVectorsSection",
-    "function VisualizationGeometryScopeSection",
+    "export function VisualizationVectorsSection",
+    "function displayControlDisabledDescription",
   );
-  const opacitySection = blockBetween(
+  const surfaceColoringSection = blockBetween(
     source,
-    "function VisualizationOpacitySection",
-    "function VisualizationOverridesSection",
+    "export function VisualizationSurfaceColoringSection",
+    "export function ScalarColorbarControl",
   );
 
   requireTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
-    "pendingValueRef",
-    "queuedDraftValueRef",
-    "window.requestAnimationFrame",
-    "window.cancelAnimationFrame",
-    "setDraftOverride(queuedValue)",
-    "onPointerUp={flushDraft}",
-    "onPointerCancel={flushDraft}",
-    "onKeyUp={flushDraft}",
-    "onBlur={flushDraft}",
+    "<Slider",
+    "onValueChange",
+    "setDraftOverride(nextValue)",
+    "onValueCommit",
+    "setDraftOverride(null)",
+    "onChange(nextValue)",
   ]);
   forbidTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
     "window.setTimeout(",
+    "window.requestAnimationFrame",
     "onChange(event.target.value)",
     "onChange(Number(event.target.value))",
   ]);
@@ -823,8 +867,8 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   ]);
   requireTokens(vectorsSection, "ObjectVisualizationPanel vector range debounce", [
     "<NumberField",
-    'label="Vector alpha"',
-    'label="Vector thickness"',
+    'label="Vector opacity"',
+    'label="Thickness"',
     'label="Arrow length"',
     'label="Arrow budget"',
     'label="Extra surface gap"',
@@ -834,10 +878,10 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
     'patchNumber("vectorBudget"',
     'patchNumber("vectorSurfaceOffsetScale"',
   ]);
-  requireTokens(opacitySection, "ObjectVisualizationPanel opacity range debounce", [
+  requireTokens(surfaceColoringSection, "ObjectVisualizationPanel surface opacity commit boundary", [
     "<NumberField",
-    'label="Opacity"',
-    "patch({ opacityPercent: value })",
+    'label="Surface opacity"',
+    "patch({ surfaceOpacityPercent: value })",
   ]);
 }
 
@@ -1047,7 +1091,7 @@ function checkSelectionComparatorHotPath() {
     "export { selectionSnapshotEquals }",
   ]);
   requireTokens(selectionController, "SelectionController selection comparator", [
-    "selectionRefEquals(prev.ref, this.state.ref)",
+    "selectionRefEquals(prev.ref, next.ref)",
   ]);
   forbidTokens(selectionTypes, "selection ref comparator", ["JSON.stringify"]);
   forbidTokens(useSelection, "useSelection selection comparator", [
@@ -1451,7 +1495,7 @@ function checkTopologyIndexBufferCache() {
     "buildCachedTopologySurfaceIndices",
     [
       "topologySurfaceIndexCache.get(topology)",
-      "buildTetraSurfaceIndices(topology.indices)",
+      "buildTopologySurfaceIndices(topology)",
       "topologySurfaceIndexCache.set(topology, surfaceIndices)",
     ],
   );
@@ -1460,7 +1504,7 @@ function checkTopologyIndexBufferCache() {
     "buildCachedTopologyVolumeEdgeIndices",
     [
       "topologyVolumeEdgeIndexCache.get(topology)",
-      "buildTetraVolumeEdgeIndices(topology.indices)",
+      "buildTopologyVolumeEdgeIndices(topology)",
       "topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices)",
     ],
   );
@@ -1472,7 +1516,8 @@ function checkTopologyIndexBufferCache() {
     "function lazyValue",
     "buildPartSurfaceIndicesUncached(part, topology)",
     "buildPartVolumeEdgeIndicesUncached(part, topology)",
-    "buildCachedSurfaceEdgeIndices(surfaceIndices())",
+    "buildCachedPartSurfaceEdgeIndicesWithSupplemental(",
+    "buildPartSurfaceEdgeIndicesWithSupplemental(",
   ]);
 }
 
@@ -1618,7 +1663,7 @@ function checkFdmCuboidSceneModelReuse() {
 function checkFooterTelemetryIsOptIn() {
   const source = readFileSync(footerModulePath, "utf8");
   requireTokens(source, "Footer telemetry opt-in", [
-    'useState<FooterTabId>("telemetry")',
+    "useLayoutSelector((layout) => layout.activeBottomPanelTab)",
     'activeTab === "telemetry" ?',
     '<FooterTelemetry bus={kernel.bus} />',
   ]);
@@ -1674,6 +1719,10 @@ function checkAnalysisPlotsStableResourceInputs() {
   const controllerSource = readFileSync(analysisPlotsControllerPath, "utf8");
   const modelSource = readFileSync(analysisPlotsModelPath, "utf8");
   const viewSource = readFileSync(analysisPlotsViewPath, "utf8");
+  const tableDataHookSource = readFileSync(analysisTableDataHookPath, "utf8");
+  const energyDataHookSource = readFileSync(analysisEnergyDataHookPath, "utf8");
+  const frequencyDataHookSource = readFileSync(analysisFrequencyDataHookPath, "utf8");
+  const tableSurfaceSource = readFileSync(analysisTableSurfacePath, "utf8");
   const adapterSource = readFileSync(analysisTableRowsAdapterPath, "utf8");
   const chartTableSource = readFileSync(chartTableModelPath, "utf8");
   requireTokens(moduleSource, "analysis plots stable resource inputs", [
@@ -1685,28 +1734,59 @@ function checkAnalysisPlotsStableResourceInputs() {
     "yAxisIds={controller.yAxisIds}",
   ]);
   requireTokens(controllerSource, "analysis plots stable resource inputs", [
+    "useAnalysisTableData",
+    "useAnalysisEnergyData",
+    "useAnalysisFrequencyData",
+  ]);
+  forbidTokens(
+    controllerSource,
+    "basic analysis excludes deferred dynamics resources",
+    [
+      "useSpinWaveGammaResource",
+      "useDynamicStructureFactorResource",
+    ],
+  );
+  requireTokens(tableDataHookSource, "analysis plots table resource owner", [
     "useTableColumnsResource",
     "useTableRowsBinaryResource",
     "tableRowsResourceFromBinary",
-    "buildAnalysisPlotsTableQuery({ cursor, range, xAxisId })",
-    "shouldFetchAnalysisTableRows({",
+    "buildAnalysisPlotsTableQuery({",
+    "shouldLoadPublishedTableRows(",
+    "shouldPausePublishedTableRows(",
+  ]);
+  requireTokens(energyDataHookSource, "analysis plots energy resource owner", [
+    "activeSurface === \"energy\"",
+    "useSolverEnergyHistoryResource",
+  ]);
+  requireTokens(frequencyDataHookSource, "analysis plots frequency resource owner", [
+    "activeSurface === \"frequency\"",
+    "useFrequencyDomainManifestResource",
   ]);
   requireTokens(modelSource, "analysis plots stable resource inputs", [
-    "columns: ANALYSIS_SCALAR_COLUMNS",
-    "targetPoints: 1_600",
+    "targetPoints = 1_600",
+  ]);
+  requireTokens(tableDataHookSource, "analysis plots runtime table schema", [
+    "tableColumnIdsForQuery(tableColumns.data)",
+    "hasPublishedTableSchema",
+    "targetPoints",
   ]);
   requireTokens(viewSource, "analysis plots stable resource inputs", [
     "const table = useMemo<TableRowsLike | null>(",
     "buildScalarChartSeries(table,",
     "const chartSeries = useMemo(",
     "onRangeChange={onRangeChange}",
-    "series={chartSeries}",
+  ]);
+  requireTokens(tableSurfaceSource, "analysis plots stable resource inputs", [
+    // allSeries={chartSeries} ensures the full series list is passed for stable axis labels
+    // series={visibleSeries} passes only visible series for rendering (hide/show support)
+    "allSeries={chartSeries}",
+    "series={visibleSeries}",
     "xAxisLabel={xAxisLabel}",
   ]);
   requireTokens(adapterSource, "analysis plots table rows adapter", [
     "ANALYSIS_SCALAR_COLUMNS",
-    "mergeTableRows",
-    "MAX_VISIBLE_TABLE_ROWS",
+    "mergeChartTableWindows",
+    "ChartTableWindow",
     "tableRowsResourceFromBinary",
     "tableRowsResourceFromScalarSample",
   ]);

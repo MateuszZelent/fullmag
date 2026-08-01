@@ -144,10 +144,12 @@ import {
   resolveStudyStageInspectorKind,
 } from "../StudyStageInspectorRouter";
 import type { StudyStageModel } from "../StudyInspectorPanelModel";
+import { AutosaveStageInspector } from "./AutosaveStageInspector";
 import { ChangeDeviceStageInspector } from "./ChangeDeviceStageInspector";
 import { AddFieldDriveStageInspector } from "./AddFieldDriveStageInspector";
 import { EigenmodesStageInspector } from "./EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./FrequencyResponseStageInspector";
+import { FftResponseStageInspector } from "./FftResponseStageInspector";
 import {
   HysteresisStageInspector,
   hysteresisInitialStateActionPresentation,
@@ -157,6 +159,8 @@ import { RelaxStageInspector } from "./RelaxStageInspector";
 import { RunStageInspector } from "./RunStageInspector";
 import { SaveStateStageInspector } from "./SaveStateStageInspector";
 import type { StageInspectorFrameProps } from "./StageInspectorFrame";
+import { TableAutosaveStageInspector } from "./TableAutosaveStageInspector";
+import { UnsupportedStageInspector } from "./UnsupportedStageInspector";
 
 function stage(kind: string): StudyStageModel {
   return {
@@ -214,9 +218,13 @@ function render(
     "add-field-activation",
     "run-time-integration",
     "run-drive",
-    "run-sampling",
-    "run-gamma-response",
+    "run-workflow-state",
     "run-progress",
+    "table-autosave-state",
+    "table-autosave-fft-clock",
+    "autosave-state",
+    "fft-response-state",
+    "fft-response-clock",
     "eigenmodes-command-center",
     "frequency-response-command-center",
   ],
@@ -297,13 +305,30 @@ describe("Study stage inspectors", () => {
       ),
     ).toContain("Sampled source spectrum |FFT(B)|");
     expect(render(<RunStageInspector {...props("run")} />)).toContain(
-      "Sampling &amp; Outputs",
+      "Active Autosave &amp; FFT State",
     );
-    expect(render(<RunStageInspector {...props("run")} />)).toContain(
-      "Gamma Response",
+    expect(render(<RunStageInspector {...props("run")} />)).not.toContain(
+      "Response t_sampling (s)",
     );
     expect(render(<RunStageInspector {...props("run")} />)).toContain(
       "Run Progress",
+    );
+    expect(
+      render(<TableAutosaveStageInspector {...props("table_autosave")} />),
+    ).toContain("Table Autosave State");
+    expect(
+      render(<AutosaveStageInspector {...props("autosave")} />),
+    ).toContain("Autosave Output State");
+    expect(
+      render(<FftResponseStageInspector {...props("fft_response")} />),
+    ).toContain("Gamma Response FFT");
+    const unsupported = props("unsupported");
+    unsupported.draft = {
+      ...unsupported.draft!,
+      rawStage: { kind: "future_solver_action", stage_id: "future-1" },
+    };
+    expect(render(<UnsupportedStageInspector {...unsupported} />)).toContain(
+      "Unsupported Stage",
     );
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
@@ -348,6 +373,240 @@ describe("Study stage inspectors", () => {
     );
     expect(render(<SaveStateStageInspector {...props("save_state")} />)).toContain(
       "Captured State",
+    );
+  });
+
+  it("resolves antenna t_sampling from the last preceding workflow instruction before its target Run", () => {
+    const relax = createDefaultStudyStageDraft("relax", 0);
+    const antenna = createDefaultStudyStageDraft("add_field_drive", 1);
+    const table = createDefaultStudyStageDraft("table_autosave", 2);
+    const run = {
+      ...createDefaultStudyStageDraft("run", 3),
+      untilSeconds: "2e-9",
+    };
+    const html = render(
+      <AddFieldDriveStageInspector
+        {...props("add_field_drive")}
+        draft={antenna}
+        draftIndex={1}
+        pipelineDrafts={[relax, antenna, table, run]}
+        scene={{ study: { solver: { dt: 1e-13 } } }}
+      />,
+    );
+
+    expect(html).toContain("Effective t_sampling source");
+    expect(html).toContain(table.stageId);
+    expect(html).toContain(
+      "The effective t_sampling satisfies Nyquist for the authored sinc cutoff.",
+    );
+    expect(html).toContain("100 fs");
+  });
+
+  it("renders automatic sinc sampling controls and complete next-Run FFT diagnostics", () => {
+    const antenna = createDefaultStudyStageDraft("add_field_drive", 0);
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const autosaveBase = createDefaultStudyStageDraft("autosave", 2);
+    const autosave = {
+      ...autosaveBase,
+      autosave: {
+        ...autosaveBase.autosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const fft = createDefaultStudyStageDraft("fft_response", 3);
+    const run = {
+      ...createDefaultStudyStageDraft("run", 4),
+      stageId: "excite",
+      untilSeconds: "2e-9",
+    };
+    const pipeline = [antenna, table, autosave, fft, run];
+    const tableHtml = render(
+      <TableAutosaveStageInspector
+        {...props("table_autosave")}
+        draft={table}
+        draftIndex={1}
+        pipelineDrafts={pipeline}
+      />,
+    );
+
+    expect(tableHtml).toContain("Sampling mode");
+    expect(tableHtml).toContain("Automatic from sinc cutoff");
+    expect(tableHtml).toMatch(/t_sampling[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    for (const label of [
+      "Source drives",
+      "Maximum sinc cutoff",
+      "Nyquist guard",
+      "Target Nyquist",
+      "Sampling frequency",
+      "t_sampling",
+      "N",
+      "df",
+      "Highest represented FFT bin",
+      "Nyquist limit",
+    ]) {
+      expect(tableHtml).toContain(label);
+    }
+    expect(tableHtml).toContain("40 GHz");
+    expect(tableHtml).toContain("1.3 × cutoff (+30%)");
+    expect(tableHtml).toContain("52 GHz");
+    expect(tableHtml).toContain("104 GHz");
+    expect(tableHtml).toContain("9.615 ps");
+    expect(tableHtml).toContain("208");
+    expect(tableHtml).toContain("500 MHz");
+
+    const autosaveHtml = render(
+      <AutosaveStageInspector
+        {...props("autosave")}
+        draft={autosave}
+        draftIndex={2}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(autosaveHtml).toContain("Automatic from sinc cutoff");
+    expect(autosaveHtml).toMatch(/Every[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+
+    const antennaHtml = render(
+      <AddFieldDriveStageInspector
+        {...props("add_field_drive")}
+        draft={antenna}
+        draftIndex={0}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(antennaHtml).toContain("Sampling plan");
+    expect(antennaHtml).toContain("104 GHz");
+    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*fm-inspector-form-field__unit">Hz/);
+    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
+    expect(antennaHtml).toMatch(/Center t0[\s\S]*fm-inspector-form-field__unit">s/);
+    expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
+    expect(antennaHtml).toContain("t0=50 ps");
+
+    const fftHtml = render(
+      <FftResponseStageInspector
+        {...props("fft_response")}
+        draft={fft}
+        draftIndex={3}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(fftHtml).toContain("Sampling plan");
+    expect(fftHtml).toContain("500 MHz");
+    expect(fftHtml).toMatch(/Compute response FFT[\s\S]*fm-inspector-form-field/);
+    expect(fftHtml).toMatch(/Response component[\s\S]*fm-inspector-form-field/);
+    expect(fftHtml).toMatch(/Susceptibility floor fraction[\s\S]*fm-inspector-form-field/);
+
+    const runHtml = render(
+      <RunStageInspector
+        {...props("run")}
+        draft={run}
+        draftIndex={4}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(runHtml).toContain("Sampling plan");
+    expect(runHtml).toContain("Run Progress");
+    expect(runHtml).not.toContain("fm-sinc-preview__metrics");
+  });
+
+  it("derives FFT clock source and warnings from the effective state at the next Run", () => {
+    const fft = createDefaultStudyStageDraft("fft_response", 0);
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplePeriodS: "1e-12",
+      },
+    };
+    const run = {
+      ...createDefaultStudyStageDraft("run", 2),
+      untilSeconds: "5e-12",
+    };
+
+    const html = render(
+      <FftResponseStageInspector
+        {...props("fft_response")}
+        draft={fft}
+        draftIndex={0}
+        pipelineDrafts={[fft, table, run]}
+      />,
+    );
+
+    expect(html).toMatch(
+      new RegExp(`t_sampling source[\\s\\S]*${table.stageId}`),
+    );
+    expect(html).not.toContain(
+      "FFT response needs a preceding Table autosave ON instruction",
+    );
+  });
+
+  it("shows the highest represented FFT bin below the Nyquist limit for odd N", () => {
+    const fft = createDefaultStudyStageDraft("fft_response", 0);
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplePeriodS: "1e-12",
+      },
+    };
+    const run = {
+      ...createDefaultStudyStageDraft("run", 2),
+      untilSeconds: "5e-12",
+    };
+
+    const html = render(
+      <FftResponseStageInspector
+        {...props("fft_response")}
+        draft={fft}
+        draftIndex={0}
+        pipelineDrafts={[fft, table, run]}
+      />,
+    );
+
+    expect(html).toContain("<small>N</small><strong>5</strong>");
+    expect(html).toContain('class="fm-sampling-plan fm-sampling-plan--manual"');
+    expect(html).toContain("Sampling plan");
+    expect(html).toContain("Clock");
+    expect(html).toContain("FFT limits");
+    expect(html).not.toContain("fm-sinc-preview__metrics");
+    expect(html).toContain(
+      "<small>Highest represented FFT bin</small><strong>400 GHz</strong>",
+    );
+    expect(html).toContain(
+      "<small>Nyquist limit</small><strong>500 GHz</strong>",
+    );
+  });
+
+  it("blocks automatic sampling without an applicable preceding sinc drive", () => {
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 0);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const run = createDefaultStudyStageDraft("run", 1);
+    const html = render(
+      <TableAutosaveStageInspector
+        {...props("table_autosave")}
+        draft={table}
+        draftIndex={0}
+        pipelineDrafts={[table, run]}
+      />,
+    );
+
+    expect(html).toContain("Automatic sampling is unresolved");
+    expect(html).toContain(
+      "No active sinc drive with a finite positive cutoff applies to this Run.",
     );
   });
 

@@ -9,6 +9,7 @@
 #include "cpu/mfem/relaxation/nonlinear_cg.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/relaxation/direct_energy_increment.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -19,6 +20,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 #include <vector>
 
 namespace fullmag::fem {
@@ -27,13 +31,38 @@ namespace {
 
 constexpr uint32_t kNonlinearCgArmijoRecoveryCycles = 1;
 
-bool accept_monotone_recovery_step(
-    const fullmag_fem_step_stats &current,
-    const fullmag_fem_step_stats &trial)
+struct NcgArmijoState {
+    relaxation::EnergyDifference last_difference{};
+    relaxation::EnergyDifference accepted_difference{};
+    double last_increment_rhs_j = 0.0;
+    double accepted_increment_rhs_j = 0.0;
+};
+
+std::string format_nonlinear_cg_scalar(double value)
 {
-    return relaxation::strict_monotone_energy_accept(
-        current.total_energy_joules,
-        trial.total_energy_joules);
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(17) << value;
+    return out.str();
+}
+
+bool track_representable_trial(
+    const Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &trial_m,
+    bool &every_permitted_trial_unchanged)
+{
+    const uint8_t *magnetic_node_mask = ctx.mesh.magnetic_node_mask.empty()
+        ? nullptr
+        : ctx.mesh.magnetic_node_mask.data();
+    const bool trial_unchanged =
+        relaxation::all_active_magnetic_dofs_bitwise_unchanged(
+            previous_m.data(),
+            trial_m.data(),
+            magnetic_node_mask,
+            previous_m.size() / 3u);
+    every_permitted_trial_unchanged =
+        every_permitted_trial_unchanged && trial_unchanged;
+    return trial_unchanged;
 }
 
 double initial_step_size(
@@ -79,6 +108,8 @@ bool ensure_descent_direction(
 bool retry_nonlinear_cg_line_search_with_restart(
     Context &ctx,
     const std::vector<double> &previous_m,
+    const std::vector<double> &previous_h_demag,
+    const std::vector<double> &previous_h_eff,
     const std::vector<double> &previous_gradient,
     const std::vector<double> &previous_preconditioned_gradient,
     const fullmag_fem_step_stats &current_stats,
@@ -89,6 +120,8 @@ bool retry_nonlinear_cg_line_search_with_restart(
     fullmag_fem_step_stats &trial_stats,
     std::vector<double> &trial_m,
     uint32_t &backtracks,
+    bool &every_permitted_trial_unchanged,
+    NcgArmijoState &armijo_state,
     int &failure_status,
     std::string &error)
 {
@@ -120,6 +153,18 @@ bool retry_nonlinear_cg_line_search_with_restart(
                 ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
                 trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
             }
+            if (track_representable_trial(
+                    ctx,
+                    previous_m,
+                    trial_m,
+                    every_permitted_trial_unchanged)) {
+                if (backtracks >= 2u * relaxation::kNonlinearCgMaxBacktracks) {
+                    break;
+                }
+                trial_step *= 0.5;
+                backtracks += 1;
+                continue;
+            }
             const int status = relaxation::upload_and_snapshot(
                 ctx,
                 trial_m,
@@ -143,15 +188,39 @@ bool retry_nonlinear_cg_line_search_with_restart(
             bool armijo = false;
             {
                 ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-                armijo =
-                    trial_stats.total_energy_joules <=
-                    current_stats.total_energy_joules +
-                        relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+                armijo = direct_minimizer_armijo_accepts(
+                    ctx,
+                    "nonlinear-CG",
+                    previous_m,
+                    trial_m,
+                    previous_h_demag,
+                    previous_h_eff,
+                    current_stats,
+                    trial_stats,
+                    profile_stats,
+                    armijo_state.last_difference,
+                    armijo_state.accepted_difference,
+                    armijo_state.last_increment_rhs_j,
+                    error);
+            }
+            if (!error.empty() || ctx.interrupt.step_interrupted) {
+                const bool interrupted = ctx.interrupt.step_interrupted;
+                const std::string difference_error = error.empty()
+                    ? "nonlinear-CG direct energy difference interrupted"
+                    : error;
+                failure_status = relaxation::restore_previous_relaxation_state(
+                    ctx,
+                    previous_m,
+                    "nonlinear-CG",
+                    "failed recovery direct energy difference",
+                    interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
+                    difference_error,
+                    error);
+                return false;
             }
             if (armijo) {
-                return true;
-            }
-            if (accept_monotone_recovery_step(current_stats, trial_stats)) {
+                armijo_state.accepted_increment_rhs_j =
+                    armijo_state.last_increment_rhs_j;
                 return true;
             }
             if (backtracks >= 2u * relaxation::kNonlinearCgMaxBacktracks) {
@@ -167,6 +236,8 @@ bool retry_nonlinear_cg_line_search_with_restart(
 bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     Context &ctx,
     const std::vector<double> &previous_m,
+    const std::vector<double> &previous_h_demag,
+    const std::vector<double> &previous_h_eff,
     const std::vector<double> &previous_gradient,
     const fullmag_fem_step_stats &current_stats,
     std::vector<double> &direction,
@@ -176,6 +247,8 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     fullmag_fem_step_stats &trial_stats,
     std::vector<double> &trial_m,
     uint32_t &backtracks,
+    bool &every_permitted_trial_unchanged,
+    NcgArmijoState &armijo_state,
     int &failure_status,
     std::string &error)
 {
@@ -208,6 +281,18 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
             ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
             trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
         }
+        if (track_representable_trial(
+                ctx,
+                previous_m,
+                trial_m,
+                every_permitted_trial_unchanged)) {
+            if (backtracks >= 3u * relaxation::kNonlinearCgMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+            continue;
+        }
         const int status = relaxation::upload_and_snapshot(
             ctx,
             trial_m,
@@ -231,15 +316,39 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
         bool armijo = false;
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            armijo =
-                trial_stats.total_energy_joules <=
-                current_stats.total_energy_joules +
-                    relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+            armijo = direct_minimizer_armijo_accepts(
+                ctx,
+                "nonlinear-CG",
+                previous_m,
+                trial_m,
+                previous_h_demag,
+                previous_h_eff,
+                current_stats,
+                trial_stats,
+                profile_stats,
+                armijo_state.last_difference,
+                armijo_state.accepted_difference,
+                armijo_state.last_increment_rhs_j,
+                error);
+        }
+        if (!error.empty() || ctx.interrupt.step_interrupted) {
+            const bool interrupted = ctx.interrupt.step_interrupted;
+            const std::string difference_error = error.empty()
+                ? "nonlinear-CG direct energy difference interrupted"
+                : error;
+            failure_status = relaxation::restore_previous_relaxation_state(
+                ctx,
+                previous_m,
+                "nonlinear-CG",
+                "failed raw-gradient direct energy difference",
+                interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
+                difference_error,
+                error);
+            return false;
         }
         if (armijo) {
-            return true;
-        }
-        if (accept_monotone_recovery_step(current_stats, trial_stats)) {
+            armijo_state.accepted_increment_rhs_j =
+                armijo_state.last_increment_rhs_j;
             return true;
         }
         if (backtracks >= 3u * relaxation::kNonlinearCgMaxBacktracks) {
@@ -352,9 +461,13 @@ int run_nonlinear_cg_step(
     }
 
     std::vector<double> previous_m;
+    std::vector<double> previous_h_demag;
+    std::vector<double> previous_h_eff;
     {
         ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
         previous_m = ctx.state.m_xyz;
+        previous_h_demag = ctx.demag.h_xyz;
+        previous_h_eff = ctx.effective_field.h_xyz;
     }
     std::vector<double> previous_gradient;
     double g_norm_sq = 0.0;
@@ -431,10 +544,24 @@ int run_nonlinear_cg_step(
     int status = FULLMAG_FEM_OK;
     uint32_t backtracks = 0;
     bool line_search_accepted = false;
+    bool every_permitted_trial_unchanged = true;
+    NcgArmijoState armijo_state;
     while (true) {
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
             trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        }
+        if (track_representable_trial(
+                ctx,
+                previous_m,
+                trial_m,
+                every_permitted_trial_unchanged)) {
+            if (backtracks >= relaxation::kNonlinearCgMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+            continue;
         }
         status = relaxation::upload_and_snapshot(
             ctx,
@@ -458,12 +585,38 @@ int run_nonlinear_cg_step(
         bool armijo = false;
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            armijo =
-                trial_stats.total_energy_joules <=
-                current_stats.total_energy_joules +
-                    relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+            armijo = direct_minimizer_armijo_accepts(
+                ctx,
+                "nonlinear-CG",
+                previous_m,
+                trial_m,
+                previous_h_demag,
+                previous_h_eff,
+                current_stats,
+                trial_stats,
+                profile_stats,
+                armijo_state.last_difference,
+                armijo_state.accepted_difference,
+                armijo_state.last_increment_rhs_j,
+                error);
+        }
+        if (!error.empty() || ctx.interrupt.step_interrupted) {
+            const bool interrupted = ctx.interrupt.step_interrupted;
+            const std::string difference_error = error.empty()
+                ? "nonlinear-CG direct energy difference interrupted"
+                : error;
+            return relaxation::restore_previous_relaxation_state(
+                ctx,
+                previous_m,
+                "nonlinear-CG",
+                "failed direct trial energy difference",
+                interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
+                difference_error,
+                error);
         }
         if (armijo) {
+            armijo_state.accepted_increment_rhs_j =
+                armijo_state.last_increment_rhs_j;
             line_search_accepted = true;
             break;
         }
@@ -477,6 +630,8 @@ int run_nonlinear_cg_step(
         if (retry_nonlinear_cg_line_search_with_restart(
                 ctx,
                 previous_m,
+                previous_h_demag,
+                previous_h_eff,
                 previous_gradient,
                 previous_preconditioned_gradient,
                 current_stats,
@@ -487,6 +642,8 @@ int run_nonlinear_cg_step(
                 trial_stats,
                 trial_m,
                 backtracks,
+                every_permitted_trial_unchanged,
+                armijo_state,
                 status,
                 error)) {
             line_search_accepted = true;
@@ -496,6 +653,8 @@ int run_nonlinear_cg_step(
         if (retry_nonlinear_cg_line_search_with_raw_gradient_restart(
                 ctx,
                 previous_m,
+                previous_h_demag,
+                previous_h_eff,
                 previous_gradient,
                 current_stats,
                 direction,
@@ -505,6 +664,8 @@ int run_nonlinear_cg_step(
                 trial_stats,
                 trial_m,
                 backtracks,
+                every_permitted_trial_unchanged,
+                armijo_state,
                 status,
                 error)) {
             line_search_accepted = true;
@@ -514,24 +675,81 @@ int run_nonlinear_cg_step(
         return status;
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            out_stats = current_stats;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = profile_stats.rhs_evaluations;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
             current_stats.total_energy_joules +
-            relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+            armijo_state.last_increment_rhs_j;
+        const double trial_energy_increment =
+            trial_stats.total_energy_joules - current_stats.total_energy_joules;
+        const double energy_scale = std::max(
+            std::abs(current_stats.total_energy_joules),
+            std::abs(trial_stats.total_energy_joules));
+        const double torque_tolerance =
+            ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0
+            ? ctx.stage_completion.relax_stop.torque_tolerance_apm
+            : std::numeric_limits<double>::quiet_NaN();
         const std::string diagnostics =
             "current_energy_j=" +
-            std::to_string(current_stats.total_energy_joules) +
+            format_nonlinear_cg_scalar(current_stats.total_energy_joules) +
             " last_trial_energy_j=" +
-            std::to_string(trial_stats.total_energy_joules) +
-            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
-            " last_trial_step=" + std::to_string(trial_step) +
-            " p_dot_g=" + std::to_string(p_dot_g) +
-            " gradient_norm_sq=" + std::to_string(g_norm_sq);
+            format_nonlinear_cg_scalar(trial_stats.total_energy_joules) +
+            " trial_energy_increment_j=" +
+            format_nonlinear_cg_scalar(trial_energy_increment) +
+            " energy_scale_j=" + format_nonlinear_cg_scalar(energy_scale) +
+            " armijo_rhs_j=" + format_nonlinear_cg_scalar(armijo_rhs) +
+            " armijo_increment_rhs_j=" + format_nonlinear_cg_scalar(
+                armijo_state.last_increment_rhs_j) +
+            " direct_delta_j=" + format_nonlinear_cg_scalar(
+                armijo_state.last_difference.delta_joules) +
+            " direct_roundoff_bound_j=" + format_nonlinear_cg_scalar(
+                armijo_state.last_difference.roundoff_bound_joules) +
+            " direct_upper_j=" + format_nonlinear_cg_scalar(
+                armijo_state.last_difference.delta_joules +
+                armijo_state.last_difference.roundoff_bound_joules) +
+            " last_trial_step=" + format_nonlinear_cg_scalar(trial_step) +
+            " p_dot_g=" + format_nonlinear_cg_scalar(p_dot_g) +
+            " gradient_norm_sq=" + format_nonlinear_cg_scalar(g_norm_sq) +
+            " current_torque_apm=" +
+            format_nonlinear_cg_scalar(current_stats.max_torque_Apm) +
+            " torque_tolerance_apm=" +
+            format_nonlinear_cg_scalar(torque_tolerance) +
+            " torque_confirmation_count=" + std::to_string(
+                ctx.stage_completion.relax_torque_confirmation_count);
         return relaxation::restore_after_failed_line_search(
             ctx,
             previous_m,
             "nonlinear-CG",
             backtracks,
             diagnostics,
+            error);
+    }
+
+    const double accepted_energy_delta_upper_j =
+        armijo_state.accepted_difference.delta_joules +
+        armijo_state.accepted_difference.roundoff_bound_joules;
+    const double armijo_increment_rhs_j =
+        armijo_state.accepted_increment_rhs_j;
+    if (!std::isfinite(accepted_energy_delta_upper_j) ||
+        !std::isfinite(armijo_increment_rhs_j) ||
+        !(accepted_energy_delta_upper_j <= armijo_increment_rhs_j &&
+          armijo_increment_rhs_j <= 0.0)) {
+        const std::string proof_error =
+            "nonlinear-CG accepted Armijo proof is invalid";
+        return relaxation::restore_previous_relaxation_state(
+            ctx,
+            previous_m,
+            "nonlinear-CG",
+            "accepted Armijo proof validation failure",
+            FULLMAG_FEM_ERR_INTERNAL,
+            proof_error,
             error);
     }
 
@@ -607,6 +825,15 @@ int run_nonlinear_cg_step(
         profile_stats,
         out_stats,
         trial_step);
+    ctx.relaxation.accepted_energy_proof.available = true;
+    ctx.relaxation.accepted_energy_proof.delta_j =
+        armijo_state.accepted_difference.delta_joules;
+    ctx.relaxation.accepted_energy_proof.roundoff_bound_j =
+        armijo_state.accepted_difference.roundoff_bound_joules;
+    ctx.relaxation.accepted_energy_proof.delta_upper_j =
+        accepted_energy_delta_upper_j;
+    ctx.relaxation.accepted_energy_proof.armijo_rhs_j =
+        armijo_increment_rhs_j;
     relaxation::publish_accepted_gradient_completion(ctx, trial_g_norm_sq);
     return FULLMAG_FEM_OK;
 #else

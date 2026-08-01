@@ -44,4 +44,4 @@ study.field_drives.add(
     )
 )
 study.tableautosave(dt, quantities=["time", "mx", "my", "mz", "E_drive", "E_total"])
-study.stages.add_run(stage_id="run", until=until, output_every=dt)
+study.stages.add_run(stage_id="run", until=until)

@@ -1,26 +1,19 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   ObjectRegionMetadataSection,
   type RegionSubPanelProps,
 } from "./shared";
 
 export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
-  const sections = ["regions", "diagnostics"];
-
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} />
 
-      <InspectorSection value="diagnostics" title="Diagnostics">
+      <InspectorGroup title="Diagnostics">
         <FieldRow label="Mode" value={model.mode} />
         <FieldRow label="Source" value={model.source} />
         <FieldRow
@@ -37,25 +30,20 @@ export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
         <FieldRow label="Errors" value={String(model.errorCount)} />
         
         {model.diagnostics.length === 0 ? (
-          <div style={{ marginTop: "12px" }}>
+          <div className="fm-mt-3">
             <FieldRow label="Messages" value="none" />
           </div>
         ) : (
-          <div style={{ marginTop: "16px" }}>
+          <div className="fm-mt-4">
             {model.diagnostics.map((diagnostic) => (
               <div
                 key={diagnostic.diagnosticId}
-                className="fm-region-diagnostic-item"
-                style={{
-                  marginBottom: "16px",
-                  paddingBottom: "12px",
-                  borderBottom: "1px solid var(--fm-border-subtle)",
-                }}
+                className="fm-region-diagnostic-item fm-section-separator fm-mb-3"
               >
                 <FieldRow label="Severity" value={diagnostic.severity} />
                 <FieldRow label="Message" value={`${diagnostic.code}: ${diagnostic.message}`} />
                 {diagnostic.capabilityGate && (
-                  <div style={{ marginTop: "8px" }}>
+                  <div className="fm-mt-2">
                     <FeedbackBanner
                       kind="warning"
                       message={`Gated by capability: '${diagnostic.capabilityGate}'. This regional parameter may be blocked or ignored by the active solver backend.`}
@@ -66,7 +54,7 @@ export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
             ))}
           </div>
         )}
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

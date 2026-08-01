@@ -1,0 +1,50 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/eigensolvers/linearized-llg.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate runtime and dependency qualification is required."},
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No production FDM eigen lane is claimed by this reference."},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public CUDA modal claim is made by this reference."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-linearized-llg-tangent", "symbols": ["m0", "dm", "e", "q"], "sources": ["stage", "native"]},
+    {"id": "eq-numerical-linearized-llg-pencil", "symbols": ["K", "qvec", "G", "lambda", "sigma", "omega", "f"], "sources": ["native"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "unit magnetization", "si_unit": "$1$"},
+    {"id": "m0", "latex": "$\\mathbf m_0$", "meaning": "equilibrium magnetization", "si_unit": "$1$"},
+    {"id": "dm", "latex": "$\\delta\\mathbf m$", "meaning": "first-order magnetization perturbation", "si_unit": "$1$"},
+    {"id": "e", "latex": "$\\mathbf e_1,\\mathbf e_2$", "meaning": "local tangent basis", "si_unit": "$1$"},
+    {"id": "q", "latex": "$q_1,q_2$", "meaning": "tangent perturbation amplitudes", "si_unit": "$1$"},
+    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "problem-dependent"},
+    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic mass/operator matrix", "si_unit": "problem-dependent"},
+    {"id": "qvec", "latex": "$\\mathbf q$", "meaning": "discrete tangent eigenvector", "si_unit": "$1$"},
+    {"id": "lambda", "latex": "$\\lambda$", "meaning": "complex eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "sigma", "latex": "$\\sigma$", "meaning": "modal growth/decay real part", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "f", "latex": "$f$", "meaning": "eigenfrequency", "si_unit": "$\\mathrm{Hz}$"}
+  ],
+  "sources": [
+    {"id": "stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class EigenmodesStageSpec", "responsibility": "Public modal stage schema."},
+    {"id": "builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Public stage construction."},
+    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal contract, validation and diagnostics."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "EigenmodesStageSpec.count", "type": "int", "default": "10", "si_unit": "$1$", "validation": "positive integer", "meaning": "number of modes", "backend_support": "FEM planner", "problem_ir": "`study.count`"},
+      {"python": "EigenmodesStageSpec.target", "type": "str", "default": "lowest", "si_unit": "$1$", "validation": "`lowest`, `nearest`, or `frequency_window`", "meaning": "spectral target policy", "backend_support": "FEM planner", "problem_ir": "`study.target`"},
+      {"python": "EigenmodesStageSpec.target_frequency", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "required for `nearest`", "meaning": "shift target", "backend_support": "FEM modal lane", "problem_ir": "`study.target_frequency`"},
+      {"python": "EigenmodesStageSpec.frequency_min", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "required with window", "meaning": "lower window bound", "backend_support": "FEM modal lane", "problem_ir": "`study.frequency_min`"},
+      {"python": "EigenmodesStageSpec.frequency_max", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "greater than `frequency_min`", "meaning": "upper window bound", "backend_support": "FEM modal lane", "problem_ir": "`study.frequency_max`"},
+      {"python": "EigenmodesStageSpec.operator", "type": "str", "default": "linearized_llg", "si_unit": "$1$", "validation": "supported operator name", "meaning": "dynamic operator family", "backend_support": "FEM", "problem_ir": "`study.operator`"},
+      {"python": "EigenmodesStageSpec.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean", "meaning": "include demagnetization", "backend_support": "FEM", "problem_ir": "`study.include_demag`"},
+      {"python": "EigenmodesStageSpec.equilibrium_source", "type": "str", "default": "relax", "si_unit": "$1$", "validation": "`relax`, `provided`, or `artifact`", "meaning": "equilibrium source", "backend_support": "planner", "problem_ir": "`study.equilibrium_source`"},
+      {"python": "EigenmodesStageSpec.equilibrium_artifact", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "required for `artifact`", "meaning": "equilibrium artifact path", "backend_support": "planner", "problem_ir": "`study.equilibrium_artifact`"},
+      {"python": "EigenmodesStageSpec.normalization", "type": "str", "default": "unit_l2", "si_unit": "$1$", "validation": "`unit_l2` or `unit_max_amplitude`", "meaning": "mode normalization", "backend_support": "FEM", "problem_ir": "`study.normalization`"},
+      {"python": "EigenmodesStageSpec.damping_policy", "type": "str", "default": "ignore", "si_unit": "$1$", "validation": "`ignore` or `include`", "meaning": "damping in the linearized operator", "backend_support": "FEM modal lane", "problem_ir": "`study.damping_policy`"},
+      {"python": "EigenmodesStageSpec.k_vector", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "finite three-vector", "meaning": "Bloch wave vector", "backend_support": "FEM periodic/Floquet lane", "problem_ir": "`study.k_vector`"},
+      {"python": "EigenmodesStageSpec.k_sampling", "type": "object | None", "default": "None", "si_unit": "$1$", "validation": "sampling schema validated by planner", "meaning": "dispersion sampling", "backend_support": "FEM modal lane", "problem_ir": "`study.k_sampling`"},
+      {"python": "EigenmodesStageSpec.bc", "type": "str | dict[str,object]", "default": "free", "si_unit": "$1$", "validation": "supported boundary-condition schema", "meaning": "spin-wave boundary policy", "backend_support": "FEM", "problem_ir": "`study.spin_wave_bc`"}
+    ]
+  }
+}

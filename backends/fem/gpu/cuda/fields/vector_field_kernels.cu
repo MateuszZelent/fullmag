@@ -6,24 +6,36 @@
 
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 
+#include <cfloat>
+#include <cmath>
+#include <math_constants.h>
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
 
 __global__ void normalize_unit_vectors_kernel(
     double *__restrict__ mx, double *__restrict__ my, double *__restrict__ mz,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    unsigned long long *__restrict__ invalid_flag,
     int N)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < N) {
+        if (magnetic_node_mask != nullptr && magnetic_node_mask[i] == 0u) {
+            return;
+        }
         const double x = mx[i], y = my[i], z = mz[i];
         const double norm = sqrt(x * x + y * y + z * z);
-        if (norm > 0.0) {
-            const double inv = 1.0 / norm;
-            mx[i] = x * inv;
-            my[i] = y * inv;
-            mz[i] = z * inv;
+        if (!isfinite(x) || !isfinite(y) || !isfinite(z) ||
+            !isfinite(norm) || norm < DBL_MIN) {
+            atomicExch(invalid_flag, __double_as_longlong(CUDART_INF));
+            return;
         }
+        const double inv = 1.0 / norm;
+        mx[i] = x * inv;
+        my[i] = y * inv;
+        mz[i] = z * inv;
     }
 }
 
@@ -67,13 +79,68 @@ __global__ void add_field_inplace_kernel(
     }
 }
 
-void fullmag_cuda_normalize_vectors(
-    double *mx, double *my, double *mz,
-    int N, cudaStream_t stream)
+__global__ void apply_full_domain_demag_correction_kernel(
+    const double *__restrict__ h_demag_full,
+    const double *__restrict__ h_demag_magnetic,
+    double *__restrict__ h_eff_full,
+    int N)
 {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) {
+        h_eff_full[i] += h_demag_full[i] - h_demag_magnetic[i];
+    }
+}
+
+bool fullmag_cuda_normalize_vectors(
+    double *mx, double *my, double *mz,
+    const uint8_t *magnetic_node_mask,
+    double *device_invalid_flag,
+    int N,
+    cudaStream_t stream,
+    std::string &reason)
+{
+    if (device_invalid_flag == nullptr) {
+        reason = "GPU vector normalization requires a preallocated invalid-vector scalar";
+        return false;
+    }
+    cudaError_t rc = cudaMemsetAsync(device_invalid_flag, 0, sizeof(double), stream);
+    if (rc != cudaSuccess) {
+        reason = std::string("cudaMemsetAsync GPU normalization guard failed: ") +
+            cudaGetErrorString(rc);
+        return false;
+    }
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
     normalize_unit_vectors_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        mx, my, mz, N);
+        mx, my, mz,
+        magnetic_node_mask,
+        reinterpret_cast<unsigned long long *>(device_invalid_flag),
+        N);
+    rc = cudaPeekAtLastError();
+    if (rc != cudaSuccess) {
+        reason = std::string("launch GPU guarded vector normalization failed: ") +
+            cudaGetErrorString(rc);
+        return false;
+    }
+    double invalid = 0.0;
+    rc = cudaMemcpyAsync(
+        &invalid,
+        device_invalid_flag,
+        sizeof(double),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (rc == cudaSuccess) {
+        rc = cudaStreamSynchronize(stream);
+    }
+    if (rc != cudaSuccess) {
+        reason = std::string("GPU normalization guard scalar readback failed: ") +
+            cudaGetErrorString(rc);
+        return false;
+    }
+    if (invalid != 0.0) {
+        reason = "GPU RK stage contains zero, subnormal-norm, or nonfinite active magnetization";
+        return false;
+    }
+    return true;
 }
 
 void fullmag_cuda_accumulate_heff(
@@ -112,6 +179,21 @@ void fullmag_cuda_add_field_inplace(
     add_field_inplace_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         h_add,
         h_accum,
+        N);
+}
+
+void fullmag_cuda_apply_full_domain_demag_correction(
+    const double *h_demag_full,
+    const double *h_demag_magnetic,
+    double *h_eff_full,
+    int N,
+    cudaStream_t stream)
+{
+    const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
+    apply_full_domain_demag_correction_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        h_demag_full,
+        h_demag_magnetic,
+        h_eff_full,
         N);
 }
 

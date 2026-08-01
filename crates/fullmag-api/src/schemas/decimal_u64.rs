@@ -89,7 +89,11 @@ mod tests {
         })
         .expect("realtime change should serialize");
 
-        for value in [status["generation_id"].clone(), catalog["domain_generation_id"].clone(), realtime["domain_generation_id"].clone()] {
+        for value in [
+            status["generation_id"].clone(),
+            catalog["domain_generation_id"].clone(),
+            realtime["domain_generation_id"].clone(),
+        ] {
             assert_eq!(value, "9007199254741001");
         }
     }

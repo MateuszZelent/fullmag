@@ -17,8 +17,7 @@ use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::flatten_vectors;
 #[cfg(feature = "cuda")]
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, relaxation_stop_criteria_satisfied,
-    RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 #[cfg(feature = "cuda")]
 use crate::relaxation_direct_minimizer::{
@@ -32,10 +31,7 @@ use crate::relaxation_direct_minimizer::{
 #[cfg(feature = "cuda")]
 use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
-    single_object_scalars,
-};
+use crate::scalar_metrics::{apply_average_m_to_step_stats, scalar_row_due, single_object_scalars};
 #[cfg(feature = "cuda")]
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
@@ -57,6 +53,7 @@ pub(crate) fn execute_cuda_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_cuda_single_grid_plan(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -69,9 +66,17 @@ pub(crate) fn execute_cuda_fdm(
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
     let initial_magnetization = backend.copy_m(cell_count)?;
-    let dt = crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-
+    let timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?)
+    };
+    let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
     let mut steps = Vec::new();
     let provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
@@ -93,6 +98,7 @@ pub(crate) fn execute_cuda_fdm(
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
+        timestep_policy,
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -108,6 +114,7 @@ pub(crate) fn execute_cuda_fdm(
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
@@ -145,7 +152,7 @@ pub(crate) fn execute_cuda_fdm(
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: Some(flatten_vectors(&state.magnetization)),
                         preview_field,
                         cached_preview_fields: None,
@@ -166,9 +173,6 @@ pub(crate) fn execute_cuda_fdm(
             }
 
             let max_torque = max_torque_from_field(&state.magnetization, &state.h_eff);
-            if relaxation_stop_criteria_satisfied(control, None, max_torque) {
-                break;
-            }
             let g_norm_sq = direct_minimizer_gradient_norm_sq(&state.gradient);
             if direct_minimizer_gradient_degenerate(g_norm_sq) {
                 break;
@@ -282,11 +286,12 @@ pub(crate) fn execute_cuda_fdm(
             current_stats = accepted_stats;
 
             let energy_plateau_range = energy_plateau.record(state.energy_j);
-            if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque_apm) {
+            if torque_confirmation.observe(control, energy_plateau_range, torque_apm) {
                 break;
             }
         }
     } else {
+        let dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         while current_time < until_seconds {
             if let Some(live) = live.as_mut() {
                 if let Some(display_selection) = live.display_selection.map(|get| get()) {
@@ -310,7 +315,7 @@ pub(crate) fn execute_cuda_fdm(
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: None,
                         preview_field,
                         cached_preview_fields: None,
@@ -339,10 +344,9 @@ pub(crate) fn execute_cuda_fdm(
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
-            let average_requested = scalar_outputs_request_average_m(&scalar_schedules);
             let mut sampled_stats = stats.clone();
             let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
-            if due_scalar_row && average_requested {
+            if due_scalar_row {
                 if magnetization_cache.is_none() {
                     magnetization_cache = Some(backend.copy_m(cell_count)?);
                 }
@@ -355,6 +359,18 @@ pub(crate) fn execute_cuda_fdm(
             }
             if let Some(live) = live.as_mut() {
                 let heavy_payload_every = live.field_every_n.max(1);
+                let heavy_payload_due = stats.step % heavy_payload_every == 0;
+                if heavy_payload_due && !due_scalar_row {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    apply_average_m_to_step_stats(
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                    );
+                }
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -365,7 +381,7 @@ pub(crate) fn execute_cuda_fdm(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let magnetization = if stats.step % heavy_payload_every == 0 {
+                let magnetization = if heavy_payload_due {
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
                     }
@@ -391,7 +407,7 @@ pub(crate) fn execute_cuda_fdm(
                 let action = (live.on_step)(StepUpdate {
                     stats: sampled_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -418,6 +434,7 @@ pub(crate) fn execute_cuda_fdm(
                 &backend,
                 cell_count,
                 &sampled_stats,
+                magnetization_cache.as_deref(),
                 &mut scalar_schedules,
                 &mut field_schedules,
                 &mut steps,
@@ -426,7 +443,7 @@ pub(crate) fn execute_cuda_fdm(
             let energy_plateau_range = energy_plateau.record(stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &stats,
                         energy_plateau_range,
@@ -464,6 +481,7 @@ pub(crate) fn execute_cuda_fdm(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: latest_stats.as_ref().map(|stats| stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: latest_stats.as_ref().map_or(0, |stats| stats.step),
             relaxation_time_s: latest_stats.as_ref().map(|stats| stats.time),

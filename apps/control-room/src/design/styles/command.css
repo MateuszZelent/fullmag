@@ -6,7 +6,7 @@
 
 .fm-command-input-wrap {
   display: flex;
-  height: 44px;
+  height: var(--fm-inspector-tab-height);
   align-items: center;
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);
@@ -55,7 +55,7 @@
 
 .fm-command-item {
   display: flex;
-  min-height: 30px;
+  min-height: var(--fm-control-height-regular);
   align-items: center;
   justify-content: space-between;
   gap: var(--fm-space-3);

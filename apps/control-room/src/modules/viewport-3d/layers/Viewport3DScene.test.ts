@@ -471,7 +471,7 @@ describe("Viewport3DScene scale helpers", () => {
 });
 
 describe("Viewport3DScene region overlay visibility", () => {
-  it("threads region target settings into authored native picking", () => {
+  it("keeps authored diagnostic picking independent from physical region settings", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
       "utf8",
@@ -480,13 +480,8 @@ describe("Viewport3DScene region overlay visibility", () => {
       source.indexOf("<RegionOverlayNativePickingLayer"),
       source.indexOf("/>", source.indexOf("<RegionOverlayNativePickingLayer")),
     );
-    const nativePickingLayer = source.slice(
-      source.indexOf("function RegionOverlayNativePickingLayer"),
-      source.indexOf("function resolveRegionSettingsEntries"),
-    );
-
-    expect(layerInvocation).toContain("getRegionSettings={getRegionSettings}");
-    expect(nativePickingLayer).toContain("resolveSettings: getRegionSettings");
+    expect(layerInvocation).not.toContain("getRegionSettings");
+    expect(layerInvocation).toContain("regions={regionOverlays}");
   });
 
   it("keeps authored overlays visible in auto mode while realized overlays are building", () => {

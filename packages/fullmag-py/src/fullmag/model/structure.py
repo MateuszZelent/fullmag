@@ -20,7 +20,8 @@ class Material:
         A: exchange stiffness in J/m
         alpha: Gilbert damping, dimensionless
         Ku1, Ku2: uniaxial anisotropy constants in J/m^3
-        anisU: uniaxial easy axis as a dimensionless direction vector
+        anisU: easy axis for Ku1 > 0, or easy-plane normal for Ku1 < 0,
+            as a dimensionless direction vector
         Kc1, Kc2, Kc3: cubic anisotropy constants in J/m^3
         anisC1, anisC2: cubic anisotropy axes as dimensionless direction vectors
         *_field: per-node overrides in the same SI unit as the corresponding scalar
@@ -70,9 +71,9 @@ class Material:
         require_positive(self.A, "A")
         require_non_negative(self.alpha, "alpha")
         if self.Ku1 is not None:
-            require_non_negative(self.Ku1, "Ku1")
+            require_finite(self.Ku1, "Ku1")
         if self.Ku2 is not None:
-            require_non_negative(self.Ku2, "Ku2")
+            require_finite(self.Ku2, "Ku2")
         if self.anisU is not None:
             object.__setattr__(self, "anisU", as_vector3(self.anisU, "anisU"))
         if self.anisC1 is not None:
@@ -87,9 +88,9 @@ class Material:
         _warn_if_suspicious_si("A", self.A, lower=1.0e-14, upper=1.0e-8, unit="J/m")
         _warn_if_suspicious_si("alpha", self.alpha, lower=0.0, upper=10.0, unit="dimensionless")
         if self.Ku1 is not None:
-            _warn_if_suspicious_si("Ku1", self.Ku1, lower=0.0, upper=1.0e10, unit="J/m^3")
+            _warn_if_suspicious_si("Ku1", self.Ku1, lower=-1.0e10, upper=1.0e10, unit="J/m^3")
         if self.Ku2 is not None:
-            _warn_if_suspicious_si("Ku2", self.Ku2, lower=0.0, upper=1.0e10, unit="J/m^3")
+            _warn_if_suspicious_si("Ku2", self.Ku2, lower=-1.0e10, upper=1.0e10, unit="J/m^3")
         if self.Kc1 is not None:
             _warn_if_suspicious_si("Kc1", self.Kc1, lower=0.0, upper=1.0e10, unit="J/m^3")
         if self.Kc2 is not None:

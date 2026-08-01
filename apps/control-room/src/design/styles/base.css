@@ -34,7 +34,7 @@ textarea {
 
 .fm-button {
   display: inline-flex;
-  min-height: 28px;
+  min-height: var(--fm-control-height-compact);
   align-items: center;
   justify-content: center;
   gap: var(--fm-space-2);
@@ -43,6 +43,7 @@ textarea {
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
   cursor: pointer;
+  font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-sm);
   font-weight: 520;
   line-height: 1;
@@ -50,14 +51,26 @@ textarea {
   transition:
     background-color var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast),
     color var(--fm-transition-fast),
-    transform var(--fm-transition-fast);
+    transform var(--fm-duration-fast) ease-out;
   user-select: none;
 }
 
 .fm-button:hover {
   border-color: var(--fm-border-strong);
   transform: translateY(-1px);
+}
+
+/* Apple: respond on pointer-down — instant press feedback */
+.fm-button:active:not(:disabled):not([data-disabled="true"]) {
+  transform: scale(0.97) translateY(0);
+  transition-duration: var(--fm-duration-instant);
+}
+
+.fm-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
 }
 
 .fm-button:disabled,
@@ -80,6 +93,10 @@ textarea {
   color: var(--fm-accent-strong);
 }
 
+.fm-button--primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--fm-accent) 28%, transparent);
+}
+
 .fm-button--secondary {
   background: var(--fm-bg-panel-raised);
 }
@@ -88,6 +105,11 @@ textarea {
   border-color: transparent;
   background: transparent;
   color: var(--fm-text-secondary);
+}
+
+.fm-button--ghost:hover {
+  border-color: var(--fm-border-subtle);
+  background: var(--fm-bg-panel-raised);
 }
 
 .fm-button--danger {
@@ -102,18 +124,19 @@ textarea {
 }
 
 .fm-button--sm {
-  min-height: 24px;
+  min-height: var(--fm-control-height-compact);
   padding: 0 var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
 }
 
 .fm-button--md {
-  min-height: 28px;
+  min-height: var(--fm-control-height-compact);
   padding: 0 var(--fm-space-3);
 }
 
 .fm-button--icon {
-  width: 28px;
-  min-width: 28px;
+  width: var(--fm-control-height-compact);
+  min-width: var(--fm-control-height-compact);
   padding: 0;
 }
 

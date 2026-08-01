@@ -250,12 +250,31 @@ fn frequency_response_solver_method_rejection_reason(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn execute_fem_frequency_response_validation(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_frequency_response_plan(plan);
+    execute_fem_frequency_response_validation_with_context(
+        plan,
+        &crate::types::FemStageExecutionContext::from_mesh_identity(stage_asset.identity),
+        output_dir,
+        interrupt_requested,
+        on_step,
+    )
+}
+
+pub(crate) fn execute_fem_frequency_response_validation_with_context(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    stage_context: &crate::types::FemStageExecutionContext,
+    output_dir: &Path,
+    interrupt_requested: Option<&AtomicBool>,
+    on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = stage_context.generation_id();
     let mut on_step = on_step;
     #[cfg(not(feature = "fem-gpu"))]
     let _ = &on_step;
@@ -286,6 +305,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
         output_dir,
         interrupt_requested,
         &mut on_step,
+        &fem_mesh_generation_id,
     )? {
         return Ok(executed);
     }
@@ -353,6 +373,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
                 if let Some(on_step) = on_step.as_deref_mut() {
                     let completed_frequency_count = completed_points as u64;
                     let action = on_step(dense_frequency_response_progress_update(
+                        fem_mesh_generation_id.clone(),
                         completed_frequency_count,
                         plan.frequencies_hz.values_hz.len() as u64,
                         plan.frequencies_hz.values_hz[completed_points - 1],
@@ -416,6 +437,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
 }
 
 fn dense_frequency_response_progress_update(
+    fem_mesh_generation_id: Option<String>,
     completed_frequency_count: u64,
     total_frequency_count: u64,
     frequency_hz: f64,
@@ -464,7 +486,7 @@ fn dense_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -480,6 +502,7 @@ fn dense_frequency_response_progress_update(
 
 #[cfg(any(feature = "fem-gpu", test))]
 fn native_frequency_response_progress_update(
+    fem_mesh_generation_id: Option<String>,
     progress: NativeFrequencyDomainProgress,
     frequency_range_hz: Option<(f64, f64)>,
     drive_norm: f64,
@@ -558,7 +581,7 @@ fn native_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1717,6 +1740,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: &mut Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+    fem_mesh_generation_id: &Option<String>,
 ) -> Result<Option<ExecutedRun>, RunError> {
     let requested_gpu = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu;
     if plan.solver_policy.as_ref().and_then(|policy| policy.method)
@@ -1740,7 +1764,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             "[fullmag-runner] frequency-response payload: building requested_gpu={} nodes={} elements={} magnetic_bc={:?} magnetostatic_bc={:?}",
             requested_gpu,
             plan.mesh.nodes.len(),
-            plan.mesh.elements.len(),
+            plan.mesh.cell_count(),
             frequency_response_effective_spin_wave_bc_kind(plan),
             plan.magnetostatic_bc
         );
@@ -1815,6 +1839,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         }
         if let Some(on_step) = live_progress_sink.borrow_mut().as_deref_mut() {
             let action = on_step(native_frequency_response_progress_update(
+                fem_mesh_generation_id.clone(),
                 progress,
                 response_frequency_range_hz,
                 payload.drive_norm,
@@ -2282,7 +2307,7 @@ impl NativeBackendDemagTangentProvider {
             eprintln!(
                 "[fullmag-runner] frequency-response demag tangent provider: creating backend nodes={} elements={} demag={} exchange={} periodic_node_pairs={} source_exchange={} source_periodic_node_pairs={}",
                 plan.mesh.nodes.len(),
-                plan.mesh.elements.len(),
+                plan.mesh.cell_count(),
                 plan.enable_demag,
                 backend_plan.enable_exchange,
                 backend_plan.mesh.periodic_node_pairs.len(),
@@ -4284,7 +4309,7 @@ fn build_dmi_payload(
     }
     if plan.mesh.nodes.len() != plan.equilibrium_magnetization.len()
         || plan.mesh.nodes.len() != node_index_map.len()
-        || plan.mesh.elements.is_empty()
+        || plan.mesh.cells.is_empty()
     {
         return None;
     }
@@ -4312,7 +4337,7 @@ fn build_dmi_payload(
         None => None,
     };
     if !plan.mesh.element_markers.is_empty()
-        && plan.mesh.element_markers.len() != plan.mesh.elements.len()
+        && plan.mesh.element_markers.len() != plan.mesh.cell_count()
     {
         return None;
     }
@@ -4326,9 +4351,10 @@ fn build_dmi_payload(
     };
     let node_count = magnetic_node_indices.len();
     let mut lumped_mass = vec![0.0; node_count];
-    let mut elements = Vec::new();
+    let mut dmi_elements = Vec::new();
 
-    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+    let tet_elements = plan.mesh.require_tet4_elements().ok()?;
+    for (element_index, element) in tet_elements.iter().enumerate() {
         if plan
             .mesh
             .element_markers
@@ -4358,7 +4384,7 @@ fn build_dmi_payload(
             lumped_mass[node_index] += geometry.volume * 0.25;
         }
         if let Some(d) = interfacial_dmi {
-            elements.push(NativeDrivenFrequencyResponseDmiElement {
+            dmi_elements.push(NativeDrivenFrequencyResponseDmiElement {
                 kind: NativeDrivenFrequencyResponseDmiKind::Interfacial,
                 node_indices: compact_element,
                 shape: [0.25, 0.25, 0.25, 0.25],
@@ -4369,7 +4395,7 @@ fn build_dmi_payload(
             });
         }
         if let Some(d) = bulk_dmi {
-            elements.push(NativeDrivenFrequencyResponseDmiElement {
+            dmi_elements.push(NativeDrivenFrequencyResponseDmiElement {
                 kind: NativeDrivenFrequencyResponseDmiKind::Bulk,
                 node_indices: compact_element,
                 shape: [0.25, 0.25, 0.25, 0.25],
@@ -4380,7 +4406,7 @@ fn build_dmi_payload(
             });
         }
     }
-    if elements.is_empty()
+    if dmi_elements.is_empty()
         || lumped_mass
             .iter()
             .any(|mass| !mass.is_finite() || *mass <= 0.0)
@@ -4388,7 +4414,7 @@ fn build_dmi_payload(
         return None;
     }
     Some(DmiPayload {
-        elements,
+        elements: dmi_elements,
         lumped_mass: Some(lumped_mass),
         ms_field,
         uniform_ms: plan.material.saturation_magnetisation,
@@ -4492,12 +4518,13 @@ fn build_exchange_edges(
         return None;
     }
     if !plan.mesh.element_markers.is_empty()
-        && plan.mesh.element_markers.len() != plan.mesh.elements.len()
+        && plan.mesh.element_markers.len() != plan.mesh.cell_count()
     {
         return None;
     }
     let mut pairs = std::collections::BTreeSet::<(usize, usize)>::new();
-    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+    let elements = plan.mesh.require_tet4_elements().ok()?;
+    for (element_index, element) in elements.iter().enumerate() {
         if plan
             .mesh
             .element_markers
@@ -4682,12 +4709,17 @@ mod tests {
         };
 
         let update = native_frequency_response_progress_update(
+            Some("mesh-gen-test".to_string()),
             progress,
             Some((1.0e9, 4.0e9)),
             3.5,
             true,
             true,
             false,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-test")
         );
 
         assert_eq!(update.stats.step, 2);
@@ -4734,12 +4766,17 @@ mod tests {
         };
 
         let update = native_frequency_response_progress_update(
+            Some("mesh-gen-test".to_string()),
             progress,
             Some((2.0e9, 5.0e9)),
             1.0,
             true,
             true,
             false,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-test")
         );
 
         let live_progress = update
@@ -5807,7 +5844,7 @@ mod tests {
         plan.enable_exchange = true;
         plan.mesh.nodes.push([1.0, 1.0, 0.0]);
         plan.mesh.nodes.push([2.0, 1.0, 0.0]);
-        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         plan.equilibrium_magnetization.push([1.0, 0.0, 0.0]);
         plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
         plan.object_segments = vec![
@@ -5949,9 +5986,9 @@ mod tests {
             mesh: fullmag_ir::MeshIR {
                 mesh_name: "unit".to_string(),
                 nodes: vec![[0.0, 0.0, 0.0]],
-                elements: Vec::new(),
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
                 element_markers: Vec::new(),
-                boundary_faces: Vec::new(),
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                 boundary_markers: Vec::new(),
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6537,7 +6574,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        supported.mesh.elements = vec![[0, 1, 2, 3]];
+        supported.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         supported.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
         assert!(super::production_gpu_frequency_response_rejection_reason(&supported).is_none());
         #[cfg(feature = "fem-gpu")]
@@ -6557,7 +6594,9 @@ mod tests {
             [0.0, 0.0, -1.0],
             [1.0, 0.0, -1.0],
         ];
-        shared_domain_static_periodic.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+        shared_domain_static_periodic
+            .mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5]]);
         shared_domain_static_periodic.mesh.element_markers = vec![1, 0];
         shared_domain_static_periodic.equilibrium_magnetization = vec![
             [0.0, 0.0, 1.0],
@@ -6830,7 +6869,9 @@ mod tests {
                 [1.0, 0.0, 1.0],
                 [1.0, 1.0, 1.0],
             ];
-            floquet_boundary_exchange.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+            floquet_boundary_exchange
+                .mesh
+                .set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
             floquet_boundary_exchange.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 8];
             floquet_boundary_exchange.mesh.periodic_node_pairs =
                 vec![fullmag_ir::MeshPeriodicNodePairIR {
@@ -6865,7 +6906,9 @@ mod tests {
                 [1.0, 1.0, 0.0],
             ];
             periodic_airbox_exchange.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 5];
-            periodic_airbox_exchange.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 4]];
+            periodic_airbox_exchange
+                .mesh
+                .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
             periodic_airbox_exchange.mesh.element_markers = vec![1, 0];
 
             let payload = super::build_native_production_cpu_payload(&periodic_airbox_exchange)
@@ -7034,7 +7077,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         plan.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
         plan.external_field = None;
 
@@ -7053,7 +7096,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1];
         plan.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
         plan.excitation.field_au_per_m = [1.0, 0.5, 0.0];
@@ -7101,7 +7144,7 @@ mod tests {
             [3.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 2, 3, 5], [1, 2, 4, 5]];
+        plan.mesh.set_tet4_cells(vec![[0, 2, 3, 5], [1, 2, 4, 5]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.equilibrium_magnetization = vec![
             [0.0, 0.0, 1.0],

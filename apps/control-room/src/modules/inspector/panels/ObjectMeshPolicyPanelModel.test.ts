@@ -10,6 +10,8 @@ import {
   draftKeyForObjectMeshPolicyResource,
   formatObjectMeshPolicyConfig,
   objectMeshPolicyDraftDirty,
+  resolveObjectMeshTopologyCapabilities,
+  validateObjectMeshTopologyCapabilities,
 } from "./ObjectMeshPolicyPanelModel";
 
 function objectMeshPolicyDraft(
@@ -22,6 +24,134 @@ function objectMeshPolicyDraft(
 }
 
 describe("ObjectMeshPolicyPanelModel", () => {
+  it("enables exact layered prism only when every canonical capability is executable", () => {
+    const enabled = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "production_executable",
+          supported_layer_counts: [1, 2, 3],
+        },
+        "mesh.swept.prism": { status: "production_executable" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+      },
+    });
+
+    expect(enabled.layeredPrism).toMatchObject({
+      enabled: true,
+      status: "production_executable",
+    });
+    expect(enabled.sweptHex).toMatchObject({ enabled: false, status: "unsupported" });
+
+    const semanticOnly = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "semantic_only" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": { status: "validated" },
+      },
+    });
+    expect(semanticOnly.layeredPrism).toMatchObject({
+      enabled: false,
+      status: "semantic_only",
+    });
+  });
+
+  it("fails closed when executable exact-layer capability omits machine-readable layer counts", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": { status: "validated" },
+      },
+    });
+
+    expect(capabilities.layeredPrism).toMatchObject({
+      enabled: false,
+      status: "invalid_scope",
+    });
+    expect(capabilities.layeredPrism.reason).toContain("supported_layer_counts");
+  });
+
+  it("preserves production-executable status when every layered-prism input is production-executable", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "production_executable" },
+        "mesh.swept.prism": { status: "production_executable" },
+        "mesh.transition.pyramid_tet": { status: "production_executable" },
+        "mesh.exact_layer_count": {
+          status: "production_executable",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+
+    expect(capabilities.layeredPrism).toMatchObject({
+      enabled: true,
+      status: "production_executable",
+    });
+  });
+
+  it("reports validated only when every layered-prism input is validated", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+
+    expect(capabilities.layeredPrism).toMatchObject({
+      enabled: true,
+      status: "validated",
+    });
+  });
+
+  it("rejects a persisted exact prism draft when current capabilities are not executable", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "semantic_only" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": { status: "validated" },
+      },
+    });
+    const draft = objectMeshPolicyDraft({
+      exactLayerCount: "true",
+      meshStrategy: "swept_prism",
+      present: true,
+      topology: "prismatic",
+      transitionPolicy: "pyramid_to_tetrahedra",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toContain(
+      "mesh.topology.mixed_p1",
+    );
+  });
+
+  it("rejects exact prism intent injected only through Advanced JSON", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities(null);
+    const draft = objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        exact_layer_count: true,
+        mesh_strategy: "swept_prism",
+        topology: "prismatic",
+      }),
+      exactLayerCount: "",
+      meshStrategy: "",
+      topology: "",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toContain(
+      "not advertised",
+    );
+  });
+
   it("formats nullable backend config as an editable object draft", () => {
     expect(formatObjectMeshPolicyConfig(null)).toBe("{}");
     expect(
@@ -53,7 +183,11 @@ describe("ObjectMeshPolicyPanelModel", () => {
         compute_quality: true,
         edge_transition_distance: "airbox_boundary",
         maximum_element_size: 5e-9,
+        minimum_element_size: 1e-9,
         mesh_strategy: "swept_prism",
+        topology: "prismatic",
+        exact_layer_count: true,
+        transition_policy: "pyramid_to_tetrahedra",
         optimize: "Netgen",
         optimize_iterations: 2,
         per_element_quality: false,
@@ -90,6 +224,10 @@ describe("ObjectMeshPolicyPanelModel", () => {
       computeQuality: "true",
       edgeTransitionDistance: "airbox_boundary",
       meshStrategy: "swept_prism",
+      topology: "prismatic",
+      exactLayerCount: "true",
+      transitionPolicy: "pyramid_to_tetrahedra",
+      minimumElementSize: "1e-9",
       optimize: "Netgen",
       optimizeIterations: "2",
       perElementQuality: "false",
@@ -109,6 +247,129 @@ describe("ObjectMeshPolicyPanelModel", () => {
     expect(draftIdentityKeyForObjectMeshPolicyResource("free-layer")).toBe(
       "free-layer",
     );
+  });
+
+  it("exports the complete canonical exact layered prism preset", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: "{}",
+      present: true,
+      maximumElementSize: "3e-9",
+      minimumElementSize: "1e-9",
+      meshStrategy: "swept_prism",
+      throughThicknessElements: "1",
+    }));
+
+    expect(result).toMatchObject({
+      request: {
+        config: {
+          maximum_element_size: 3e-9,
+          minimum_element_size: 1e-9,
+          mesh_strategy: "swept_prism",
+          topology: "prismatic",
+          element_family: "prism",
+          exact_layer_count: true,
+          order: 1,
+          sweep_direction: "auto",
+          sweep_face_meshing: "triangular",
+          through_thickness_distribution: "fixed",
+          through_thickness_element_ratio: 1,
+          transition_policy: "pyramid_to_tetrahedra",
+          through_thickness_elements: 1,
+          through_thickness_symmetric: false,
+        },
+      },
+    });
+  });
+
+  it("rejects exact layered prism exports outside the qualified 1..3 layer scope", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: "{}",
+      meshStrategy: "swept_prism",
+      present: true,
+      throughThicknessElements: "4",
+    }));
+
+    expect(result).toEqual({
+      error: "Exact layered prism supports 1, 2, or 3 through-thickness elements.",
+    });
+  });
+
+  it("normalizes contradictory exact prism controls to the approved preset", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: "{}",
+      exactLayerCount: "false",
+      meshStrategy: "swept_prism",
+      order: "2",
+      present: true,
+      sweepFaceMeshing: "quadrilateral",
+      throughThicknessDistribution: "exponential",
+      throughThicknessElementRatio: "2",
+      throughThicknessElements: "3",
+      throughThicknessSymmetric: "true",
+      topology: "tetrahedral",
+      transitionPolicy: "reject",
+    }));
+
+    expect(result).toMatchObject({
+      request: {
+        config: {
+          element_family: "prism",
+          exact_layer_count: true,
+          mesh_strategy: "swept_prism",
+          order: 1,
+          sweep_direction: "auto",
+          sweep_face_meshing: "triangular",
+          through_thickness_distribution: "fixed",
+          through_thickness_element_ratio: 1,
+          through_thickness_elements: 3,
+          through_thickness_symmetric: false,
+          topology: "prismatic",
+          transition_policy: "pyramid_to_tetrahedra",
+        },
+      },
+    });
+  });
+
+  it("exports free tetrahedral without topology or stale layered policy fields", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        element_family: "prism",
+        exact_layer_count: true,
+        sweep_direction: "auto",
+        topology: "prismatic",
+        transition_policy: "pyramid_to_tetrahedra",
+      }),
+      exactLayerCount: "true",
+      meshStrategy: "free_tetrahedral",
+      order: "1",
+      present: true,
+      sweepFaceMeshing: "triangular",
+      throughThicknessDistribution: "fixed",
+      throughThicknessElementRatio: "1",
+      throughThicknessElements: "1",
+      throughThicknessSymmetric: "false",
+      topology: "tetrahedral",
+      transitionPolicy: "pyramid_to_tetrahedra",
+    }));
+
+    expect(result).toMatchObject({
+      request: {
+        config: {
+          mesh_strategy: "free_tetrahedral",
+          order: 1,
+        },
+      },
+    });
+    expect(result).not.toHaveProperty("request.config.topology");
+    expect(result).not.toHaveProperty("request.config.through_thickness_elements");
+    expect(result).not.toHaveProperty("request.config.through_thickness_distribution");
+    expect(result).not.toHaveProperty("request.config.through_thickness_element_ratio");
+    expect(result).not.toHaveProperty("request.config.through_thickness_symmetric");
+    expect(result).not.toHaveProperty("request.config.sweep_face_meshing");
+    expect(result).not.toHaveProperty("request.config.sweep_direction");
+    expect(result).not.toHaveProperty("request.config.element_family");
+    expect(result).not.toHaveProperty("request.config.transition_policy");
+    expect(result).not.toHaveProperty("request.config.exact_layer_count");
   });
 
   it("detects object mesh policy draft changes without JSON or numeric formatting false positives", () => {
@@ -354,6 +615,8 @@ describe("ObjectMeshPolicyPanelModel", () => {
           edge_maximum_element_size: 1e-8,
           edge_thickness: 2e-8,
           edge_transition_distance: "airbox_boundary",
+          element_family: "prism",
+          exact_layer_count: true,
           corner_maximum_element_size: 8e-9,
           corner_extent: 1.5e-8,
           corner_transition_distance: 120e-9,
@@ -362,6 +625,7 @@ describe("ObjectMeshPolicyPanelModel", () => {
           narrow_regions: 2,
           optimize: "Netgen",
           optimize_iterations: 3,
+          order: 1,
           per_element_quality: true,
           size_factor: 1,
           size_from_curvature: 16,
@@ -369,10 +633,14 @@ describe("ObjectMeshPolicyPanelModel", () => {
           smoothing_steps: 2,
           sweep_face_meshing: "triangular",
           sweep_destination: "top",
+          sweep_direction: "auto",
           sweep_source: "bottom",
           through_thickness_distribution: "fixed",
+          through_thickness_element_ratio: 1,
           through_thickness_elements: 1,
           through_thickness_symmetric: false,
+          topology: "prismatic",
+          transition_policy: "pyramid_to_tetrahedra",
         },
       },
     });

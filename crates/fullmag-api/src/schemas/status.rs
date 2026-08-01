@@ -61,6 +61,13 @@ pub struct RunSummary {
     pub started_at: String,
     pub solver_steps: u64,
     pub solver_time: f64,
+    pub requested_device: String,
+    pub resolved_device: String,
+    pub selection_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_confidence: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -130,6 +137,7 @@ pub struct ResourceRevisionMap {
     pub mesh_build_revision: u64,
     pub commands_revision: u64,
     pub stages_revision: u64,
+    pub simulation_preparation_revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_revision: Option<u64>,
     pub visualization_state_revision: u64,
@@ -168,5 +176,7 @@ pub struct EnergySummary {
 pub struct MetricsSummary {
     pub uptime_seconds: u64,
     pub total_steps: u64,
+    /// Deprecated compatibility alias of the diagnostics end-to-end rate.
+    #[schema(deprecated)]
     pub steps_per_second: Option<f64>,
 }

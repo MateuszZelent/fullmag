@@ -234,9 +234,9 @@ impl FdmPeriodicityIR {
                                 requested[axis]
                             )
                         })?;
-                    image_terms = image_terms.checked_mul(span).ok_or_else(|| {
-                        "FDM periodic image term count overflow".to_string()
-                    })?;
+                    image_terms = image_terms
+                        .checked_mul(span)
+                        .ok_or_else(|| "FDM periodic image term count overflow".to_string())?;
                 }
             }
             const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
@@ -245,9 +245,7 @@ impl FdmPeriodicityIR {
                     "FDM periodic image budget exceeded: {image_terms} image terms > {MAX_PERIODIC_IMAGE_TERMS}"
                 ));
             }
-            return Ok(ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages {
-                image_counts,
-            });
+            return Ok(ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages { image_counts });
         }
         Ok(ResolvedFdmDemagBoundaryIR::Open)
     }
@@ -270,7 +268,9 @@ impl FdmPeriodicityIR {
         for axis in 0..3 {
             let cells = u64::from(grid_counts[axis]);
             if cells == 0 {
-                return Err(format!("FDM periodic image budget requires positive grid count on axis {axis}"));
+                return Err(format!(
+                    "FDM periodic image budget requires positive grid count on axis {axis}"
+                ));
             }
             let periodic = self.is_periodic(axis);
             let padded = if periodic {
@@ -287,11 +287,14 @@ impl FdmPeriodicityIR {
                     .checked_mul(2)
                     .and_then(|value| value.checked_add(1))
                     .ok_or_else(|| {
-                        format!("FDM periodic image count overflow on axis {axis}: {}", requested[axis])
+                        format!(
+                            "FDM periodic image count overflow on axis {axis}: {}",
+                            requested[axis]
+                        )
                     })?;
-                image_terms = image_terms.checked_mul(span).ok_or_else(|| {
-                    "FDM periodic image term count overflow".to_string()
-                })?;
+                image_terms = image_terms
+                    .checked_mul(span)
+                    .ok_or_else(|| "FDM periodic image term count overflow".to_string())?;
             }
         }
         const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
@@ -593,7 +596,11 @@ mod tests {
         assert!(zero.contains("positive grid count"));
 
         let mut open_policy = truncated([0, 0, 0]);
-        open_policy.axes = [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open];
+        open_policy.axes = [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ];
         let overflow = open_policy
             .resolve_periodic_images([u32::MAX, u32::MAX, u32::MAX], ExecutionPrecision::Double)
             .expect_err("padded cell multiplication must be checked");

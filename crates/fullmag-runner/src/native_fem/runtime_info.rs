@@ -1,6 +1,8 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
+use crate::types::RunError;
+
 use std::ffi::CStr;
 
 #[derive(Debug, Clone)]
@@ -11,6 +13,177 @@ pub(crate) struct DeviceInfo {
     pub runtime_version: i32,
     pub memory_free_bytes: u64,
     pub memory_total_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBuildInfo {
+    pub mfem_version: String,
+    pub hypre_version: String,
+}
+
+pub(crate) fn runtime_build_info() -> Result<RuntimeBuildInfo, RunError> {
+    let mut info = ffi::fullmag_fem_runtime_build_info_v2 {
+        abi_version: 0,
+        struct_size: 0,
+        mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+        hypre_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+    };
+    let rc = unsafe { ffi::fullmag_fem_get_runtime_build_info_v2(&mut info) };
+    if rc != ffi::FULLMAG_FEM_OK {
+        return Err(RunError {
+            message: "native FEM runtime build identity is unavailable".to_string(),
+        });
+    }
+    RuntimeBuildInfo::from_ffi(info)
+}
+
+pub(crate) fn strict_gpu_mfem_version() -> Result<String, RunError> {
+    runtime_build_info().map(|info| info.mfem_version)
+}
+
+pub(crate) fn strict_gpu_runtime_build_info() -> Result<RuntimeBuildInfo, RunError> {
+    runtime_build_info()
+}
+
+impl RuntimeBuildInfo {
+    fn from_ffi(info: ffi::fullmag_fem_runtime_build_info_v2) -> Result<Self, RunError> {
+        if info.abi_version != ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION
+            || info.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32
+        {
+            return Err(RunError {
+                message: "native FEM runtime build identity ABI is incompatible".to_string(),
+            });
+        }
+        fn parse_version(bytes: &[std::ffi::c_char], library: &str) -> Result<String, RunError> {
+            let Some(nul_index) = bytes.iter().position(|byte| *byte == 0) else {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM runtime build identity {library} version is not NUL terminated"
+                    ),
+                });
+            };
+            let version = std::str::from_utf8(unsafe {
+                std::slice::from_raw_parts(bytes.as_ptr().cast::<u8>(), nul_index)
+            })
+            .map_err(|_| RunError {
+                message: format!(
+                    "native FEM runtime build identity {library} version is not UTF-8"
+                ),
+            })?
+            .to_string();
+            if version.is_empty() {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM runtime build identity did not publish {library} version"
+                    ),
+                });
+            }
+            Ok(version)
+        }
+        Ok(Self {
+            mfem_version: parse_version(&info.mfem_version, "MFEM")?,
+            hypre_version: parse_version(&info.hypre_version, "HYPRE")?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod runtime_build_info_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_versioned_mfem_identity_from_loaded_native_abi() {
+        let mut info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+        info.hypre_version[..6]
+            .copy_from_slice(&[b'3' as _, b'.' as _, b'1' as _, b'.' as _, b'0' as _, 0]);
+
+        let parsed = RuntimeBuildInfo::from_ffi(info).unwrap();
+        assert_eq!(parsed.mfem_version, "4.9");
+        assert_eq!(parsed.hypre_version, "3.1.0");
+    }
+
+    #[test]
+    fn rejects_missing_mfem_identity_from_loaded_native_abi() {
+        let info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_hypre_identity_from_loaded_native_abi() {
+        let mut info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_incompatible_runtime_build_identity_abi() {
+        let mut info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: 0,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_runtime_build_identity_without_bounded_nul_terminator() {
+        let info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32,
+            mfem_version: [b'4' as _; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [b'3' as _; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_nonterminated_hypre_identity_from_loaded_native_abi() {
+        let mut info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [b'3' as _; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_runtime_build_identity_with_struct_size_mismatch() {
+        let mut info = ffi::fullmag_fem_runtime_build_info_v2 {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info_v2>() as u32 - 1,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+            hypre_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
 }
 
 impl DeviceInfo {
@@ -144,32 +317,56 @@ pub(crate) fn stage_completion_from_ffi(
     }
 
     let reason = match completion.reason {
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32 =>
+        {
             StageStopReason::Torque
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY as i32 =>
+        {
             StageStopReason::Energy
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS
+                as i32 =>
+        {
             StageStopReason::MaxSteps
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME
+                as i32 =>
+        {
             StageStopReason::MaxPseudotime
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME
+                as i32 =>
+        {
             StageStopReason::MaxPhysicalTime
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED
+                as i32 =>
+        {
             StageStopReason::UserCancelled
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR
+                as i32 =>
+        {
             StageStopReason::BackendError
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT
+                as i32 =>
+        {
             StageStopReason::Gradient
         }
+        _ => StageStopReason::BackendError,
     };
 
+    let representability_stationary = stage_completion_is_representability_stationary(&completion);
     let (status, converged, metric) = match reason {
         StageStopReason::Torque => ("completed", true, Some(StageMetricKind::MaxTorqueApm)),
         StageStopReason::Energy => (
@@ -181,6 +378,11 @@ pub(crate) fn stage_completion_from_ffi(
         StageStopReason::MaxPseudotime | StageStopReason::MaxPhysicalTime => {
             ("completed", false, Some(StageMetricKind::RelaxationTimeS))
         }
+        StageStopReason::Gradient if representability_stationary => (
+            "completed",
+            false,
+            Some(StageMetricKind::NumericalStagnation),
+        ),
         StageStopReason::Gradient => ("failed", false, Some(StageMetricKind::NumericalStagnation)),
         StageStopReason::UserCancelled => ("cancelled", false, None),
         StageStopReason::BackendError => ("failed", false, None),
@@ -191,6 +393,9 @@ pub(crate) fn stage_completion_from_ffi(
         StageMetricKind::TotalEnergyPlateauRangeJ => "total_energy_plateau_range_J",
         StageMetricKind::RelaxationTimeS => "relaxation_time_s",
         StageMetricKind::Steps => "steps",
+        StageMetricKind::NumericalStagnation if representability_stationary => {
+            "representability_stationary"
+        }
         StageMetricKind::NumericalStagnation => "numerical_stagnation",
     });
 
@@ -213,6 +418,26 @@ pub(crate) fn stage_completion_from_ffi(
     })
 }
 
+pub(crate) fn stage_completion_is_representability_stationary(
+    completion: &ffi::fullmag_fem_stage_completion,
+) -> bool {
+    if completion.has_reason == 0
+        || completion.reason
+            != ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT as i32
+        || completion.has_metric_name == 0
+    {
+        return false;
+    }
+
+    let expected = b"representability_stationary";
+    completion
+        .metric_name
+        .iter()
+        .map(|byte| *byte as u8)
+        .take_while(|byte| *byte != 0)
+        .eq(expected.iter().copied())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,11 +454,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_metric_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY as i32,
             has_metric_name: 1,
             metric_name: metric_name("energy_delta_j"),
             metric_value: 1.0e-21,
             threshold: 1.0e-20,
+            ..Default::default()
         })
         .expect("completion should map when reason is present");
 
@@ -256,11 +482,13 @@ mod tests {
     fn stage_completion_from_ffi_maps_max_steps_as_non_converged() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS
+                as i32,
             has_metric_name: 1,
             metric_name: metric_name("steps"),
             metric_value: 50_000.0,
             threshold: 50_000.0,
+            ..Default::default()
         })
         .expect("max-steps completion should map");
 
@@ -274,11 +502,13 @@ mod tests {
     fn stage_completion_from_ffi_maps_backend_error_as_failed() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR
+                as i32,
             has_metric_name: 0,
             metric_name: [0; 64],
             metric_value: 0.0,
             threshold: 0.0,
+            ..Default::default()
         })
         .expect("backend-error completion should map");
 
@@ -292,11 +522,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_torque_as_converged() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32,
             has_metric_name: 1,
             metric_name: metric_name("max_torque_apm"),
             metric_value: 0.0,
             threshold: 1.0e-4,
+            ..Default::default()
         })
         .expect("torque completion should map");
 
@@ -313,11 +544,13 @@ mod tests {
     fn stage_completion_from_ffi_maps_gradient_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT
+                as i32,
             has_metric_name: 1,
             metric_name: metric_name("tangent_gradient_norm_sq"),
             metric_value: 0.0,
             threshold: 1.0e-30,
+            ..Default::default()
         })
         .expect("gradient completion should map when reason is present");
 
@@ -337,14 +570,44 @@ mod tests {
     }
 
     #[test]
+    fn stage_completion_from_ffi_maps_representability_stationary_without_convergence() {
+        let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
+            has_reason: 1,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT
+                as i32,
+            has_metric_name: 1,
+            metric_name: metric_name("representability_stationary"),
+            metric_value: 1.0,
+            threshold: 1.0,
+            ..Default::default()
+        })
+        .expect("representability-stationary completion should map");
+
+        assert_eq!(completion.status, "completed");
+        assert!(!completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Gradient));
+        assert_eq!(
+            completion.metric,
+            Some(fullmag_ir::StageMetricKind::NumericalStagnation)
+        );
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("representability_stationary")
+        );
+        assert_eq!(completion.metric_value, Some(1.0));
+        assert_eq!(completion.threshold, Some(1.0));
+    }
+
+    #[test]
     fn stage_completion_from_ffi_omits_empty_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 0,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            reason: 0,
             has_metric_name: 0,
             metric_name: [0; 64],
             metric_value: 0.0,
             threshold: 0.0,
+            ..Default::default()
         });
 
         assert!(completion.is_none());

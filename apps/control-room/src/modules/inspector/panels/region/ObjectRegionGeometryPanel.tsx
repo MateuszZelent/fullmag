@@ -1,9 +1,8 @@
 "use client";
 
 import type { ChangeEvent } from "react";
-import { Accordion } from "@/shared/ui/Accordion";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionEditShapeKind } from "../ObjectRegionsPanelModel";
 import { PhysicalScalarField } from "../ObjectRegionsPanel";
 import {
@@ -29,17 +28,11 @@ export function ObjectRegionGeometryPanel({
   deleteRegion,
   feedback,
 }: RegionSubPanelProps) {
-  const sections = ["regions", "shape", "actions"];
-
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} />
 
-      <InspectorSection value="shape" title="Shape">
+      <InspectorGroup title="Shape">
         <FormField
           label="Kind"
           type="select"
@@ -127,7 +120,7 @@ export function ObjectRegionGeometryPanel({
             />
           </>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
       <ObjectRegionActionsSection
         pending={pending}
@@ -142,6 +135,6 @@ export function ObjectRegionGeometryPanel({
         deleteRegion={deleteRegion}
         feedback={feedback}
       />
-    </Accordion>
+    </div>
   );
 }

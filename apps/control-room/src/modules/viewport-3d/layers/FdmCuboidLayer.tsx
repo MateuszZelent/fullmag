@@ -51,14 +51,16 @@ import {
   type Viewport3DInspectScreenPosition,
 } from "../viewport3dInspect";
 import {
-  opacityFromSettings,
   pointColorFromSettings,
   surfaceMaterialColorFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
-  wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+import {
+  resolveViewport3DTargetRenderPlan,
+  type Viewport3DTargetRenderPlan,
+} from "./viewport3DTargetRenderPlan";
 import {
   VectorFieldLayer,
   type VectorFieldLayerVectorStyle,
@@ -626,6 +628,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   onPointerMove,
   onPointerOut,
   renderSettings,
+  renderPlan,
   surfaceColors,
   surfaceRef,
   tracker,
@@ -639,6 +642,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOut: () => void;
   renderSettings: VisualizationTargetSettings;
+  renderPlan: Viewport3DTargetRenderPlan;
   surfaceColors: ScalarColorBuffer | null;
   surfaceRef: RefObject<InstancedMesh | null>;
   tracker: Viewport3DResourceTracker;
@@ -649,7 +653,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     () => tracker.track("geometry", new BoxGeometry(1, 1, 1)),
     [tracker],
   );
-  const surfaceOpacity = opacityFromSettings(renderSettings);
+  const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
   const usesInstanceColors = Boolean(
     surfaceColors && surfaceColors.colors.length === model.count * 3,
@@ -722,10 +726,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   );
   const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeColor = wireframeColorFromSettings(renderSettings, colors.wire);
-  const wireframeOpacity = wireframeOpacityFromSettings(
-    renderSettings,
-    materialProfile.featureEdges,
-  );
+  const wireframeOpacity = renderPlan.wireframe.opacity;
   const wireframeMaterial = useMemo(
     () =>
       tracker.track(
@@ -756,11 +757,11 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   useFdmCuboidMatrixUpload({
     invalidate,
     model,
-    shaderVisible: renderSettings.shaderVisible,
+    shaderVisible: renderPlan.surface.visible,
     surfaceRef,
     tracker,
     wireframeRef,
-    wireframeVisible: renderSettings.wireframeVisible,
+    wireframeVisible: renderPlan.wireframe.visible,
   });
   useFdmCuboidColorUpload({
     invalidate,
@@ -774,7 +775,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
 
   return (
     <>
-      {renderSettings.shaderVisible ? (
+      {renderPlan.surface.visible ? (
         <instancedMesh
           args={[geometry, surfaceMaterial, model.count]}
           frustumCulled={false}
@@ -785,7 +786,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
           renderOrder={surfacePolicy.renderOrder}
         />
       ) : null}
-      {renderSettings.wireframeVisible ? (
+      {renderPlan.wireframe.visible ? (
         <instancedMesh
           args={[geometry, wireframeMaterial, model.count]}
           frustumCulled={false}
@@ -804,11 +805,13 @@ const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
   colors,
   model,
   renderSettings,
+  opacity,
   tracker,
 }: {
   colors: Viewport3DColors;
   model: FdmCuboidInstanceModel;
   renderSettings: VisualizationTargetSettings;
+  opacity: number;
   tracker: Viewport3DResourceTracker;
 }) {
   const geometry = useMemo(() => {
@@ -834,7 +837,7 @@ const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
     >
       <pointsMaterial
         color={pointColorFromSettings(renderSettings, colors.wire)}
-        opacity={opacityFromSettings(renderSettings)}
+        opacity={opacity}
         sizeAttenuation={false}
         size={3}
         {...materialPolicyProps("points")}
@@ -903,6 +906,10 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const inspectFrameRef = useRef(0);
   const r3fInspectHitFrameRef = useRef(0);
   const renderSettings = settings;
+  const targetRenderPlan = resolveViewport3DTargetRenderPlan(
+    renderSettings,
+    materialProfile,
+  );
   const passPlan = resolveFdmCuboidPassPlan(renderSettings);
   const regionPickModels = useMemo(
     () =>
@@ -1089,6 +1096,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           onPointerMove={handlePointerMove}
           onPointerOut={handlePointerOut}
           renderSettings={renderSettings}
+          renderPlan={targetRenderPlan}
           surfaceColors={surfaceColors}
           surfaceRef={surfaceRef}
           tracker={tracker}
@@ -1099,6 +1107,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         <FdmCuboidPointsPass
           colors={colors}
           model={model}
+          opacity={targetRenderPlan.points.opacity}
           renderSettings={renderSettings}
           tracker={tracker}
         />
@@ -1111,7 +1120,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
-          opacity={opacityFromSettings(renderSettings)}
+          opacity={targetRenderPlan.vectors.opacity}
           fieldBufferId={
             fieldVector
               ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`

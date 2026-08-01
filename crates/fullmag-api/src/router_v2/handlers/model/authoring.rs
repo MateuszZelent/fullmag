@@ -22,8 +22,7 @@ use crate::schemas::authoring::{
     ObjectRegionReorderRequest, RegionDiagnosticResource, RegionDiagnosticsResource,
     RegionListResource, RegionPatchRequest, RegionResource, RegionalFieldDriveResource,
     SceneCouplingPatch, ScenePatchRequest, SceneResource, StudyRuntimePatchRequest,
-    StudyRuntimeResource, UniverseFitRequest,
-    UniversePatchRequest, UniverseResource,
+    StudyRuntimeResource, UniverseFitRequest, UniversePatchRequest, UniverseResource,
 };
 use crate::types::{
     AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
@@ -642,9 +641,13 @@ pub async fn create_authoring_field_drive(
     Json(req): Json<FieldDriveCreateRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    apply_create_field_drive_transaction(&mut scene, req.base_revision, req.drive.into_ir().map_err(
-        |error| ApiError::bad_request(format!("invalid field drive: {error}")),
-    )?)?;
+    apply_create_field_drive_transaction(
+        &mut scene,
+        req.base_revision,
+        req.drive
+            .into_ir()
+            .map_err(|error| ApiError::bad_request(format!("invalid field drive: {error}")))?,
+    )?;
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     authoring_transaction_response("create_field_drive", committed)
 }
@@ -672,9 +675,9 @@ pub async fn replace_authoring_field_drive(
         &mut scene,
         req.base_revision,
         &drive_id,
-        req.drive.into_ir().map_err(|error| {
-            ApiError::bad_request(format!("invalid field drive: {error}"))
-        })?,
+        req.drive
+            .into_ir()
+            .map_err(|error| ApiError::bad_request(format!("invalid field drive: {error}")))?,
     )?;
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     authoring_transaction_response("replace_field_drive", committed)
@@ -1344,7 +1347,7 @@ fn coupling_endpoint_resolution(
                         region_id: None,
                         selector: Some(resolved.selector),
                         tolerance: Some(resolved.tolerance),
-                        resolved_face_count: Some(resolved.surface_faces.len() as u64),
+                        resolved_face_count: Some(resolved.facet_global_ordinals.len() as u64),
                         boundary_face_indices: Some(resolved.boundary_face_indices),
                         boundary_marker_ids: Some(boundary_marker_ids),
                         area: Some(resolved.area),
@@ -1391,9 +1394,9 @@ fn coupling_resolution_mesh(
     let mesh_ir = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -1431,7 +1434,7 @@ fn coupling_resolution_mesh(
                 },
                 boundary_face_indices: part.boundary_face_indices.clone(),
                 node_indices: part.node_indices.clone(),
-                surface_faces: part.surface_faces.clone(),
+                facet_global_ordinals: part.facet_global_ordinals.clone(),
                 bounds_min: part.bounds_min,
                 bounds_max: part.bounds_max,
                 parent_id: None,
@@ -3270,7 +3273,10 @@ fn apply_delete_field_drive_transaction(
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
     let before = scene.field_drives.drives.len();
-    scene.field_drives.drives.retain(|entry| entry.id != drive_id);
+    scene
+        .field_drives
+        .drives
+        .retain(|entry| entry.id != drive_id);
     if scene.field_drives.drives.len() == before {
         return Err(ApiError::not_found(format!(
             "field drive not found: {drive_id}"
@@ -4115,8 +4121,7 @@ mod regional_field_drive_tests {
     #[test]
     fn field_drive_crud_preserves_typed_scene_state() {
         let mut scene = scene();
-        apply_create_field_drive_transaction(&mut scene, Some(4), drive("pulse"))
-            .expect("create");
+        apply_create_field_drive_transaction(&mut scene, Some(4), drive("pulse")).expect("create");
         assert_eq!(scene.field_drives.drives[0].id, "pulse");
 
         let mut replacement = drive("pulse");

@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::header::{
     ACCEPT_RANGES, CACHE_CONTROL, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE,
 };
@@ -12,38 +12,88 @@ use serde::Serialize;
 
 use fullmag_runner::{FemMeshPartPayload, FemMeshPayload};
 
+pub(crate) struct FacetGlobalOrdinalIndex {
+    indices: HashMap<u64, usize>,
+}
+
+impl FacetGlobalOrdinalIndex {
+    pub(crate) fn new(facets: &fullmag_ir::FemFacetConnectivityIR) -> Self {
+        Self {
+            indices: facets
+                .global_ordinals
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, global_ordinal)| (global_ordinal, index))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn get(&self, global_ordinal: u64) -> Option<usize> {
+        self.indices.get(&global_ordinal).copied()
+    }
+}
+
+pub(crate) fn mesh_part_surface_faces(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+    facet_index: &FacetGlobalOrdinalIndex,
+) -> Option<Vec<Vec<u32>>> {
+    mesh_part_surface_faces_with_indices(mesh, part, facet_index).map(|(_, faces)| faces)
+}
+
+pub(crate) fn mesh_part_surface_faces_with_indices(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+    facet_index: &FacetGlobalOrdinalIndex,
+) -> Option<(Vec<u32>, Vec<Vec<u32>>)> {
+    let face_indices = if !part.facet_global_ordinals.is_empty() {
+        let mut indices = Vec::with_capacity(part.facet_global_ordinals.len());
+        for global_ordinal in &part.facet_global_ordinals {
+            indices.push(facet_index.get(*global_ordinal)?);
+        }
+        indices
+    } else if !part.boundary_face_indices.is_empty() {
+        part.boundary_face_indices
+            .iter()
+            .map(|index| *index as usize)
+            .collect()
+    } else if part.boundary_face_count > 0 {
+        let start = part.boundary_face_start as usize;
+        let end = start.saturating_add(part.boundary_face_count as usize);
+        (start..end).collect()
+    } else {
+        return None;
+    };
+
+    let resolved_indices = face_indices
+        .iter()
+        .copied()
+        .map(u32::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let faces = face_indices
+        .into_iter()
+        .map(|index| mesh.facets.item_nodes(index).map(<[u32]>::to_vec))
+        .collect::<Option<Vec<_>>>()?;
+    Some((resolved_indices, faces))
+}
+
 pub(crate) fn mesh_part_surface_node_indices(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
 ) -> Option<Vec<u32>> {
+    let facet_index = FacetGlobalOrdinalIndex::new(&mesh.facets);
+    let faces = mesh_part_surface_faces(mesh, part, &facet_index)?;
+    Some(surface_node_indices_from_faces(&faces))
+}
+
+pub(crate) fn surface_node_indices_from_faces(faces: &[Vec<u32>]) -> Vec<u32> {
     let mut node_indices = BTreeSet::new();
-    if !part.surface_faces.is_empty() {
-        for face in &part.surface_faces {
-            node_indices.extend(face);
-        }
-        return Some(node_indices.into_iter().collect());
+    for face in faces {
+        node_indices.extend(face.iter().copied());
     }
-
-    let boundary_face_indices = if !part.boundary_face_indices.is_empty() {
-        Some(part.boundary_face_indices.iter().copied().collect::<Vec<_>>())
-    } else if part.boundary_face_count > 0 {
-        Some(
-            (part.boundary_face_start
-                ..part
-                    .boundary_face_start
-                    .saturating_add(part.boundary_face_count))
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        None
-    }?;
-
-    for face_index in boundary_face_indices {
-        if let Some(face) = mesh.boundary_faces.get(face_index as usize) {
-            node_indices.extend(face);
-        }
-    }
-    Some(node_indices.into_iter().collect())
+    node_indices.into_iter().collect()
 }
 
 pub(crate) fn stable_strong_etag(token: &str) -> String {
@@ -90,6 +140,15 @@ pub(crate) fn conditional_binary_response_with_content_type(
     body: Vec<u8>,
     content_type: HeaderValue,
 ) -> Response {
+    conditional_binary_bytes_response(headers, etag, Bytes::from(body), content_type)
+}
+
+fn conditional_binary_bytes_response(
+    headers: &HeaderMap,
+    etag: &str,
+    body: Bytes,
+    content_type: HeaderValue,
+) -> Response {
     let mut response = if if_none_match_matches(headers, etag) {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::NOT_MODIFIED;
@@ -97,7 +156,7 @@ pub(crate) fn conditional_binary_response_with_content_type(
     } else if let Some(range_header) = headers.get(RANGE).and_then(|value| value.to_str().ok()) {
         match parse_single_byte_range(range_header, body.len()) {
             Some((start, end)) => {
-                let mut response = Response::new(Body::from(body[start..=end].to_vec()));
+                let mut response = Response::new(Body::from(body.slice(start..end + 1)));
                 *response.status_mut() = StatusCode::PARTIAL_CONTENT;
                 response.headers_mut().insert(CONTENT_TYPE, content_type);
                 if let Ok(value) =
@@ -133,6 +192,39 @@ pub(crate) fn conditional_binary_response_with_content_type(
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
+}
+
+pub(crate) fn conditional_fem_topology_response(
+    state: &crate::types::AppState,
+    headers: &HeaderMap,
+    etag: &str,
+    mesh: &FemMeshPayload,
+) -> Result<Response, String> {
+    if if_none_match_matches(headers, etag) {
+        return Ok(conditional_binary_bytes_response(
+            headers,
+            etag,
+            Bytes::new(),
+            HeaderValue::from_static("application/octet-stream"),
+        ));
+    }
+
+    let body = {
+        let mut cache = state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .map_err(|_| "FMMT topology cache lock poisoned".to_string())?;
+        cache.get_or_try_insert_with(etag, || {
+            crate::field_store::serialize_fem_mesh_topology_binary_v2(mesh)
+        })?
+    };
+    Ok(conditional_binary_bytes_response(
+        headers,
+        etag,
+        Bytes::from_owner(body),
+        HeaderValue::from_static("application/octet-stream"),
+    ))
 }
 
 fn parse_single_byte_range(raw: &str, len: usize) -> Option<(usize, usize)> {
@@ -184,4 +276,27 @@ pub(crate) fn conditional_json_response<T: Serialize>(
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facet_global_ordinal_index_resolves_reordered_ids() {
+        let facets = fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Tri3; 3],
+            roles: vec![fullmag_ir::FemFacetRoleIR::Exterior; 3],
+            offsets: vec![0, 3, 6, 9],
+            nodes: vec![0, 1, 2, 0, 2, 3, 1, 2, 3],
+            global_ordinals: vec![900, 100, 700],
+        };
+
+        let index = FacetGlobalOrdinalIndex::new(&facets);
+
+        assert_eq!(index.get(100), Some(1));
+        assert_eq!(index.get(700), Some(2));
+        assert_eq!(index.get(900), Some(0));
+        assert_eq!(index.get(404), None);
+    }
 }

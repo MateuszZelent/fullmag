@@ -17,9 +17,9 @@ fn make_test_plan(enable_demag: bool) -> FemPlanIR {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -173,16 +173,16 @@ fn make_box_demag_plan() -> FemPlanIR {
                 [20e-9, 10e-9, 5e-9],
                 [-20e-9, 10e-9, 5e-9],
             ],
-            elements: vec![
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
                 [0, 1, 2, 6],
                 [0, 2, 3, 6],
                 [0, 3, 7, 6],
                 [0, 7, 4, 6],
                 [0, 4, 5, 6],
                 [0, 5, 1, 6],
-            ],
+            ]),
             element_markers: vec![1; 6],
-            boundary_faces: vec![
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
                 [0, 1, 2],
                 [0, 1, 5],
                 [1, 2, 6],
@@ -195,7 +195,7 @@ fn make_box_demag_plan() -> FemPlanIR {
                 [0, 4, 5],
                 [4, 5, 6],
                 [1, 5, 6],
-            ],
+            ]),
             boundary_markers: vec![1; 12],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -570,7 +570,7 @@ fn fem_airbox_plan_uses_airbox_demag_operator_in_reference_runner() {
     let plan = make_shared_domain_airbox_demag_plan();
     let (_problem, _state) = build_problem_and_state(&plan)
         .expect("shared-domain FEM airbox problem should build in reference runner");
-    let provenance = execution_provenance(&plan);
+    let provenance = execution_provenance(&plan).unwrap();
 
     assert_eq!(
         provenance.demag_operator_kind.as_deref(),
@@ -590,7 +590,7 @@ fn fem_airbox_plan_uses_airbox_demag_operator_in_reference_runner() {
 #[test]
 fn baseline_provenance_defaults_implicit_demag_to_fem_poisson() {
     let plan = make_test_plan(true);
-    let provenance = execution_provenance(&plan);
+    let provenance = execution_provenance(&plan).unwrap();
 
     assert_eq!(provenance.execution_engine, "fem_cpu_baseline_internal");
     assert_eq!(provenance.requested_demag_realization, None);
@@ -628,7 +628,7 @@ fn fem_per_object_scalars_uses_mesh_part_node_indices_for_shared_nodes() {
         node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
         boundary_face_indices: Vec::new(),
         node_indices: vec![1, 3, 5],
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: None,
         bounds_max: None,
         parent_id: None,

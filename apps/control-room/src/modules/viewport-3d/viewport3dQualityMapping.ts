@@ -6,6 +6,7 @@ import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry"
 
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+import { topologyCellAt } from "./viewport3dTopologyIndexModel";
 
 export type MeshQualityColorMetric = "gamma" | "sicn" | "volume";
 
@@ -38,13 +39,23 @@ const meshQualityVertexColorCache = new WeakMap<
   WeakMap<DecodedMeshQualityData, MeshQualityColorCacheEntry>
 >();
 
+/** FMMQ v1 quality arrays are defined only for the legacy tet4 realization. */
+export function topologySupportsTet4FmmqQuality(
+  topology: DecodedTopology | null | undefined,
+): topology is DecodedTopology {
+  return Boolean(
+    topology &&
+      (!topology.cellTypes || topology.cellTypes.every((cellType) => cellType === 1)),
+  );
+}
+
 export function buildMeshQualityVertexColors(
   topology: DecodedTopology | null | undefined,
   quality: DecodedMeshQualityData | null | undefined,
   metric: MeshQualityColorMetric,
   palette = "viridis",
 ): ScalarColorBuffer | null {
-  if (!topology || !quality) return null;
+  if (!topologySupportsTet4FmmqQuality(topology) || !quality) return null;
 
   const cacheKey = `${metric}:${palette}`;
   const cached = cachedMeshQualityVertexColors(topology, quality, cacheKey);
@@ -54,17 +65,11 @@ export function buildMeshQualityVertexColors(
     cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
-
   const values = quality[metric];
   if (!values || values.length !== topology.elementCount) {
     cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
-  if (topology.indices.length !== topology.elementCount * 4) {
-    cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
-    return null;
-  }
-
   const range = rangeFor(values);
   if (!range) {
     cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
@@ -75,10 +80,10 @@ export function buildMeshQualityVertexColors(
   const counts = new Uint32Array(topology.nodeCount);
   for (let element = 0; element < topology.elementCount; element += 1) {
     const value = values[element] ?? 0;
-    const offset = element * 4;
-    for (let corner = 0; corner < 4; corner += 1) {
-      const node = topology.indices[offset + corner];
-      if (node === undefined || node >= topology.nodeCount) return null;
+    const cell = topologyCellAt(topology, element);
+    if (!cell || cell.nodes.length === 0) return null;
+    for (const node of cell.nodes) {
+      if (node >= topology.nodeCount) return null;
       sums[node] += value;
       counts[node] += 1;
     }

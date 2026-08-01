@@ -37,6 +37,14 @@ pub(crate) fn collect_artifacts(
             .unwrap_or(&path)
             .display()
             .to_string();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".autosave.json"))
+        {
+            out.push(stage_autosave_artifact_entry(root, &path, relative)?);
+            continue;
+        }
         let kind = match path.extension().and_then(|ext| ext.to_str()) {
             Some("json") => "json",
             Some("csv") => "csv",
@@ -53,6 +61,129 @@ pub(crate) fn collect_artifacts(
     }
     out.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
     Ok(())
+}
+
+fn stage_autosave_artifact_entry(
+    _root: &Path,
+    _path: &Path,
+    relative: String,
+) -> Result<ArtifactEntry, ApiError> {
+    Ok(ArtifactEntry {
+        path: relative,
+        kind: "stage_autosave".into(),
+        region_owned_provenance: None,
+    })
+}
+
+pub(crate) fn read_stage_autosave_metadata(
+    path: &Path,
+) -> Result<StageAutosaveArtifactMetadata, ApiError> {
+    let value: Value = serde_json::from_slice(&std::fs::read(path)?).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse stage autosave artifact manifest '{}': {error}",
+            path.display()
+        ))
+    })?;
+    let target = value
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let format = value
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let layout = value
+        .get("layout")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let extension = match format {
+        "zarr" => "zarr",
+        "hdf5" => "h5",
+        "txt" => "txt",
+        _ => "",
+    };
+    let stages = value
+        .get("stages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|stage| {
+            let complete = stage
+                .get("complete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let stage_id = stage
+                .get("stage_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let stage_index = stage
+                .get("stage_index")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            StageAutosaveArtifactStageMetadata {
+                stage_id: stage_id.into(),
+                stage_index,
+                resource_path: if format == "txt" && layout == "separate" {
+                    format!("{target}.stage_{stage_index:04}_{stage_id}.txt")
+                } else if extension.is_empty() {
+                    target.into()
+                } else {
+                    format!("{target}.{extension}")
+                },
+                download_path: match format {
+                    "txt" if layout == "separate" => {
+                        Some(format!("{target}.stage_{stage_index:04}_{stage_id}.txt"))
+                    }
+                    "txt" => Some(format!("{target}.txt")),
+                    "hdf5" => Some(format!("{target}.h5")),
+                    _ => None,
+                },
+                status: if complete { "completed" } else { "in_progress" }.into(),
+                complete,
+                table_quantities: string_array(stage.get("table_quantities")),
+                field_quantities: string_array(stage.get("field_quantities")),
+                table_sample_count: stage
+                    .get("table_sample_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                field_sample_count: stage
+                    .get("field_sample_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            }
+        })
+        .collect();
+    Ok(StageAutosaveArtifactMetadata {
+        schema_version: value
+            .get("schema_version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .into(),
+        target: target.into(),
+        format: format.into(),
+        layout: layout.into(),
+        resource_path: if extension.is_empty() {
+            target.into()
+        } else {
+            format!("{target}.{extension}")
+        },
+        download_path: match format {
+            "txt" if layout == "continuous" => Some(format!("{target}.txt")),
+            "hdf5" => Some(format!("{target}.h5")),
+            _ => None,
+        },
+        stages,
+    })
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
 }
 
 pub(crate) fn sanitize_file_name(file_name: &str) -> String {

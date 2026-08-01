@@ -25,6 +25,7 @@ mod oersted;
 pub mod quantities;
 mod region_conflict;
 mod regional_field_drive;
+mod sampling;
 mod spin_torque;
 mod surface_selectors;
 mod util;
@@ -34,13 +35,18 @@ pub mod boundary_geometry;
 
 pub use error::PlanError;
 pub use geometry::{
-    checked_fdm_grid_cost, FdmGridCost, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
-    FDM_GRID_MAX_BYTES, FDM_GRID_MAX_CELLS,
+    checked_fdm_grid_cost, FdmGridCost, FDM_GRID_ESTIMATED_BYTES_PER_CELL, FDM_GRID_MAX_BYTES,
+    FDM_GRID_MAX_CELLS,
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
     QuantityCapability,
+};
+pub use sampling::{
+    resolve_auto_sampling_for_stage, validate_continuous_autosave_targets,
+    validate_stage_autosave_capabilities, ResolvedAutosaveClock, ResolvedStageAutosave,
+    SamplingResolutionIR, SAMPLING_RESOLUTION_SCHEMA_VERSION,
 };
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
@@ -53,6 +59,18 @@ pub use util::generate_random_unit_vectors;
 /// - executable multilayer FDM for stacked multi-body cases,
 /// - executable FEM / FEM eigen with precomputed mesh assets.
 pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
+    if sampling::has_unresolved_auto_sampling(problem) {
+        let context = if util::active_stage_id(problem).is_none() {
+            "runtime_metadata.active_stage_id and an enabled active sinc drive"
+        } else {
+            "per-stage automatic sampling resolution"
+        };
+        return Err(PlanError {
+            reasons: vec![format!(
+                "automatic sampling is unresolved; {context} are required before backend planning"
+            )],
+        });
+    }
     if let Err(validation_errors) = problem.validate() {
         return Err(PlanError {
             reasons: validation_errors,
@@ -62,7 +80,12 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
     let resolved_backend = match problem.backend_policy.requested_backend {
         BackendTarget::Fdm => BackendTarget::Fdm,
-        BackendTarget::Auto => validate::resolve_auto_backend(problem),
+        BackendTarget::Auto => {
+            if let Err(reason) = mesh::reject_auto_backend_mixed_fem_topology(problem) {
+                errors.push(reason);
+            }
+            validate::resolve_auto_backend(problem)
+        }
         BackendTarget::Fem => BackendTarget::Fem,
         other => {
             errors.push(format!(

@@ -13,7 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
     let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
         .expect("read lib.rs");
-    let route_count = source.matches("fem::relax::execute_fem_relax(").count();
+    let route_count = source.matches("fem::relax::execute_fem_relax_in_mode(").count()
+        + source
+            .matches("fem::relax::execute_fem_relax_with_context_in_mode(")
+            .count();
     assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"
@@ -937,9 +940,9 @@ fn mesh_preview_active_mask_marks_only_non_air_nodes_for_m() {
             [2.0, 0.0, 1.0],
             [3.0, 0.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![1, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),

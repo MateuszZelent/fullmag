@@ -3,6 +3,7 @@
  */
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include <cmath>
@@ -10,9 +11,45 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <new>
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace allocation_probe {
+bool enabled = false;
+std::size_t count = 0u;
+}
+
+void *operator new(std::size_t size) {
+    if (allocation_probe::enabled) {
+        ++allocation_probe::count;
+    }
+    if (void *memory = std::malloc(size == 0u ? 1u : size)) {
+        return memory;
+    }
+    throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) {
+    return ::operator new(size);
+}
+
+void operator delete(void *memory) noexcept {
+    std::free(memory);
+}
+
+void operator delete[](void *memory) noexcept {
+    std::free(memory);
+}
+
+void operator delete(void *memory, std::size_t) noexcept {
+    std::free(memory);
+}
+
+void operator delete[](void *memory, std::size_t) noexcept {
+    std::free(memory);
+}
 
 namespace {
 
@@ -186,10 +223,92 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 #endif
 }
 
+void average_magnetization_consumes_dg0_ms_without_nodal_projection() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 8;
+    ctx.state.m_xyz.assign(24u, 0.0);
+    for (std::size_t node = 0; node < 4u; ++node) {
+        ctx.state.m_xyz[node * 3u] = 1.0;
+    }
+    for (std::size_t node = 4u; node < 8u; ++node) {
+        ctx.state.m_xyz[node * 3u + 1u] = 1.0;
+    }
+    ctx.material_fields.Ms_element_field = {1.0, 3.0};
+    ctx.material_fields.runtime.emplace(fullmag::fem::P1TetrahedralMaterialRealization(
+        8u,
+        {
+            {{{0u, 1u, 2u, 3u}}, 1.0},
+            {{{4u, 5u, 6u, 7u}}, 1.0},
+        },
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, {1.0, 3.0}},
+        {fullmag::fem::MaterialCoefficientLocation::uniform, {1.0}}));
+
+    const auto average = fullmag::fem::average_magnetization_components(ctx);
+    check_near(average[0], 0.25, 1e-15, "DG0 Ms weighted mx");
+    check_near(average[1], 0.75, 1e-15, "DG0 Ms weighted my");
+    check_near(average[2], 0.0, 1e-15, "DG0 Ms weighted mz");
+}
+
+void dg0_average_magnetization_is_allocation_free() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 8;
+    ctx.state.m_xyz.assign(24u, 0.0);
+    for (std::size_t node = 0; node < 4u; ++node) {
+        ctx.state.m_xyz[node * 3u] = 1.0;
+    }
+    for (std::size_t node = 4u; node < 8u; ++node) {
+        ctx.state.m_xyz[node * 3u + 1u] = 1.0;
+    }
+    ctx.material_fields.Ms_element_field = {1.0, 3.0};
+    ctx.material_fields.runtime.emplace(fullmag::fem::P1TetrahedralMaterialRealization(
+        8u,
+        {
+            {{{0u, 1u, 2u, 3u}}, 1.0},
+            {{{4u, 5u, 6u, 7u}}, 1.0},
+        },
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, {1.0, 3.0}},
+        {fullmag::fem::MaterialCoefficientLocation::uniform, {1.0}}));
+
+    allocation_probe::count = 0u;
+    allocation_probe::enabled = true;
+    const auto average = fullmag::fem::average_magnetization_components(ctx);
+    allocation_probe::enabled = false;
+
+    check(allocation_probe::count == 0u, "DG0 average magnetization must not heap-allocate");
+    check_near(average[0], 0.25, 1e-15, "allocation-free DG0 mx");
+    check_near(average[1], 0.75, 1e-15, "allocation-free DG0 my");
+    check_near(average[2], 0.0, 1e-15, "allocation-free DG0 mz");
+}
+
+void mixed_average_does_not_fallback_to_geometry_over_arity_node_volumes() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.cell_types = {FULLMAG_FEM_CELL_PRISM6, FULLMAG_FEM_CELL_PYRAMID5};
+    ctx.mesh.node_volumes = {1.0, 3.0};
+    ctx.mesh.magnetic_node_mask = {1u, 1u};
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+    ctx.state.m_xyz = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+
+    const auto missing = fullmag::fem::average_magnetization_components(ctx);
+    check_near(missing[0], 0.0, 0.0, "mixed average rejects missing MFEM weights");
+    check_near(missing[1], 0.0, 0.0, "mixed average rejects legacy node-volume fallback");
+    check_near(missing[2], 0.0, 0.0, "mixed average rejects missing canonical measure");
+
+    ctx.integration_weights.mfem_lumped_mass = {1.0};
+    const auto wrong_extent = fullmag::fem::average_magnetization_components(ctx);
+    check_near(wrong_extent[0], 0.0, 0.0, "mixed average rejects partial MFEM weights");
+    check_near(wrong_extent[1], 0.0, 0.0, "mixed average rejects wrong weight extent");
+}
+
 } // namespace
 
 int main() {
     step_metrics_are_owned_by_runtime_module();
     fill_common_step_metrics_reports_energy_fields_torque_and_averages();
+    average_magnetization_consumes_dg0_ms_without_nodal_projection();
+    dg0_average_magnetization_is_allocation_free();
+    mixed_average_does_not_fallback_to_geometry_over_arity_node_volumes();
     return 0;
 }

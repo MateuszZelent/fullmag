@@ -1,6 +1,7 @@
 use crate::dispatch::{FdmEngine, FemEngine};
 use crate::quantities::QuantityId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,11 +31,47 @@ impl RuntimeEngineId {
     }
 }
 
+pub type FeatureCapabilityStatus = fullmag_ir::FemMixedTopologyCapabilityStatusIR;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureCapability {
+    pub status: FeatureCapabilityStatus,
+    pub reason: String,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_layer_counts: Vec<u32>,
+}
+
+pub const MIXED_P1_MESH_FEATURE_CAPABILITY_IDS: [&str; 4] = [
+    "mesh.topology.mixed_p1",
+    "mesh.swept.prism",
+    "mesh.transition.pyramid_tet",
+    "mesh.exact_layer_count",
+];
+
+pub const MIXED_P1_FEATURE_CAPABILITY_IDS: [&str; 6] = [
+    "mesh.topology.mixed_p1",
+    "mesh.swept.prism",
+    "mesh.transition.pyramid_tet",
+    "mesh.exact_layer_count",
+    "fem.cpu.exchange_demag.mixed_p1",
+    "fem.gpu.exchange_demag.mixed_p1",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendCapabilities {
     pub engine_id: RuntimeEngineId,
     pub capability_profile_version: String,
     pub supported_terms: Vec<String>,
+    /// Executable restrictions for terms advertised by this resolved plan
+    /// profile. The semantic term name remains stable in `supported_terms`;
+    /// clients must use this map for command gating and explanatory text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub term_scopes: BTreeMap<String, String>,
+    /// Cross-cutting feature availability. Feature IDs are intentionally
+    /// separate from executable physics terms in `supported_terms`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub feature_capabilities: BTreeMap<String, FeatureCapability>,
     pub supported_demag_realizations: Vec<String>,
     pub preview_quantities: Vec<String>,
     pub snapshot_quantities: Vec<String>,
@@ -53,11 +90,182 @@ pub struct BackendCapabilities {
 // frequency-domain or two-way magnetoelastic solver.
 const DEFERRED_STUDY_CAPABILITY: bool = false;
 
+/// The FDM plan family whose public execution scope is being reported.
+///
+/// This is intentionally separate from the selected engine: the public
+/// multilayer plan rejects several interactions that the single-grid engine
+/// can execute. `supported_terms` is an executable-plan catalog, not a source
+/// inventory of dormant kernels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FdmCapabilityProfile {
+    SingleGrid,
+    Multilayer,
+}
+
 fn quantity_names(ids: &[QuantityId]) -> Vec<String> {
     ids.iter().map(|id| id.as_str().to_string()).collect()
 }
 
-pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilities {
+fn fdm_supported_terms(profile: FdmCapabilityProfile, cuda: bool) -> Vec<String> {
+    let terms = match profile {
+        FdmCapabilityProfile::SingleGrid => vec![
+            "exchange",
+            "demag_tensor_fft_newell",
+            "zeeman",
+            "thermal",
+            "uniaxial_anisotropy",
+            "cubic_anisotropy",
+            "interfacial_dmi",
+            "bulk_dmi",
+            "stt",
+            "sot",
+            "oersted",
+        ],
+        FdmCapabilityProfile::Multilayer => vec![
+            "exchange",
+            "demag_tensor_fft_newell",
+            "zeeman",
+            "uniaxial_anisotropy",
+            "cubic_anisotropy",
+            "interfacial_dmi",
+        ],
+    };
+    let mut terms = terms.into_iter().map(str::to_string).collect::<Vec<_>>();
+    if cuda && profile == FdmCapabilityProfile::SingleGrid {
+        terms.push("boundary_correction".to_string());
+    }
+    terms
+}
+
+fn fdm_term_scopes(profile: FdmCapabilityProfile, cuda: bool) -> BTreeMap<String, String> {
+    if profile == FdmCapabilityProfile::Multilayer {
+        return BTreeMap::new();
+    }
+
+    let mut scopes = BTreeMap::from([
+        (
+            "thermal".to_string(),
+            "single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized".to_string(),
+        ),
+        (
+            "sot".to_string(),
+            "single_grid; uniform_module; conservative_energy=none".to_string(),
+        ),
+    ]);
+    scopes.insert(
+        "oersted".to_string(),
+        if cuda {
+            "single_grid; cylinder_axis=+z/time_dependence=constant; field=precomputed_static"
+                .to_string()
+        } else {
+            "single_grid; cylinder_any_axis; time_dependence=constant|sinusoidal|pulse; field=current_solution"
+                .to_string()
+        },
+    );
+    scopes
+}
+
+fn feature_capability(
+    status: FeatureCapabilityStatus,
+    reason: &str,
+    scope: &str,
+) -> FeatureCapability {
+    FeatureCapability {
+        status,
+        reason: reason.to_string(),
+        scope: scope.to_string(),
+        supported_layer_counts: Vec::new(),
+    }
+}
+
+fn mixed_p1_feature_capabilities(
+    fem_engine: Option<FemEngine>,
+) -> BTreeMap<String, FeatureCapability> {
+    const FDM_REASON: &str =
+        "Mixed-P1 shared-domain topology is FEM-only; FDM retains Cartesian cells.";
+    const OPERATOR_SCOPE: &str =
+        "double; one axis-aligned P1 Box; one conforming shared-domain airbox; requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; uniform Ms/Aex; exchange; uniform Zeeman; Poisson Robin|Dirichlet; PG-BB|NCG|overdamped LLG; no fallback";
+
+    let mesh_status = match fem_engine {
+        Some(FemEngine::CpuNative | FemEngine::NativeGpu) => FeatureCapabilityStatus::Implemented,
+        None => FeatureCapabilityStatus::Unsupported,
+    };
+    let mesh_reason = match fem_engine {
+        Some(FemEngine::CpuNative | FemEngine::NativeGpu) => {
+            "Implemented for the certificate-bound explicit CPU/GPU double strict relaxation scope; managed public runtime proof is still pending."
+        }
+        None => FDM_REASON,
+    };
+    let mut features = BTreeMap::from([
+        (
+            "mesh.topology.mixed_p1".to_string(),
+            feature_capability(
+                mesh_status,
+                mesh_reason,
+                "conforming P1; prism6 magnetic cells; pyramid5/tet4 air cells; tri3/quad4 facets",
+            ),
+        ),
+        (
+            "mesh.swept.prism".to_string(),
+            feature_capability(
+                mesh_status,
+                mesh_reason,
+                "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; magnetic_cells=prism6; no prism-to-tet conversion",
+            ),
+        ),
+        (
+            "mesh.transition.pyramid_tet".to_string(),
+            feature_capability(
+                mesh_status,
+                mesh_reason,
+                "pyramid5 transition air; tet4 far air; shared conforming nodes",
+            ),
+        ),
+        (
+            "mesh.exact_layer_count".to_string(),
+            feature_capability(
+                mesh_status,
+                mesh_reason,
+                "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
+            ),
+        ),
+    ]);
+    for id in MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
+        features
+            .get_mut(id)
+            .expect("mixed-P1 mesh capability must exist")
+            .supported_layer_counts = vec![1, 2, 3];
+    }
+
+    for (id, owner) in [
+        ("fem.cpu.exchange_demag.mixed_p1", FemEngine::CpuNative),
+        ("fem.gpu.exchange_demag.mixed_p1", FemEngine::NativeGpu),
+    ] {
+        let status = if fem_engine == Some(owner) {
+            FeatureCapabilityStatus::Implemented
+        } else {
+            FeatureCapabilityStatus::Unsupported
+        };
+        let reason = match fem_engine {
+            Some(engine) if engine == owner => {
+                "Implemented for the bounded certified mixed-P1 relaxation lane on this device; not production executable until managed public runtime proof is stored."
+            }
+            Some(_) => "The capability belongs to the other FEM device lane.",
+            None => FDM_REASON,
+        };
+        features.insert(
+            id.to_string(),
+            feature_capability(status, reason, OPERATOR_SCOPE),
+        );
+    }
+
+    features
+}
+
+pub(crate) fn capabilities_for_fdm_engine(
+    engine: FdmEngine,
+    profile: FdmCapabilityProfile,
+) -> BackendCapabilities {
     match engine {
         FdmEngine::CpuReference => BackendCapabilities {
             supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
@@ -66,21 +274,10 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
             supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FdmCpuReference,
-            capability_profile_version: "2026-04-04".to_string(),
-            supported_terms: vec![
-                "exchange".to_string(),
-                "demag_tensor_fft_newell".to_string(),
-                "zeeman".to_string(),
-                "thermal".to_string(),
-                "uniaxial_anisotropy".to_string(),
-                "cubic_anisotropy".to_string(),
-                "interfacial_dmi".to_string(),
-                "bulk_dmi".to_string(),
-                "stt".to_string(),
-                "sot".to_string(),
-                "magnetoelastic".to_string(),
-                "oersted".to_string(),
-            ],
+            capability_profile_version: "2026-07-28".to_string(),
+            supported_terms: fdm_supported_terms(profile, false),
+            term_scopes: fdm_term_scopes(profile, false),
+            feature_capabilities: mixed_p1_feature_capabilities(None),
             supported_demag_realizations: vec!["tensor_fft_newell".to_string()],
             // H_ani and H_dmi are exposed as derived CPU observables when the
             // plan enables the corresponding local anisotropy or DMI terms.
@@ -132,22 +329,10 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
             supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FdmCuda,
-            capability_profile_version: "2026-04-04".to_string(),
-            supported_terms: vec![
-                "exchange".to_string(),
-                "demag_tensor_fft_newell".to_string(),
-                "zeeman".to_string(),
-                "thermal".to_string(),
-                "uniaxial_anisotropy".to_string(),
-                "cubic_anisotropy".to_string(),
-                "interfacial_dmi".to_string(),
-                "bulk_dmi".to_string(),
-                "stt".to_string(),
-                "sot".to_string(),
-                "magnetoelastic".to_string(),
-                "oersted".to_string(),
-                "boundary_correction".to_string(),
-            ],
+            capability_profile_version: "2026-07-28".to_string(),
+            supported_terms: fdm_supported_terms(profile, true),
+            term_scopes: fdm_term_scopes(profile, true),
+            feature_capabilities: mixed_p1_feature_capabilities(None),
             supported_demag_realizations: vec!["tensor_fft_newell".to_string()],
             preview_quantities: quantity_names(&[
                 QuantityId::M,
@@ -189,7 +374,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FemCpuNative,
-            capability_profile_version: "2026-04-04".to_string(),
+            capability_profile_version: "2026-07-28".to_string(),
             supported_terms: vec![
                 "exchange".to_string(),
                 "zeeman".to_string(),
@@ -202,6 +387,8 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "thermal".to_string(),
                 "oersted".to_string(),
             ],
+            term_scopes: BTreeMap::new(),
+            feature_capabilities: mixed_p1_feature_capabilities(Some(FemEngine::CpuNative)),
             supported_demag_realizations: vec![
                 "poisson_robin".to_string(),
                 "poisson_dirichlet".to_string(),
@@ -243,7 +430,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FemNativeGpu,
-            capability_profile_version: "2026-04-04".to_string(),
+            capability_profile_version: "2026-07-29".to_string(),
             supported_terms: vec![
                 "exchange".to_string(),
                 "zeeman".to_string(),
@@ -256,6 +443,8 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "thermal".to_string(),
                 "oersted".to_string(),
             ],
+            term_scopes: BTreeMap::new(),
+            feature_capabilities: mixed_p1_feature_capabilities(Some(FemEngine::NativeGpu)),
             supported_demag_realizations: vec![
                 "poisson_robin".to_string(),
                 "poisson_dirichlet".to_string(),
@@ -321,6 +510,181 @@ pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
 mod tests {
     use super::*;
 
+    fn mixed_p1_statuses(
+        capabilities: &BackendCapabilities,
+    ) -> BTreeMap<&str, FeatureCapabilityStatus> {
+        MIXED_P1_FEATURE_CAPABILITY_IDS
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    capabilities
+                        .feature_capabilities
+                        .get(*id)
+                        .unwrap_or_else(|| panic!("missing mixed-P1 capability '{id}'"))
+                        .status,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fem_cpu_reports_bounded_mixed_p1_implementation_without_public_promotion() {
+        let capabilities = capabilities_for_fem_engine(FemEngine::CpuNative);
+
+        assert_eq!(
+            mixed_p1_statuses(&capabilities),
+            BTreeMap::from([
+                (
+                    "mesh.topology.mixed_p1",
+                    FeatureCapabilityStatus::Implemented
+                ),
+                ("mesh.swept.prism", FeatureCapabilityStatus::Implemented),
+                (
+                    "mesh.transition.pyramid_tet",
+                    FeatureCapabilityStatus::Implemented,
+                ),
+                (
+                    "mesh.exact_layer_count",
+                    FeatureCapabilityStatus::Implemented,
+                ),
+                (
+                    "fem.cpu.exchange_demag.mixed_p1",
+                    FeatureCapabilityStatus::Implemented,
+                ),
+                (
+                    "fem.gpu.exchange_demag.mixed_p1",
+                    FeatureCapabilityStatus::Unsupported,
+                ),
+            ]),
+        );
+        assert!(capabilities
+            .feature_capabilities
+            .values()
+            .all(|feature| !feature.reason.is_empty() && !feature.scope.is_empty()));
+        assert!(MIXED_P1_FEATURE_CAPABILITY_IDS.iter().all(|feature_id| {
+            !capabilities
+                .supported_terms
+                .iter()
+                .any(|term| term == feature_id)
+        }));
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.swept.prism"].scope,
+            "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; magnetic_cells=prism6; no prism-to-tet conversion",
+        );
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].scope,
+            "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
+        );
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].supported_layer_counts,
+            vec![1, 2, 3],
+        );
+        let cpu_operator = &capabilities.feature_capabilities["fem.cpu.exchange_demag.mixed_p1"];
+        assert_eq!(cpu_operator.status, FeatureCapabilityStatus::Implemented);
+        assert!(cpu_operator
+            .scope
+            .contains("requested_layers=realized_layers={1,2,3}"));
+        assert!(cpu_operator
+            .scope
+            .contains("magnetic_node_planes=requested_layers+1"));
+    }
+
+    #[test]
+    fn fem_gpu_reports_bounded_mixed_p1_implementation_without_public_promotion() {
+        let capabilities = capabilities_for_fem_engine(FemEngine::NativeGpu);
+
+        assert_eq!(
+            mixed_p1_statuses(&capabilities).get("fem.cpu.exchange_demag.mixed_p1"),
+            Some(&FeatureCapabilityStatus::Unsupported),
+        );
+        assert_eq!(
+            mixed_p1_statuses(&capabilities).get("fem.gpu.exchange_demag.mixed_p1"),
+            Some(&FeatureCapabilityStatus::Implemented),
+        );
+        for id in &MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
+            assert_eq!(
+                capabilities
+                    .feature_capabilities
+                    .get(*id)
+                    .map(|feature| feature.status),
+                Some(FeatureCapabilityStatus::Implemented),
+            );
+        }
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].scope,
+            "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
+        );
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].supported_layer_counts,
+            vec![1, 2, 3],
+        );
+        let gpu_operator = &capabilities.feature_capabilities["fem.gpu.exchange_demag.mixed_p1"];
+        assert_eq!(gpu_operator.status, FeatureCapabilityStatus::Implemented);
+        assert!(gpu_operator
+            .scope
+            .contains("requested_layers=realized_layers={1,2,3}"));
+        assert!(gpu_operator
+            .scope
+            .contains("magnetic_node_planes=requested_layers+1"));
+    }
+
+    #[test]
+    fn fdm_profiles_do_not_advertise_mixed_p1_execution() {
+        for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
+            let capabilities =
+                capabilities_for_fdm_engine(engine, FdmCapabilityProfile::SingleGrid);
+
+            assert_eq!(capabilities.feature_capabilities.len(), 6);
+            assert!(capabilities
+                .feature_capabilities
+                .values()
+                .all(|feature| feature.status == FeatureCapabilityStatus::Unsupported));
+        }
+    }
+
+    #[test]
+    fn backend_capabilities_deserialize_without_feature_capabilities() {
+        let capabilities = capabilities_for_fem_engine(FemEngine::CpuNative);
+        let mut legacy = serde_json::to_value(capabilities).expect("serialize capabilities");
+        legacy
+            .as_object_mut()
+            .expect("capabilities serialize as an object")
+            .remove("feature_capabilities");
+
+        let decoded: BackendCapabilities =
+            serde_json::from_value(legacy).expect("deserialize legacy capabilities");
+
+        assert!(decoded.feature_capabilities.is_empty());
+    }
+
+    #[test]
+    fn backend_capabilities_serialize_exact_mixed_p1_feature_contract() {
+        for (engine, operator_id) in [
+            (FemEngine::CpuNative, "fem.cpu.exchange_demag.mixed_p1"),
+            (FemEngine::NativeGpu, "fem.gpu.exchange_demag.mixed_p1"),
+        ] {
+            let capabilities = capabilities_for_fem_engine(engine);
+            assert_eq!(capabilities.feature_capabilities.len(), 6);
+
+            let encoded = serde_json::to_value(capabilities).expect("serialize capabilities");
+            let features = encoded["feature_capabilities"]
+                .as_object()
+                .expect("feature capabilities serialize as an object");
+            assert_eq!(features.len(), 6);
+            assert_eq!(features["mesh.topology.mixed_p1"]["status"], "implemented");
+            assert_eq!(features[operator_id]["status"], "implemented");
+            for id in MIXED_P1_FEATURE_CAPABILITY_IDS {
+                assert!(features[id]["reason"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()));
+                assert!(features[id]["scope"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()));
+            }
+        }
+    }
+
     #[test]
     fn fem_time_domain_and_eigen_capabilities_keep_distinct_engine_ids() {
         let fem_cpu = capabilities_for_fem_engine(FemEngine::CpuNative);
@@ -356,8 +720,8 @@ mod tests {
     #[test]
     fn frequency_response_and_two_way_magnetoelasticity_are_explicitly_deferred() {
         let capabilities = [
-            capabilities_for_fdm_engine(FdmEngine::CpuReference),
-            capabilities_for_fdm_engine(FdmEngine::CudaFdm),
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid),
+            capabilities_for_fdm_engine(FdmEngine::CudaFdm, FdmCapabilityProfile::SingleGrid),
             capabilities_for_fem_engine(FemEngine::CpuNative),
             capabilities_for_fem_engine(FemEngine::NativeGpu),
             capabilities_for_fem_eigen_engine(FemEngine::CpuNative),
@@ -392,5 +756,73 @@ mod tests {
                 capability.engine_id.as_str()
             );
         }
+    }
+
+    #[test]
+    fn multilayer_fdm_catalog_excludes_terms_the_planner_rejects() {
+        for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
+            let capabilities =
+                capabilities_for_fdm_engine(engine, FdmCapabilityProfile::Multilayer);
+            for term in [
+                "thermal",
+                "stt",
+                "sot",
+                "oersted",
+                "bulk_dmi",
+                "magnetoelastic",
+            ] {
+                assert!(
+                    !capabilities
+                        .supported_terms
+                        .iter()
+                        .any(|candidate| candidate == term),
+                    "{} must not advertise '{term}' for a public multilayer FDM plan",
+                    capabilities.engine_id.as_str(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn single_grid_fdm_catalog_advertises_only_current_public_fdm_terms() {
+        for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
+            let capabilities =
+                capabilities_for_fdm_engine(engine, FdmCapabilityProfile::SingleGrid);
+            for term in ["thermal", "stt", "sot", "oersted"] {
+                assert!(
+                    capabilities
+                        .supported_terms
+                        .iter()
+                        .any(|candidate| candidate == term),
+                    "{} must advertise its executable single-grid '{term}' path",
+                    capabilities.engine_id.as_str(),
+                );
+            }
+            assert!(
+                !capabilities
+                    .supported_terms
+                    .iter()
+                    .any(|candidate| candidate == "magnetoelastic"),
+                "{} must not advertise the semantic-only FDM magnetoelastic path",
+                capabilities.engine_id.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn single_grid_cuda_oersted_scope_is_not_advertised_as_general_geometry() {
+        let capabilities =
+            capabilities_for_fdm_engine(FdmEngine::CudaFdm, FdmCapabilityProfile::SingleGrid);
+
+        assert_eq!(
+            capabilities.term_scopes.get("oersted").map(String::as_str),
+            Some(
+                "single_grid; cylinder_axis=+z/time_dependence=constant; field=precomputed_static"
+            ),
+        );
+        assert_eq!(
+            capabilities.term_scopes.get("thermal").map(String::as_str),
+            Some("single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized"),
+        );
     }
 }

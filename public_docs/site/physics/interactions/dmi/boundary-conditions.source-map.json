@@ -1,0 +1,39 @@
+{
+  "document": {"path": "public_docs/site/physics/interactions/dmi/boundary-conditions.md", "title": "DMI boundary conditions", "interaction": "Dzyaloshinskii-Moriya interaction boundary conditions"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Canonical normal and boundary stencil are source-visible; full natural-boundary qualification is incomplete."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "CUDA DMI kernels exist; executed-device boundary parity remains evidence-gated."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Natural boundary contribution is part of the FEM weak residual source path."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "CUDA DMI field and energy path exists; mixed-element boundary qualification remains open."}
+  ],
+  "sources": [
+    {"id": "interfacial-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "interfacial coefficient and normal validation"},
+    {"id": "bulk-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "bulk coefficient validation and IR"},
+    {"id": "fem-interfacial", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM interfacial DMI field"},
+    {"id": "fem-bulk", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "FEM bulk DMI field"},
+    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "fullmag_cuda_dmi_field_energy", "responsibility": "CUDA DMI field and energy"},
+    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu", "symbol": "launch_multilayer_dmi_field_fp64", "responsibility": "FDM CUDA DMI launch"}
+  ],
+  "symbols": [
+    {"id": "A", "latex": "$A$", "meaning": "exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "D", "latex": "$D$", "meaning": "DMI constant", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "n-hat", "latex": "$\\hat{\\mathbf{n}}$", "meaning": "interface-symmetry normal", "si_unit": "$1$"},
+    {"id": "ns", "latex": "$\\mathbf{n}_s$", "meaning": "outward surface normal", "si_unit": "$1$"},
+    {"id": "partial-n", "latex": "$\\partial_n$", "meaning": "normal derivative", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "ell", "latex": "$\\ell_{\\mathrm{DMI}}$", "meaning": "DMI boundary-twist length", "si_unit": "$\\mathrm{m}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-idmi-bc", "symbols": ["A", "partial-n", "m", "D", "n-hat", "ns"], "sources": ["interfacial-api", "fem-interfacial"]},
+    {"id": "eq-bdmi-bc", "symbols": ["A", "partial-n", "m", "D", "ns"], "sources": ["bulk-api", "fem-bulk"]},
+    {"id": "eq-dmi-bc-length", "symbols": ["ell", "A", "D"], "sources": ["interfacial-api", "bulk-api"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.InterfacialDMI", "fullmag.BulkDMI"],
+    "parameters": [
+      {"python": "InterfacialDMI.D", "type": "`float`", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite", "meaning": "interfacial DMI coefficient and sign", "backend_support": "FDM/FEM subject to normal policy", "problem_ir": "`energy_terms[].D`"},
+      {"python": "InterfacialDMI.interface_normal", "type": "`Sequence[float] or None`", "default": "`None`", "si_unit": "$1$", "validation": "three finite values; FEM non-zero; FDM canonical orientation", "meaning": "interface-symmetry normal", "backend_support": "FEM arbitrary non-zero; FDM restricted", "problem_ir": "`energy_terms[].interface_normal`"},
+      {"python": "BulkDMI.D", "type": "`float`", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite", "meaning": "bulk DMI coefficient and sign", "backend_support": "FDM/FEM lane-dependent", "problem_ir": "`energy_terms[].D` for `bulk_dmi`"}
+    ]
+  }
+}

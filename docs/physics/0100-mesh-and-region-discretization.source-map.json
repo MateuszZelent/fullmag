@@ -1,0 +1,51 @@
+{
+  "document": {
+    "path": "docs/physics/0100-mesh-and-region-discretization.md"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The API persists unstructured FEM meshes; FDM uses its separate grid certificate."},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "The API persists unstructured FEM meshes; FDM uses its separate grid certificate."}
+  ],
+  "equations": [],
+  "symbols": [
+    {"id": "x_i", "latex": "\\mathbf{x}_i", "meaning": "Coordinate of mesh node i", "si_unit": "\\mathrm{m}"},
+    {"id": "m_e", "latex": "m_e", "meaning": "Canonical Fullmag volume marker", "si_unit": "1"},
+    {"id": "b_f", "latex": "b_f", "meaning": "Canonical Fullmag boundary marker", "si_unit": "1"},
+    {"id": "g_e", "latex": "g_e", "meaning": "Immutable Fullmag global ordinal of element $e$ inside one native mesh identity", "si_unit": "1"},
+    {"id": "g_f", "latex": "g_f", "meaning": "Immutable Fullmag global ordinal of facet $f$ inside one native mesh identity", "si_unit": "1"},
+    {"id": "H_A", "latex": "H_A", "meaning": "Mesh authoring fingerprint", "si_unit": "1"},
+    {"id": "H_T", "latex": "H_T", "meaning": "Mesh topology fingerprint", "si_unit": "1"}
+    ,{"id": "epsilon_V_P", "latex": "\\epsilon_{V,P}", "meaning": "Relative volume error recorded by the Python mixed-mesh certificate producer", "si_unit": "1"}
+    ,{"id": "epsilon_V_R", "latex": "\\epsilon_{V,R}", "meaning": "Relative volume error independently recomputed by the Rust validator", "si_unit": "1"}
+    ,{"id": "tau_V", "latex": "\\tau_V", "meaning": "Physical relative-volume acceptance limit for mixed-mesh certificates", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "study-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyMeshHandle", "responsibility": "Owns the public study mesh persistence and interchange facade."},
+    {"id": "native-save", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "save_mesh_artifact", "responsibility": "Writes the lossless native mesh artifact atomically."},
+    {"id": "native-load", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "load_mesh_artifact", "responsibility": "Validates and loads the native mesh artifact."},
+    {"id": "comsol-export", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "export_comsol_mesh", "responsibility": "Writes COMSOL MPHTXT v4 and the Fullmag interchange sidecar."},
+    {"id": "comsol-import", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "import_comsol_mesh", "responsibility": "Imports and validates supported COMSOL MPHTXT v4 topology."},
+    {"id": "gmsh-export", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "export_gmsh_mesh", "responsibility": "Writes Gmsh 4.1 and the Fullmag interchange sidecar."},
+    {"id": "gmsh-import", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "import_gmsh_mesh", "responsibility": "Imports and validates supported Gmsh topology."},
+    {"id": "mesh-data", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "class MeshData", "responsibility": "Owns canonical typed FEM topology and fingerprints."},
+    {"id": "problem-ingress", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "build_geometry_assets_for_request", "responsibility": "Inlines persisted topology into the existing FEM domain mesh asset."},
+    {"id": "mixed-volume-evidence-validation", "path": "crates/fullmag-ir/src/mesh_assets.rs", "symbol": "validate_mixed_certificate_evidence_against_mesh", "responsibility": "Recomputes mixed-mesh certificate evidence and applies the dedicated cross-language relative-volume comparison boundary."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "study.mesh.save.path", "type": "str | Path", "default": "required", "si_unit": "1", "validation": "Must end in .fullmag-mesh and resolve to a strictly valid shared-domain FEM mesh.", "meaning": "Native artifact destination.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset"},
+      {"python": "study.mesh.load.path", "type": "str | Path", "default": "required", "si_unit": "1", "validation": "Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate.", "meaning": "Native artifact source.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset"},
+      {"python": "study.mesh.save_or_load.path", "type": "str | Path", "default": "required", "si_unit": "1", "validation": "Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild.", "meaning": "Reusable native artifact path.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset"},
+      {"python": "study.mesh.export.path", "type": "str | Path", "default": "required", "si_unit": "1", "validation": "Must end in .mphtxt for COMSOL or .msh for Gmsh; every marker must have a semantic name.", "meaning": "Interchange destination.", "backend_support": "FEM CPU/GPU", "problem_ir": "not stored; external artifact"},
+      {"python": "study.mesh.export.format", "type": "str", "default": "auto", "si_unit": "1", "validation": "auto, comsol, or gmsh; auto resolves from suffix.", "meaning": "Interchange format selector.", "backend_support": "FEM CPU/GPU", "problem_ir": "not stored; external artifact"},
+      {"python": "study.mesh.import_.path", "type": "str | Path", "default": "required", "si_unit": "1", "validation": "Must be a supported COMSOL .mphtxt v4 or Gmsh .msh file.", "meaning": "External mesh source.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset"},
+      {"python": "study.mesh.import_.region_map", "type": "Mapping[str, int] | None", "default": "None", "si_unit": "1", "validation": "Required when a matching sidecar or unambiguous Physical Volume names are absent.", "meaning": "External volume name to canonical marker mapping.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset.region_markers"},
+      {"python": "study.mesh.import_.boundary_map", "type": "Mapping[str, int] | None", "default": "None", "si_unit": "1", "validation": "Required for boundary selections not recoverable from sidecar or Physical Surface names.", "meaning": "External surface name to canonical marker mapping.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers"},
+      {"python": "study.mesh.import_.region_entity_map", "type": "Mapping[int, int] | None", "default": "None", "si_unit": "1", "validation": "COMSOL only; required without a matching sidecar.", "meaning": "COMSOL domain entity to canonical Fullmag volume marker.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset.element_markers"},
+      {"python": "study.mesh.import_.boundary_entity_map", "type": "Mapping[int, int] | None", "default": "None", "si_unit": "1", "validation": "COMSOL only; required without a matching sidecar.", "meaning": "COMSOL boundary entity to canonical Fullmag boundary marker.", "backend_support": "FEM CPU/GPU", "problem_ir": "geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers"},
+      {"python": "study.mesh.import_.coordinate_unit", "type": "str | None", "default": "None", "si_unit": "1", "validation": "m, mm, um, or nm; required when no valid sidecar supplies the unit.", "meaning": "Unit of imported node coordinates.", "backend_support": "FEM CPU/GPU", "problem_ir": "normalized to geometry_assets.fem_domain_mesh_asset.mesh.nodes in metres"}
+    ]
+  }
+}

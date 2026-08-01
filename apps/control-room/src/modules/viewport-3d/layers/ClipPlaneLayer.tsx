@@ -13,6 +13,7 @@ import {
 } from "three";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
@@ -143,6 +144,78 @@ export function ClipPlaneFramePreviewLayer({
     <group position={frame.center} quaternion={planeQuaternion} renderOrder={31}>
       <ClipPlaneFrameOutline colors={colors} frame={frame} />
     </group>
+  );
+}
+
+export function PlanarMonitorFramePreviewLayer({
+  colors,
+  preview,
+  tracker,
+}: {
+  colors: Viewport3DColors;
+  preview: PlanarMonitorFramePreview;
+  tracker: Viewport3DResourceTracker;
+}) {
+  const invalidate = useThree((state) => state.invalidate);
+  const geometry = useMemo(() => {
+    const next = new BufferGeometry();
+    next.setAttribute(
+      "position",
+      new BufferAttribute(planarMonitorFrameSegments(preview), 3),
+    );
+    next.computeBoundingSphere();
+    return next;
+  }, [preview]);
+
+  useEffect(() => {
+    tracker.recordDirtyFrame("planar-monitor-frame-preview");
+    invalidate();
+    return () => geometry.dispose();
+  }, [geometry, invalidate, tracker]);
+
+  return (
+    <lineSegments geometry={geometry} renderOrder={31}>
+      <lineBasicMaterial
+        color={colors.accent}
+        depthTest={false}
+        depthWrite={false}
+        opacity={0.95}
+        transparent
+      />
+    </lineSegments>
+  );
+}
+
+export function planarMonitorFrameSegments(
+  preview: PlanarMonitorFramePreview,
+): Float32Array {
+  const [uMin, uMax, vMin, vMax] = preview.boundsUvM;
+  const point = (u: number, v: number) =>
+    preview.originM.map(
+      (origin, axis) =>
+        origin + u * preview.uAxis[axis] + v * preview.vAxis[axis],
+    ) as [number, number, number];
+  const corners = [
+    point(uMin, vMin),
+    point(uMax, vMin),
+    point(uMax, vMax),
+    point(uMin, vMax),
+  ];
+  return new Float32Array(
+    [
+      corners[0],
+      corners[1],
+      corners[1],
+      corners[2],
+      corners[2],
+      corners[3],
+      corners[3],
+      corners[0],
+      point(uMin, 0),
+      point(uMax, 0),
+      point(0, vMin),
+      point(0, vMax),
+    ].flatMap((position) => position),
   );
 }
 

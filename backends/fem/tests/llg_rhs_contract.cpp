@@ -240,27 +240,6 @@ void gamma_mu0_convention_is_pinned_by_docs_and_material_validation() {
         "LLG RHS header must expose the native precession mode contract");
 }
 
-void progress_report_marks_gamma_mu0_convention_contract_covered() {
-    const std::string progress = read_text_file(
-        repo_root() / "docs" / "reports" / "16.05.2026" /
-        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
-
-    check(
-        progress.find("| Ujednolicic konwencje `gamma_mu0` | zrobione kontraktowo |") !=
-            std::string::npos,
-        "progress report must mark gamma_mu0 convention as contract-covered");
-    check(
-        progress.find("`fem_material_fields_contract`") != std::string::npos &&
-            progress.find("`fem_llg_rhs_contract`") != std::string::npos &&
-            progress.find("`docs/physics/units.md`") != std::string::npos &&
-            progress.find("`docs/physics/llg_conventions.md`") != std::string::npos,
-        "progress report must cite gamma_mu0 contract gates and docs");
-    check(
-        progress.find("legacy ABI field `gyromagnetic_ratio` pozostaje gamma_mu0 w `m/(A s)`") !=
-            std::string::npos,
-        "progress report must document the legacy ABI name and gamma_mu0 units");
-}
-
 } // namespace
 
 int main() {
@@ -270,6 +249,5 @@ int main() {
     llg_rhs_can_disable_precession_for_overdamped_relaxation();
     aos_helpers_normalize_and_mask_nodes();
     gamma_mu0_convention_is_pinned_by_docs_and_material_validation();
-    progress_report_marks_gamma_mu0_convention_contract_covered();
     return 0;
 }

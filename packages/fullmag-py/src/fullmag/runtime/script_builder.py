@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import copy
 import json
+import math
 import re
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from fullmag._validation import (
+    AUTO_SINC_NYQUIST_GUARD_FACTOR,
+    SamplingPeriod,
+    normalize_sampling_period,
+)
 from fullmag.init.magnetization import (
     RandomMagnetization,
     SampledMagnetization,
@@ -35,7 +42,12 @@ from fullmag.model.spin_torque import (
     ZhangLiSTT,
 )
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
-from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
+from fullmag.model.dynamics import (
+    ADAPTIVE_INTEGRATORS,
+    AdaptiveTimestep,
+    DEFAULT_GAMMA,
+    LLG,
+)
 from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
@@ -70,6 +82,7 @@ from fullmag.model.study import (
     Hysteresis,
     RelaxStop,
     Relaxation,
+    StageAutosave,
     TableAutosave,
     TimeEvolution,
 )
@@ -78,6 +91,133 @@ from fullmag.runtime.loader import LoadedProblem, LoadedStage
 
 DEFAULT_ADAPTIVE_DT_MIN = 1e-15
 DEFAULT_ADAPTIVE_ATOL = 1e-6
+
+
+def _is_exact_max_err_policy(policy: AdaptiveTimestep) -> bool:
+    return (
+        policy._tolerance_mode == "max_error"
+        and policy.rtol == 0.0
+        and policy.safety == 0.9
+        and policy.growth_limit == 2.0
+        and policy.shrink_limit == 0.2
+        and policy.max_spin_rotation is None
+        and policy.norm_tolerance is None
+    )
+
+
+def _adaptive_timestep_draft(policy: AdaptiveTimestep | None) -> dict[str, object] | None:
+    if policy is None or _is_exact_max_err_policy(policy):
+        return None
+    return {
+        "atol": _text_number(policy.atol),
+        "rtol": _text_number(policy.rtol),
+        "dt_initial": _text_number(policy.dt_initial),
+        "dt_min": _text_number(policy.dt_min),
+        "dt_max": _text_number(policy.dt_max),
+        "safety": _text_number(policy.safety),
+        "growth_limit": _text_number(policy.growth_limit),
+        "shrink_limit": _text_number(policy.shrink_limit),
+        "max_spin_rotation": _text_number(policy.max_spin_rotation),
+        "norm_tolerance": _text_number(policy.norm_tolerance),
+    }
+
+
+def _stage_adaptive_timestep_draft(
+    policy: AdaptiveTimestep | None,
+) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "tolerance_mode": policy._tolerance_mode,
+        "atol": _text_number(policy.atol),
+        "rtol": _text_number(policy.rtol),
+        "dt_initial": _text_number(policy.dt_initial),
+        "dt_min": _text_number(policy.dt_min),
+        "dt_max": _text_number(policy.dt_max),
+        "safety": _text_number(policy.safety),
+        "growth_limit": _text_number(policy.growth_limit),
+        "shrink_limit": _text_number(policy.shrink_limit),
+        "max_spin_rotation": _text_number(policy.max_spin_rotation),
+        "norm_tolerance": _text_number(policy.norm_tolerance),
+    }
+
+
+def _advanced_policy_with_overrides(
+    fallback: AdaptiveTimestep | None,
+    overrides: dict[str, object],
+) -> AdaptiveTimestep:
+    nullable = {"dt_initial", "dt_max", "max_spin_rotation", "norm_tolerance"}
+    defaults: dict[str, float | None] = {
+        "atol": fallback.atol if fallback is not None else None,
+        "rtol": fallback.rtol if fallback is not None else None,
+        "dt_initial": fallback.dt_initial if fallback is not None else None,
+        "dt_min": fallback.dt_min if fallback is not None else None,
+        "dt_max": fallback.dt_max if fallback is not None else None,
+        "safety": fallback.safety if fallback is not None else None,
+        "growth_limit": fallback.growth_limit if fallback is not None else None,
+        "shrink_limit": fallback.shrink_limit if fallback is not None else None,
+        "max_spin_rotation": fallback.max_spin_rotation if fallback is not None else None,
+        "norm_tolerance": fallback.norm_tolerance if fallback is not None else None,
+    }
+    merged = dict(defaults)
+    for key in defaults:
+        if key not in overrides:
+            continue
+        value = _number_or_none(overrides[key])
+        if value is None and key not in nullable:
+            raise ValueError(f"advanced adaptive override {key} cannot be cleared")
+        merged[key] = value
+    missing = [key for key in defaults if key not in nullable and merged[key] is None]
+    if missing:
+        raise ValueError(
+            "advanced adaptive override requires " + ", ".join(sorted(missing))
+        )
+    return AdaptiveTimestep(
+        atol=float(merged["atol"]),
+        rtol=float(merged["rtol"]),
+        dt_initial=merged["dt_initial"],
+        dt_min=float(merged["dt_min"]),
+        dt_max=merged["dt_max"],
+        safety=float(merged["safety"]),
+        growth_limit=float(merged["growth_limit"]),
+        shrink_limit=float(merged["shrink_limit"]),
+        max_spin_rotation=merged["max_spin_rotation"],
+        norm_tolerance=merged["norm_tolerance"],
+    )
+
+
+def _max_error_policy_with_overrides(
+    fallback: AdaptiveTimestep | None,
+    overrides: dict[str, object],
+) -> AdaptiveTimestep:
+    def value(key: str, default: float | None, *, nullable: bool) -> float | None:
+        if key not in overrides:
+            return default
+        resolved = _number_or_none(overrides[key])
+        if resolved is None and not nullable:
+            raise ValueError(f"convenience adaptive override {key} cannot be cleared")
+        return resolved
+
+    max_err_fallback = (
+        fallback.atol
+        if fallback is not None and fallback._tolerance_mode == "max_error"
+        else None
+    )
+    max_err = value("max_err", max_err_fallback, nullable=False)
+    if max_err is None:
+        raise ValueError("convenience adaptive override requires max_err")
+    return AdaptiveTimestep._from_max_error(
+        max_err=max_err,
+        dt_initial=value(
+            "dt_initial", fallback.dt_initial if fallback is not None else None, nullable=True
+        ),
+        dt_min=value(
+            "dt_min", fallback.dt_min if fallback is not None else 1e-15, nullable=False
+        ),
+        dt_max=value(
+            "dt_max", fallback.dt_max if fallback is not None else None, nullable=True
+        ),
+    )
 
 
 def _builder_base_problem(loaded: LoadedProblem) -> Problem:
@@ -89,10 +229,17 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
     base_dynamics = getattr(base_problem.study, "dynamics", None)
+    adaptive_policy = (
+        base_dynamics.adaptive_timestep if base_dynamics is not None else None
+    )
+    exact_max_err = (
+        adaptive_policy is not None and _is_exact_max_err_policy(adaptive_policy)
+    )
 
-    return {
+    draft = {
         "revision": 1,
         "backend": base_problem.runtime.backend_target.value,
+        "requested_mode": base_problem.runtime.execution_mode.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
         "exchange_enabled": _problem_has_exchange(base_problem),
@@ -102,6 +249,27 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
+            "dt_initial": _text_number(
+                adaptive_policy.dt_initial
+                if exact_max_err
+                else None
+            ),
+            "dt_min": _text_number(
+                adaptive_policy.dt_min
+                if exact_max_err
+                else None
+            ),
+            "dt_max": _text_number(
+                adaptive_policy.dt_max
+                if exact_max_err
+                else None
+            ),
+            "max_err": _text_number(
+                adaptive_policy.atol
+                if exact_max_err
+                else None
+            ),
+            "adaptive_timestep": _adaptive_timestep_draft(adaptive_policy),
             "demag_interval_s": _text_number(
                 base_dynamics.field_refresh.demag_interval_s
                 if base_dynamics is not None and base_dynamics.field_refresh is not None
@@ -156,11 +324,21 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
         "field_drives": [drive.to_ir() for drive in base_problem.field_drives],
+        "planar_monitors": [monitor.to_ir() for monitor in base_problem.monitors],
         "spin_torques": [
             _export_spin_torque_entry(module) for module in base_problem.spin_torques
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    solver_draft = draft["solver"]
+    if base_dynamics is None or base_dynamics.fixed_timestep is None:
+        solver_draft.pop("fixed_timestep", None)
+    if not exact_max_err:
+        for key in ("dt_initial", "dt_min", "dt_max", "max_err"):
+            solver_draft.pop(key, None)
+    if adaptive_policy is None or exact_max_err:
+        solver_draft.pop("adaptive_timestep", None)
+    return draft
 
 
 def rewrite_loaded_problem_script(
@@ -292,10 +470,24 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(coupling_lines)
 
+    monitor_lines = _render_planar_monitors(
+        base_problem,
+        overrides=overrides,
+        surface=surface,
+    )
+    if monitor_lines:
+        lines.append("")
+        lines.extend(monitor_lines)
+
     demag_lines = _render_demag(base_problem, overrides=overrides, surface=surface)
     if demag_lines:
         lines.append("")
         lines.extend(demag_lines)
+
+    thermal_lines = _render_thermal_noise(base_problem, surface=surface)
+    if thermal_lines:
+        lines.append("")
+        lines.extend(thermal_lines)
 
     mesh_lines = _render_mesh_workflow(
         base_problem,
@@ -393,12 +585,27 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
         payload["output_every_seconds"] = stage.output_every_seconds
+    if stage.table_autosave is not None:
+        payload["table_autosave"] = stage.table_autosave.to_ir()
     return payload
 
 
 def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
     draft = _export_stage_draft_with_identity(stage)
     stage_kind = _infer_pipeline_stage_kind(draft)
+    if stage_kind == "run":
+        draft = {
+            key: draft[key]
+            for key in (
+                "kind",
+                "entrypoint_kind",
+                "stage_id",
+                "until_seconds",
+                "output_every_seconds",
+                "autosave",
+            )
+            if key in draft
+        }
     return {
         "id": stage.stage_id or f"stage_{index + 1}_{stage_kind}",
         "label": _study_pipeline_stage_label(draft, stage_kind=stage_kind, index=index),
@@ -418,6 +625,10 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         "export",
         "change_device",
         "add_field_drive",
+        "remove_field_drive",
+        "table_autosave",
+        "autosave",
+        "fft_response",
     }:
         return kind
     entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
@@ -496,6 +707,37 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "entrypoint_kind": stage.entrypoint_kind,
                 "drive": drive_payload,
             }
+        if action_kind == "remove_field_drive":
+            drive_id = _text_value(action.get("drive_id"))
+            if not drive_id:
+                raise TypeError("remove_field_drive action requires drive_id")
+            return {
+                "kind": "remove_field_drive",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "drive_id": drive_id,
+            }
+        if action_kind == "table_autosave":
+            return {
+                "kind": "table_autosave",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "enabled": bool(action.get("enabled", True)),
+                "table_autosave": copy.deepcopy(action.get("table_autosave")),
+            }
+        if action_kind == "autosave":
+            return {
+                "kind": "autosave",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "enabled": bool(action.get("enabled", True)),
+                "quantity": _text_value(action.get("quantity")),
+                "output": copy.deepcopy(action.get("output")),
+            }
+        if action_kind == "fft_response":
+            return {
+                "kind": "fft_response",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "enabled": bool(action.get("enabled", True)),
+                "request": copy.deepcopy(action.get("request")),
+            }
 
     study = stage.problem.study
     if study is None:
@@ -515,11 +757,18 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "energy_tolerance": _text_number(study.energy_tolerance),
             "max_steps": str(study.max_steps),
         }
+        if stage.table_autosave is not None:
+            payload["table_autosave"] = stage.table_autosave.to_ir()
+        if stage.autosave is not None:
+            payload["autosave"] = stage.autosave.to_ir()
         if study.dynamics is not None:
             payload.update(
                 {
                     "integrator": study.dynamics.integrator,
                     "fixed_timestep": _text_number(study.dynamics.fixed_timestep),
+                    "adaptive_timestep": _stage_adaptive_timestep_draft(
+                        study.dynamics.adaptive_timestep
+                    ),
                     "demag_interval_s": _text_number(
                         study.dynamics.field_refresh.demag_interval_s
                         if study.dynamics.field_refresh is not None
@@ -610,7 +859,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 else ""
             ),
         }
-    return {
+    payload = {
         "kind": "run",
         "entrypoint_kind": stage.entrypoint_kind,
         "integrator": dynamics.integrator,
@@ -631,6 +880,9 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         )
         or None,
     }
+    if stage.autosave is not None:
+        payload["autosave"] = stage.autosave.to_ir()
+    return payload
 
 
 def _render_header(script_path: Path, entrypoint_kind: str) -> list[str]:
@@ -651,6 +903,18 @@ def _render_runtime(
 ) -> list[str]:
     runtime = problem.runtime
     runtime_override = _normalize_mapping(overrides.get("runtime_selection"))
+    requested_mode = overrides.get("requested_mode")
+    override_mode = (
+        requested_mode
+        if isinstance(requested_mode, str)
+        else runtime_override.get("mode") if runtime_override else None
+    )
+    execution_mode = (
+        override_mode
+        if isinstance(override_mode, str)
+        and override_mode in {"strict", "extended", "hybrid"}
+        else runtime.execution_mode.value
+    )
     override_cpu_threads = runtime_override.get("cpu_threads") if runtime_override else None
     cpu_threads = (
         int(override_cpu_threads)
@@ -661,6 +925,8 @@ def _render_runtime(
     if surface == "flat" and problem.name != "fullmag_sim":
         lines.append(f"fm.name({_py_repr(problem.name)})")
     lines.append(f"{_surface_call(surface, 'engine')}({_py_repr(runtime.backend_target.value)})")
+    if execution_mode != "strict":
+        lines.append(f"{_surface_call(surface, 'mode')}({_py_repr(execution_mode)})")
 
     device_spec = _runtime_device_spec(runtime)
     if device_spec == "auto" and runtime.execution_precision.value == "double":
@@ -736,7 +1002,6 @@ def _render_runtime(
                 demag_kwargs = [
                     f"strategy={_py_repr(fdm.demag.strategy)}",
                     f"mode={_py_repr(fdm.demag.mode)}",
-                    f"allow_single_grid_fallback={fdm.demag.allow_single_grid_fallback!r}",
                     f"explain={fdm.demag.explain!r}",
                 ]
                 if fdm.demag.common_cells is not None:
@@ -1968,6 +2233,144 @@ def _render_field_drives(problem: Problem, *, surface: str) -> list[str]:
     return lines
 
 
+def _render_planar_monitors(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+    surface: str,
+) -> list[str]:
+    override = overrides.get("planar_monitors")
+    if isinstance(override, list):
+        payloads = [
+            _normalize_mapping(item)
+            for item in override
+            if isinstance(item, dict)
+        ]
+    else:
+        payloads = [monitor.to_ir() for monitor in problem.monitors]
+    if not payloads:
+        return []
+    if surface != "study":
+        raise ValueError("canonical planar monitor rewrite requires the study API surface")
+
+    lines = ["# Planar monitors"]
+    for payload in payloads:
+        lines.append(
+            "study.monitors.add_planar("
+            f"monitor_id={_py_repr(str(payload.get('id', '')))}, "
+            f"name={_py_repr(str(payload.get('name', '')))}, "
+            f"target={_render_monitor_target(payload.get('target'))}, "
+            f"frame={_render_planar_frame(payload.get('frame'))}, "
+            f"operator={_render_planar_operator(payload.get('operator'))}"
+            ")"
+        )
+    return lines
+
+
+def _render_monitor_target(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "magnetic_domain":
+        return "fm.MonitorTarget.magnetic_domain()"
+    if kind == "domain":
+        return "fm.MonitorTarget.domain()"
+    if kind == "object":
+        return f"fm.MonitorTarget.object({_py_repr(str(payload.get('object_id', '')))})"
+    if kind == "region":
+        return (
+            "fm.MonitorTarget.region("
+            f"{_py_repr(str(payload.get('object_id', '')))}, "
+            f"{_py_repr(str(payload.get('region_id', '')))}"
+            ")"
+        )
+    raise ValueError(f"unsupported planar monitor target kind {kind!r}")
+
+
+def _render_planar_extent(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "explicit":
+        return (
+            "fm.PlanarExtent.explicit("
+            f"u=({_py_repr(payload.get('u_min_m'))}, {_py_repr(payload.get('u_max_m'))}), "
+            f"v=({_py_repr(payload.get('v_min_m'))}, {_py_repr(payload.get('v_max_m'))})"
+            ")"
+        )
+    if kind in {"target_bounds", "magnetic_domain", "universe"}:
+        return (
+            f"fm.PlanarExtent.{kind}("
+            f"padding={_py_repr(payload.get('padding_m', 0.0))}"
+            ")"
+        )
+    raise ValueError(f"unsupported planar extent kind {kind!r}")
+
+
+def _render_planar_frame(value: object) -> str:
+    payload = _normalize_mapping(value)
+    extent = _render_planar_extent(payload.get("extent"))
+    preset = payload.get("preset")
+    origin = payload.get("origin_m")
+    if preset in {"xy", "xz", "yz"} and isinstance(origin, list) and len(origin) == 3:
+        position_index = {"xy": 2, "xz": 1, "yz": 0}[str(preset)]
+        return (
+            f"fm.PlanarFrame.{preset}("
+            f"position={_py_repr(origin[position_index])}, extent={extent}"
+            ")"
+        )
+    return (
+        "fm.PlanarFrame("
+        f"origin={_py_repr(payload.get('origin_m'))}, "
+        f"normal={_py_repr(payload.get('normal'))}, "
+        f"u_axis={_py_repr(payload.get('u_axis'))}, "
+        f"extent={extent}"
+        ")"
+    )
+
+
+def _render_surface_boundary(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "object_boundary":
+        return "fm.SurfaceBoundary.object_boundary()"
+    if kind == "region_boundary":
+        return (
+            "fm.SurfaceBoundary.region_boundary("
+            f"{_py_repr(str(payload.get('region_id', '')))}"
+            ")"
+        )
+    if kind == "named_surface":
+        return (
+            "fm.SurfaceBoundary.named("
+            f"{_py_repr(str(payload.get('surface_id', '')))}"
+            ")"
+        )
+    raise ValueError(f"unsupported surface boundary kind {kind!r}")
+
+
+def _render_planar_operator(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "plane_sample":
+        return "fm.PlaneSample()"
+    if kind == "slab_average":
+        return f"fm.SlabAverage(thickness={_py_repr(payload.get('thickness_m'))})"
+    if kind == "depth_projection":
+        return (
+            "fm.DepthProjection("
+            f"reduction={_py_repr(payload.get('reduction'))}, "
+            f"empty_policy={_py_repr(payload.get('empty_policy'))}"
+            ")"
+        )
+    if kind == "surface_projection":
+        return (
+            "fm.SurfaceProjection("
+            f"boundary={_render_surface_boundary(payload.get('boundary'))}, "
+            f"visibility_policy={_py_repr(payload.get('visibility_policy'))}"
+            ")"
+        )
+    raise ValueError(f"unsupported planar operator kind {kind!r}")
+
+
 def _render_spin_torques(
     problem: Problem,
     *,
@@ -2305,6 +2708,20 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if isinstance(sweep_face_meshing_value, str) and sweep_face_meshing_value.strip():
         kwargs.append(f"sweep_face_meshing={_py_repr(sweep_face_meshing_value)}")
 
+    for key in (
+        "topology",
+        "sweep_direction",
+        "element_family",
+        "transition_policy",
+    ):
+        value = mesh_config.get(key)
+        if isinstance(value, str) and value.strip():
+            kwargs.append(f"{key}={_py_repr(value)}")
+
+    exact_layer_count = mesh_config.get("exact_layer_count")
+    if isinstance(exact_layer_count, bool):
+        kwargs.append(f"exact_layer_count={_py_literal(exact_layer_count)}")
+
     periodic_pair_ids = mesh_config.get("periodic_pair_ids")
     if isinstance(periodic_pair_ids, list) and periodic_pair_ids:
         kwargs.append(f"periodic_pair_ids={_py_literal(periodic_pair_ids)}")
@@ -2312,51 +2729,16 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     return kwargs
 
 
-def _mesh_value_is_set(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (list, tuple, dict)):
-        return bool(value)
-    return True
-
-
 def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] | None:
     strategy = mesh_config.get("mesh_strategy")
-    if not isinstance(strategy, str) or strategy.strip() != "thin_film_tetrahedral":
-        return None
-
-    unsupported_keys = (
-        "source",
-        "calibrate_for",
-        "size_preset",
-        "algorithm_2d",
-        "algorithm_3d",
-        "size_factor",
-        "size_from_curvature",
-        "smoothing_steps",
-        "optimize_iterations",
-        "growth_rate",
-        "maximum_element_growth_rate",
-        "narrow_regions",
-        "transition_growth",
-        "boundary_layer_count",
-        "boundary_layer_thickness",
-        "boundary_layer_stretching",
-        "boundary_layer_target_surface_tags",
-        "boundary_layer_target_curve_tags",
-        "boundary_layer_target_surface_selectors",
-        "boundary_layer_target_curve_selectors",
-        "optimize",
-        "compute_quality",
-        "per_element_quality",
-        "through_thickness_element_ratio",
-        "through_thickness_symmetric",
+    topology = mesh_config.get("topology")
+    legacy_tetrahedral = isinstance(strategy, str) and strategy.strip() == "thin_film_tetrahedral"
+    prismatic = (
+        isinstance(strategy, str)
+        and strategy.strip() == "swept_prism"
+        and topology == "prismatic"
     )
-    if any(_mesh_value_is_set(mesh_config.get(key)) for key in unsupported_keys):
+    if not legacy_tetrahedral and not prismatic:
         return None
 
     distribution = mesh_config.get("through_thickness_distribution")
@@ -2364,6 +2746,16 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
         return None
     face_meshing = mesh_config.get("sweep_face_meshing")
     if isinstance(face_meshing, str) and face_meshing.strip() not in {"", "triangular"}:
+        return None
+    if prismatic and (
+        mesh_config.get("sweep_direction") != "auto"
+        or mesh_config.get("element_family") != "prism"
+        or mesh_config.get("transition_policy") != "pyramid_to_tetrahedra"
+        or not isinstance(mesh_config.get("exact_layer_count"), bool)
+        or mesh_config.get("through_thickness_element_ratio") is not None
+        or mesh_config.get("through_thickness_symmetric") is True
+        or mesh_config.get("order") != 1
+    ):
         return None
 
     kwargs: list[str] = []
@@ -2456,10 +2848,63 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
         )
 
     layers_value = mesh_config.get("through_thickness_elements")
-    if isinstance(layers_value, (int, float)):
-        kwargs.append(f"layers={int(layers_value)}")
+    if layers_value is not None:
+        kwargs.append(
+            f"layers={_render_element_layer_count(layers_value, context='thin-film layers')}"
+        )
+
+    if prismatic:
+        kwargs.append('topology="prismatic"')
+        transition = mesh_config.get("transition_policy")
+        if isinstance(transition, str) and transition.strip():
+            kwargs.append(f"transition={_py_repr(transition)}")
+        exact_layers = mesh_config.get("exact_layer_count")
+        if isinstance(exact_layers, bool):
+            kwargs.append(f"exact_layers={_py_literal(exact_layers)}")
 
     return kwargs
+
+
+def _render_swept_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] | None:
+    strategy = mesh_config.get("mesh_strategy")
+    if strategy not in {"swept_prism", "swept_hex"} or mesh_config.get("topology") is not None:
+        return None
+
+    kwargs: list[str] = []
+    elements = mesh_config.get("through_thickness_elements")
+    if elements is not None:
+        kwargs.append(
+            f"elements={_render_element_layer_count(elements, context='swept elements')}"
+        )
+    distribution = mesh_config.get("through_thickness_distribution")
+    if isinstance(distribution, str) and distribution.strip():
+        kwargs.append(f"distribution={_py_repr(distribution)}")
+    element_ratio = _number_or_none(mesh_config.get("through_thickness_element_ratio"))
+    if element_ratio is not None:
+        kwargs.append(f"element_ratio={_py_number(element_ratio)}")
+    if mesh_config.get("through_thickness_symmetric") is True:
+        kwargs.append("symmetric=True")
+    face_meshing = mesh_config.get("sweep_face_meshing")
+    if isinstance(face_meshing, str) and face_meshing.strip():
+        kwargs.append(f"face_meshing={_py_repr(face_meshing)}")
+    sweep_direction = mesh_config.get("sweep_direction")
+    if isinstance(sweep_direction, str) and sweep_direction.strip():
+        kwargs.append(f"sweep_direction={_py_repr(sweep_direction)}")
+    transition = mesh_config.get("transition_policy")
+    if isinstance(transition, str) and transition.strip():
+        kwargs.append(f"transition={_py_repr(transition)}")
+    exact_layers = mesh_config.get("exact_layer_count")
+    if isinstance(exact_layers, bool):
+        kwargs.append(f"exact_layers={_py_literal(exact_layers)}")
+    return kwargs
+
+
+def _render_element_layer_count(value: object, *, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an integer element-layer count")
+    if value < 1:
+        raise ValueError(f"{context} must be >= 1")
+    return value
 
 
 def _render_geometry_mesh_call(
@@ -2470,7 +2915,69 @@ def _render_geometry_mesh_call(
 ) -> str | None:
     thin_film_kwargs = _render_thin_film_mesh_kwargs(mesh_config)
     if thin_film_kwargs is not None:
-        return f"{target_var}.mesh.thin_film({', '.join(thin_film_kwargs)})"
+        base_config = dict(mesh_config)
+        for key in (
+            "hmax",
+            "maximum_element_size",
+            "hmin",
+            "minimum_element_size",
+            "order",
+            "curvature_factor",
+            "narrow_region_resolution",
+            "interface_hmax",
+            "interface_thickness",
+            "transition_distance",
+            "edge_hmax",
+            "edge_maximum_element_size",
+            "edge_thickness",
+            "edge_transition_distance",
+            "corner_hmax",
+            "corner_maximum_element_size",
+            "corner_extent",
+            "corner_transition_distance",
+            "mesh_strategy",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "topology",
+            "sweep_direction",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        ):
+            base_config.pop(key, None)
+        base_kwargs = _render_mesh_kwargs(base_config, source_root=source_root)
+        target = (
+            f"{target_var}.mesh({', '.join(base_kwargs)})"
+            if base_kwargs
+            else f"{target_var}.mesh"
+        )
+        return f"{target}.thin_film({', '.join(thin_film_kwargs)})"
+    swept_kwargs = _render_swept_mesh_kwargs(mesh_config)
+    if swept_kwargs is not None:
+        base_config = dict(mesh_config)
+        for key in (
+            "mesh_strategy",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "sweep_direction",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        ):
+            base_config.pop(key, None)
+        base_kwargs = _render_mesh_kwargs(base_config, source_root=source_root)
+        target = (
+            f"{target_var}.mesh({', '.join(base_kwargs)})"
+            if base_kwargs
+            else f"{target_var}.mesh"
+        )
+        return f"{target}.swept({', '.join(swept_kwargs)})"
     kwargs = _render_mesh_kwargs(mesh_config, source_root=source_root)
     if kwargs:
         return f"{target_var}.mesh({', '.join(kwargs)})"
@@ -2908,12 +3415,12 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     for output in outputs:
         if isinstance(output, SaveField):
             lines.append(
-                f"{_surface_call(surface, 'save')}({_py_repr(output.field)}, every={_py_number(output.every)})"
+                f"{_surface_call(surface, 'save')}({_py_repr(output.field)}, every={_py_sampling_period(output.every)})"
             )
             continue
         if isinstance(output, SaveScalar):
             lines.append(
-                f"{_surface_call(surface, 'save')}({_py_repr(output.scalar)}, every={_py_number(output.every)})"
+                f"{_surface_call(surface, 'save')}({_py_repr(output.scalar)}, every={_py_sampling_period(output.every)})"
             )
             continue
         if isinstance(output, Snapshot):
@@ -2946,49 +3453,6 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     return lines
 
 
-def _render_time_output_expr(output: object) -> str:
-    if isinstance(output, SaveField):
-        return f"fm.SaveField({_py_repr(output.field)}, every={_py_number(output.every)})"
-    if isinstance(output, SaveScalar):
-        return f"fm.SaveScalar({_py_repr(output.scalar)}, every={_py_number(output.every)})"
-    if isinstance(output, Snapshot):
-        kwargs = [
-            f"field={_py_repr(output.field)}",
-            f"component={_py_repr(output.component)}",
-            f"every={_py_number(output.every)}",
-        ]
-        if output.layer is not None:
-            kwargs.append(f"layer={_py_repr(output.layer)}")
-        return f"fm.Snapshot({', '.join(kwargs)})"
-    raise TypeError(f"unsupported time output {type(output).__name__}")
-
-
-def _render_table_autosave_expr(table: TableAutosave | None) -> str:
-    if table is None:
-        return "False"
-    kwargs = [f"t_sampl={_py_number(table.t_sampl)}"]
-    quantities = tuple(table.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
-    kwargs.append(f"quantities={_py_literal(list(quantities))}")
-    if table.table_id != "default":
-        kwargs.append(f"table_id={_py_repr(table.table_id)}")
-    return f"fm.TableAutosave({', '.join(kwargs)})"
-
-
-def _render_gamma_response_expr(value: object) -> str:
-    request = _normalize_mapping(value)
-    if not request:
-        return "False"
-    kwargs = [
-        f"response_component={_py_repr(str(request.get('response_component') or 'my'))}",
-        f"weighting={_py_repr(str(request.get('weighting') or 'Ms_times_lumped_volume'))}",
-        f"detrend={_py_repr(str(request.get('detrend') or 'linear'))}",
-        f"window={_py_repr(str(request.get('window') or 'hann'))}",
-        "susceptibility_floor_fraction="
-        f"{_py_number(float(request.get('susceptibility_floor_fraction', 1e-6)))}",
-    ]
-    return f"fm.GammaResponseAnalysis({', '.join(kwargs)})"
-
-
 def _render_table_autosave(
     problem: Problem,
     *,
@@ -3003,7 +3467,11 @@ def _render_table_autosave(
     if table_autosave is None:
         return []
 
-    kwargs = [f"{_py_number(table_autosave.t_sampl)}"]
+    kwargs = (
+        [f"every_steps={table_autosave.every_steps}"]
+        if table_autosave.every_steps is not None
+        else [f"{_py_sampling_period(table_autosave.t_sampl)}"]
+    )
     quantities = tuple(table_autosave.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
     if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
         kwargs.append(f"quantities={_py_literal(list(quantities))}")
@@ -3018,15 +3486,58 @@ def _table_autosave_from_override(value: object) -> TableAutosave | None:
         return None
     if value.get("kind") not in {None, "table_autosave"}:
         return None
-    sample_period = value.get("sample_period_s")
-    if not isinstance(sample_period, (int, float)):
+    every_steps = value.get("every_steps")
+    if isinstance(every_steps, bool) or not isinstance(every_steps, int):
+        every_steps = None
+    sample_period = _requested_sampling_period_from_ir(value, "sample_period_s")
+    if sample_period is None and every_steps is None:
         return None
     quantities = value.get("quantities")
     return TableAutosave(
-        t_sampl=float(sample_period),
+        t_sampl=sample_period,
+        every_steps=every_steps,
         quantities=quantities if isinstance(quantities, list) else None,
         table_id=str(value.get("table_id") or "default"),
     )
+
+
+def _render_relax_adaptive_policy_args(policy: AdaptiveTimestep) -> list[str]:
+    if policy._tolerance_mode == "max_error":
+        args: list[str] = []
+        if policy.dt_initial is not None:
+            args.append(f"dt_initial={_py_number(policy.dt_initial)}")
+        args.extend(
+            [
+                f"max_err={_py_number(policy.atol)}",
+                f"dt_min={_py_number(policy.dt_min)}",
+            ]
+        )
+        if policy.dt_max is not None:
+            args.append(f"dt_max={_py_number(policy.dt_max)}")
+        return args
+
+    adaptive_parts = [
+        f"atol={_py_number(policy.atol)}",
+        f"rtol={_py_number(policy.rtol)}",
+        "dt_initial="
+        + ("None" if policy.dt_initial is None else _py_number(policy.dt_initial)),
+        f"dt_min={_py_number(policy.dt_min)}",
+        "dt_max=" + ("None" if policy.dt_max is None else _py_number(policy.dt_max)),
+        f"safety={_py_number(policy.safety)}",
+        f"growth_limit={_py_number(policy.growth_limit)}",
+        f"shrink_limit={_py_number(policy.shrink_limit)}",
+    ]
+    if policy.max_spin_rotation is not None:
+        adaptive_parts.append(
+            f"max_spin_rotation={_py_number(policy.max_spin_rotation)}"
+        )
+    if policy.norm_tolerance is not None:
+        adaptive_parts.append(f"norm_tolerance={_py_number(policy.norm_tolerance)}")
+    return [
+        "adaptive_timestep=fm.AdaptiveTimestep("
+        + ", ".join(adaptive_parts)
+        + ")"
+    ]
 
 
 def _render_stages(
@@ -3076,6 +3587,88 @@ def _render_stages(
                 if stage.stage_id is not None:
                     call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
                 lines.append(f"study.stages.add_field_drive({', '.join(call_parts)})")
+                continue
+            if action_kind == "remove_field_drive":
+                if not is_study_surface:
+                    raise ValueError("remove_field_drive action requires the study API surface")
+                drive_id = _text_value(stage.action.get("drive_id"))
+                if not drive_id:
+                    raise ValueError("remove_field_drive action requires drive_id")
+                call_parts = [_py_repr(drive_id)]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.remove_field_drive({', '.join(call_parts)})")
+                continue
+            if action_kind == "table_autosave":
+                if not is_study_surface:
+                    raise ValueError("table_autosave action requires the study API surface")
+                call_parts: list[str] = []
+                if bool(stage.action.get("enabled", True)):
+                    table = _normalize_mapping(stage.action.get("table_autosave"))
+                    sample_period = _requested_sampling_period_from_ir(table, "sample_period_s")
+                    if sample_period is None:
+                        raise ValueError("enabled table_autosave action requires a sampling cadence")
+                    call_parts.append(_py_sampling_period(sample_period))
+                    quantities = table.get("quantities")
+                    if isinstance(quantities, list):
+                        call_parts.append(f"quantities={_py_literal(quantities)}")
+                else:
+                    call_parts.append("enabled=False")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.tableautosave({', '.join(call_parts)})")
+                continue
+            if action_kind == "autosave":
+                if not is_study_surface:
+                    raise ValueError("autosave action requires the study API surface")
+                call_parts = []
+                enabled = bool(stage.action.get("enabled", True))
+                quantity = _text_value(stage.action.get("quantity"))
+                if enabled:
+                    output = _normalize_mapping(stage.action.get("output"))
+                    output_name = _text_value(output.get("name")) or quantity
+                    every = _requested_sampling_period_from_ir(output, "every_seconds")
+                    if not output_name or every is None:
+                        raise ValueError("enabled autosave action requires output name and cadence")
+                    call_parts.extend(
+                        [
+                            _py_repr(output_name),
+                            f"every={_py_sampling_period(every)}",
+                        ]
+                    )
+                else:
+                    if quantity:
+                        call_parts.append(_py_repr(quantity))
+                    call_parts.append("enabled=False")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.autosave({', '.join(call_parts)})")
+                continue
+            if action_kind == "fft_response":
+                if not is_study_surface:
+                    raise ValueError("fft_response action requires the study API surface")
+                call_parts = []
+                if bool(stage.action.get("enabled", True)):
+                    request = _normalize_mapping(stage.action.get("request"))
+                    call_parts.append(
+                        _py_repr(str(request.get("response_component") or "my"))
+                    )
+                    detrend = str(request.get("detrend") or "linear")
+                    window = str(request.get("window") or "hann")
+                    floor = float(request.get("susceptibility_floor_fraction", 1e-6))
+                    if detrend != "linear":
+                        call_parts.append(f"detrend={_py_repr(detrend)}")
+                    if window != "hann":
+                        call_parts.append(f"window={_py_repr(window)}")
+                    if floor != 1e-6:
+                        call_parts.append(
+                            f"susceptibility_floor_fraction={_py_number(floor)}"
+                        )
+                else:
+                    call_parts.append("enabled=False")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.fft_response({', '.join(call_parts)})")
                 continue
             continue
         if stage.problem.study is None:
@@ -3244,6 +3837,28 @@ def _render_stages(
                 "fixed_timestep",
                 study.dynamics.fixed_timestep if study.dynamics is not None else None,
             )
+            has_stage_adaptive_override = "adaptive_timestep" in stage_override
+            stage_adaptive_override = _normalize_mapping(
+                stage_override.get("adaptive_timestep")
+            )
+            stage_adaptive_policy: AdaptiveTimestep | None = None
+            if stage_adaptive_override:
+                if stage_adaptive_override.get("tolerance_mode") == "max_error":
+                    stage_adaptive_policy = _max_error_policy_with_overrides(
+                        None,
+                        {
+                            "max_err": stage_adaptive_override.get("atol"),
+                            "dt_initial": stage_adaptive_override.get("dt_initial"),
+                            "dt_min": stage_adaptive_override.get("dt_min"),
+                            "dt_max": stage_adaptive_override.get("dt_max"),
+                        },
+                    )
+                else:
+                    stage_adaptive_policy = _advanced_policy_with_overrides(
+                        None, stage_adaptive_override
+                    )
+            if stage_adaptive_policy is not None:
+                relax_fixed_timestep = None
             torque_tolerance = _override_number(
                 stage_override,
                 "torque_tolerance",
@@ -3276,6 +3891,16 @@ def _render_stages(
                     study.stop.max_relaxation_time_s,
                 ),
             )
+            torque_tolerance_argument = (
+                "tolA" if study.torque_tolerance_unit == "A/m" else "tolT"
+            )
+            torque_tolerance_value = (
+                None
+                if torque_tolerance is None
+                else torque_tolerance
+                if study.torque_tolerance_unit == "A/m"
+                else torque_tolerance * 4.0e-7 * math.pi
+            )
             call_parts = [f"algorithm={_py_repr(algorithm)}"]
             if stage.stage_id is not None:
                 call_parts.insert(0, f"stage_id={_py_repr(stage.stage_id)}")
@@ -3285,6 +3910,11 @@ def _render_stages(
                 or max_relaxation_time_s is not None
             )
             if needs_stop_object:
+                if torque_tolerance is not None:
+                    call_parts.append(
+                        f"{torque_tolerance_argument}="
+                        f"{_py_number(torque_tolerance_value)}"
+                    )
                 stop_parts: list[str] = []
                 stop_parts.append(
                     "torque_tolerance_apm=None"
@@ -3305,7 +3935,10 @@ def _render_stages(
                     )
                 call_parts.append(f"stop=fm.RelaxStop({', '.join(stop_parts)})")
             else:
-                call_parts.append(f"tol={_py_number(torque_tolerance)}")  # type: ignore[arg-type]
+                call_parts.append(
+                    f"{torque_tolerance_argument}="
+                    f"{_py_number(torque_tolerance_value)}"
+                )  # type: ignore[operator]
                 call_parts.append(f"max_steps={max_steps}")
                 if energy_tolerance is not None:
                     call_parts.append(
@@ -3316,16 +3949,38 @@ def _render_stages(
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
                     call_parts.append(f"dt={_py_number(relax_fixed_timestep)}")
-                if study.dynamics is not None and study.dynamics.adaptive_timestep is not None:
-                    adaptive_timestep = study.dynamics.adaptive_timestep
-                    if adaptive_timestep.atol != DEFAULT_ADAPTIVE_ATOL:
-                        call_parts.append(f"max_error={_py_number(adaptive_timestep.atol)}")
-                    if adaptive_timestep.dt_min != DEFAULT_ADAPTIVE_DT_MIN:
-                        call_parts.append(f"dt_min={_py_number(adaptive_timestep.dt_min)}")
-                    if adaptive_timestep.dt_max is not None:
-                        call_parts.append(f"dt_max={_py_number(adaptive_timestep.dt_max)}")
+                if stage_adaptive_policy is not None:
+                    call_parts.extend(
+                        _render_relax_adaptive_policy_args(stage_adaptive_policy)
+                    )
+                elif (
+                    not has_stage_adaptive_override
+                    and relax_fixed_timestep is None
+                    and study.dynamics is not None
+                    and study.dynamics.adaptive_timestep is not None
+                    and study.dynamics.adaptive_timestep._dt_min_explicit
+                    and study.dynamics.adaptive_timestep.dt_max is not None
+                ):
+                    call_parts.extend(
+                        _render_relax_adaptive_policy_args(
+                            study.dynamics.adaptive_timestep
+                        )
+                    )
             if is_study_surface:
-                lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
+                relax_call = f"study.stages.add_relax({', '.join(call_parts)})"
+                if stage.table_autosave is not None:
+                    table = stage.table_autosave
+                    table_parts = [f"every_steps={table.every_steps}"]
+                    if table.quantities is not None:
+                        table_parts.append(
+                            f"quantities={_py_literal(list(table.quantities))}"
+                        )
+                    if table.table_id != "default":
+                        table_parts.append(f"table_id={_py_repr(table.table_id)}")
+                    relax_call += f".tableautosave({', '.join(table_parts)})"
+                if stage.autosave is not None:
+                    relax_call += _render_stage_autosave(stage.autosave)
+                lines.append(relax_call)
             else:
                 lines.append(f"{_surface_call(surface, 'relax')}({', '.join(call_parts)})")
             continue
@@ -3344,29 +3999,57 @@ def _render_stages(
             if stage.stage_id is not None:
                 run_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
             run_parts.append(f"until={_py_number(until_seconds)}")
-            if stage.output_every_seconds is not None:
-                run_parts.append(
-                    f"output_every={_py_number(stage.output_every_seconds)}"
-                )
-            if isinstance(study, TimeEvolution):
-                run_parts.append(
-                    "outputs=["
-                    + ", ".join(_render_time_output_expr(output) for output in study.outputs)
-                    + "]"
-                )
-                run_parts.append(
-                    f"table_autosave={_render_table_autosave_expr(study._table_autosave)}"
-                )
-                run_parts.append(
-                    "spin_wave_response="
-                    + _render_gamma_response_expr(
-                        stage.problem.runtime_metadata.get("spin_wave_response")
-                    )
-                )
-            lines.append(f"study.stages.add_run({', '.join(run_parts)})")
+            run_call = f"study.stages.add_run({', '.join(run_parts)})"
+            if stage.autosave is not None:
+                run_call += _render_stage_autosave(stage.autosave)
+            lines.append(run_call)
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
+
+
+def _render_stage_autosave(policy: StageAutosave) -> str:
+    parts: list[str] = []
+    if policy.target != "main":
+        parts.append(f"target={_py_repr(policy.target)}")
+    if policy.layout != "continuous":
+        parts.append(f"layout={_py_repr(policy.layout)}")
+    if policy.format != "zarr":
+        parts.append(f"format={_py_repr(policy.format)}")
+    if policy.table is not None:
+        parts.append(f"table={_render_stage_table_autosave(policy.table)}")
+    if policy.fields:
+        fields = ", ".join(
+            _render_field_autosave(field_policy)
+            for field_policy in policy.fields
+        )
+        parts.append(f"fields=[{fields}]")
+    return f".autosave(fm.StageAutosave({', '.join(parts)}))"
+
+
+def _render_stage_table_autosave(table: TableAutosave) -> str:
+    parts: list[str] = []
+    if table.every_steps is not None:
+        parts.append(f"every_steps={table.every_steps}")
+    else:
+        parts.append(f"t_sampl={_py_sampling_period(table.t_sampl)}")
+    if table.quantities is not None:
+        parts.append(f"quantities={_py_literal(list(table.quantities))}")
+    if table.table_id != "default":
+        parts.append(f"table_id={_py_repr(table.table_id)}")
+    return f"fm.TableAutosave({', '.join(parts)})"
+
+
+def _render_field_autosave(field_policy: object) -> str:
+    quantity = getattr(field_policy, "quantity")
+    every_steps = getattr(field_policy, "every_steps")
+    every = getattr(field_policy, "every")
+    cadence = (
+        f"every_steps={every_steps}"
+        if every_steps is not None
+        else f"every={_py_sampling_period(every)}"
+    )
+    return f"fm.FieldAutosave({_py_repr(quantity)}, {cadence})"
 
 
 def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
@@ -3663,7 +4346,17 @@ def _stage_override_for(
         return {}
     if isinstance(stage.action, dict):
         action_kind = str(stage.action.get("kind") or "").strip().lower()
-        if action_kind in {"save_state", "load_state", "export"}:
+        if action_kind in {
+            "save_state",
+            "load_state",
+            "export",
+            "change_device",
+            "add_field_drive",
+            "remove_field_drive",
+            "table_autosave",
+            "autosave",
+            "fft_response",
+        }:
             expected_kind = action_kind
         else:
             expected_kind = "run"
@@ -3701,14 +4394,98 @@ def _render_solver_call(
         if dynamics.field_refresh is not None
         else None,
     )
-    if dynamics.adaptive_timestep is not None:
-        if fixed_timestep is not None:
-            kwargs.append(f"dt={_py_number(fixed_timestep)}")
-        kwargs.append(f"max_error={_py_number(dynamics.adaptive_timestep.atol)}")
-        if dynamics.adaptive_timestep.dt_min != DEFAULT_ADAPTIVE_DT_MIN:
-            kwargs.append(f"dt_min={_py_number(dynamics.adaptive_timestep.dt_min)}")
-    elif fixed_timestep is not None:
-        kwargs.append(f"dt={_py_number(fixed_timestep)}")
+    convenience_keys = {"dt_initial", "dt_min", "dt_max", "max_err"}
+    has_fixed_override = (
+        "fixed_timestep" in solver_override
+        and _number_or_none(solver_override.get("fixed_timestep")) is not None
+    )
+    has_advanced_override = isinstance(solver_override.get("adaptive_timestep"), dict)
+    has_convenience_override = any(key in solver_override for key in convenience_keys)
+    has_active_convenience_override = any(
+        key in solver_override and _number_or_none(solver_override.get(key)) is not None
+        for key in convenience_keys
+    )
+    if has_fixed_override and (
+        has_advanced_override or has_active_convenience_override
+    ):
+        raise ValueError("solver override must resolve exactly one timestep policy")
+    if has_advanced_override and has_active_convenience_override:
+        raise ValueError("solver override must resolve exactly one timestep policy")
+
+    resolved_adaptive = dynamics.adaptive_timestep
+    resolved_fixed = fixed_timestep
+    if has_fixed_override:
+        resolved_adaptive = None
+    elif has_advanced_override:
+        resolved_adaptive = _advanced_policy_with_overrides(
+            dynamics.adaptive_timestep,
+            solver_override["adaptive_timestep"],
+        )
+        resolved_fixed = None
+    elif has_convenience_override:
+        resolved_adaptive = _max_error_policy_with_overrides(
+            dynamics.adaptive_timestep, solver_override
+        )
+        resolved_fixed = None
+    elif "adaptive_timestep" in solver_override:
+        resolved_adaptive = None
+
+    if (
+        resolved_adaptive is not None
+        and integrator not in ADAPTIVE_INTEGRATORS
+        and integrator != "auto"
+    ):
+        raise ValueError("adaptive timestep requires rk23, rk45, or auto")
+
+    if resolved_adaptive is not None:
+        if not _is_exact_max_err_policy(resolved_adaptive):
+            kwargs.append(
+                "adaptive_timestep=fm.AdaptiveTimestep("
+                + ", ".join(
+                    [
+                        f"atol={_py_number(resolved_adaptive.atol)}",
+                        f"rtol={_py_number(resolved_adaptive.rtol)}",
+                        "dt_initial="
+                        + (
+                            "None"
+                            if resolved_adaptive.dt_initial is None
+                            else _py_number(resolved_adaptive.dt_initial)
+                        ),
+                        f"dt_min={_py_number(resolved_adaptive.dt_min)}",
+                        "dt_max="
+                        + (
+                            "None"
+                            if resolved_adaptive.dt_max is None
+                            else _py_number(resolved_adaptive.dt_max)
+                        ),
+                        f"safety={_py_number(resolved_adaptive.safety)}",
+                        f"growth_limit={_py_number(resolved_adaptive.growth_limit)}",
+                        f"shrink_limit={_py_number(resolved_adaptive.shrink_limit)}",
+                        "max_spin_rotation="
+                        + (
+                            "None"
+                            if resolved_adaptive.max_spin_rotation is None
+                            else _py_number(resolved_adaptive.max_spin_rotation)
+                        ),
+                        "norm_tolerance="
+                        + (
+                            "None"
+                            if resolved_adaptive.norm_tolerance is None
+                            else _py_number(resolved_adaptive.norm_tolerance)
+                        ),
+                    ]
+                )
+                + ")"
+            )
+        else:
+            if resolved_adaptive.dt_initial is not None:
+                kwargs.append(f"dt_initial={_py_number(resolved_adaptive.dt_initial)}")
+            kwargs.append(f"dt_min={_py_number(resolved_adaptive.dt_min)}")
+            if resolved_adaptive.dt_max is not None:
+                kwargs.append(f"dt_max={_py_number(resolved_adaptive.dt_max)}")
+            kwargs.append(f"max_err={_py_number(resolved_adaptive.atol)}")
+    elif resolved_fixed is not None:
+        kwargs.append(f"fix_dt={_py_number(resolved_fixed)}")
     if demag_interval_s is not None:
         kwargs.append(f"demag_interval_s={_py_number(demag_interval_s)}")
 
@@ -4389,6 +5166,11 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             ),
             "through_thickness_symmetric": bool(mesh_entry["through_thickness_symmetric"]) if isinstance(mesh_entry.get("through_thickness_symmetric"), bool) else None,
             "sweep_face_meshing": str(mesh_entry["sweep_face_meshing"]) if isinstance(mesh_entry.get("sweep_face_meshing"), str) else None,
+            "topology": str(mesh_entry["topology"]) if isinstance(mesh_entry.get("topology"), str) else None,
+            "sweep_direction": str(mesh_entry["sweep_direction"]) if isinstance(mesh_entry.get("sweep_direction"), str) else None,
+            "element_family": str(mesh_entry["element_family"]) if isinstance(mesh_entry.get("element_family"), str) else None,
+            "transition_policy": str(mesh_entry["transition_policy"]) if isinstance(mesh_entry.get("transition_policy"), str) else None,
+            "exact_layer_count": bool(mesh_entry["exact_layer_count"]) if isinstance(mesh_entry.get("exact_layer_count"), bool) else None,
             "source": str(mesh_entry["source"]) if isinstance(mesh_entry.get("source"), str) else None,
             "algorithm_2d": int(mesh_entry["algorithm_2d"]) if isinstance(mesh_entry.get("algorithm_2d"), (int, float)) else None,
             "algorithm_3d": int(mesh_entry["algorithm_3d"]) if isinstance(mesh_entry.get("algorithm_3d"), (int, float)) else None,
@@ -4489,6 +5271,11 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "through_thickness_element_ratio": None,
             "through_thickness_symmetric": None,
             "sweep_face_meshing": None,
+            "topology": None,
+            "sweep_direction": None,
+            "element_family": None,
+            "transition_policy": None,
+            "exact_layer_count": None,
             "source": None,
             "algorithm_2d": None,
             "algorithm_3d": None,
@@ -5015,8 +5802,11 @@ def _script_api_surface(
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     surface = runtime_metadata.get("script_api_surface")
     couplings_override = (overrides or {}).get("couplings")
+    monitors_override = (overrides or {}).get("planar_monitors")
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
+    ) or problem.monitors or (
+        isinstance(monitors_override, list) and len(monitors_override) > 0
     ):
         return "study"
     return "study" if surface == "study" else "flat"
@@ -5113,6 +5903,19 @@ def _render_demag(
     ]
 
 
+def _render_thermal_noise(problem: Problem, *, surface: str) -> list[str]:
+    thermal_terms = [term for term in problem.energy if isinstance(term, ThermalNoise)]
+    if not thermal_terms:
+        return []
+    if len(thermal_terms) != 1:
+        raise ValueError("canonical flat-script rewrite requires at most one ThermalNoise term")
+    term = thermal_terms[0]
+    args = [f"temperature={_py_number(term.temperature)}"]
+    if term.seed is not None:
+        args.append(f"seed={term.seed}")
+    return ["# Brown thermal noise", f"{_surface_call(surface, 'thermal_noise')}({', '.join(args)})"]
+
+
 def _resolve_universe(
     problem: Problem,
     *,
@@ -5202,6 +6005,48 @@ def _py_tuple3(value: tuple[float, float, float]) -> str:
 
 def _normalize_mapping(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _requested_sampling_period_from_ir(
+    value: Mapping[str, object],
+    numeric_key: str,
+) -> SamplingPeriod | None:
+    kind = value.get("kind")
+    resolved_auto_kind = kind in {"field_resolved_auto", "scalar_resolved_auto"}
+    requested_policy = value.get("requested_policy")
+    if resolved_auto_kind:
+        if requested_policy is None:
+            raise ValueError("resolved automatic sampling output requires requested_policy")
+        _validate_auto_sinc_sampling_policy_ir(requested_policy)
+        if numeric_key not in value:
+            raise ValueError("resolved automatic sampling output requires a resolved cadence")
+        normalize_sampling_period(value[numeric_key], numeric_key)
+        return "auto"
+    if requested_policy is not None:
+        raise ValueError("requested_policy is only valid for resolved automatic outputs")
+
+    policy_value = value.get("sample_period_policy")
+    if policy_value is not None:
+        _validate_auto_sinc_sampling_policy_ir(policy_value)
+        if value.get(numeric_key) is not None:
+            raise ValueError("automatic sampling intent must not contain an explicit cadence")
+        return "auto"
+
+    if numeric_key not in value:
+        return None
+    return normalize_sampling_period(value[numeric_key], numeric_key)
+
+
+def _validate_auto_sinc_sampling_policy_ir(value: object) -> None:
+    policy = _normalize_mapping(value)
+    guard = policy.get("nyquist_guard_factor")
+    if (
+        policy.get("kind") != "auto_sinc_cutoff"
+        or isinstance(guard, bool)
+        or not isinstance(guard, (int, float))
+        or float(guard) != AUTO_SINC_NYQUIST_GUARD_FACTOR
+    ):
+        raise ValueError("unsupported automatic sampling period policy")
 
 
 def _override_string(overrides: dict[str, object], key: str, fallback: str | None) -> str | None:
@@ -5441,6 +6286,10 @@ def _py_repr(value: str) -> str:
 
 def _py_number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def _py_sampling_period(value: SamplingPeriod) -> str:
+    return _py_repr("auto") if value == "auto" else _py_number(value)
 
 
 def _py_literal(value: object) -> str:

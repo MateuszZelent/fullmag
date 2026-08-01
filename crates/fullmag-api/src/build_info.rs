@@ -1,5 +1,8 @@
 pub(crate) fn backend_build_date() -> &'static str {
-    option_env!("FULLMAG_BACKEND_BUILD_DATE").unwrap_or("unknown-build-date")
+    fullmag_build_info::identity()
+        .built_at_utc
+        .get(..10)
+        .unwrap_or("unknown-build-date")
 }
 
 #[cfg(test)]

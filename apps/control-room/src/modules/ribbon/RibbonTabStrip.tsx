@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import type { RibbonTabDef, RibbonTabId } from "./ribbonTypes";
 
 interface RibbonTabStripProps {
@@ -13,8 +14,40 @@ export function RibbonTabStrip({
   activeTabId,
   onTabClick,
 }: RibbonTabStripProps) {
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+      if (currentIndex < 0) return;
+
+      let nextIndex: number | undefined;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        nextIndex = (currentIndex + 1) % tabs.length;
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      } else if (e.key === "Home") {
+        nextIndex = 0;
+      } else if (e.key === "End") {
+        nextIndex = tabs.length - 1;
+      }
+
+      if (nextIndex !== undefined) {
+        e.preventDefault();
+        onTabClick(tabs[nextIndex].id);
+        const container = e.currentTarget;
+        const buttons = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+        buttons[nextIndex]?.focus();
+      }
+    },
+    [tabs, activeTabId, onTabClick],
+  );
+
   return (
-    <div className="fm-ribbon__tabs" role="tablist" aria-label="Ribbon tabs">
+    <div
+      className="fm-ribbon__tabs"
+      role="tablist"
+      aria-label="Ribbon tabs"
+      onKeyDown={handleKeyDown}
+    >
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -23,6 +56,7 @@ export function RibbonTabStrip({
           role="tab"
           type="button"
           aria-selected={tab.id === activeTabId}
+          tabIndex={tab.id === activeTabId ? 0 : -1}
           onClick={() => onTabClick(tab.id)}
         >
           {tab.label}

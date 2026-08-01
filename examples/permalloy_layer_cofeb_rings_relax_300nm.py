@@ -80,9 +80,14 @@ layer.mesh(
     minimum_element_size=1.6 * NM,
     order=1,
     mesh_strategy="swept_prism",
+    topology="prismatic",
     through_thickness_elements=1,
     through_thickness_distribution="fixed",
     sweep_face_meshing="triangular",
+    sweep_direction="auto",
+    element_family="prism",
+    transition_policy="pyramid_to_tetrahedra",
+    exact_layer_count=True,
 )
 
 top_ring = study.geometry(
@@ -137,7 +142,7 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 study.stages.add_minimize(
     method="bb",
     max_steps=10,
-    tol=1e-4,
+    tolA=1e-4,
 )
 
 # study.stages.add_relax(
@@ -147,5 +152,5 @@ study.stages.add_minimize(
 #     dt_min=1e-17,
 #     dt_max=1e-13,
 #     max_steps=100,
-#     tol=1e-4,
+#     tolA=1e-4,
 # )

@@ -20,20 +20,20 @@ jobs:
     runs-on: [self-hosted, windows, x64, docker]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build MSI inside Windows container
         shell: powershell
         run: .\scripts\windows\build_installer_windows_container.ps1
 
       - name: Upload MSI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fullmag-windows-msi
           path: .fullmag\dist\fullmag.msi
 
       - name: Upload Windows stage manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fullmag-windows-msi-manifest
           path: .fullmag\dist\windows-msi-manifest.json

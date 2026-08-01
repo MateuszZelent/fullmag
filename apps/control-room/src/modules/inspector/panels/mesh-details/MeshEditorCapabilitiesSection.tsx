@@ -1,5 +1,5 @@
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { MeshEditorCapabilityModel } from "@/shared/domain/mesh/meshEditorCapabilityModel";
 
 const LABELS = {
@@ -25,8 +25,7 @@ export function MeshEditorCapabilitiesSection({
 }) {
   const enabledCount = model.options.filter((option) => option.enabled).length;
   return (
-    <InspectorSection
-      value="editor-capabilities"
+    <InspectorGroup
       title="Mesh editor capabilities"
       badge={`${enabledCount}/${model.options.length} available`}
     >
@@ -42,6 +41,6 @@ export function MeshEditorCapabilitiesSection({
           }
         />
       ))}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

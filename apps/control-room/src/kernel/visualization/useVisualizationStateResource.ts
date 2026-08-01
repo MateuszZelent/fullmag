@@ -40,7 +40,7 @@ export function useVisualizationStateResource({
     visualizationSync.observeRemoteState(resource.data);
     cameraRegistry.observeRemoteState(resource.data);
     if (resource.data) {
-      visualization.acknowledgePendingTargetPatches(resource.data.revision);
+      visualization.acknowledgePendingTargetPatches(resource.data);
     }
   }, [cameraRegistry, resource.data, visualization, visualizationSync]);
 

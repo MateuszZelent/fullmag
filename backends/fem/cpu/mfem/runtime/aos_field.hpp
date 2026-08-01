@@ -44,9 +44,9 @@ void pack_components_to_aos(
 /*
  * Normalize active magnetic nodes in an AoS-3 reduced-magnetization field.
  *
- * Active nodes must be finite and non-zero. Empty masks are treated as fully
- * magnetic. Nonmagnetic nodes are checked for finite values but otherwise left
- * unchanged.
+ * Active nodes must be finite and have a normal (non-zero, non-subnormal)
+ * vector norm. Empty masks are treated as fully magnetic. Nonmagnetic nodes
+ * are checked for finite values but otherwise left unchanged.
  */
 bool normalize_active_magnetization_aos(
     const Context &ctx,

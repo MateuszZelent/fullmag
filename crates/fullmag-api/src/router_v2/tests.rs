@@ -26,11 +26,13 @@ use crate::schemas::realtime::{
 };
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
-    CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
-    CurrentWorkspaceSelection, DisplayPresentationState, LatestFields, LiveState, RunManifest,
-    RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
-    SessionStateResponse, StageExecutionRecord, StageExecutionState, StageLifecycleState,
-    StepUpdateView, TrackedCommandRecord,
+    CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
+    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
+    LiveState, RunManifest, RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand,
+    SessionManifest, SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
+    SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
+    SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
+    StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
 use fullmag_runner::eigen::{
@@ -49,6 +51,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
         revision: 3,
         backend: None,
+        requested_mode: Some("strict".to_string()),
         cpu_threads: None,
         fem_demag_solver_policy: None,
         exchange_enabled: true,
@@ -62,6 +65,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             torque_tolerance: "1e-4".to_string(),
             energy_tolerance: String::new(),
             max_relax_steps: "1000".to_string(),
+            ..fullmag_authoring::ScriptBuilderSolverState::default()
         },
         mesh: fullmag_authoring::ScriptBuilderMeshState {
             algorithm_2d: 6,
@@ -146,6 +150,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
         field_drives: Vec::new(),
+        planar_monitors: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -167,9 +172,9 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![7],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -203,9 +208,9 @@ fn regular_tetra_fem_mesh_payload() -> FemMeshPayload {
             [0.5, 3.0_f64.sqrt() / 2.0, 0.0],
             [0.5, 3.0_f64.sqrt() / 6.0, h],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![7],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -246,7 +251,7 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
             node_start: 0,
             node_count: 0,
             node_indices: vec![],
-            surface_faces: vec![],
+            facet_global_ordinals: vec![],
             bounds_min: Some([-1.0, -1.0, -1.0]),
             bounds_max: Some([2.0, 2.0, 2.0]),
         },
@@ -265,7 +270,7 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.0, 0.0, 0.0]),
             bounds_max: Some([1.0, 1.0, 1.0]),
         },
@@ -283,9 +288,9 @@ fn sample_periodic_fem_mesh_payload() -> FemMeshPayload {
         [0.0, 0.0, 1.0e-6],
         [1.0e-6, 0.0, 1.0e-6],
     ];
-    mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+    mesh.set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5]]);
     mesh.element_markers = vec![7, 0];
-    mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
+    mesh.set_tri3_facets(vec![[0, 2, 4], [1, 5, 3]]);
     mesh.boundary_markers = vec![10, 11];
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "x_periodic".to_string(),
@@ -333,9 +338,9 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
             [-1.0, 2.0, -1.0],
             [-1.0, -1.0, 2.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![7, 8],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![3, 4],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -377,7 +382,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
                 node_start: 0,
                 node_count: 4,
                 node_indices: vec![0, 1, 2, 3],
-                surface_faces: vec![[0, 1, 2]],
+                facet_global_ordinals: vec![0],
                 bounds_min: Some([0.0, 0.0, 0.0]),
                 bounds_max: Some([1.0, 1.0, 1.0]),
             },
@@ -396,7 +401,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
                 node_start: 4,
                 node_count: 4,
                 node_indices: vec![4, 5, 6, 7],
-                surface_faces: vec![[4, 5, 6]],
+                facet_global_ordinals: vec![1],
                 bounds_min: Some([-1.0, -1.0, -1.0]),
                 bounds_max: Some([2.0, 2.0, 2.0]),
             },
@@ -465,9 +470,9 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
         mesh_name: "skyrmion-test-mesh".to_string(),
         mesh_id: "skyrmion-test-mesh:1".to_string(),
         nodes,
-        elements,
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
         element_markers: vec![1; (grid - 1) * (grid - 1) * 6],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::empty(),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -496,7 +501,7 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
             node_start: 0,
             node_count: node_indices.len() as u32,
             node_indices,
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: Some([-span * 0.5, -span * 0.5, -half_thickness]),
             bounds_max: Some([span * 0.5, span * 0.5, half_thickness]),
         }],
@@ -531,9 +536,9 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
         element_markers: vec![7, 0],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![3, 4],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -553,7 +558,7 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
             node_start: 4,
             node_count: 4,
             node_indices: vec![0, 1, 2, 4],
-            surface_faces: vec![[0, 1, 4]],
+            facet_global_ordinals: vec![1],
             bounds_min: Some([0.0, 0.0, -1.0]),
             bounds_max: Some([1.0, 1.0, 0.0]),
         }],
@@ -681,6 +686,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: ".".into(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -703,6 +709,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -724,12 +731,118 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
 
     state
+}
+
+fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot {
+    let stage_ids = [
+        "runtime_startup",
+        "script_materialization",
+        "validation",
+        "planning",
+        "domain_preparation",
+        "meshing",
+        "mesh_postprocessing",
+        "solver_initialization",
+        "ready",
+    ];
+    let terminal_stage_index = match status {
+        "ready" => stage_ids.len(),
+        "failed" | "running" => 5,
+        other => panic!("unsupported preparation fixture status: {other}"),
+    };
+    let stages = stage_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let stage_status = if status == "failed" && index == terminal_stage_index {
+                "failed"
+            } else if status == "running" && index == terminal_stage_index {
+                "active"
+            } else if index < terminal_stage_index || status == "ready" {
+                "completed"
+            } else {
+                "pending"
+            };
+            SimulationPreparationStageSnapshot {
+                id: id.to_string(),
+                label: id.replace('_', " "),
+                detail: if id == "meshing" {
+                    "Optimizing element quality".to_string()
+                } else {
+                    String::new()
+                },
+                status: stage_status.to_string(),
+                started_at_unix_ms: (index <= terminal_stage_index)
+                    .then_some(1_700_000_000_000 + index as u64 * 100),
+                completed_at_unix_ms: (stage_status == "completed")
+                    .then_some(1_700_000_000_090 + index as u64 * 100),
+                duration_ms: (stage_status != "pending").then_some(90),
+                clock_adjustment: None,
+                progress_percent: (status == "running" && id == "meshing").then_some(63),
+                progress_label: (status == "running" && id == "meshing")
+                    .then(|| "142580 / 226318 elements".to_string()),
+            }
+        })
+        .collect();
+
+    SimulationPreparationSnapshot {
+        preparation_id: "prep-contract-test".to_string(),
+        revision: 7,
+        status: status.to_string(),
+        active_stage_id: (status == "running").then(|| "meshing".to_string()),
+        started_at_unix_ms: 1_700_000_000_000,
+        completed_at_unix_ms: (status != "running").then_some(1_700_000_001_000),
+        stages,
+        log_tail: vec![SimulationPreparationLogEntrySnapshot {
+            timestamp_unix_ms: 1_700_000_000_550,
+            level: if status == "failed" { "error" } else { "info" }.to_string(),
+            stage_id: "meshing".to_string(),
+            message: "Optimizing element quality".to_string(),
+        }],
+        failure: (status == "failed").then(|| SimulationPreparationFailureSnapshot {
+            error_code: "mesh_generation_failed".to_string(),
+            summary: "Mesh generation failed".to_string(),
+            detail: Some("meshing: no valid tetrahedra".to_string()),
+            stage_id: "meshing".to_string(),
+            diagnostics_correlation_id: Some("diag-prep-7".to_string()),
+        }),
+    }
+}
+
+async fn test_app_state_with_simulation_preparation(status: &str) -> Arc<AppState> {
+    test_app_state_with_simulation_preparation_snapshot(simulation_preparation_fixture(status))
+        .await
+}
+
+async fn test_app_state_with_simulation_preparation_snapshot(
+    preparation: SimulationPreparationSnapshot,
+) -> Arc<AppState> {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.simulation_preparation_revision = preparation.revision;
+        snapshot.simulation_preparation = Some(preparation);
+    }
+    state
+}
+
+fn overlong_preparation_value(prefix: &str, max_chars: usize) -> String {
+    format!("{prefix}{}", "x".repeat(max_chars + 32))
+}
+
+fn assert_bounded_preparation_value(actual: &serde_json::Value, source: &str, max_chars: usize) {
+    let expected = source.chars().take(max_chars).collect::<String>();
+    assert_eq!(actual.as_str(), Some(expected.as_str()));
+    assert_eq!(
+        actual.as_str().map(|value| value.chars().count()),
+        Some(max_chars)
+    );
 }
 
 async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) {
@@ -833,6 +946,10 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         step,
         time,
         solver_dt: 1e-12,
+        error_estimate: None,
+        max_error: None,
+        dt_suggested: None,
+        rejected_attempts: 0,
         pseudo_time_s: None,
         active_runtime_s: None,
         mx: 0.1 * step as f64,
@@ -935,9 +1052,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
                 wall_time_ns: 100,
                 grid: [4, 4, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -947,6 +1066,10 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 41,
                 time: 2.4e-9,
                 solver_dt: 1.0e-13,
+                error_estimate: Some(2.5e-7),
+                max_error: Some(1.0e-6),
+                dt_suggested: Some(1.2e-13),
+                rejected_attempts: 1,
                 pseudo_time_s: None,
                 active_runtime_s: Some(0.041),
                 mx: 0.0,
@@ -968,6 +1091,10 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 42,
                 time: 2.5e-9,
                 solver_dt: 1.0e-13,
+                error_estimate: Some(2.0e-7),
+                max_error: Some(1.0e-6),
+                dt_suggested: Some(1.3e-13),
+                rejected_attempts: 0,
                 pseudo_time_s: None,
                 active_runtime_s: Some(0.042),
                 mx: 0.0,
@@ -1120,6 +1247,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 integrator: Some("rk45".into()),
                 fixed_timestep: Some(1.0e-13),
                 max_error: None,
+                solver_policy: None,
                 relax_algorithm: None,
                 relax_alpha: None,
                 mesh_options: None,
@@ -1159,6 +1287,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 integrator: None,
                 fixed_timestep: None,
                 max_error: None,
+                solver_policy: None,
                 relax_algorithm: None,
                 relax_alpha: None,
                 mesh_options: None,
@@ -1198,6 +1327,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 integrator: None,
                 fixed_timestep: None,
                 max_error: None,
+                solver_policy: None,
                 relax_algorithm: None,
                 relax_alpha: None,
                 mesh_options: None,
@@ -1266,6 +1396,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -1288,6 +1419,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -1309,6 +1441,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
@@ -1391,6 +1524,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: repo_root.join("artifacts").display().to_string(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -1423,9 +1557,11 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -1440,6 +1576,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -1461,6 +1598,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
@@ -1568,7 +1706,6 @@ fn is_iso_calendar_date(value: &str) -> bool {
 async fn health_endpoint_returns_200() {
     let app = test_router();
     let response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1628,7 +1765,6 @@ async fn health_reports_active_session_when_present() {
 async fn capabilities_endpoint_returns_200() {
     let app = test_router();
     let response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/capabilities")
@@ -1759,6 +1895,10 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
     assert!(
         exposed_headers.contains("etag"),
         "browser clients must be able to read etag, got {exposed_headers}"
+    );
+    assert!(
+        exposed_headers.contains("content-range"),
+        "browser clients must be able to read content-range, got {exposed_headers}"
     );
     for header_name in [
         "x-fullmag-field-revision",
@@ -1912,6 +2052,57 @@ async fn status_returns_200_with_live_session() {
 }
 
 #[tokio::test]
+async fn status_exposes_fem_auto_device_crossover_decision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_device = "auto".into();
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.fem_crossover_decision = Some(fullmag_runner::FemCrossoverDecision {
+            requested: "auto".into(),
+            resolved: "cpu".into(),
+            reason: "calibrated_below_lower_bound".into(),
+            calibration_id: Some("test-calibration".into()),
+            confidence: Some(0.95),
+        });
+        snapshot.run = Some(RunManifest {
+            run_id: "run-crossover".into(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "running".into(),
+            total_steps: 0,
+            final_time: Some(0.0),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_total: None,
+            artifact_dir: "/tmp/fullmag-tests".into(),
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["run"]["requested_device"], "auto");
+    assert_eq!(json["run"]["resolved_device"], "cpu");
+    assert_eq!(
+        json["run"]["selection_reason"],
+        "calibrated_below_lower_bound"
+    );
+    assert_eq!(json["run"]["calibration_id"], "test-calibration");
+    assert_eq!(json["run"]["selection_confidence"], 0.95);
+}
+
+#[tokio::test]
 async fn status_exposes_typed_relaxation_algorithm_from_canonical_metadata() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1936,7 +2127,7 @@ async fn status_exposes_typed_relaxation_algorithm_from_canonical_metadata() {
 }
 
 #[tokio::test]
-async fn status_steps_per_second_uses_solver_wall_time_not_session_uptime() {
+async fn status_steps_per_second_is_absent_without_a_closed_end_to_end_span() {
     let app = test_router_with_runtime_read_models().await;
     let response = app
         .oneshot(
@@ -1952,10 +2143,7 @@ async fn status_steps_per_second_uses_solver_wall_time_not_session_uptime() {
 
     let json = body_json(response).await;
     assert_eq!(json["metrics"]["total_steps"], 42);
-    assert_eq!(
-        json["metrics"]["steps_per_second"],
-        serde_json::json!(420_000_000.0)
-    );
+    assert!(json["metrics"]["steps_per_second"].is_null());
 }
 
 // ─── domain endpoints ───────────────────────────────────────────────────────
@@ -2033,9 +2221,11 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [4, 3, 2],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2163,8 +2353,10 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
         json["domain"]["generation_id"]
     );
     assert_eq!(
-        json["resources"]["topology_revision"],
+        json["resources"]["topology_revision"].as_u64(),
         json["domain"]["generation_id"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok())
     );
 }
 
@@ -2228,9 +2420,11 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [4, 3, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2359,9 +2553,11 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
         snapshot.mesh_revision = 18;
     }
+    let cache_state = state.clone();
     let app = build_v2_router().with_state(state);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/domain/topology")
@@ -2385,10 +2581,70 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
             .headers()
             .get("content-range")
             .and_then(|value| value.to_str().ok()),
-        Some("bytes 0-3/164")
+        Some("bytes 0-3/244")
     );
     let body = body_bytes(response).await;
     assert_eq!(&body[..], b"FMMT");
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("range", "bytes=64-71")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        cache_state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .expect("topology cache lock")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn domain_topology_matching_etag_does_not_populate_binary_cache() {
+    let state = test_app_state_with_live_session().await;
+    let mesh = sample_fem_mesh_payload();
+    let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+    let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "domain-topology:{generation_id}:{topology_hash}:19"
+    ));
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 19;
+    }
+    let cache_state = state.clone();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        cache_state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .expect("topology cache lock")
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -2439,7 +2695,7 @@ async fn domain_slice_mesh_overlay_returns_json_for_fem() {
     assert_eq!(json["u_axis"], "x");
     assert_eq!(json["v_axis"], "y");
     assert_eq!(json["normal_axis"], "z");
-    assert_eq!(json["domain_generation_id"], 42);
+    assert_eq!(json["domain_generation_id"], "42");
     assert_eq!(json["topology_revision"], 31);
     assert_eq!(json["etag"], etag);
     assert_eq!(json["truncated"], false);
@@ -2532,6 +2788,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: Some(LiveState {
                     status: "running".into(),
@@ -2554,11 +2811,17 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         max_torque_T: 0.0,
                         wall_time_ns: 100,
                         grid: [2, 1, 1],
+                        fem_mesh_generation_id: None,
                         fem_mesh: None,
                         magnetization: None,
                         per_object_scalars: Default::default(),
+                        field_materialization_states: Vec::new(),
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
+                            source_step: 0,
+                            source_revision: 4,
+                            materialized_at_unix_ms: 0,
+                            materialization_wall_time_ns: 0,
                             quantity: "H_eff".to_string(),
                             unit: "A/m".to_string(),
                             spatial_kind: "grid".to_string(),
@@ -2620,6 +2883,127 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
     assert_eq!(vector.status(), StatusCode::OK);
     let vector_bytes = body_bytes(vector).await;
     assert_eq!(&vector_bytes[..4], b"FMVP");
+}
+
+#[tokio::test]
+async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body() {
+    let state = test_app_state_with_live_session().await;
+    let terminal_values = vec![1.0, 2.0, 52.0, 4.0, 5.0, 52.0];
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let runtime_preview = LivePreviewField {
+            config_revision: 7,
+            source_step: 52,
+            source_revision: 7,
+            materialized_at_unix_ms: 1_700_000_000_200,
+            materialization_wall_time_ns: 100,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "fem_nodes".to_string(),
+            quantity_domain: "node".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![0.0; 6],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        };
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                "field_revision": 7,
+                "source_step": 52,
+                "source_revision": 7,
+                "materialized_at_unix_ms": 1_700_000_000_200_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("stale latest H_demag field");
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 7);
+        snapshot.field_samples_revision = 7;
+        crate::session::merge_cached_preview_fields(
+            &mut snapshot.preview_cache,
+            vec![runtime_preview.clone()],
+        );
+    }
+
+    let app = build_v2_router().with_state(state.clone());
+    let stale_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_response.status(), StatusCode::OK);
+    let stale_etag = stale_response
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("stale response ETag")
+        .clone();
+    let stale_bytes = body_bytes(stale_response).await;
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let mut terminal_preview = snapshot
+            .preview_cache
+            .get("H_demag")
+            .expect("runtime preview")
+            .clone();
+        terminal_preview.materialized_at_unix_ms += 1;
+        terminal_preview.vector_field_values = terminal_values.clone();
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: None,
+                preview_fields: Some(vec![terminal_preview]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("terminal field frame should apply");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let terminal_etag = response
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("terminal response ETag")
+        .clone();
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_ne!(
+        terminal_etag, stale_etag,
+        "terminal field must publish a new ETag"
+    );
+    assert_ne!(
+        bytes, stale_bytes,
+        "prefilled projection cache must be invalidated by revision"
+    );
+    assert_eq!(decode_fmvp_payload_f64(&bytes), terminal_values);
 }
 
 #[tokio::test]
@@ -2919,16 +3303,33 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 5);
+    assert_eq!(json["schema_version"], 6);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
     );
     assert_eq!(json["layers"]["vectors"]["visible"], json["vector_glyphs"]);
     assert_eq!(json["layers"]["vectors"]["density"], json["vector_density"]);
-    assert_eq!(json["layers"]["airbox"]["visible"], false);
-    assert_eq!(json["layers"]["airbox"]["wireframe"]["visible"], true);
+    assert_eq!(json["layers"]["airbox"]["visible"], true);
+    assert_eq!(json["layers"]["airbox"]["surface"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["wireframe"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["points"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["vectors"]["visible"], false);
+    assert_eq!(json["targets"]["airbox"]["settings"]["visible"], true);
+    assert_eq!(json["targets"]["airbox"]["settings"]["render_mode"], "off");
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["surface_visible"],
+        false
+    );
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["wireframe_visible"],
+        false
+    );
     assert_eq!(json["layers"]["airbox"]["vectors"]["domain"], "airbox_only");
+    assert_eq!(json["layers"]["surface"]["visible"], true);
+    assert_eq!(json["layers"]["wireframe"]["visible"], false);
+    assert_eq!(json["layers"]["points"]["visible"], false);
+    assert_eq!(json["layers"]["vectors"]["visible"], false);
     assert_eq!(json["sampling"]["max_points"], json["max_points"]);
     assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
     assert_eq!(json["slice"]["quantity_id"], json["active_quantity_id"]);
@@ -3127,10 +3528,10 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                 "visible": true,
                                 "display": {
                                     "visible": true,
-                                    "bounds": { "visible": true },
-                                    "surface": { "visible": true },
+                                    "bounds": { "visible": true, "opacity": 0.35 },
+                                    "surface": { "visible": true, "opacity": 0.25 },
                                     "wireframe": { "visible": true, "opacity": 0.65 },
-                                    "points": { "visible": false },
+                                    "points": { "visible": false, "opacity": 0.75 },
                                     "vectors": { "visible": false },
                                     "opacity": 0.55,
                                     "geometry_scope": "surface"
@@ -3164,7 +3565,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 5);
+    assert_eq!(json["schema_version"], 6);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -3222,6 +3623,121 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
         json["targets"]["objects"][0]["settings"]["active_quantity_id"],
         "h_demag"
     );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["surface_opacity"],
+        0.25
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["wireframe_opacity"],
+        0.65
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["point_opacity"],
+        0.75
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["bounds_opacity"],
+        0.35
+    );
+}
+
+#[tokio::test]
+async fn visualization_state_planar_profile_round_trips_without_mutating_three_d_quantity() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let before = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let before = body_json(before).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "active_monitor_id": "plane-1",
+                            "quantity_id": "h_demag",
+                            "component": "normal",
+                            "colormap": "coolwarm",
+                            "resolution": {
+                                "width": 640,
+                                "height": 320,
+                                "vector_budget": 750
+                            },
+                            "layers": {
+                                "raster": true,
+                                "contours": true,
+                                "mesh": false,
+                                "boundaries": true,
+                                "vectors": true,
+                                "probes": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["planar"]["active_monitor_id"], "plane-1");
+    assert_eq!(json["planar"]["quantity_id"], "h_demag");
+    assert_eq!(json["planar"]["component"], "normal");
+    assert_eq!(json["planar"]["resolution"]["width"], 640);
+    assert_eq!(json["planar"]["layers"]["vectors"], true);
+    assert_eq!(json["slice"]["quantity_id"], "h_demag");
+    assert_eq!(json["slice"]["component"], "magnitude");
+    assert_eq!(json["slice"]["colormap"], "coolwarm");
+    assert_eq!(json["slice"]["projection_resolution"], 512);
+    assert_eq!(json["slice"]["show_mesh"], false);
+    assert_eq!(json["slice"]["show_vectors"], true);
+    assert_eq!(json["quantity"], before["quantity"]);
+    assert_eq!(json["layers"], before["layers"]);
+    assert_eq!(json["camera"], before["camera"]);
+
+    let cleared = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "active_monitor_id": null,
+                            "contrast_min": null,
+                            "contrast_max": null,
+                            "display_unit": null
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let cleared = body_json(cleared).await;
+    assert_eq!(
+        cleared["planar"]["active_monitor_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(cleared["planar"]["contrast_min"], serde_json::Value::Null);
+    assert_eq!(cleared["planar"]["contrast_max"], serde_json::Value::Null);
+    assert_eq!(cleared["planar"]["display_unit"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -3337,7 +3853,10 @@ async fn visualization_state_normalizes_legacy_airbox_overrides_with_canonical_p
     assert_eq!(overrides[0]["scope"], "airbox");
     assert_eq!(overrides[0]["scope_id"], "airbox");
     assert_eq!(overrides[0]["style"]["vector_budget"], 512);
-    assert_eq!(json["targets"]["airbox"]["settings"]["vectors_visible"], true);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["vectors_visible"],
+        true
+    );
     assert_eq!(json["targets"]["airbox"]["settings"]["vector_budget"], 512);
 }
 
@@ -3369,7 +3888,10 @@ async fn visualization_state_migrates_a_legacy_synthetic_object_airbox_override(
     let json = body_json(response).await;
     assert_eq!(json["overrides"][0]["scope"], "airbox");
     assert_eq!(json["overrides"][0]["scope_id"], "airbox");
-    assert_eq!(json["targets"]["airbox"]["settings"]["vector_length_scale"], 1.5);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["vector_length_scale"],
+        1.5
+    );
 }
 
 #[tokio::test]
@@ -3831,6 +4353,67 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
 }
 
 #[tokio::test]
+async fn table_resources_expose_only_configured_autosave_quantities() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.metadata = Some(serde_json::json!({
+            "table_autosave": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 10,
+                "quantities": ["step", "mx", "e_ex"]
+            }
+        }));
+        snapshot.scalar_rows = vec![sample_scalar_row(1, 1e-12, 6.9)];
+        snapshot.scalar_revision = 1;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/columns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let columns = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{columns:#}");
+    assert_eq!(
+        columns
+            .as_array()
+            .expect("columns response should be an array")
+            .iter()
+            .map(|column| column["column_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["step", "mx", "e_ex"]
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?columns=mx,e_total")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_json(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+    assert!(body["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("not available")));
+}
+
+#[tokio::test]
 async fn table_resources_expose_list_detail_and_columns_metadata() {
     let state = test_app_state_with_live_session().await;
     {
@@ -4271,7 +4854,7 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(sel.selection.y_chosen_size, 16);
     assert_eq!(sel.revision, 1);
     assert_eq!(presentation.colormap, "viridis");
-    assert!(presentation.vector_glyphs);
+    assert!(!presentation.vector_glyphs);
 }
 
 #[tokio::test]
@@ -5313,6 +5896,322 @@ async fn mesh_semantics_returns_three_level_projection() {
 }
 
 #[tokio::test]
+async fn mesh_capabilities_replace_stale_workspace_mixed_features_fail_closed() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_capabilities": {
+                "has_volume_mesh": true,
+                "mesh.topology.mixed_p1": { "status": "production_executable" },
+                "mesh.swept.prism": { "status": "production_executable" },
+                "mesh.transition.pyramid_tet": { "status": "production_executable" },
+                "mesh.exact_layer_count": { "status": "production_executable" }
+            }
+        }));
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fem_cpu_native",
+                "capability_profile_version": "2026-07-28",
+                "supported_terms": [],
+                "feature_capabilities": {
+                    "mesh.topology.mixed_p1": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "conforming P1"
+                    },
+                    "mesh.swept.prism": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "prism6 magnetic cells"
+                    },
+                    "mesh.transition.pyramid_tet": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "pyramid5 transition and tet4 far air"
+                    },
+                    "fem.cpu.exchange_demag.mixed_p1": {
+                        "status": "unsupported",
+                        "reason": "operator unavailable",
+                        "scope": "cpu"
+                    }
+                },
+                "supported_demag_realizations": [],
+                "preview_quantities": [],
+                "snapshot_quantities": [],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("backend capabilities fixture should deserialize"),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let capabilities = json["mesh_capabilities"]
+        .as_object()
+        .expect("mesh capabilities should be an object");
+    assert_eq!(capabilities["has_volume_mesh"], true);
+    for id in [
+        "mesh.topology.mixed_p1",
+        "mesh.swept.prism",
+        "mesh.transition.pyramid_tet",
+    ] {
+        assert_eq!(capabilities[id]["status"], "semantic_only", "{id}");
+        assert!(capabilities[id]["reason"].is_string(), "{id}");
+        assert!(capabilities[id]["scope"].is_string(), "{id}");
+    }
+    assert!(!capabilities.contains_key("mesh.exact_layer_count"));
+    assert!(!capabilities.contains_key("fem.cpu.exchange_demag.mixed_p1"));
+}
+
+#[tokio::test]
+async fn mixed_shared_domain_resources_publish_typed_topology_truth() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.build_report = Some(
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "component_aware",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": fixture["certificate"].clone(),
+                "mixed_topology_provenance": {
+                    "requested_topology": "mixed_p1",
+                    "resolved_topology": "mixed_p1",
+                    "accepted_certificate_fingerprint": fixture["certificate"]["topology_fingerprint"].clone(),
+                    "requested_device": "auto",
+                    "precision": "double",
+                    "capability_status": "semantic_only"
+                }
+            }))
+            .expect("mixed build report fixture should deserialize"),
+        );
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fem_cpu_native",
+                "capability_profile_version": "2026-07-28",
+                "supported_terms": [],
+                "feature_capabilities": {
+                    "mesh.topology.mixed_p1": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "conforming P1"
+                    }
+                },
+                "supported_demag_realizations": [],
+                "preview_quantities": [],
+                "snapshot_quantities": [],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("backend capabilities fixture should deserialize"),
+        );
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_summary": { "mesh_name": "test-mesh" }
+        }));
+        snapshot.mesh_revision = 91;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let report_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/semantics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report_response.status(), StatusCode::OK);
+    let report_json = body_json(report_response).await;
+    let report = &report_json["solver_mesh"]["build_report"];
+    assert_eq!(report["topology_schema_version"], 2);
+    assert_eq!(report["element_counts_by_type"]["prism6"], 2);
+    assert_eq!(report["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(report["element_counts_by_type"]["tet4"], 8);
+    assert_eq!(
+        report["facet_counts_by_type_and_role"]["exterior"]["tri3"],
+        38
+    );
+    assert_eq!(report["requested_layered_policy"]["layers"], 1);
+    assert_eq!(report["resolved_layered_policy"]["layers"], 1);
+    assert_eq!(
+        report["mixed_layer_topology_certificate"]["certificate_status"],
+        "accepted"
+    );
+    assert_eq!(
+        report["mixed_layer_topology_certificate"]["actual_node_plane_count"],
+        2
+    );
+    assert_eq!(report["gmsh_version"], "4.15.2");
+    assert_eq!(report["fallbacks_triggered"], serde_json::json!([]));
+    assert_eq!(
+        report["mixed_topology_provenance"]["requested_topology"],
+        "mixed_p1"
+    );
+    assert_eq!(
+        report["mixed_topology_provenance"]["capability_reason"],
+        "native mixed-P1 execution is not advertised"
+    );
+
+    let manifest_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest_response.status(), StatusCode::OK);
+    let manifest = body_json(manifest_response).await;
+    assert_eq!(manifest["topology_schema_version"], 2);
+    assert_eq!(manifest["element_counts_by_type"]["prism6"], 2);
+    assert_eq!(manifest["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(manifest["element_counts_by_type"]["tet4"], 8);
+    assert_eq!(manifest["gmsh_version"], "4.15.2");
+    assert_eq!(manifest["fallbacks_triggered"], serde_json::json!([]));
+    assert_eq!(
+        manifest["mixed_topology_provenance"]["capability_reason"],
+        "native mixed-P1 execution is not advertised"
+    );
+    let airbox = manifest["mesh_parts"]
+        .as_array()
+        .and_then(|parts| parts.iter().find(|part| part["id"] == "airbox"))
+        .expect("airbox part should be present");
+    assert_eq!(airbox["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(airbox["element_counts_by_type"]["tet4"], 8);
+    assert!(manifest.get("cells").is_none());
+    assert!(manifest.get("connectivity").is_none());
+}
+
+#[test]
+fn mixed_orphan_entity_schema_rejects_malformed_diagnostics() {
+    let valid: crate::schemas::mesh::MeshOrphanEntityResource =
+        serde_json::from_value(serde_json::json!({ "dimension": 2, "tag": 41 }))
+            .expect("typed orphan entity should deserialize");
+    assert_eq!(valid.dimension, 2);
+    assert_eq!(valid.tag, 41);
+
+    assert!(
+        serde_json::from_value::<crate::schemas::mesh::MeshOrphanEntityResource>(
+            serde_json::json!({ "dimension": "surface", "tag": 41 })
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<crate::schemas::mesh::MeshOrphanEntityResource>(
+            serde_json::json!({ "dimension": 4, "tag": 41 })
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<crate::schemas::mesh::MeshOrphanEntityResource>(
+            serde_json::json!({ "dimension": 2, "tag": 0 })
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn mesh_active_build_publishes_mixed_layer_rejection_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {
+                "kind": "mesh_build_failed",
+                "mixed_layer_topology_rejection": {
+                    "schema_version": "mixed_layer_topology_rejection.v1",
+                    "certificate_status": "rejected",
+                    "requested_layer_count": 1,
+                    "rejection_category": "missing_capability",
+                    "rejection_reason": "resolved 2 layers",
+                    "missing_capabilities": ["fem.gpu.exchange_demag.mixed_p1"],
+                    "requested_execution": {
+                        "backend": "fem",
+                        "device": "gpu",
+                        "precision": "double",
+                        "mode": "strict",
+                        "study": "relaxation"
+                    },
+                    "fallback": "none",
+                    "free_tetrahedral_alternative": "Select free_tetrahedral explicitly."
+                }
+            },
+            "last_build_error": "resolved 2 layers"
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/builds/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["certificate_status"],
+        "rejected"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["rejection_reason"],
+        "resolved 2 layers"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["rejection_category"],
+        "missing_capability"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["missing_capabilities"][0],
+        "fem.gpu.exchange_demag.mixed_p1"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["requested_execution"]["device"],
+        "gpu"
+    );
+    assert_eq!(json["mixed_layer_topology_rejection"]["fallback"], "none");
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["free_tetrahedral_alternative"],
+        "Select free_tetrahedral explicitly."
+    );
+}
+
+#[tokio::test]
 async fn mesh_semantics_returns_404_without_scene_document() {
     let app = test_router_with_session().await;
     let response = app
@@ -5619,6 +6518,277 @@ async fn mesh_quality_gates_returns_marked_projection_when_backend_payload_is_mi
         json["gates"]["reason"],
         "mesh_quality_gates is missing from the current mesh workspace/build report"
     );
+    assert_eq!(json["mixed_certificate"]["status"], "unavailable");
+    assert_eq!(json["mixed_certificate"]["mesh_revision"], 20);
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let mut certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        certificate.topology_fingerprint_version = "v3".to_string();
+        certificate.topology_fingerprint = mesh_ir.mixed_topology_fingerprint_v3().unwrap();
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:1".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 91;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let evidence = &json["mixed_certificate"];
+    assert_eq!(evidence["status"], "valid");
+    assert_eq!(evidence["mesh_revision"], 91);
+    assert_eq!(
+        evidence["topology_fingerprint"],
+        evidence["certificate_fingerprint"]
+    );
+    assert_eq!(evidence["certificate_status"], "accepted");
+    let gates = evidence["family_gates"]
+        .as_array()
+        .expect("family gates should be typed rows");
+    assert_eq!(gates.len(), 3);
+    let prism = gates
+        .iter()
+        .find(|gate| gate["family"] == "prism6")
+        .expect("prism6 gate should be published");
+    assert_eq!(prism["metric"], "tetra_decomposition_scaled_jacobian.v1");
+    assert_eq!(prism["threshold"], 0.1);
+    assert_eq!(prism["passed"], true);
+    assert_eq!(prism["positive_jacobian"], true);
+    assert!(prism["minimum_jacobian_m3"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_preserves_legacy_v2_mixed_certificate_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        assert_eq!(certificate.topology_fingerprint_version, "v2");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:v2".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-v2-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 92;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let evidence = &body_json(response).await["mixed_certificate"];
+    assert_eq!(evidence["status"], "valid");
+    assert_eq!(evidence["mesh_revision"], 92);
+    assert_eq!(
+        evidence["topology_fingerprint"],
+        evidence["certificate_fingerprint"]
+    );
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_rejects_quality_evidence_mutated_for_the_same_topology() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let mut certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        *certificate
+            .scaled_jacobian_p05_by_family
+            .get_mut("prism6")
+            .expect("fixture should contain prism6 quality") += 0.01;
+        certificate
+            .validate()
+            .expect("mutated finite above-threshold evidence remains internally valid");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:mutated".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-mutated-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 93;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mixed_certificate"]["status"], "rejected");
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+    assert!(json["mixed_certificate"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("scaled_jacobian_p05_by_family"));
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_suppresses_stale_mixed_certificate_values() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.build_report = Some(report);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 92;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mixed_certificate"]["status"], "stale");
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+    assert!(json["mixed_certificate"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("fingerprint"));
 }
 
 #[tokio::test]
@@ -5974,6 +7144,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                     }
                 })),
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6019,6 +7190,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6071,6 +7243,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6103,6 +7276,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6356,6 +7530,149 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 }
 
 #[tokio::test]
+async fn all_fmmt_v2_topology_routes_serve_mixed_cells() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![901],
+            mesh_parts: Vec::new(),
+        };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for uri in [
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/objects/body/topology",
+        "/v2/sessions/current/meshing/meshes/parts/body/topology",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = body_bytes(response).await;
+        assert_eq!(&body[0..4], b"FMMT", "{uri}");
+        assert_eq!(body[4], 2, "{uri}");
+        assert_eq!(
+            u32::from_le_bytes(body[12..16].try_into().unwrap()),
+            1,
+            "{uri}"
+        );
+
+        let node_count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+        let cell_types_offset = 64 + node_count * 3 * std::mem::size_of::<f64>();
+        assert_eq!(
+            u32::from_le_bytes(
+                body[cell_types_offset..cell_types_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            2,
+            "{uri}"
+        );
+    }
+}
+
+#[test]
+fn openapi_documents_malformed_topology_without_claiming_fmmt_v1_limitations() {
+    let openapi = crate::openapi_v2::openapi_json();
+    for path in [
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
+        "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
+    ] {
+        let responses = &openapi["paths"][path]["get"]["responses"];
+        assert!(responses
+            .as_object()
+            .is_some_and(|responses| responses.contains_key("409")));
+        assert!(
+            responses["200"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("FMMT v2")),
+            "missing FMMT v2 success contract for {path}"
+        );
+        assert!(
+            !responses["409"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("FMMT v1")),
+            "stale FMMT v1 limitation documented for {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fmmt_v2_topology_routes_reject_malformed_csr_instead_of_truncating() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.cells.offsets[1] = 3;
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn scoped_topology_routes_distinguish_missing_resources_from_malformed_topology() {
+    let valid_state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = valid_state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+    }
+    let valid_app = build_v2_router().with_state(valid_state);
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/objects/missing/topology",
+        "/v2/sessions/current/meshing/meshes/parts/missing/topology",
+    ] {
+        let response = valid_app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+
+    let malformed_state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = malformed_state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.cells.offsets[1] = 3;
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let malformed_app = build_v2_router().with_state(malformed_state);
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/objects/body/topology",
+        "/v2/sessions/current/meshing/meshes/parts/body/topology",
+    ] {
+        let response = malformed_app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -6391,6 +7708,69 @@ async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
     assert_eq!(u32::from_le_bytes(body[20..24].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(body[24..28].try_into().unwrap()), 3);
     assert_eq!(u32::from_le_bytes(body[28..32].try_into().unwrap()), 1);
+}
+
+#[tokio::test]
+async fn mixed_mesh_cross_section_endpoints_return_stable_unsupported_code() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![901],
+            mesh_parts: Vec::new(),
+        };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section?plane=xy&position_percent=50",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=512",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality?plane=xy&position_percent=50&metric=gamma",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body_bytes(response).await).expect("JSON error body");
+        assert_eq!(body["code"], "mixed_topology_not_supported", "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("tet4-only")),
+            "{uri}: {body}"
+        );
+    }
+}
+
+#[test]
+fn openapi_types_cross_section_conflicts_as_api_errors() {
+    let openapi = crate::openapi_v2::openapi_json();
+    for path in [
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
+    ] {
+        assert_eq!(
+            openapi["paths"][path]["get"]["responses"]["409"]["content"]["application/json"]
+                ["schema"]["$ref"],
+            "#/components/schemas/ApiErrorResponse",
+            "{path}"
+        );
+    }
+    assert!(
+        openapi["components"]["schemas"]["ApiErrorResponse"]["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&serde_json::json!("code")))
+    );
 }
 
 #[tokio::test]
@@ -6686,13 +8066,44 @@ async fn mesh_shared_domain_manifest_includes_topology_fingerprint() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["topology_fingerprint"], expected_hash);
+    assert!(json.get("fallbacks_triggered").is_none());
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_omits_unpublished_fallback_evidence() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.build_report = Some(
+        serde_json::from_value(serde_json::json!({
+            "build_mode": "component_aware"
+        }))
+        .expect("legacy build report should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert!(json.get("fallbacks_triggered").is_none());
 }
 
 #[tokio::test]
 async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() {
     let state = test_app_state_with_live_session().await;
     let mut mesh = sample_scoped_fem_mesh_payload();
-    mesh.mesh_parts[1].surface_faces.clear();
+    mesh.mesh_parts[1].facet_global_ordinals.clear();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(mesh);
     }
@@ -6714,6 +8125,165 @@ async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() 
         json["mesh_parts"][1]["surface_node_indices"],
         serde_json::json!([4, 5, 6])
     );
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_projects_quad_surface_faces_without_internal_ids() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.facets = fullmag_ir::FemFacetConnectivityIR {
+        types: vec![fullmag_ir::FemFacetTypeIR::Quad4; 2],
+        roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface; 2],
+        offsets: vec![0, 4, 8],
+        nodes: vec![0, 1, 2, 3, 3, 2, 1, 0],
+        global_ordinals: vec![700, 12],
+    };
+    mesh.boundary_markers = vec![1, 2];
+    mesh.mesh_parts[1].boundary_face_indices.clear();
+    mesh.mesh_parts[1].boundary_face_start = 99;
+    mesh.mesh_parts[1].boundary_face_count = 2;
+    mesh.mesh_parts[1].facet_global_ordinals = vec![12, 700];
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mesh_parts"][1]["surface_faces"],
+        serde_json::json!([[3, 2, 1, 0], [0, 1, 2, 3]])
+    );
+    assert_eq!(
+        json["mesh_parts"][1]["boundary_face_indices"],
+        serde_json::json!([1, 0])
+    );
+    assert!(json["mesh_parts"][1]
+        .as_object()
+        .is_some_and(|part| !part.contains_key("facet_global_ordinals")));
+}
+
+#[test]
+fn openapi_mesh_part_schema_keeps_surface_faces_and_hides_internal_facet_ids() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let properties = openapi["components"]["schemas"]["MeshPartResource"]["properties"]
+        .as_object()
+        .expect("MeshPartResource properties");
+    assert!(properties.contains_key("surface_faces"));
+    assert!(properties.contains_key("element_counts_by_type"));
+    assert!(!properties.contains_key("facet_global_ordinals"));
+}
+
+#[test]
+fn openapi_registers_typed_mixed_topology_truth_fields() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schemas = openapi["components"]["schemas"]
+        .as_object()
+        .expect("OpenAPI schemas");
+    let mesh_capabilities = &schemas["MeshCapabilitiesResource"]["properties"]["mesh_capabilities"];
+    assert_eq!(
+        mesh_capabilities["oneOf"][1]["$ref"], "#/components/schemas/MeshCapabilityMatrixResource",
+        "nullable mesh capability matrix must retain its typed schema: {mesh_capabilities}"
+    );
+    let exact_layer_count =
+        &schemas["MeshCapabilityMatrixResource"]["properties"]["mesh.exact_layer_count"];
+    let mixed_capability = exact_layer_count["oneOf"][1]["$ref"].as_str();
+    assert_eq!(
+        mixed_capability,
+        Some("#/components/schemas/MeshFeatureCapabilityResource")
+    );
+    assert_ne!(
+        schemas["MeshCapabilityMatrixResource"]["additionalProperties"], false,
+        "unknown capability entries must remain compatible"
+    );
+    let feature_properties = schemas["MeshFeatureCapabilityResource"]["properties"]
+        .as_object()
+        .expect("mesh feature capability properties");
+    for field in ["status", "reason", "scope", "supported_layer_counts"] {
+        assert!(
+            feature_properties.contains_key(field),
+            "missing field {field}"
+        );
+    }
+    for schema in [
+        "MeshLayeredPolicyResource",
+        "MeshMixedLayerTopologyCertificateSummaryResource",
+        "MeshMixedCertificateFamilyQualityGateResource",
+        "MeshMixedCertificateQualityEvidenceResource",
+        "MeshMixedP1ExecutionResource",
+        "MeshMixedLayerTopologyRejectionResource",
+        "MeshMixedTopologyProvenanceResource",
+        "MeshOrphanEntityResource",
+        "MeshSharedDomainBuildReportResource",
+    ] {
+        assert!(schemas.contains_key(schema), "missing schema {schema}");
+    }
+    let manifest = schemas["MeshSharedDomainManifestResource"]["properties"]
+        .as_object()
+        .expect("manifest properties");
+    for field in [
+        "topology_schema_version",
+        "element_counts_by_type",
+        "facet_counts_by_type_and_role",
+        "requested_layered_policy",
+        "resolved_layered_policy",
+        "mixed_layer_topology_certificate",
+        "mixed_topology_provenance",
+        "gmsh_version",
+        "fallbacks_triggered",
+    ] {
+        assert!(
+            manifest.contains_key(field),
+            "missing manifest field {field}"
+        );
+    }
+    let active_build = schemas["MeshActiveBuildResource"]["properties"]
+        .as_object()
+        .expect("active build properties");
+    assert!(active_build.contains_key("mixed_layer_topology_rejection"));
+    let orphan = schemas["MeshOrphanEntityResource"]["properties"]
+        .as_object()
+        .expect("orphan entity properties");
+    assert_eq!(orphan["dimension"]["minimum"], 0);
+    assert_eq!(orphan["dimension"]["maximum"], 3);
+    assert_eq!(orphan["tag"]["minimum"], 1);
+    let histogram_path = "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements";
+    assert_eq!(
+        openapi["paths"][histogram_path]["get"]["responses"]["409"]["content"]["application/json"]
+            ["schema"]["$ref"],
+        "#/components/schemas/ApiErrorResponse"
+    );
+    let quality_gates = schemas["MeshQualityGatesResource"]["properties"]
+        .as_object()
+        .expect("quality-gates properties");
+    assert!(quality_gates.contains_key("mixed_certificate"));
+    let rejection = schemas["MeshMixedLayerTopologyRejectionResource"]["properties"]
+        .as_object()
+        .expect("mixed rejection properties");
+    for field in [
+        "rejection_category",
+        "rejection_reason",
+        "missing_capabilities",
+        "requested_execution",
+        "resolved_execution",
+        "fallback",
+        "free_tetrahedral_alternative",
+    ] {
+        assert!(
+            rejection.contains_key(field),
+            "missing rejection field {field}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -7043,10 +8613,7 @@ async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
-    assert_eq!(
-        json["pairs"][0]["status"],
-        "unpaired_boundary_nodes"
-    );
+    assert_eq!(json["pairs"][0]["status"], "unpaired_boundary_nodes");
     assert_eq!(json["status"], "invalid");
     assert!(!json["status_reasons"].as_array().unwrap().is_empty());
 }
@@ -7116,7 +8683,10 @@ async fn mesh_periodic_pairs_marks_accepted_certificate_stale_after_scene_edit()
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 }
 
 #[tokio::test]
@@ -7127,9 +8697,9 @@ async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_
     let topology_fingerprint = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -7198,7 +8768,10 @@ async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -7211,9 +8784,9 @@ async fn mesh_periodic_pairs_rejects_artifact_with_mismatched_marker_certificate
     let mesh_ir = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -7284,7 +8857,9 @@ async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residu
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_periodic_fem_mesh_payload();
-        mesh.boundary_faces[1] = [1, 5, 4];
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces[1] = [1, 5, 4];
+        mesh.set_tri3_facets(faces);
         snapshot.fem_mesh = Some(mesh);
         snapshot.mesh_revision = 44;
     }
@@ -7418,7 +8993,10 @@ async fn mesh_periodic_pairs_rejects_artifact_from_stale_scene_revision() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -7849,7 +9427,7 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -7952,7 +9530,7 @@ async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8057,7 +9635,7 @@ async fn mesh_region_quality_returns_scoped_size_and_quality_distributions() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8450,7 +10028,7 @@ async fn mesh_region_memberships_lists_available_authored_region_memberships() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -9614,6 +11192,782 @@ async fn authoring_object_geometry_patch_marks_mesh_dirty_and_checks_revision() 
         .expect("object retained");
     assert_eq!(object.geometry.geometry_kind, "Box");
     assert!(object.tags.iter().any(|tag| tag == "mesh:dirty"));
+}
+
+#[tokio::test]
+async fn planar_monitor_crud_enforces_revision_and_target_validation() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 12;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": {"grid_cells": [2, 2, 1]}
+            }
+        }))
+        .unwrap();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let monitor = serde_json::json!({
+        "id": "monitor_xy",
+        "name": "XY monitor",
+        "target": {"kind": "magnetic_domain"},
+        "frame": {
+            "origin_m": [0.0, 0.0, 0.0],
+            "u_axis": [1.0, 0.0, 0.0],
+            "v_axis": [0.0, 1.0, 0.0],
+            "normal": [0.0, 0.0, 1.0],
+            "preset": "xy",
+            "normalization_version": "planar_frame_v1",
+            "extent": {
+                "kind": "explicit",
+                "u_min_m": -1.0,
+                "u_max_m": 1.0,
+                "v_min_m": -1.0,
+                "v_max_m": 1.0
+            }
+        },
+        "operator": {"kind": "plane_sample"}
+    });
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": 12,
+                        "monitor": monitor
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    let mut revision = created["scene_revision"].as_u64().unwrap();
+    assert_eq!(created["monitor"]["id"], "monitor_xy");
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list = body_json(list).await;
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["monitors"][0]["id"], "monitor_xy");
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_json(get).await["monitor"]["name"], "XY monitor");
+
+    let mut patched_monitor = created["monitor"].clone();
+    patched_monitor["name"] = serde_json::json!("Patched XY monitor");
+    let patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": revision,
+                        "monitor": patched_monitor
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+    let patched = body_json(patch).await;
+    assert_eq!(patched["monitor"]["name"], "Patched XY monitor");
+    revision = patched["scene_revision"].as_u64().unwrap();
+
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy/duplicate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": revision,
+                        "new_id": "monitor_xy_copy",
+                        "new_name": "XY monitor copy"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    let duplicate = body_json(duplicate).await;
+    assert_eq!(duplicate["monitor"]["id"], "monitor_xy_copy");
+    revision = duplicate["scene_revision"].as_u64().unwrap();
+
+    let delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy_copy")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"expected_scene_revision": revision}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+    let deleted = body_json(delete).await;
+    assert_eq!(deleted["count"], 1);
+    assert_eq!(deleted["monitors"][0]["id"], "monitor_xy");
+    revision = deleted["scene_revision"].as_u64().unwrap();
+
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": 12,
+                        "monitor": {
+                            "id": "stale",
+                            "name": "Stale",
+                            "target": {"kind": "magnetic_domain"},
+                            "frame": created["monitor"]["frame"].clone(),
+                            "operator": {"kind": "plane_sample"}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/planar-monitors/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let invalid_target = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": revision,
+                        "monitor": {
+                            "id": "invalid_target",
+                            "name": "Invalid target",
+                            "target": {"kind": "object", "object_id": "missing-object"},
+                            "frame": created["monitor"]["frame"].clone(),
+                            "operator": {"kind": "plane_sample"}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_target.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 21;
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "monitor_xy",
+            "name": "XY monitor",
+            "target": {"kind": "domain"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {"kind": "target_bounds", "padding_m": 0.0}
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .unwrap(),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": {"grid_cells": [2, 2, 1]}
+            }
+        }))
+        .unwrap();
+    }
+    let app = build_v2_router().with_state(state);
+    let base = "/v2/sessions/current/data/fields/m/planar-monitors/monitor_xy";
+    let query = "?component=magnitude&resolution_x=16&resolution_y=16";
+
+    let meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let etag = meta.headers()["etag"].to_str().unwrap().to_string();
+    let meta_json = body_json(meta).await;
+    assert_eq!(meta_json["monitor_id"], "monitor_xy");
+    assert_eq!(meta_json["resolution"], serde_json::json!([16, 16]));
+    assert_eq!(meta_json["sampling_execution"], "cpu");
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}"))
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+
+    for resource in ["scalar", "vectors", "empty-mask"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{base}/{resource}{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{resource}");
+    }
+
+    let probe = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/probe?u_m=0&v_m=0&component=magnitude"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), StatusCode::OK);
+    let probe = body_json(probe).await;
+    assert_eq!(probe["monitor_id"], "monitor_xy");
+    assert!(probe["cell_id"].is_number());
+    assert!(probe["element_id"].is_null());
+
+    let png = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/render.png{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(png.status(), StatusCode::OK);
+    assert_eq!(png.headers()["content-type"], "image/png");
+
+    let overlay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/mesh-overlay{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay.status(), StatusCode::NO_CONTENT);
+
+    let stale_mesh = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}&expected_mesh_revision=999"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_mesh.status(), StatusCode::CONFLICT);
+    let stale_mesh = body_json(stale_mesh).await;
+    assert_eq!(stale_mesh["code"], "stale_mesh_revision");
+
+    let unbounded = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta?resolution_x=2048&resolution_y=2048"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unbounded.status(), StatusCode::BAD_REQUEST);
+
+    let status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_wire = body_json(status).await.to_string();
+    for forbidden in [
+        "monitor_xy",
+        "scalar_values",
+        "vector_values",
+        "mesh_overlay",
+    ] {
+        assert!(
+            !status_wire.contains(forbidden),
+            "thin status must not embed planar payload {forbidden}"
+        );
+    }
+
+    let snapshot_without_stage = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}&snapshot_id=point-1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot_without_stage.status(), StatusCode::BAD_REQUEST);
+    let snapshot_without_stage = body_json(snapshot_without_stage).await;
+    assert_eq!(snapshot_without_stage["code"], "snapshot_requires_stage");
+}
+
+#[tokio::test]
+async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geometry() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    let grid_fingerprint = "00".repeat(32);
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": grid_fingerprint,
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 2,
+            "object_ids": ["body"],
+            "region_legend": [],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    let mut membership = vec![0u8; 64 + 2 * 4];
+    membership[..4].copy_from_slice(b"FMRM");
+    membership[4] = 2;
+    membership[5] = 2;
+    membership[8..12].copy_from_slice(&2u32.to_le_bytes());
+    membership[12..16].copy_from_slice(&1u32.to_le_bytes());
+    membership[16..20].copy_from_slice(&1u32.to_le_bytes());
+    membership[20..24].copy_from_slice(&2u32.to_le_bytes());
+    membership[64..68].copy_from_slice(&0u32.to_le_bytes());
+    membership[68..72].copy_from_slice(&u32::MAX.to_le_bytes());
+    fs::write(mesh_dir.join("fdm_region_membership.v2.bin"), membership)
+        .expect("failed to write FDM membership binary");
+
+    let mut scene = sample_scene_document();
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "body-plane",
+            "name": "Body plane",
+            "target": {"kind": "object", "object_id": "body"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.5],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": 0.0,
+                    "u_max_m": 2.0,
+                    "v_min_m": 0.0,
+                    "v_max_m": 1.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("FDM object monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "mat_ms": {
+                "values": [4.0, 9.0],
+                "layout": {"grid_cells": [2, 1, 1]}
+            }
+        }))
+        .expect("mock FDM scalar field should deserialize");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/sessions/current/data/fields/mat_ms/planar-monitors/body-plane/meta?component=scalar&resolution_x=16&resolution_y=16",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:#}");
+    assert!(body["occupancy"]["occupied"].as_u64().unwrap() > 0);
+    assert!(body["occupancy"]["empty"].as_u64().unwrap() > 0);
+    assert_eq!(body["scalar_min"], 4.0);
+    assert_eq!(body["scalar_max"], 4.0);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn planar_field_fem_overlay_is_fmcs_v3_and_mesh_part_scope_changes_sampling() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 22;
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "fem_domain_xy",
+            "name": "FEM domain XY",
+            "target": {"kind": "domain"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": -1.0,
+                    "u_max_m": 2.0,
+                    "v_min_m": -1.0,
+                    "v_max_m": 2.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("FEM planar monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0]
+                ],
+                "layout": {"grid_cells": [8, 1, 1]}
+            }
+        }))
+        .expect("scoped FEM field should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+    let base = "/v2/sessions/current/data/fields/m/planar-monitors/fem_domain_xy";
+    let body_query =
+        "?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=body";
+    let air_query =
+        "?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=airbox";
+
+    let overlay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/mesh-overlay{body_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay.status(), StatusCode::OK);
+    let overlay = body_bytes(overlay).await;
+    assert_eq!(&overlay[..4], b"FMCS");
+    assert_eq!(u32::from_le_bytes(overlay[4..8].try_into().unwrap()), 3);
+    assert!(
+        u32::from_le_bytes(overlay[8..12].try_into().unwrap()) > 0,
+        "FEM overlay must contain at least one clipped element polygon"
+    );
+
+    let body_mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/empty-mask{body_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_mask.status(), StatusCode::OK);
+    let body_mask = body_bytes(body_mask).await;
+
+    let air_mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/empty-mask{air_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(air_mask.status(), StatusCode::OK);
+    let air_mask = body_bytes(air_mask).await;
+    assert_ne!(
+        body_mask, air_mask,
+        "mesh-part scope must change the sampled occupancy, not only metadata"
+    );
+
+    let probe = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}/probe?u_m=0.2&v_m=0.2&component=magnitude&scope_kind=mesh_part&scope_id=body"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), StatusCode::OK);
+    let probe = body_json(probe).await;
+    assert!(probe["cell_id"].is_null());
+    assert!(probe["element_id"].is_number());
+
+    let stale_scope = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}/meta?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=removed-part"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_scope.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(stale_scope).await["code"], "stale_mesh_scope");
+}
+
+#[tokio::test]
+async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_running_stage_execution(&state, 23).await;
+    let snapshot_id = "hysteresis_point_002";
+    let snapshot_dir = artifact_dir.join("hysteresis_snapshots").join(snapshot_id);
+    fs::create_dir_all(&snapshot_dir).expect("snapshot directory should be writable");
+    fs::write(
+        snapshot_dir.join("m.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "quantity_id": "m",
+            "snapshot_id": snapshot_id,
+            "layout": {"grid_cells": [2, 1, 1]},
+            "values": [[9.0, 0.0, 0.0], [8.0, 0.0, 0.0]]
+        }))
+        .expect("snapshot should serialize"),
+    )
+    .expect("snapshot should be writable");
+    let stage_artifact_dir = artifact_dir.join("artifacts/stage-000");
+    fs::create_dir_all(&stage_artifact_dir).expect("stage artifact directory should be writable");
+    fs::write(
+        stage_artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([{
+            "point_id": 1,
+            "field_value_mT": 25.0,
+            "m_parallel": 0.8,
+            "m_oop": 0.0,
+            "m_ip": 0.8,
+            "m_avg": [0.8, 0.0, 0.0],
+            "status": "completed",
+            "snapshot_id": snapshot_id
+        }]))
+        .expect("points should serialize"),
+    )
+    .expect("points should be writable");
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot
+            .stage_execution
+            .as_mut()
+            .and_then(|execution| execution.stages.first_mut())
+            .expect("stage-000 should exist")
+            .kind = Some("flat_hysteresis".to_string());
+        let mut scene = sample_scene_document();
+        scene.monitors.planar.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "snapshot_xy",
+                "name": "Snapshot XY",
+                "target": {"kind": "domain"},
+                "frame": {
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "preset": "xy",
+                    "normalization_version": "planar_frame_v1",
+                    "extent": {
+                        "kind": "explicit",
+                        "u_min_m": -0.5,
+                        "u_max_m": 1.5,
+                        "v_min_m": -0.5,
+                        "v_max_m": 0.5
+                    }
+                },
+                "operator": {"kind": "plane_sample"}
+            }))
+            .expect("snapshot monitor should deserialize"),
+        );
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let base = "/v2/sessions/current/data/fields/m/planar-monitors/snapshot_xy/meta";
+    let valid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-000&snapshot_id={snapshot_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let valid_status = valid.status();
+    let valid = body_json(valid).await;
+    assert_eq!(valid_status, StatusCode::OK, "{valid:#}");
+    assert_eq!(
+        valid["field_source"],
+        format!("stage_snapshot:{snapshot_id}")
+    );
+    assert_eq!(valid["scalar_max"], 9.0);
+
+    let outside_stage = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-999&snapshot_id={snapshot_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outside_stage.status(), StatusCode::NOT_FOUND);
+
+    let missing_snapshot = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-000&snapshot_id=hysteresis_point_missing"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_snapshot.status(), StatusCode::NOT_FOUND);
+
+    let _ = fs::remove_dir_all(artifact_dir);
 }
 
 #[tokio::test]
@@ -11560,13 +13914,13 @@ async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 2]]);
     if let Some(body_part) = mesh
         .mesh_parts
         .iter_mut()
         .find(|part| part.object_id.as_deref() == Some("body"))
     {
-        body_part.surface_faces = vec![[0, 1, 2]];
+        body_part.facet_global_ordinals = vec![0];
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -11639,7 +13993,6 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces.clear();
     mesh.boundary_markers.clear();
     if let Some(body_part) = mesh
         .mesh_parts
@@ -11649,7 +14002,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
         body_part.boundary_face_start = 0;
         body_part.boundary_face_count = 0;
         body_part.boundary_face_indices.clear();
-        body_part.surface_faces = vec![[0, 1, 2]];
+        body_part.facet_global_ordinals = vec![0];
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -11682,7 +14035,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     );
     assert_eq!(
         json["couplings"][0]["source_resolution"]["boundary_face_indices"],
-        serde_json::json!([])
+        serde_json::json!([0])
     );
     assert_eq!(
         json["couplings"][0]["source_resolution"]["boundary_marker_ids"],
@@ -11713,7 +14066,7 @@ async fn authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magneti
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 2]]);
     mesh.mesh_parts[1].role = "unsupported_role".to_string();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -13022,9 +15375,11 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -13558,6 +15913,7 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
                 integrator: None,
                 fixed_timestep: None,
                 max_error: None,
+                solver_policy: None,
                 relax_algorithm: None,
                 relax_alpha: None,
                 mesh_options: None,
@@ -14011,6 +16367,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 integrator: None,
                 fixed_timestep: None,
                 max_error: None,
+                solver_policy: None,
                 relax_algorithm: Some("llg_overdamped".into()),
                 relax_alpha: None,
                 mesh_options: None,
@@ -14076,7 +16433,11 @@ async fn relax_command_rejects_llg_only_controls_for_direct_minimizer() {
                     serde_json::json!({
                         "kind": "relax",
                         "relax_algorithm": "projected_gradient_bb",
-                        "max_relaxation_time_s": 1.0
+                        "solver_policy": {
+                            "kind": "fixed",
+                            "integrator": "heun",
+                            "fix_dt": 1e-15
+                        }
                     })
                     .to_string(),
                 ))
@@ -14090,6 +16451,53 @@ async fn relax_command_rejects_llg_only_controls_for_direct_minimizer() {
     assert!(json["error"]
         .as_str()
         .is_some_and(|message| message.contains("valid only for llg_overdamped")));
+}
+
+#[tokio::test]
+async fn adaptive_command_rejects_single_precision_before_enqueue() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.study.requested_backend = "fdm".to_string();
+    scene.study.requested_device = "cpu".to_string();
+    scene.study.requested_precision = "single".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let queued_before = state.current_control_queue.lock().await.len();
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "relax",
+                        "solver_policy": {
+                            "kind": "adaptive_max_error",
+                            "integrator": "rk45",
+                            "dt_min": 1e-16,
+                            "dt_max": 1e-13,
+                            "max_err": 1e-6
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(json["error"]
+        .as_str()
+        .is_some_and(|message| message.contains("double precision")));
+    assert_eq!(
+        state.current_control_queue.lock().await.len(),
+        queued_before
+    );
 }
 
 #[tokio::test]
@@ -14128,6 +16536,429 @@ async fn current_run_endpoint_returns_runtime_summary() {
         json["resolved_fallback"]["reason"],
         "native_fem_gpu_unavailable"
     );
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_active_projection() {
+    let state = test_app_state_with_simulation_preparation("running").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["preparation_id"], "prep-contract-test");
+    assert_eq!(body["revision"], 7);
+    assert_eq!(body["status"], "running");
+    assert_eq!(body["active_stage_id"], "meshing");
+    assert_eq!(body["stages"][5]["progress_percent"], 63);
+    assert_eq!(
+        body["stages"][5]["progress_label"],
+        "142580 / 226318 elements"
+    );
+    assert_eq!(body["log_tail"].as_array().map(Vec::len), Some(1));
+    assert_eq!(body["requested_execution"]["backend"], "cpu-fdm");
+    assert_eq!(body["requested_execution"]["device"], "auto");
+    assert_eq!(body["resolved_execution"]["backend"], "cpu-fdm");
+    assert_eq!(body["resolved_execution"]["device"], "cpu");
+}
+
+#[tokio::test]
+async fn simulation_preparation_preserves_backward_clock_adjustment_evidence() {
+    let mut preparation = simulation_preparation_fixture("running");
+    preparation.stages[1].completed_at_unix_ms = Some(1_700_000_000_068);
+    preparation.stages[1].clock_adjustment = Some(SimulationPreparationClockAdjustmentSnapshot {
+        observed_at_unix_ms: 1_700_000_000_068,
+        stage_started_at_unix_ms: 1_700_000_032_068,
+        backward_delta_ms: 32_000,
+    });
+    let state = test_app_state_with_simulation_preparation_snapshot(preparation).await;
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(
+        body["stages"][1]["completed_at_unix_ms"],
+        1_700_000_000_068u64
+    );
+    assert_eq!(
+        body["stages"][1]["clock_adjustment"],
+        serde_json::json!({
+            "backward_delta_ms": 32_000,
+            "observed_at_unix_ms": 1_700_000_000_068u64,
+            "stage_started_at_unix_ms": 1_700_000_032_068u64,
+        })
+    );
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_ready_projection() {
+    let state = test_app_state_with_simulation_preparation("ready").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["status"], "ready");
+    assert!(body["active_stage_id"].is_null());
+    assert_eq!(body["stages"].as_array().map(Vec::len), Some(9));
+    assert!(body["stages"]
+        .as_array()
+        .is_some_and(|stages| stages.iter().all(|stage| stage["status"] == "completed")));
+    assert!(body["completed_at_unix_ms"].is_number());
+    assert!(body["failure"].is_null());
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_failed_projection() {
+    let state = test_app_state_with_simulation_preparation("failed").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["status"], "failed");
+    assert_eq!(body["stages"][5]["status"], "failed");
+    assert_eq!(body["failure"]["error_code"], "mesh_generation_failed");
+    assert_eq!(body["failure"]["detail"], "meshing: no valid tetrahedra");
+    assert_eq!(body["failure"]["stage_id"], "meshing");
+    assert_eq!(body["failure"]["diagnostics_correlation_id"], "diag-prep-7");
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_404_when_unavailable() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn simulation_preparation_rejects_noncanonical_stage_sequences() {
+    let canonical = simulation_preparation_fixture("running");
+    let mut empty = canonical.clone();
+    empty.stages.clear();
+    let mut partial = canonical.clone();
+    partial.stages.pop();
+    let mut duplicated = canonical.clone();
+    duplicated.stages[8] = duplicated.stages[7].clone();
+    let mut reordered = canonical;
+    reordered.stages.swap(4, 5);
+
+    for (case, preparation) in [
+        ("empty", empty),
+        ("partial", partial),
+        ("duplicated", duplicated),
+        ("reordered", reordered),
+    ] {
+        let state = test_app_state_with_simulation_preparation_snapshot(preparation).await;
+        let response = build_v2_router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/simulation/preparation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{case} stage sequence must fail closed"
+        );
+    }
+}
+
+#[tokio::test]
+async fn simulation_preparation_projection_enforces_all_runtime_bounds() {
+    let mut preparation = simulation_preparation_fixture("failed");
+    let preparation_id = overlong_preparation_value("preparation-id:", 128);
+    let stage_label = overlong_preparation_value("stage-label:", 128);
+    let stage_detail = overlong_preparation_value("stage-detail:", 1024);
+    let progress_label = overlong_preparation_value("progress-label:", 256);
+    let error_code = overlong_preparation_value("error-code:", 128);
+    let failure_summary = overlong_preparation_value("failure-summary:", 1024);
+    let correlation_id = overlong_preparation_value("correlation-id:", 256);
+    preparation.preparation_id = preparation_id.clone();
+    preparation.stages[5].label = stage_label.clone();
+    preparation.stages[5].detail = stage_detail.clone();
+    preparation.stages[5].progress_label = Some(progress_label.clone());
+    let failure = preparation
+        .failure
+        .as_mut()
+        .expect("failed fixture failure");
+    failure.error_code = error_code.clone();
+    failure.summary = failure_summary.clone();
+    failure.diagnostics_correlation_id = Some(correlation_id.clone());
+    preparation.log_tail = (0..206)
+        .map(|index| SimulationPreparationLogEntrySnapshot {
+            timestamp_unix_ms: 1_700_000_100_000 + index,
+            level: "info".to_string(),
+            stage_id: "meshing".to_string(),
+            message: overlong_preparation_value(&format!("entry-{index:03}:"), 2048),
+        })
+        .collect();
+
+    let state = test_app_state_with_simulation_preparation_snapshot(preparation).await;
+    let requested_backend = overlong_preparation_value("requested-backend:", 128);
+    let requested_device = overlong_preparation_value("requested-device:", 128);
+    let requested_precision = overlong_preparation_value("requested-precision:", 128);
+    let requested_mode = overlong_preparation_value("requested-mode:", 128);
+    let resolved_backend = overlong_preparation_value("resolved-backend:", 128);
+    let resolved_device = overlong_preparation_value("resolved-device:", 128);
+    let resolved_precision = overlong_preparation_value("resolved-precision:", 128);
+    let resolved_mode = overlong_preparation_value("resolved-mode:", 128);
+    let resolved_runtime_family = overlong_preparation_value("runtime-family:", 128);
+    let resolved_engine_id = overlong_preparation_value("engine-id:", 128);
+    let resolved_worker = overlong_preparation_value("worker:", 128);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_backend = requested_backend.clone();
+        snapshot.session.requested_device = requested_device.clone();
+        snapshot.session.requested_precision = requested_precision.clone();
+        snapshot.session.requested_mode = requested_mode.clone();
+        snapshot.session.resolved_backend = Some(resolved_backend.clone());
+        snapshot.session.resolved_device = Some(resolved_device.clone());
+        snapshot.session.resolved_precision = Some(resolved_precision.clone());
+        snapshot.session.resolved_mode = Some(resolved_mode.clone());
+        snapshot.session.resolved_runtime_family = Some(resolved_runtime_family.clone());
+        snapshot.session.resolved_engine_id = Some(resolved_engine_id.clone());
+        snapshot.session.resolved_worker = Some(resolved_worker.clone());
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    assert_bounded_preparation_value(&body["preparation_id"], &preparation_id, 128);
+    assert_bounded_preparation_value(&body["stages"][5]["label"], &stage_label, 128);
+    assert_bounded_preparation_value(&body["stages"][5]["detail"], &stage_detail, 1024);
+    assert_bounded_preparation_value(&body["stages"][5]["progress_label"], &progress_label, 256);
+    assert_bounded_preparation_value(&body["failure"]["error_code"], &error_code, 128);
+    assert_bounded_preparation_value(&body["failure"]["summary"], &failure_summary, 1024);
+    assert_bounded_preparation_value(
+        &body["failure"]["diagnostics_correlation_id"],
+        &correlation_id,
+        256,
+    );
+
+    let log_tail = body["log_tail"].as_array().expect("bounded log tail");
+    assert_eq!(log_tail.len(), 200);
+    assert_eq!(
+        log_tail.first().unwrap()["timestamp_unix_ms"],
+        1_700_000_100_006u64
+    );
+    assert_eq!(
+        log_tail.last().unwrap()["timestamp_unix_ms"],
+        1_700_000_100_205u64
+    );
+    let first_log_source = overlong_preparation_value("entry-006:", 2048);
+    let last_log_source = overlong_preparation_value("entry-205:", 2048);
+    assert_bounded_preparation_value(
+        &log_tail.first().unwrap()["message"],
+        &first_log_source,
+        2048,
+    );
+    assert_bounded_preparation_value(&log_tail.last().unwrap()["message"], &last_log_source, 2048);
+
+    for (field, source) in [
+        ("backend", &requested_backend),
+        ("device", &requested_device),
+        ("precision", &requested_precision),
+        ("mode", &requested_mode),
+    ] {
+        assert_bounded_preparation_value(&body["requested_execution"][field], source, 128);
+    }
+    for (field, source) in [
+        ("backend", &resolved_backend),
+        ("device", &resolved_device),
+        ("precision", &resolved_precision),
+        ("mode", &resolved_mode),
+        ("runtime_family", &resolved_runtime_family),
+        ("engine_id", &resolved_engine_id),
+        ("worker", &resolved_worker),
+    ] {
+        assert_bounded_preparation_value(&body["resolved_execution"][field], source, 128);
+    }
+}
+
+#[tokio::test]
+async fn simulation_preparation_status_exposes_only_revision_pointer() {
+    let state = test_app_state_with_simulation_preparation("running").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["resources"]["simulation_preparation_revision"], 7);
+    assert!(body.get("simulation_preparation").is_none());
+    assert!(body["resources"].get("simulation_preparation").is_none());
+}
+
+#[test]
+fn simulation_preparation_openapi_registers_route_and_bounded_schemas() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let get = &openapi["paths"]["/v2/sessions/current/simulation/preparation"]["get"];
+    assert_eq!(
+        get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/SimulationPreparationResource"
+    );
+    assert!(get["responses"].get("404").is_some());
+
+    let schemas = &openapi["components"]["schemas"];
+    assert_eq!(
+        schemas["PreparationProgressStage"]["properties"]["progress_percent"]["minimum"],
+        0
+    );
+    assert_eq!(
+        schemas["PreparationProgressStage"]["properties"]["progress_percent"]["maximum"],
+        100
+    );
+    assert_eq!(
+        schemas["SimulationPreparationResource"]["properties"]["stages"]["minItems"],
+        9
+    );
+    assert_eq!(
+        schemas["SimulationPreparationResource"]["properties"]["log_tail"]["maxItems"],
+        200
+    );
+    assert!(schemas["PreparationStatus"]["enum"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value == "ready")));
+    assert!(schemas["PreparationStageId"]["enum"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value == "mesh_postprocessing")));
+    assert!(schemas["PreparationFailureResource"]["properties"]
+        .get("diagnostics_correlation_id")
+        .is_some());
+    assert!(schemas["PreparationFailureResource"]["properties"]
+        .get("detail")
+        .is_some());
+    assert!(schemas["PreparationExecutionSummary"]["properties"]
+        .get("backend")
+        .is_some());
+}
+
+#[tokio::test]
+async fn simulation_preparation_invalidation_is_revision_only() {
+    let state = test_app_state_with_simulation_preparation("running").await;
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .expect("live snapshot")
+        .clone();
+    let realtime_state =
+        crate::current_live_realtime_state_from_snapshot(&state, &snapshot, 0).await;
+    let unchanged = crate::current_live_realtime_changes_since(
+        &realtime_state,
+        Some(&realtime_state.revisions),
+    );
+    assert!(unchanged.iter().all(|change| {
+        !matches!(change.resource, RealtimeResourceName::Simulation)
+            || change.resource_id.as_deref() != Some("preparation")
+    }));
+    let mut previous_revisions = realtime_state.revisions.clone();
+    previous_revisions.simulation_preparation_revision = 6;
+    let changed =
+        crate::current_live_realtime_changes_since(&realtime_state, Some(&previous_revisions));
+    assert!(changed.iter().any(|change| {
+        matches!(change.resource, RealtimeResourceName::Simulation)
+            && change.resource_id.as_deref() == Some("preparation")
+            && change.revision == 7
+    }));
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+        .await
+        .expect("preparation invalidation should publish");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("invalidation event should arrive")
+        .expect("realtime channel should stay open");
+    let body: serde_json::Value =
+        serde_json::from_str(&event.json).expect("invalidation event should be JSON");
+    assert_eq!(body["type"], "resource.batch_changed");
+    let change = body["payload"]["changes"]
+        .as_array()
+        .and_then(|changes| {
+            changes.iter().find(|change| {
+                change["resource"] == "simulation" && change["resource_id"] == "preparation"
+            })
+        })
+        .expect("simulation preparation invalidation");
+    assert_eq!(change["revision"], 7);
+    assert_eq!(change["resource"], "simulation");
+    assert_eq!(
+        change["recommended_fetch"],
+        "/v2/sessions/current/simulation/preparation"
+    );
+    for forbidden in ["stages", "log_tail", "failure", "requested_execution"] {
+        assert!(
+            change.get(forbidden).is_none(),
+            "websocket invalidation must not carry `{forbidden}` resource content"
+        );
+    }
 }
 
 #[tokio::test]
@@ -14344,6 +17175,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [0, 0, 0],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: HashMap::from([(
@@ -14363,6 +17195,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                         ("demag_periodic_airbox_k0".into(), 1.0),
                     ]),
                 )]),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -15047,6 +17880,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
     let (app, state, _repo_root) = test_router_with_session_store_state().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mesh = sample_scoped_fem_mesh_payload();
+        snapshot.fem_mesh = Some(mesh);
         snapshot.state_version = 16;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "entrypoint_kind": "flat_hysteresis",
@@ -15059,7 +17893,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             "stage_id": "stage-fem-magnetic-average"
         })));
         if let Some(live_state) = snapshot.live_state.as_mut() {
-            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.fem_mesh = None;
             live_state.latest_step.magnetization = Some(vec![
                 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -15132,6 +17966,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
         mesh.mesh_parts[1].role = "magnetic_object".to_string();
         mesh.mesh_parts[1].object_id = Some("body-large".to_string());
         mesh.mesh_parts[1].material_id = Some("mat-body".to_string());
+        snapshot.fem_mesh = Some(mesh);
         snapshot.state_version = 17;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "entrypoint_kind": "flat_hysteresis",
@@ -15144,7 +17979,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             "stage_id": "stage-fem-volume-average"
         })));
         if let Some(live_state) = snapshot.live_state.as_mut() {
-            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.fem_mesh = None;
             live_state.latest_step.magnetization = Some(vec![
                 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -16229,6 +19064,10 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["runtime_state"], "running");
     assert_eq!(json["integrator"], "rk45");
     assert_eq!(json["step_index"], 42);
+    assert_eq!(json["error_estimate"], 2.0e-7);
+    assert_eq!(json["max_error"], 1.0e-6);
+    assert_eq!(json["dt_suggested_seconds"], 1.3e-13);
+    assert_eq!(json["rejected_attempts"], 0);
     assert_eq!(json["last_step_updated_at_unix_ms"], 1_700_000_000_123u64);
     let expected_torque_t = 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7;
     assert_eq!(json["max_torque_T"], expected_torque_t);
@@ -16289,9 +19128,11 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 max_torque_T: 6.0,
                 wall_time_ns: 1,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: true,
             },
@@ -16380,9 +19221,11 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -16508,6 +19351,7 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![0.1, 0.2, 0.3]),
                 per_object_scalars: HashMap::from([(
@@ -16524,6 +19368,7 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                         ("e_total".to_string(), 65.0),
                     ]),
                 )]),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -16579,6 +19424,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: Some(FemMeshPayload {
                     mesh_name: "shared-node-test-mesh".to_string(),
                     mesh_id: "shared-node-test-mesh:1".to_string(),
@@ -16590,9 +19436,9 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                         [1.0, 1.0, 0.0],
                         [1.0, 0.0, 1.0],
                     ],
-                    elements: vec![[1, 3, 5, 0]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[1, 3, 5, 0]]),
                     element_markers: vec![7],
-                    boundary_faces: vec![[1, 3, 5]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[1, 3, 5]]),
                     boundary_markers: vec![3],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -16621,7 +19467,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                         node_start: 0,
                         node_count: 3,
                         node_indices: vec![1, 3, 5],
-                        surface_faces: vec![[1, 3, 5]],
+                        facet_global_ordinals: vec![0],
                         bounds_min: Some([0.0, 0.0, 0.0]),
                         bounds_max: Some([1.0, 1.0, 1.0]),
                     }],
@@ -16636,10 +19482,15 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                     5.0, 0.0, 0.0,
                 ]),
                 per_object_scalars: HashMap::new(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
         });
+        snapshot.fem_mesh = snapshot
+            .live_state
+            .as_mut()
+            .and_then(|live_state| live_state.latest_step.fem_mesh.take());
         snapshot.scalar_revision = 21;
     }
     let app = build_v2_router().with_state(state);
@@ -17747,7 +20598,19 @@ async fn solver_profile_returns_404_without_session() {
 
 #[tokio::test]
 async fn solver_profile_returns_200_with_session() {
-    let app = test_router_with_session().await;
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session exists")
+            .solver_profile
+            .persistence_failed = true;
+        let profile = &mut guard.as_mut().expect("live session exists").solver_profile;
+        profile.overhead.persist_enqueued_count = 3;
+        profile.overhead.persist_completed_count = 2;
+    }
+    let app = build_v2_router().with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -17765,6 +20628,9 @@ async fn solver_profile_returns_200_with_session() {
     assert_eq!(json["state"], "disabled");
     assert!(json["latest_samples"].is_array());
     assert_eq!(json["aggregates"]["sample_count"], 0);
+    assert_eq!(json["persistence_failed"], true);
+    assert_eq!(json["overhead"]["persist_enqueued_count"], 3);
+    assert_eq!(json["overhead"]["persist_completed_count"], 2);
 }
 
 #[tokio::test]
@@ -17942,6 +20808,71 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("main.autosave.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fullmag.stage_autosave.artifact.v1",
+            "target": "main",
+            "format": "zarr",
+            "layout": "continuous",
+            "stages": [
+                {"schema_version":"stage_autosave.v1","target":"main","stage_id":"done","stage_index":0,"layout":"continuous","format":"zarr","table_quantities":["step","mx"],"field_quantities":[],"complete":true,"table_sample_count":3,"field_sample_count":0},
+                {"schema_version":"stage_autosave.v1","target":"main","stage_id":"active","stage_index":1,"layout":"continuous","format":"zarr","table_quantities":["step","mx"],"field_quantities":["m"],"complete":false,"table_sample_count":2,"field_sample_count":1},
+                {"schema_version":"stage_autosave.v1","target":"main","stage_id":"broken","stage_index":2,"layout":"continuous","format":"zarr","table_quantities":["step","mx"],"field_quantities":[],"complete":false,"table_sample_count":1,"field_sample_count":0}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.stage_execution = Some(
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 3,
+                "stages": [
+                    {"stage_id":"done","status":"completed"},
+                    {"stage_id":"active","status":"running"},
+                    {"stage_id":"broken","status":"failed"}
+                ],
+                "runtime_state": "failed"
+            }))
+            .unwrap(),
+        );
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let autosave = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["kind"] == "stage_autosave")
+        .expect("stage autosave artifact metadata");
+    assert_eq!(
+        autosave["stage_autosave"]["schema_version"],
+        "fullmag.stage_autosave.artifact.v1"
+    );
+    assert_eq!(autosave["stage_autosave"]["resource_path"], "main.zarr");
+    assert_eq!(
+        autosave["stage_autosave"]["stages"][0]["status"],
+        "completed"
+    );
+    assert_eq!(autosave["stage_autosave"]["stages"][1]["status"], "running");
+    assert_eq!(autosave["stage_autosave"]["stages"][2]["status"], "failed");
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn artifact_download_accepts_encoded_relative_paths() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let field_state_dir = artifact_dir.join("field-states");
@@ -17963,6 +20894,25 @@ async fn artifact_download_accepts_encoded_relative_paths() {
     let body = body_bytes(response).await;
     assert_eq!(&body[..], b"h5-bytes");
 
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn absent_fdm_region_membership_descriptor_is_not_applicable() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 
@@ -18051,7 +21001,10 @@ async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
         let error = body_json(first).await;
         panic!("FDM binary failed: {error}");
     }
-    assert_eq!(first.headers()["x-fullmag-grid-fingerprint"], grid_fingerprint);
+    assert_eq!(
+        first.headers()["x-fullmag-grid-fingerprint"],
+        grid_fingerprint
+    );
     assert_eq!(first.headers()["x-fullmag-region-membership-revision"], "7");
     let etag = first.headers()["etag"].to_str().unwrap().to_string();
     let scoped = body_bytes(first).await;
@@ -18139,6 +21092,7 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
         mesh_build_revision: 1,
         commands_revision: 1,
         stages_revision: 1,
+        simulation_preparation_revision: 1,
         scene_revision: Some(1),
         visualization_state_revision: 1,
     })
@@ -18175,6 +21129,7 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
         RealtimeResourceName::MeshBuilds,
         RealtimeResourceName::Commands,
         RealtimeResourceName::Stages,
+        RealtimeResourceName::Simulation,
         RealtimeResourceName::SceneDocument,
         RealtimeResourceName::VisualizationState,
         RealtimeResourceName::VisualizationClientAcks,
@@ -18631,9 +21586,11 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -18666,9 +21623,9 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             mesh_name: "fem-empty-topology".to_string(),
             mesh_id: "fem-empty-topology:1".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -21394,9 +24351,11 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -21420,6 +24379,250 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
     assert_eq!(meta["stats"]["max"], serde_json::json!(1.0));
     assert_eq!(meta["stats"]["mean"], serde_json::json!(0.5));
     assert_eq!(meta["field_revision"], serde_json::json!(8));
+}
+
+#[tokio::test]
+async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_frames() {
+    let state = test_app_state_with_live_session().await;
+    let legacy_a = vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let field_b = vec![0.0, 1.0, 0.0, 0.0, -1.0, 0.0];
+    let field_c = vec![-1.0, 0.0, 0.0, -1.0, 0.0, 0.0];
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_100,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 1.0e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: Some(legacy_a.clone()),
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.field_quantity_revisions.insert("m".to_string(), 1);
+        snapshot.field_samples_revision = 1;
+
+        let session_id = snapshot.session.session_id.clone();
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]],
+                "source_step": 2,
+                "source_revision": 2,
+                "materialized_at_unix_ms": 1_700_000_000_200_u64,
+                "materialization_wall_time_ns": 200_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("provenance-rich field B should deserialize");
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(latest_fields),
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("field B frame should apply");
+    }
+
+    let app = build_v2_router().with_state(state.clone());
+    let meta_b_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_b_response.status(), StatusCode::OK);
+    let meta_b = body_json(meta_b_response).await;
+    assert_eq!(meta_b["source_step"], 2);
+    assert_eq!(meta_b["source_revision"], 2);
+    assert_eq!(meta_b["materialized_at_unix_ms"], 1_700_000_000_200_u64);
+    assert_eq!(meta_b["stats"]["min"], 0.0);
+    assert_eq!(meta_b["stats"]["max"], 0.0);
+    assert_eq!(meta_b["stats"]["mean"], 0.0);
+
+    let vector_b_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_b_response.status(), StatusCode::OK);
+    let revision_b = vector_b_response
+        .headers()
+        .get("x-fullmag-field-revision")
+        .expect("field B revision header")
+        .clone();
+    let etag_b = vector_b_response
+        .headers()
+        .get(header::ETAG)
+        .expect("field B ETag")
+        .clone();
+    let vector_b = decode_fmvp_payload_f64(&body_bytes(vector_b_response).await);
+    assert_eq!(
+        vector_b, field_b,
+        "FMVP must use provenance-rich field B instead of legacy magnetization A"
+    );
+    let projection_b_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/matrix.json?plane=xy&component=x&mode=projection&aggregation=mean_occupied&x_size=2&y_size=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(projection_b_response.status(), StatusCode::OK);
+    let projection_b_etag = projection_b_response
+        .headers()
+        .get(header::ETAG)
+        .expect("field B projection ETag")
+        .clone();
+    let projection_b = body_json(projection_b_response).await;
+    let projection_b_values = projection_b["values"]
+        .as_array()
+        .expect("field B projection rows")
+        .iter()
+        .flat_map(|row| row.as_array().expect("field B projection row"))
+        .filter_map(serde_json::Value::as_f64)
+        .collect::<Vec<_>>();
+    assert!(!projection_b_values.is_empty());
+    assert!(projection_b_values.iter().all(|value| *value == 0.0));
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let session_id = snapshot.session.session_id.clone();
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]],
+                "source_step": 3,
+                "source_revision": 3,
+                "materialized_at_unix_ms": 1_700_000_000_300_u64,
+                "materialization_wall_time_ns": 300_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("provenance-rich field C should deserialize");
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(latest_fields),
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("field C frame should apply");
+    }
+
+    let meta_c_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_c_response.status(), StatusCode::OK);
+    let meta_c = body_json(meta_c_response).await;
+    assert_eq!(meta_c["source_step"], 3);
+    assert_eq!(meta_c["source_revision"], 3);
+    assert_eq!(meta_c["materialized_at_unix_ms"], 1_700_000_000_300_u64);
+    assert_eq!(meta_c["stats"]["min"], -1.0);
+    assert_eq!(meta_c["stats"]["max"], -1.0);
+    assert_eq!(meta_c["stats"]["mean"], -1.0);
+
+    let vector_c_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .header(header::IF_NONE_MATCH, etag_b.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        vector_c_response.status(),
+        StatusCode::OK,
+        "field C must invalidate field B's ETag instead of returning 304"
+    );
+    let revision_c = vector_c_response
+        .headers()
+        .get("x-fullmag-field-revision")
+        .expect("field C revision header")
+        .clone();
+    let etag_c = vector_c_response
+        .headers()
+        .get(header::ETAG)
+        .expect("field C ETag")
+        .clone();
+    let vector_c = decode_fmvp_payload_f64(&body_bytes(vector_c_response).await);
+    assert_ne!(
+        revision_c, revision_b,
+        "field revision must advance from B to C"
+    );
+    assert_ne!(etag_c, etag_b, "field ETag must advance from B to C");
+    assert_eq!(
+        vector_c, field_c,
+        "FMVP must advance from field B to field C"
+    );
+    let projection_c_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/matrix.json?plane=xy&component=x&mode=projection&aggregation=mean_occupied&x_size=2&y_size=1")
+                .header(header::IF_NONE_MATCH, projection_b_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(projection_c_response.status(), StatusCode::OK);
+    let projection_c = body_json(projection_c_response).await;
+    let projection_c_values = projection_c["values"]
+        .as_array()
+        .expect("field C projection rows")
+        .iter()
+        .flat_map(|row| row.as_array().expect("field C projection row"))
+        .filter_map(serde_json::Value::as_f64)
+        .collect::<Vec<_>>();
+    assert!(!projection_c_values.is_empty());
+    assert!(projection_c_values.iter().all(|value| *value == -1.0));
 }
 
 #[tokio::test]
@@ -21856,9 +25059,11 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![f64::NAN, 0.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -21927,6 +25132,7 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [6, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![
                     1.0, 0.0, 0.0, //
@@ -21937,6 +25143,7 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                     0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22017,6 +25224,7 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [4, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![
                     1.0, 0.0, 0.0, //
@@ -22025,6 +25233,7 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                     -1.0, 0.0, 0.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22050,6 +25259,76 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
             .and_then(|value| value.to_str().ok()),
         Some("4")
     );
+}
+
+#[tokio::test]
+async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_identity() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        while mesh.nodes.len() < 70 {
+            let index = mesh.nodes.len() as f64;
+            mesh.nodes.push([index, index + 0.25, index + 0.5]);
+        }
+        let values = (0..70)
+            .map(|index| [index as f64, index as f64 + 0.1, index as f64 + 0.2])
+            .collect::<Vec<_>>();
+        snapshot.state_version = 52;
+        snapshot.mesh_revision = 19;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.preview_cache = Default::default();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": values,
+                "source_step": 52,
+                "source_revision": 19,
+                "materialized_at_unix_ms": 1_700_000_000_456_u64,
+                "layout": { "grid_cells": [0, 0, 0] }
+            }
+        }))
+        .expect("terminal FEM m field should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "full_domain"
+    );
+    assert!(response
+        .headers()
+        .get("x-fullmag-mesh-topology-hash")
+        .is_some());
+    assert!(response
+        .headers()
+        .get("x-fullmag-node-index-count")
+        .is_none());
+
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3);
+    assert_eq!(bytes[6], 3);
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 210);
+    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 70);
+    assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[104..108].try_into().unwrap()), 0);
+    assert_eq!(u32::from_le_bytes(bytes[108..112].try_into().unwrap()), 0);
+    let values = decode_fmvp_payload_f64(&bytes);
+    assert_eq!(values.len(), 210);
+    assert_eq!(&values[..3], &[0.0, 0.1, 0.2]);
+    assert_eq!(&values[207..], &[69.0, 69.1, 69.2]);
 }
 
 #[tokio::test]
@@ -22090,9 +25369,11 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22235,6 +25516,10 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         .expect("mock latest_fields should deserialize");
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 4,
+            source_step: 4,
+            source_revision: 4,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
             quantity: "m".to_string(),
             unit: "1".to_string(),
             spatial_kind: "grid".to_string(),
@@ -22272,9 +25557,11 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22282,6 +25569,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
     }
     let app = build_v2_router().with_state(state);
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
@@ -22299,6 +25587,511 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_revision"], 4);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["stale_by_steps"], 5);
+    assert_eq!(meta["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(meta["state"], "stale_complete");
+}
+
+#[tokio::test]
+async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 25;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[0.0, 0.0, -1.0], [0.0, -1.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 11,
+                "materialized_at_unix_ms": 1_700_000_000_456_u64,
+                "materialization_wall_time_ns": 80_000_000_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("captured magnetization field should deserialize");
+        snapshot.live_state = Some(
+            serde_json::from_value(serde_json::json!({
+                "status": "running",
+                "updated_at_unix_ms": 1_700_000_000_789_u64,
+                "latest_step": {
+                    "step": 9,
+                    "time": 3.0e-9,
+                    "dt": 1.0e-13,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_ani": 0.0,
+                    "e_dmi": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "max_h_demag": 0.0,
+                    "max_torque_Apm": 0.0,
+                    "max_torque_T": 0.0,
+                    "wall_time_ns": 100,
+                    "grid": [2, 1, 1],
+                    "magnetization": [0.0, 0.0, -1.0, 0.0, -1.0, 0.0],
+                    "magnetization_source_step": 4,
+                    "magnetization_source_revision": 11,
+                    "magnetization_materialized_at_unix_ms": 1_700_000_000_456_u64,
+                    "magnetization_materialization_wall_time_ns": 80_000_000_u64,
+                    "finished": false
+                }
+            }))
+            .expect("live state with carried magnetization provenance should deserialize"),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_revision"], 11);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["materialization_wall_time_ns"], 80_000_000_u64);
+    assert_eq!(meta["stale_by_steps"], 5);
+    assert_eq!(meta["state"], "stale_complete");
+}
+
+#[tokio::test]
+async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 25;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [9.0, 9.0, 9.0],
+                    [8.0, 8.0, 8.0]
+                ],
+                "source_step": 0,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_100_u64,
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 4,
+            source_step: 52,
+            source_revision: 4,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "completed".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 52,
+                time: 5.2e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: true,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let metadata_length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let values: Vec<f64> = bytes[48 + metadata_length..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 52);
+    assert_eq!(meta["source_revision"], 4);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["stale_by_steps"], 0);
+    assert_eq!(meta["state"], "complete");
+
+    let catalog_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let descriptor = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_demag")
+        .expect("H_demag field descriptor");
+    assert_eq!(descriptor["source_step"], 52);
+    assert_eq!(descriptor["source_revision"], 4);
+    assert_eq!(descriptor["state"], "complete");
+}
+
+#[tokio::test]
+async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and_last_good_data() {
+    use fullmag_runner::{LiveFieldMaterializationState, LiveFieldMaterializationStatus};
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 3,
+            source_step: 4,
+            source_revision: 7,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 9,
+                time: 9.0e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: vec![
+                    LiveFieldMaterializationStatus {
+                        quantity: "H_demag".to_string(),
+                        source_step: 9,
+                        request_revision: 12,
+                        state: LiveFieldMaterializationState::Pending,
+                        error: None,
+                    },
+                    LiveFieldMaterializationStatus {
+                        quantity: "H_dmi_bulk".to_string(),
+                        source_step: 9,
+                        request_revision: 13,
+                        state: LiveFieldMaterializationState::Pending,
+                        error: None,
+                    },
+                ],
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let pending = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_demag")
+        .expect("pending H_demag descriptor");
+    assert_eq!(pending["state"], "stale_complete");
+    assert_eq!(pending["source_step"], 4);
+    assert_eq!(pending["source_revision"], 7);
+    assert_eq!(pending["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(pending["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(pending["stale_by_steps"], 5);
+    assert_eq!(pending["available"], true);
+    let pending_without_payload = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_dmi_bulk")
+        .expect("pending H_dmi_bulk descriptor");
+    assert_eq!(pending_without_payload["state"], "pending");
+    assert_eq!(pending_without_payload["source_step"], 9);
+    assert_eq!(pending_without_payload["source_revision"], 13);
+    assert_eq!(pending_without_payload["available"], false);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let status = &mut guard
+            .as_mut()
+            .expect("live session exists")
+            .live_state
+            .as_mut()
+            .expect("live state exists")
+            .latest_step
+            .field_materialization_states[0];
+        status.state = LiveFieldMaterializationState::Superseded;
+    }
+
+    let superseded_catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(superseded_catalog_response.status(), StatusCode::OK);
+    let superseded_catalog = body_json(superseded_catalog_response).await;
+    let superseded = superseded_catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_demag")
+        .expect("superseded H_demag descriptor");
+    assert_eq!(superseded["state"], "stale_complete");
+    assert_eq!(superseded["source_step"], 4);
+    assert_eq!(superseded["source_revision"], 7);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let status = &mut guard
+            .as_mut()
+            .expect("live session exists")
+            .live_state
+            .as_mut()
+            .expect("live state exists")
+            .latest_step
+            .field_materialization_states[0];
+        status.state = LiveFieldMaterializationState::Error;
+        status.error = Some("native preview snapshot failed".to_string());
+    }
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["state"], "error");
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_revision"], 7);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(meta["stale_by_steps"], 5);
+    assert_eq!(
+        meta["materialization_error"],
+        "native preview snapshot failed"
+    );
+    assert!(
+        meta["stats"].is_object(),
+        "last-good payload must remain readable"
+    );
+
+    let vector_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::OK);
+
+    let status_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(status_response).await["solver"]["state"],
+        "running"
+    );
+}
+
+#[tokio::test]
+async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 3,
+            source_step: 4,
+            source_revision: 7,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000,
+            quantity: "eden_ex".to_string(),
+            unit: "J/m^3".to_string(),
+            spatial_kind: "fem_nodal_visualization_projection".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: Some(vec![true, true]),
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_ex/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(meta_response).await["location"],
+        "fem_nodal_visualization_projection"
+    );
+
+    let catalog_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let descriptor = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "eden_ex")
+        .expect("eden_ex field descriptor");
+    assert_eq!(descriptor["location"], "fem_nodal_visualization_projection");
 }
 
 #[tokio::test]
@@ -22330,11 +26123,13 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [4, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22395,12 +26190,14 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [3, 3, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
                     0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22441,6 +26238,9 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
     assert_eq!(json["trust"], "qualified");
     assert_eq!(json["nearest_integer"], 0);
     assert_eq!(json["integer_error"], 0.0);
+    assert!(json["computed_at_unix_ms"]
+        .as_u64()
+        .is_some_and(|value| value > 0));
     assert!(json["warnings"].as_array().unwrap().is_empty());
 }
 
@@ -22472,12 +26272,14 @@ async fn topological_charge_cache_key_tracks_field_revision() {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [3, 3, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
                     0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22504,15 +26306,24 @@ async fn topological_charge_cache_key_tracks_field_revision() {
     )
     .await;
     assert_eq!(first["quality"]["valid_vertex_count"], 9);
+    assert_eq!(first["trust"], "qualified");
+    assert_eq!(first["quality"]["boundary_max_deviation_rad"], 0.0);
     assert!(first["warnings"].as_array().unwrap().is_empty());
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot
+        let magnetization = snapshot
             .live_state
             .as_mut()
             .unwrap()
             .latest_step
-            .magnetization = Some(vec![0.0; 27]);
+            .magnetization
+            .as_mut()
+            .unwrap();
+        magnetization[..3].copy_from_slice(&[
+            15.0_f64.to_radians().sin(),
+            0.0,
+            15.0_f64.to_radians().cos(),
+        ]);
     }
     let cached = body_json(
         app.clone()
@@ -22528,6 +26339,8 @@ async fn topological_charge_cache_key_tracks_field_revision() {
     )
     .await;
     assert_eq!(cached["quality"]["valid_vertex_count"], 9);
+    assert_eq!(cached["trust"], "qualified");
+    assert_eq!(cached["quality"]["boundary_max_deviation_rad"], 0.0);
     assert!(cached["warnings"].as_array().unwrap().is_empty());
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -22548,13 +26361,12 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             .unwrap(),
     )
     .await;
-    assert_eq!(recomputed["status"], "invalid_magnetization");
-    assert_eq!(recomputed["quality"]["valid_vertex_count"], 0);
-    assert!(recomputed["charge"].is_null());
-    assert!(recomputed["nearest_integer"].is_null());
-    assert!(recomputed["integer_error"].is_null());
+    assert_eq!(recomputed["status"], "ready");
+    assert_eq!(recomputed["trust"], "diagnostic_boundary");
+    assert!(recomputed["quality"]["boundary_max_deviation_rad"]
+        .as_f64()
+        .is_some_and(|value| value > 0.0));
     assert!(recomputed.get("polarity").is_none());
-    assert_eq!(recomputed["warnings"][0]["code"], "invalid_magnetization");
 }
 
 #[tokio::test]
@@ -22586,9 +26398,11 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [5, 5, 3],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(uniform_3d_m),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22629,7 +26443,7 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
     let object_id = scene.objects[0].id.clone();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_scoped_fem_mesh_payload();
-        mesh.mesh_parts[0].surface_faces.clear();
+        mesh.mesh_parts[0].facet_global_ordinals.clear();
         snapshot.scene_document = Some(scene);
         snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.mesh_revision = 17;
@@ -22761,7 +26575,7 @@ async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_scoped_fem_mesh_payload();
         mesh.mesh_parts[0].element_count = 0;
-        mesh.mesh_parts[0].surface_faces.clear();
+        mesh.mesh_parts[0].facet_global_ordinals.clear();
         snapshot.scene_document = Some(scene);
         snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.fem_mesh = Some(mesh);
@@ -23329,7 +27143,7 @@ async fn v2_field_vector_rejects_airbox_surface_without_surface_membership() {
             .iter_mut()
             .find(|part| part.role == "air")
             .expect("sample mesh should include airbox");
-        airbox.surface_faces.clear();
+        airbox.facet_global_ordinals.clear();
         airbox.boundary_face_indices.clear();
         airbox.boundary_face_count = 0;
         snapshot.fem_mesh = Some(mesh);
@@ -23409,14 +27223,24 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
 
     assert_eq!(response.status(), StatusCode::OK);
     for required_header in [
-        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
-        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
-        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
-        "x-fullmag-scope-kind", "x-fullmag-scope-id",
-        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
         "x-fullmag-node-index-count",
     ] {
-        assert!(response.headers().get(required_header).is_some(), "missing {required_header}");
+        assert!(
+            response.headers().get(required_header).is_some(),
+            "missing {required_header}"
+        );
     }
     assert!(response.headers().get("x-fullmag-snapshot-id").is_none());
     assert_eq!(
@@ -23470,7 +27294,7 @@ async fn v2_field_vector_object_scope_fallback_uses_segment_element_nodes() {
         mesh.mesh_parts.clear();
         mesh.object_segments[0].node_start = 3;
         mesh.object_segments[0].node_count = 1;
-        mesh.elements[0] = [0, 1, 2, 3];
+        mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
@@ -23618,9 +27442,10 @@ async fn v2_mesh_part_topology_returns_scoped_mesh() {
         &(1u32).to_le_bytes(),
         "airbox topology elements"
     );
-    let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v1(
+    let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v2(
         &sample_scoped_fem_mesh_payload(),
     )
+    .unwrap()
     .len();
     assert!(
         bytes.len() < full_len,
@@ -23676,6 +27501,31 @@ async fn v2_mesh_histogram_bin_elements_rejects_invalid_bin() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v2_mesh_histogram_bin_elements_rejects_mixed_topology_with_typed_code() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.cells.types[0] = fullmag_ir::FemCellTypeIR::Prism6;
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/parts/airbox/histogram-bins/volume/0/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "mixed_topology_not_supported");
 }
 
 #[tokio::test]
@@ -23915,7 +27765,10 @@ async fn field_vector_component_etag_304() {
         .unwrap();
 
     assert_eq!(first.status(), StatusCode::OK);
-    assert_eq!(first.headers().get("x-fullmag-encoding").unwrap(), "FMVP;version=2");
+    assert_eq!(
+        first.headers().get("x-fullmag-encoding").unwrap(),
+        "FMVP;version=2"
+    );
     for optional_header in [
         "x-fullmag-mesh-topology-hash",
         "x-fullmag-field-indexing",
@@ -23948,6 +27801,144 @@ async fn field_vector_component_etag_304() {
 }
 
 #[tokio::test]
+async fn field_vector_cache_identity_includes_session_id() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[1.0, 2.0, 3.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .unwrap();
+        snapshot.field_samples_revision = 1;
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 1);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let uri = "/v2/sessions/current/data/fields/H_demag/samples/vector?component=full";
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first.headers().get("etag").unwrap().clone();
+    let first_bytes = body_bytes(first).await;
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.session.session_id = "replacement-session".to_string();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[4.0, 5.0, 6.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .unwrap();
+    }
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_bytes = body_bytes(second).await;
+    assert_ne!(second_bytes, first_bytes);
+}
+
+#[tokio::test]
+async fn projection_and_slice_etags_are_scoped_to_session_identity() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.state_version = 11;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 2.0, 2.0]
+                ],
+                "layout": { "grid_cells": [2, 2, 1] }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let paths = [
+        "/v2/sessions/current/data/fields/m/projection/scalar?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2",
+        "/v2/sessions/current/data/fields/m/projection/empty-mask?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2",
+        "/v2/sessions/current/data/fields/m/samples/slice/scalar?plane=xy&component=x",
+        "/v2/sessions/current/data/fields/m/samples/slice/arrows?plane=xy&include_arrows=true",
+    ];
+
+    let mut first_etags = Vec::new();
+    for path in paths {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "initial request: {path}");
+        first_etags.push(
+            response
+                .headers()
+                .get("etag")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_else(|| panic!("missing ETag for {path}"))
+                .to_string(),
+        );
+    }
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session exists")
+            .session
+            .session_id = "replacement-session".to_string();
+    }
+
+    for (path, old_etag) in paths.into_iter().zip(first_etags) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("if-none-match", &old_etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "replacement session must not reuse stale ETag for {path}",
+        );
+        let new_etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| panic!("missing replacement-session ETag for {path}"));
+        assert_ne!(new_etag, old_etag, "session identity must affect {path}");
+    }
+}
+
+#[tokio::test]
 async fn field_vector_topology_change_invalidates_etag_without_field_revision_change() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -23957,24 +27948,52 @@ async fn field_vector_topology_change_invalidates_etag_without_field_revision_ch
                 [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]
             ], "layout": { "grid_cells": [8, 1, 1] } }
-        })).unwrap();
+        }))
+        .unwrap();
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body";
-    let first = app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
-    let etag = first.headers().get("etag").unwrap().to_str().unwrap().to_string();
-    let field_revision = first.headers().get("x-fullmag-field-revision").unwrap().clone();
+    let etag = first
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let field_revision = first
+        .headers()
+        .get("x-fullmag-field-revision")
+        .unwrap()
+        .clone();
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh.as_mut().unwrap().nodes[0][0] = 0.125;
     }
-    let second = app.oneshot(
-        Request::builder().uri(uri).header("if-none-match", &etag).body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
-    assert_eq!(second.headers().get("x-fullmag-field-revision"), Some(&field_revision));
-    assert_ne!(second.headers().get("etag").unwrap().to_str().unwrap(), etag);
+    assert_eq!(
+        second.headers().get("x-fullmag-field-revision"),
+        Some(&field_revision)
+    );
+    assert_ne!(
+        second.headers().get("etag").unwrap().to_str().unwrap(),
+        etag
+    );
 }
 
 #[tokio::test]
@@ -24775,6 +28794,48 @@ fn openapi_contains_field_slice_paths() {
 }
 
 #[test]
+fn openapi_contains_planar_monitor_model_paths() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let paths = openapi["paths"]
+        .as_object()
+        .expect("OpenAPI paths must be an object");
+    let collection = paths
+        .get("/v2/sessions/current/model/planar-monitors")
+        .expect("planar monitor collection path");
+    assert!(collection.get("get").is_some());
+    assert!(collection.get("post").is_some());
+    let item = paths
+        .get("/v2/sessions/current/model/planar-monitors/{monitor_id}")
+        .expect("planar monitor item path");
+    assert!(item.get("get").is_some());
+    assert!(item.get("patch").is_some());
+    assert!(item.get("delete").is_some());
+    assert!(paths.contains_key("/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate"));
+}
+
+#[test]
+fn openapi_contains_planar_field_data_paths() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let paths = openapi["paths"]
+        .as_object()
+        .expect("OpenAPI paths must be an object");
+    for resource in [
+        "meta",
+        "scalar",
+        "vectors",
+        "empty-mask",
+        "mesh-overlay",
+        "probe",
+        "render.png",
+    ] {
+        let path = format!(
+            "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"
+        );
+        assert!(paths.contains_key(&path), "OpenAPI missing {path}");
+    }
+}
+
+#[test]
 fn openapi_contains_field_slice_contract() {
     let openapi = crate::openapi_v2::openapi_json();
     let value = openapi;
@@ -24807,14 +28868,25 @@ fn openapi_contains_field_slice_contract() {
         .as_object()
         .expect("vector 200 response headers missing");
     for header_name in [
-        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
-        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
-        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
-        "x-fullmag-scope-kind", "x-fullmag-scope-id", "x-fullmag-snapshot-id",
-        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+        "x-fullmag-snapshot-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
         "x-fullmag-node-index-count",
     ] {
-        assert!(response_headers.contains_key(header_name), "missing documented response header {header_name}");
+        assert!(
+            response_headers.contains_key(header_name),
+            "missing documented response header {header_name}"
+        );
     }
 
     let slice_meta_get = paths
@@ -25266,9 +29338,13 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "active_quantity_id",
         "visible",
         "bounds_visible",
+        "bounds_opacity",
         "surface_visible",
+        "surface_opacity",
         "wireframe_visible",
+        "wireframe_opacity",
         "point_color",
+        "point_opacity",
         "points_visible",
         "vectors_visible",
         "render_mode",
@@ -28783,7 +32859,16 @@ async fn spin_wave_gamma_resource_reads_typed_session_artifact() {
         })).expect("gamma fixture should serialize"),
     ).expect("gamma fixture should be written");
 
-    let response = app.oneshot(Request::builder().method("GET").uri("/v2/sessions/current/analysis/spin-wave/gamma.v1").body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/spin-wave/gamma.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["weighting"], "Ms_times_lumped_volume");
@@ -28795,8 +32880,8 @@ async fn dynamic_structure_factor_resource_bounds_json_and_keeps_full_artifact_r
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let analysis_dir = artifact_dir.join("analysis");
     fs::create_dir_all(&analysis_dir).expect("analysis artifact directory should exist");
-    let axis=(0..80).map(|index|index as f64).collect::<Vec<_>>();
-    let matrix=vec![1.0;80*80];
+    let axis = (0..80).map(|index| index as f64).collect::<Vec<_>>();
+    let matrix = vec![1.0; 80 * 80];
     fs::write(
         analysis_dir.join("dynamic_structure_factor.1d.v1.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -28810,10 +32895,22 @@ async fn dynamic_structure_factor_resource_bounds_json_and_keeps_full_artifact_r
         })).expect("finite-k fixture should serialize"),
     ).expect("finite-k fixture should be written");
 
-    let response = app.oneshot(Request::builder().method("GET").uri("/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1").body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let json=body_json(response).await;
-    assert_eq!(json["artifact_ref"], "analysis/dynamic_structure_factor.1d.v1.json");
+    let json = body_json(response).await;
+    assert_eq!(
+        json["artifact_ref"],
+        "analysis/dynamic_structure_factor.1d.v1.json"
+    );
     assert_eq!(json["bounded"], true);
     assert!(json["power"].as_array().unwrap().len() <= 4096);
     assert_eq!(json["original_frequency_count"], 80);

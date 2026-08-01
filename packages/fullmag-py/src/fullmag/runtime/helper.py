@@ -2,19 +2,43 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Sequence
 
 from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
-from fullmag.runtime.loader import load_problem_from_script
+from fullmag.runtime.loader import apply_ir_runtime_device_selection, load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+
+
+def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
+    output = os.environ.get("FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE")
+    if output is None:
+        return
+    canonical_bytes = json.dumps(
+        problem_ir,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    problem_ir_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+    path = Path(output)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(problem_ir_sha256 + "\n", encoding="ascii")
+    os.replace(temporary, path)
+
+
+def _write_json(value: object) -> None:
+    json.dump(value, sys.stdout)
+    sys.stdout.write("\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     export_run_config.add_argument(
         "--precision",
         choices=[precision.value for precision in ExecutionPrecision],
+    )
+    export_run_config.add_argument(
+        "--runtime-device",
+        choices=["cpu", "gpu"],
+        help="Explicit execution-device override supplied by the managed runtime launcher.",
     )
     export_run_config.add_argument(
         "--skip-geometry-assets",
@@ -161,21 +190,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_precision=execution_precision,
             asset_cache=asset_cache,
             include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
+            runtime_device_override=getattr(args, "runtime_device", None),
+            _copy_cached_geometry_assets=False,
         )
-        shared_geometry_assets = copy.deepcopy(ir.get("geometry_assets"))
-        if loaded.stages and shared_geometry_assets is not None:
-            ir = copy.deepcopy(ir)
-            ir["geometry_assets"] = None
+        _write_executed_problem_ir_identity(ir)
         if args.command == "export-ir":
-            print(json.dumps(ir))
+            _write_json(ir)
             return 0
 
+        ir, shared_geometry_assets = _prepare_run_config_geometry_assets(
+            ir,
+            has_stages=bool(loaded.stages),
+        )
+
         stages = []
-        device_override: str | None = None
+        script_device_override: str | None = None
         stage_start_time_s = 0.0
         for stage in loaded.stages or ():
             action_device = _change_device_action_device(stage.action)
-            stage_device_override = action_device or device_override
             stage_ir = stage.to_ir(
                 requested_backend=requested_backend,
                 execution_mode=execution_mode,
@@ -185,11 +217,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 asset_cache=asset_cache,
                 include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
                 study_pipeline=study_pipeline,
-                runtime_device_override=stage_device_override,
+                runtime_device_override=getattr(args, "runtime_device", None),
                 stage_start_time_s=stage_start_time_s,
+                _copy_cached_geometry_assets=False,
             )
+            authored_stage_device = action_device or script_device_override
+            if authored_stage_device is not None:
+                apply_ir_runtime_device_selection(stage_ir, authored_stage_device)
             if action_device is not None:
-                device_override = action_device
+                script_device_override = action_device
             stages.append(
                 {
                     "ir": _compact_stage_ir(
@@ -204,16 +240,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             if stage.default_until_seconds is not None:
                 stage_start_time_s += stage.default_until_seconds
 
-        print(
-            json.dumps(
-                {
-                    "ir": ir,
-                    "shared_geometry_assets": shared_geometry_assets,
-                    "default_until_seconds": loaded.default_until_seconds,
-                    "study_pipeline": study_pipeline,
-                    "stages": stages,
-                }
-            )
+        _write_json(
+            {
+                "ir": ir,
+                "shared_geometry_assets": shared_geometry_assets,
+                "default_until_seconds": loaded.default_until_seconds,
+                "study_pipeline": study_pipeline,
+                "stages": stages,
+            }
         )
         emit_progress("Run configuration exported")
         return 0
@@ -331,10 +365,51 @@ def _compact_stage_ir(
     *,
     shared_geometry_assets: object,
 ) -> dict[str, object]:
-    compacted = copy.deepcopy(ir)
-    if shared_geometry_assets is not None and compacted.get("geometry_assets") == shared_geometry_assets:
-        compacted["geometry_assets"] = None
-    return compacted
+    detached = dict(ir)
+    if _geometry_assets_semantically_equal(
+        detached.get("geometry_assets"),
+        shared_geometry_assets,
+    ):
+        detached["geometry_assets"] = None
+    return copy.deepcopy(detached)
+
+
+def _prepare_run_config_geometry_assets(
+    ir: dict[str, object],
+    *,
+    has_stages: bool,
+) -> tuple[dict[str, object], object]:
+    """Keep one asset owner unless compacted stage IRs need a shared copy."""
+    if not has_stages:
+        return ir, None
+
+    shared_geometry_assets = ir.get("geometry_assets")
+    if shared_geometry_assets is None:
+        return ir, None
+
+    detached_root = dict(ir)
+    detached_root["geometry_assets"] = None
+    return copy.deepcopy(detached_root), shared_geometry_assets
+
+
+def _geometry_assets_semantically_equal(left: object, right: object) -> bool:
+    if left is right:
+        return True
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _geometry_assets_semantically_equal(left[key], right[key])
+            for key in left
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _geometry_assets_semantically_equal(left_value, right_value)
+            for left_value, right_value in zip(left, right, strict=True)
+        )
+    if type(left) is not type(right):
+        return False
+    if left is None or isinstance(left, (bool, int, float, str)):
+        return left == right
+    return False
 
 
 def _change_device_action_device(action: dict[str, object] | None) -> str | None:

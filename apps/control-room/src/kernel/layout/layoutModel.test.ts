@@ -44,6 +44,19 @@ describe("workspace layout model", () => {
     ]);
   });
 
+  it("defines the Inspector as a pixel-sized scientific work surface", () => {
+    const inspector = DEFAULT_WORKSPACE_LAYOUT.columns.find(
+      (column) => column.slotId === "panel-right",
+    );
+
+    expect(inspector).toMatchObject({
+      defaultSize: "416px",
+      maxSize: "560px",
+      minSize: "360px",
+      resizeBehavior: "preserve-pixel-size",
+    });
+  });
+
   it("resets to the default workspace column order", () => {
     const moved = moveWorkspaceColumn(
       DEFAULT_WORKSPACE_LAYOUT,

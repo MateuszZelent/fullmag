@@ -1,15 +1,14 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisCurrentFieldInspector({
   progress,
 }: Pick<HysteresisInspectorCommonProps, "progress">) {
   return (
-    <InspectorSection
-      value="hysteresis-current-field"
+    <InspectorGroup
       title="Current Field"
       badge={
         progress?.current_field_mT != null
@@ -46,6 +45,6 @@ export function HysteresisCurrentFieldInspector({
         label="Status"
         value={progress?.status ?? (progress?.active ? "running" : "not started")}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

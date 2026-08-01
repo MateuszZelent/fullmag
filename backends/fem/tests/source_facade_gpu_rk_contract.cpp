@@ -7,12 +7,25 @@
 
 #include "source_facade_contract_utils.hpp"
 
+#include <cctype>
+
 namespace {
 
 using fullmag::fem::tests::check;
 using fullmag::fem::tests::fem_source_root;
 using fullmag::fem::tests::read_text_file;
 using fullmag::fem::tests::repo_root;
+
+std::string without_whitespace(const std::string &source) {
+    std::string compact;
+    compact.reserve(source.size());
+    for (const char character : source) {
+        if (!std::isspace(static_cast<unsigned char>(character))) {
+            compact.push_back(character);
+        }
+    }
+    return compact;
+}
 
 void gpu_rk_workspace_is_owned_by_cuda_rk_module() {
     const std::filesystem::path root = fem_source_root();
@@ -781,17 +794,27 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             external_energy_source.find("ctx.zeeman.has_external_field") !=
                 std::string::npos &&
+            external_energy_source.find("ctx.zeeman.regional_drives.empty()") !=
+                std::string::npos &&
             external_energy_source.find("fullmag_cuda_external_energy_blocks(") !=
                 std::string::npos &&
             external_energy_source.find("GpuFinalScalarSlot::ExternalEnergy") !=
+                std::string::npos &&
+            external_energy_source.find("GpuFinalScalarSlot::DriveEnergy") !=
+                std::string::npos &&
+            external_energy_source.find("gpu_regional_field_drive_materialize_and_accumulate(") !=
                 std::string::npos &&
             external_energy_source.find("launch GPU RK external energy blocks") !=
                 std::string::npos &&
             external_energy_source.find("launch GPU RK external energy reduction") !=
                 std::string::npos &&
-            external_energy_source.find("GPU RK external energy requires device-resident Ms, lumped mass, and H_ext") !=
+            external_energy_source.find("GPU RK Zeeman energy requires device-resident Ms and lumped mass") !=
+                std::string::npos &&
+            external_energy_source.find("GPU RK external energy requires device-resident H_ext") !=
+                std::string::npos &&
+            external_energy_source.find("GPU RK drive energy requires device-resident H_drive") !=
                 std::string::npos,
-        "GPU CUDA RK external final energy reductions source must own external energy validation, launch, and scalar slot");
+        "GPU CUDA RK external final energy reductions source must own external/drive validation, launch, and scalar slots");
     check(
         energy_source.find("fullmag_cuda_external_energy_blocks(") ==
                 std::string::npos &&
@@ -1503,6 +1526,19 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
     const std::string stage_compute =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string compact_stage_compute = without_whitespace(stage_compute);
+    const auto has_masked_recovery_call = [&compact_stage_compute](const char axis) {
+        const std::string component(1, axis);
+        const std::string recovery = "workspace->recovery_" + component;
+        const std::string call =
+            "fullmag_cuda_demag_recovery_csr(" + recovery + ".d_row_offsets," +
+            recovery + ".d_col_indices," + recovery + ".d_values," +
+            "gpu.demag_poisson.poisson_solution," +
+            "gpu.mesh_regions.magnetic_node_mask,gpu.fields.h_demag." + component + ",";
+        return compact_stage_compute.find(call) != std::string::npos;
+    };
+    const std::string hypre_stream_interop =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string runtime_snapshot =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
 
@@ -1546,11 +1582,11 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             hypre_solver_header.find("bool initialize_demag_poisson_hypre_device_solver(") !=
                 std::string::npos &&
-            hypre_solver_header.find("bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+            hypre_solver_header.find("bool prepare_demag_poisson_hypre_device_solver_apply(") !=
                 std::string::npos &&
             hypre_solver_header.find("bool set_demag_poisson_hypre_solver_iterative_mode(") !=
                 std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver header must declare solver setup, fresh-RHS solver reset, and per-solve initial-guess policy");
+        "GPU CUDA Poisson demag Hypre solver header must declare persistent solver setup and per-solve initial-guess policy");
     check(
         stage_compute_header.find("GPU CUDA Poisson demag stage compute header") !=
                 std::string::npos &&
@@ -1678,12 +1714,16 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             hypre_solver.find("bool set_demag_poisson_hypre_solver_iterative_mode(") !=
                 std::string::npos &&
-            hypre_solver.find("bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+            hypre_solver.find("bool prepare_demag_poisson_hypre_device_solver_apply(") !=
+                std::string::npos &&
+            hypre_solver.find("workspace.solver->Setup(*workspace.b_par, *workspace.x_par);") !=
+                std::string::npos &&
+            hypre_solver.find("workspace.solver_setup_complete = true;") !=
                 std::string::npos &&
             hypre_solver.find("SetZeroInitialIterate()") !=
                 std::string::npos &&
             hypre_solver.find("HypreBoomerAMG") != std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver module must own solver policy setup, fresh-RHS solver reset, MFEM zero-initial initial-guess policy, and iteration stats");
+        "GPU CUDA Poisson demag Hypre solver module must own persistent setup, MFEM initial-guess policy, and iteration stats");
     check(
         hypre_solver.find("HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE)") !=
                 std::string::npos &&
@@ -1729,26 +1769,14 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             stage_compute.find("poisson_solution_for_recovery") ==
                 std::string::npos &&
-            stage_compute.find(
-                "gpu.demag_poisson.poisson_solution,\n"
-                "        gpu.mesh_regions.magnetic_node_mask,\n"
-                "        gpu.fields.h_demag.x") != std::string::npos &&
-            stage_compute.find(
-                "gpu.demag_poisson.poisson_solution,\n"
-                "        gpu.mesh_regions.magnetic_node_mask,\n"
-                "        gpu.fields.h_demag.y") != std::string::npos &&
-            stage_compute.find(
-                "gpu.demag_poisson.poisson_solution,\n"
-                "        gpu.mesh_regions.magnetic_node_mask,\n"
-                "        gpu.fields.h_demag.z") != std::string::npos,
+            has_masked_recovery_call('x') &&
+            has_masked_recovery_call('y') &&
+            has_masked_recovery_call('z'),
         "GPU periodic reduced Poisson demag recovery CSR uses reduced scalar columns, so device recovery must read reduced true-DOF phi; nodal phi lift belongs only to export");
     check(
-        stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.x") !=
-                std::string::npos &&
-            stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.y") !=
-                std::string::npos &&
-            stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.z") !=
-                std::string::npos &&
+        has_masked_recovery_call('x') &&
+            has_masked_recovery_call('y') &&
+            has_masked_recovery_call('z') &&
             stage_compute.find("Pass nullptr mask so recovery computes H_demag at all nodes") ==
                 std::string::npos,
         "GPU Poisson demag recovery must mask non-magnetic nodes before periodic projection to match CPU MFEM recovery");
@@ -1758,33 +1786,29 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             stage_compute.find("workspace->x_par->HypreWrite();") !=
                 std::string::npos &&
-            stage_compute.find("cudaMemset(\n                gpu.demag_poisson.poisson_solution") <
-                stage_compute.find("cudaEventRecord(workspace->compute_ready_event, stream)") &&
+            stage_compute.find("cudaMemsetAsync(\n                gpu.demag_poisson.poisson_solution") <
+                stage_compute.find("hypre_wait_for_fullmag(") &&
             stage_compute.find("workspace->x_par->HypreWrite();") <
                 stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
-            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+            stage_compute.find("prepare_demag_poisson_hypre_device_solver_apply(") !=
                 std::string::npos &&
-            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") <
-                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
-            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") <
-                stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") &&
-            stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") <
+            stage_compute.find("prepare_demag_poisson_hypre_device_solver_apply(") <
                 stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
             stage_compute.find("*workspace->x_par = 0.0") ==
                 std::string::npos &&
-            stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") !=
-                std::string::npos &&
-            stage_compute.find("!reset_initial_solution") != std::string::npos,
-        "GPU CUDA Poisson demag fresh solves must publish externally written device buffers with HypreWrite and disable nonzero initial guesses before Mult");
+            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") ==
+                std::string::npos,
+        "GPU CUDA Poisson demag solves must publish external device buffers, select the initial-guess policy, and reuse persistent Hypre setup before Mult");
     check(
-        stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") !=
-                std::string::npos &&
-            stage_compute.find("cudaDeviceSynchronize()") != std::string::npos &&
-            stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") <
-                stage_compute.find("cudaDeviceSynchronize()") &&
-            stage_compute.find("cudaDeviceSynchronize()") <
-                stage_compute.find("fullmag_cuda_zero_indexed_values(\n        gpu.demag_poisson.poisson_solution"),
-        "GPU CUDA Poisson demag must synchronize after Hypre Mult before reading solution in recovery");
+        stage_compute.find("hypre_wait_for_fullmag(") <
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("fullmag_wait_for_hypre(") >
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("cudaStreamSynchronize(hypre_stream)") == std::string::npos &&
+            stage_compute.find("cudaDeviceSynchronize()") == std::string::npos &&
+            hypre_stream_interop.find("cudaStreamSynchronize") == std::string::npos &&
+            hypre_stream_interop.find("cudaDeviceSynchronize") == std::string::npos,
+        "GPU CUDA Poisson demag must use exact event dependencies around Hypre Mult without host-blocking synchronization");
     check(
         read_text_file(root / "gpu" / "cuda" / "relaxation" / "pgbb_kernels.cu")
                 .find("periodic_representative_root") != std::string::npos,

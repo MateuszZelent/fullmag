@@ -1,0 +1,82 @@
+@theme inline {
+  --color-fm-app: var(--fm-bg-app);
+  --color-fm-chrome: var(--fm-bg-chrome);
+  --color-fm-panel: var(--fm-bg-panel);
+  --color-fm-raised: var(--fm-bg-panel-raised);
+  --color-fm-canvas: var(--fm-bg-canvas);
+  --color-fm-overlay: var(--fm-bg-overlay);
+  --color-fm-selected: var(--fm-bg-selected);
+  --color-fm-hover: var(--fm-bg-hover);
+  --color-fm-disabled: var(--fm-bg-disabled);
+  --color-fm-disabled-border: var(--fm-border-disabled);
+  --color-fm-primary: var(--fm-text-primary);
+  --color-fm-secondary: var(--fm-text-secondary);
+  --color-fm-muted: var(--fm-text-muted);
+  --color-fm-disabled-text: var(--fm-text-disabled);
+  --color-fm-inverse: var(--fm-text-inverse);
+  --color-fm-subtle: var(--fm-border-subtle);
+  --color-fm-moderate: var(--fm-border-moderate);
+  --color-fm-border: var(--fm-border-default);
+  --color-fm-strong: var(--fm-border-strong);
+  --color-fm-accent: var(--fm-accent);
+  --color-fm-accent-soft: var(--fm-accent-soft);
+  --color-fm-success: var(--fm-success);
+  --color-fm-warning: var(--fm-warning);
+  --color-fm-danger: var(--fm-danger);
+  --color-fm-stale: var(--fm-stale);
+  --color-fm-degraded: var(--fm-degraded);
+  /* Spacing — generic scale */
+  --spacing-fm-control-sm: var(--fm-control-height-sm);
+  --spacing-fm-control-md: var(--fm-control-height-md);
+  --spacing-fm-1: var(--fm-space-1);
+  --spacing-fm-2: var(--fm-space-2);
+  --spacing-fm-3: var(--fm-space-3);
+  --spacing-fm-4: var(--fm-space-4);
+  --spacing-fm-5: var(--fm-space-5);
+  --spacing-fm-6: var(--fm-space-6);
+  --spacing-fm-7: var(--fm-space-7);
+  --spacing-fm-8: var(--fm-space-8);
+  /* Spacing — inspector-specific (enables px-fm-inline, gap-fm-inspector-control, etc.) */
+  --spacing-fm-inline: var(--fm-inspector-padding-inline);
+  --spacing-fm-inspector-control: var(--fm-inspector-control-gap);
+  --spacing-fm-inspector-row: var(--fm-inspector-row-gap);
+  --spacing-fm-inspector-group: var(--fm-inspector-group-gap);
+  --spacing-fm-field-row: var(--fm-field-row-min-height);
+  /* Radii */
+  --radius-fm-control: var(--fm-radius-control);
+  --radius-fm-surface: var(--fm-radius-surface);
+  --radius-fm-input: var(--fm-radius-input);
+  --radius-fm-segment: var(--fm-radius-segment);
+  --radius-fm-disclosure: var(--fm-radius-disclosure);
+  --radius-fm-xs: var(--fm-radius-xs);
+  --radius-fm-sm: var(--fm-radius-sm);
+  --radius-fm-md: var(--fm-radius-md);
+  --radius-fm-lg: var(--fm-radius-lg);
+  /* Shadows */
+  --shadow-fm-overlay: var(--fm-shadow-elevated);
+  --shadow-fm-sm: var(--fm-shadow-sm);
+  --shadow-fm-md: var(--fm-shadow-md);
+  --shadow-fm-lg: var(--fm-shadow-lg);
+  --shadow-fm-panel: var(--fm-shadow-panel);
+  --shadow-fm-control: var(--fm-shadow-control);
+  --shadow-fm-control-hover: var(--fm-shadow-control-hover);
+  --shadow-fm-control-pressed: var(--fm-shadow-control-pressed);
+  --shadow-fm-control-inset: var(--fm-shadow-control-inset);
+  /* Fonts */
+  --font-fm-ui: var(--fm-font-ui);
+  --font-fm-mono: var(--fm-font-mono);
+  /* Named font sizes — enables text-fm-xs, text-fm-sm, text-fm-md etc. */
+  --text-fm-2xs: var(--fm-font-size-2xs);
+  --text-fm-xs: var(--fm-font-size-xs);
+  --text-fm-sm: var(--fm-font-size-sm);
+  --text-fm-md: var(--fm-font-size-md);
+  --text-fm-lg: var(--fm-font-size-lg);
+  --text-fm-xl: var(--fm-font-size-xl);
+  /* Legacy text aliases */
+  --text-fm-label: var(--fm-font-size-field-label);
+  --text-fm-control: var(--fm-font-size-control);
+  --text-fm-help: var(--fm-font-size-help);
+  /* Named line heights — enables leading-fm-control, leading-fm-tight */
+  --leading-fm-control: var(--fm-line-height-control);
+  --leading-fm-tight: var(--fm-line-height-tight);
+}

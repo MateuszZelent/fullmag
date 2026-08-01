@@ -168,6 +168,7 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "bin\fullmag.exe"),
     (Join-Path $StageRoot "bin\fullmag-api.exe"),
     (Join-Path $StageRoot "bin\fullmag-ui.exe"),
+    (Join-Path $StageRoot "web\index.html"),
     (Join-Path $StageRoot "share\version.json"),
     (Join-Path $StageRoot "runtimes\cpu-reference\manifest.json"),
     (Join-Path $StageRoot "runtimes\fdm-cuda\manifest.json")
@@ -214,7 +215,9 @@ Import-VsEnvironment
 Push-Location $RepoRoot
 try {
   pnpm install --frozen-lockfile
+  $env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT = "1"
   pnpm --dir apps/control-room build
+  Remove-Item Env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT -ErrorAction SilentlyContinue
   rustup target add $TargetTriple
 
   cargo build --release --target $TargetTriple -p fullmag-cli
@@ -251,7 +254,7 @@ try {
     Copy-Item -Force $_.FullName (Join-Path $libDir $_.Name)
   }
 
-  Copy-Tree (Join-Path $RepoRoot "apps\web\out") $webDir
+  Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir
   Copy-Tree (Join-Path $RepoRoot "examples") $examplesDir
   Copy-Tree (Join-Path $RepoRoot ".fullmag\local\python") $pythonDir
 

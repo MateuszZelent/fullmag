@@ -23,7 +23,7 @@ struct ExplicitTableau {
     double b_hi[MAX_RK_STAGES];                     // high-order weights
     double b_lo[MAX_RK_STAGES];                     // low-order weights (embedded error)
     int order_hi;                                  // order of b_hi
-    int order_est;                                 // order of b_lo (0 = no error est)
+    int order_est;                                 // embedded error-estimator order q used by the adaptive controller (0 = none)
     bool fsal;                                     // first-same-as-last?
 };
 

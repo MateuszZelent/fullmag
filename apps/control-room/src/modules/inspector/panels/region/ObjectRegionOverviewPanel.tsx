@@ -2,9 +2,8 @@
 
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { ChangeEvent } from "react";
-import { Accordion } from "@/shared/ui/Accordion";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionEditRealizationPolicy } from "../ObjectRegionsPanelModel";
 import {
   ObjectRegionMetadataSection,
@@ -29,17 +28,11 @@ export function ObjectRegionOverviewPanel({
   deleteRegion,
   feedback,
 }: RegionSubPanelProps) {
-  const sections = ["regions", "identity", "actions"];
-
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} />
 
-      <InspectorSection value="identity" title="Region Identity">
+      <InspectorGroup title="Region Identity">
         <ObjectRegionInlineDiagnostics
           capabilityGates={[
             "regions.realized_materialization",
@@ -90,7 +83,7 @@ export function ObjectRegionOverviewPanel({
           <option value="conformal">Conformal</option>
           <option value="project">Project</option>
         </FormField>
-      </InspectorSection>
+      </InspectorGroup>
 
       <ObjectRegionActionsSection
         pending={pending}
@@ -105,6 +98,6 @@ export function ObjectRegionOverviewPanel({
         deleteRegion={deleteRegion}
         feedback={feedback}
       />
-    </Accordion>
+    </div>
   );
 }

@@ -105,6 +105,11 @@ fn find_api_binary() -> Option<PathBuf> {
 
     let mut candidates: Vec<PathBuf> = vec![self_dir.join(&name)];
 
+    if let Some(root) = packaged_install_root(&self_exe) {
+        candidates.push(root.join("bin").join(&name));
+        candidates.push(root.join(".fullmag").join("local").join("bin").join(&name));
+    }
+
     // Walk up to find repo root and add target directories
     if let Some(root) = find_repo_root_from(&self_exe) {
         for profile in ["release", "debug"] {
@@ -129,12 +134,32 @@ fn find_repo_root_from(start: &std::path::Path) -> Option<PathBuf> {
     }
     let mut dir = start.parent();
     while let Some(d) = dir {
-        if d.join("AGENTS.md").is_file() || d.join("Cargo.toml").is_file() {
+        if d.join("AGENTS.md").is_file()
+            || d.join("Cargo.toml").is_file()
+            || packaged_root_marker(d)
+        {
             return Some(d.to_path_buf());
         }
         dir = d.parent();
     }
     None
+}
+
+fn packaged_install_root(start: &std::path::Path) -> Option<PathBuf> {
+    let bin_dir = start.parent()?;
+    if !bin_dir
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("bin")
+    {
+        return None;
+    }
+    let install_root = bin_dir.parent()?.to_path_buf();
+    packaged_root_marker(&install_root).then_some(install_root)
+}
+
+fn packaged_root_marker(root: &std::path::Path) -> bool {
+    root.join(".fullmag").is_dir() || root.join("web").join("index.html").is_file()
 }
 
 fn discover_repo_root(api_exe: &std::path::Path) -> PathBuf {
@@ -152,11 +177,38 @@ fn discover_repo_root(api_exe: &std::path::Path) -> PathBuf {
 fn resolve_web_static_dir(repo_root: &std::path::Path) -> Option<PathBuf> {
     let candidates = [
         repo_root.join(".fullmag").join("local").join("web"),
+        repo_root.join("web"),
+        repo_root.join("share").join("control-room"),
+        repo_root.join("apps").join("control-room").join("out"),
         repo_root.join("apps").join("web").join("out"),
     ];
     candidates
         .into_iter()
         .find(|p| p.join("index.html").is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::packaged_install_root;
+
+    #[test]
+    fn packaged_install_root_is_derived_from_bin_executable() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-desktop-packaged-root-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join(".fullmag")).unwrap();
+
+        assert_eq!(
+            packaged_install_root(&root.join("bin").join("fullmag-ui")),
+            Some(root.clone())
+        );
+        assert_eq!(packaged_install_root(&root.join("target").join("fullmag-ui")), None);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn find_free_port() -> Option<u16> {

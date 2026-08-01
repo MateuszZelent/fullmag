@@ -7,7 +7,7 @@ import type { SceneResource } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StudyProgressBar } from "../StudyProgressBar";
 import {
   StudyStageDraftEditor,
@@ -128,22 +128,26 @@ export function StageInspectorFrame({
 
   return (
     <>
-      <InspectorSection
-        value="identity"
+      <InspectorGroup
         title="Identity"
         badge={stage?.status ?? "not selected"}
       >
         <FieldRow label="Stage" value={stage?.label ?? kindLabel} />
-        <FieldRow label="Kind" value={stage?.kind ?? expectedKind} />
-        <FieldRow label="Stage ID" value={stage?.stageId ?? draft?.stageId ?? "n/a"} />
-        <FieldRow label="Status" value={stage?.status ?? "draft"} />
+        <FieldRow label="Kind" value={stage?.kind ?? expectedKind} mono />
+        <FieldRow label="Stage ID" value={stage?.stageId ?? draft?.stageId ?? "n/a"} mono />
+        <FieldRow
+          label="Status"
+          value={stage?.status ?? "draft"}
+          status={stage?.status}
+        />
         <FieldRow
           label="Execution revision"
           value={stageExecutionRevision ?? "not available"}
+          mono
         />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="authoring" title="Authoring" badge={kindLabel}>
+      <InspectorGroup title="Authoring" badge={kindLabel}>
         {draft && isExpectedDraft ? (
           <StudyStageDraftEditor
             algorithmsAvailable={algorithmsAvailable}
@@ -180,10 +184,9 @@ export function StageInspectorFrame({
             {authoringBusy ? "Saving" : "Save stage"}
           </Button>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="telemetry"
+      <InspectorGroup
         title="Telemetry & Results"
         badge={stage?.runtimeMetric?.name ?? "stage"}
       >
@@ -286,7 +289,7 @@ export function StageInspectorFrame({
             stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"
           }
         />
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

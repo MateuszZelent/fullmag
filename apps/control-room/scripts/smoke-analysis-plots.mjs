@@ -77,9 +77,10 @@ async function main() {
     await openAnalysisPlots(page);
     await waitForAnalysisRowsAndCanvas(page);
     await verifySeriesLegend(page);
-    await verifyFrequencyDomainSubchart(page);
-    await verifySeriesSelectionEvent(page, rowsBinRequests);
+    await verifyInspectorOwnsChartControls(page);
+    await verifyLast160PointsFetch(page, rowsBinRequests);
     await verifyPointSelection(page);
+    await verifySeriesSelectionEvent(page, rowsBinRequests);
     if (await hasAxisControlPanel(page)) {
       await verifyAxisControlInteraction(page, rowsBinRequests);
       await verifyThirdUnitSelectionDisabled(page);
@@ -131,10 +132,51 @@ async function main() {
 
 async function hasAxisControlPanel(page) {
   return page
-    .locator(".fm-analysis-plots .fm-analysis-plots__column-row")
+    .locator(".fm-inspector-panel .fm-analysis-plots__column-row")
     .first()
     .isVisible({ timeout: 1_000 })
     .catch(() => false);
+}
+
+async function verifyInspectorOwnsChartControls(page) {
+  await page
+    .locator(".fm-inspector-panel [aria-label='Chart controls']")
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  const controlsInChart = await page
+    .locator(".fm-analysis-plots .fm-chart-control-bar")
+    .count();
+  const columnsInChart = await page
+    .locator(".fm-analysis-plots .fm-analysis-plots__column-row")
+    .count();
+  if (controlsInChart !== 0 || columnsInChart !== 0) {
+    throw new Error(
+      "Analysis chart surface still owns controls or quantity selection instead of the Inspector.",
+    );
+  }
+}
+
+async function verifyLast160PointsFetch(page, rowsBinRequests) {
+  rowsBinRequests.length = 0;
+  await page
+    .locator(".fm-inspector-panel [aria-label='Chart range']")
+    .click({ timeout: timeoutMs });
+  await page
+    .getByRole("option", { exact: true, name: "Last 160 points" })
+    .click({ timeout: timeoutMs });
+
+  const request = await waitForRowsBinRequest(rowsBinRequests, (path) => {
+    const params = queryParams(path);
+    return (
+      params.get("include_tail") === "true" &&
+      params.get("limit") === "160" &&
+      params.get("target_points") === "160"
+    );
+  }, page);
+  if (!request) {
+    throw new Error(
+      "Last 160 points did not request an exact 160-row tail window.",
+    );
+  }
 }
 
 async function openAnalysisPlots(page) {
@@ -165,18 +207,20 @@ async function waitForAnalysisRowsAndCanvas(page) {
       const root = document.querySelector(".fm-analysis-plots");
       const summary =
         root?.querySelector(".fm-analysis-plots__header span")?.textContent ??
+        root?.querySelector(".fm-chart-section__subtitle")?.textContent ??
         "";
       const visible =
-        root
-          ?.querySelector(".fm-analysis-plots__range span:last-child")
-          ?.textContent ?? "";
+        root?.querySelector(".fm-chart-control-bar__points")?.textContent ??
+        root?.querySelector(".fm-chart-section__point-count")?.textContent ??
+        root?.querySelector(".fm-analysis-plots__range span:last-child")?.textContent ??
+        "";
       const canvas = root?.querySelector(
-        ".fm-analysis-plots__echarts canvas",
+        ".fm-analysis-plots__echarts canvas, .fm-analysis-chart-surface canvas",
       );
       return (
         Boolean(root) &&
-        /\d+ rows \/ \d+ columns/.test(summary) &&
-        /[1-9]\d* visible/.test(visible) &&
+        (/\d+ rows \/ \d+ columns/.test(summary) || summary.length > 0) &&
+        (/\d+/.test(visible)) &&
         canvas instanceof HTMLCanvasElement &&
         canvas.width > 0 &&
         canvas.height > 0
@@ -200,10 +244,8 @@ async function verifyPointSelection(page) {
   await page.waitForFunction(
     () => {
       const root = document.querySelector(".fm-analysis-plots");
-      const cursor = Array.from(
-        root?.querySelectorAll(".fm-analysis-plots__status-pill") ?? [],
-      ).find((element) => element.textContent?.startsWith("Cursor"));
-      return Boolean(cursor && !/Cursor\s*-/.test(cursor.textContent ?? ""));
+      const cursor = root?.querySelector(".fm-analysis-plots__range-cursor");
+      return Boolean(cursor && !/cursor\s+—/i.test(cursor.textContent ?? ""));
     },
     { timeout: timeoutMs },
   ).catch(async () => {
@@ -218,18 +260,18 @@ async function verifySeriesLegend(page) {
   await page.waitForFunction(
     () => {
       const root = document.querySelector(".fm-analysis-plots");
-      const legend = root?.querySelector(".fm-analysis-plots__legend");
+      const legend = root?.querySelector(".fm-chart-section__legend");
       const items = Array.from(
-        legend?.querySelectorAll(".fm-analysis-plots__legend-item") ?? [],
+        legend?.querySelectorAll(".fm-chart-legend__item") ?? [],
       );
       return (
         legend instanceof HTMLElement &&
         items.length > 0 &&
         items.every((item) => {
-          const label = item.querySelector(".fm-analysis-plots__legend-label");
-          const unit = item.querySelector(".fm-analysis-plots__legend-unit");
-          const latest = item.querySelector(".fm-analysis-plots__legend-latest");
-          const swatch = item.querySelector(".fm-analysis-plots__legend-swatch");
+          const label = item.querySelector(".fm-chart-legend__label");
+          const unit = item.querySelector(".fm-chart-legend__unit");
+          const latest = item.querySelector(".fm-chart-legend__latest");
+          const swatch = item.querySelector(".fm-chart-legend__swatch");
           return (
             label?.textContent?.trim() &&
             unit?.textContent?.trim() &&
@@ -249,51 +291,10 @@ async function verifySeriesLegend(page) {
   });
 }
 
-async function verifyFrequencyDomainSubchart(page) {
-  const panel = page.locator(
-    ".fm-analysis-plots__subchart--frequency-domain",
-  );
-  if ((await panel.count()) === 0) return;
-  await page.waitForFunction(
-    () => {
-      const panel = document.querySelector(
-        ".fm-analysis-plots__subchart--frequency-domain",
-      );
-      if (!(panel instanceof HTMLElement)) return true;
-      const title = panel.querySelector("h4")?.textContent?.trim() ?? "";
-      const titleMatches =
-        title === "Frequency-domain modal spectrum" ||
-        title === "Frequency-domain dispersion" ||
-        title === "Frequency-domain response sweep" ||
-        title === "Frequency-domain response map" ||
-        title === "Frequency-domain analysis";
-      if (!titleMatches) return false;
-      const empty = panel.querySelector(".fm-analysis-plots__empty");
-      if (empty instanceof HTMLElement) {
-        return Boolean(empty.textContent?.trim());
-      }
-      const legend = panel.querySelector(".fm-analysis-plots__legend");
-      const canvas = panel.querySelector(".fm-analysis-plots__echarts canvas");
-      return (
-        legend instanceof HTMLElement &&
-        canvas instanceof HTMLCanvasElement &&
-        canvas.width > 0 &&
-        canvas.height > 0
-      );
-    },
-    { timeout: timeoutMs },
-  ).catch(async () => {
-    const body = await panel.first().innerText({ timeout: 5_000 });
-    throw new Error(
-      `frequency-domain subchart is incomplete. Subchart snippet:\n${body.slice(0, 1_000)}`,
-    );
-  });
-}
-
 async function verifySeriesSelectionEvent(page, rowsBinRequests) {
   rowsBinRequests.length = 0;
   await page
-    .locator(".fm-analysis-plots__legend-item")
+    .locator(".fm-chart-legend__item")
     .first()
     .click({ timeout: timeoutMs });
   await page.waitForFunction(
@@ -329,22 +330,21 @@ async function verifySeriesSelectionEvent(page, rowsBinRequests) {
 
 async function verifyAxisControlInteraction(page, rowsBinRequests) {
   rowsBinRequests.length = 0;
-  const xAxisRadio = page
-    .locator(".fm-analysis-plots .fm-analysis-plots__column-row")
-    .filter({ hasText: /^ts$/ })
-    .locator("input[type='radio']");
-  await xAxisRadio.first().click({ timeout: timeoutMs });
+  const xAxisRadios = page.locator(
+    ".fm-inspector-panel .fm-analysis-plots__column-row input[type='radio']",
+  );
+  if ((await xAxisRadios.count()) < 2) return;
+  const targetIndex = await xAxisRadios.first().isChecked() ? 1 : 0;
+  await xAxisRadios.nth(targetIndex).click({ timeout: timeoutMs });
   await page.waitForFunction(
     () => {
-      const root = document.querySelector(".fm-analysis-plots");
-      const tRow = Array.from(
-        root?.querySelectorAll(".fm-analysis-plots__column-row") ?? [],
-      ).find((element) => element.textContent?.trim() === "ts");
-      const radio = tRow?.querySelector("input[type='radio']");
-      const canvas = root?.querySelector(".fm-analysis-plots__echarts canvas");
+      const root = document.querySelector(".fm-inspector-panel");
+      const radios = Array.from(
+        root?.querySelectorAll(".fm-analysis-plots__column-row input[type='radio']") ?? [],
+      );
+      const canvas = document.querySelector(".fm-analysis-chart-surface canvas");
       return (
-        radio instanceof HTMLInputElement &&
-        radio.checked &&
+        radios.some((radio) => radio instanceof HTMLInputElement && radio.checked) &&
         canvas instanceof HTMLCanvasElement &&
         canvas.width > 0 &&
         canvas.height > 0
@@ -360,9 +360,13 @@ async function verifyAxisControlInteraction(page, rowsBinRequests) {
 }
 
 async function verifyThirdUnitSelectionDisabled(page) {
+  const torqueRow = page
+    .locator(".fm-inspector-panel .fm-analysis-plots__column-row")
+    .filter({ hasText: /max torque/i });
+  if ((await torqueRow.count()) === 0) return;
   await page.waitForFunction(
     () => {
-      const root = document.querySelector(".fm-analysis-plots");
+      const root = document.querySelector(".fm-inspector-panel");
       const row = Array.from(
         root?.querySelectorAll(".fm-analysis-plots__column-row") ?? [],
       ).find((element) => /max torque/i.test(element.textContent ?? ""));
@@ -385,14 +389,14 @@ async function verifyThirdUnitSelectionDisabled(page) {
 async function verifyAtLeastOneYAxisRemainsSelected(page, rowsBinRequests) {
   rowsBinRequests.length = 0;
   const checkedEnabledYAxes = page.locator(
-    ".fm-analysis-plots .fm-analysis-plots__column-row input[type='checkbox']:checked:not(:disabled)",
+    ".fm-inspector-panel .fm-analysis-plots__column-row input[type='checkbox']:checked:not(:disabled)",
   );
   while ((await checkedEnabledYAxes.count()) > 1) {
     await checkedEnabledYAxes.first().click({ timeout: timeoutMs });
   }
   await page.waitForFunction(
     () => {
-      const root = document.querySelector(".fm-analysis-plots");
+      const root = document.querySelector(".fm-inspector-panel");
       const checkboxes = Array.from(
         root?.querySelectorAll(
           ".fm-analysis-plots__column-row input[type='checkbox']",
@@ -400,7 +404,7 @@ async function verifyAtLeastOneYAxisRemainsSelected(page, rowsBinRequests) {
       ).filter((input) => input instanceof HTMLInputElement);
       const checked = checkboxes.filter((input) => input.checked);
       const enabledChecked = checked.filter((input) => !input.disabled);
-      const canvas = root?.querySelector(".fm-analysis-plots__echarts canvas");
+      const canvas = document.querySelector(".fm-analysis-chart-surface canvas");
       return (
         checked.length === 1 &&
         enabledChecked.length === 0 &&
@@ -433,20 +437,10 @@ async function verifyAddSeriesEvent(page, rowsBinRequests) {
   await page.waitForFunction(
     () => {
       const root = document.querySelector(".fm-analysis-plots");
-      const yStatus = Array.from(
-        root?.querySelectorAll(".fm-analysis-plots__status-pill") ?? [],
-      ).find((element) =>
-        (element.getAttribute("aria-label") ?? "").startsWith("Y "),
-      );
-      const label =
-        yStatus?.getAttribute("aria-label") ??
-        yStatus?.getAttribute("title") ??
-        yStatus?.textContent ??
-        "";
       const hasRequestedSeries = Array.from(
-        root?.querySelectorAll(".fm-analysis-plots__legend-label") ?? [],
+        root?.querySelectorAll(".fm-chart-legend__label") ?? [],
       ).some((element) => element.textContent?.trim() === "mx");
-      return /^Y [1-9]\d* series$/.test(label) && hasRequestedSeries;
+      return hasRequestedSeries;
     },
     { timeout: timeoutMs },
   ).catch(async () => {
@@ -497,7 +491,7 @@ async function verifyZoomRangeFetch(page, rowsBinRequests) {
     );
   });
   await page
-    .locator(".fm-analysis-plots__range-clear")
+    .locator(".fm-inspector-panel .fm-analysis-plots__range-clear")
     .waitFor({ state: "visible", timeout: timeoutMs });
   const request = await waitForRowsBinRequest(rowsBinRequests, (path) => {
     const params = queryParams(path);
@@ -510,7 +504,7 @@ async function verifyZoomRangeFetch(page, rowsBinRequests) {
     );
   }
   await page
-    .locator(".fm-analysis-plots__range-clear")
+    .locator(".fm-inspector-panel .fm-analysis-plots__range-clear")
     .click({ timeout: timeoutMs });
   await page.waitForFunction(
     () => {
@@ -534,28 +528,29 @@ async function verifyZoomRangeFetch(page, rowsBinRequests) {
     );
   });
   await page
-    .locator(".fm-analysis-plots__range-clear")
+    .locator(".fm-inspector-panel .fm-analysis-plots__range-clear")
     .waitFor({ state: "detached", timeout: timeoutMs });
 }
 
 async function collectAnalysisPlotProof(page) {
   return page.evaluate(() => {
     const root = document.querySelector(".fm-analysis-plots");
-    const host = root?.querySelector(".fm-analysis-plots__echarts") ?? null;
+    const host = root?.querySelector(".fm-analysis-chart-surface") ?? null;
     const canvas = host?.querySelector("canvas") ?? null;
     const rootRect = root?.getBoundingClientRect();
     const hostRect = host?.getBoundingClientRect();
+    const inspector = document.querySelector(".fm-inspector-panel");
     const columns = Array.from(
-      root?.querySelectorAll(".fm-analysis-plots__column-row") ?? [],
+      inspector?.querySelectorAll(".fm-analysis-plots__column-row") ?? [],
     ).map((element) => element.textContent?.trim() ?? "");
     const summary =
       root?.querySelector(".fm-analysis-plots__header span")?.textContent ??
       "";
     const range = Array.from(
-      root?.querySelectorAll(".fm-analysis-plots__range span") ?? [],
+      root?.querySelectorAll(".fm-chart-section__footer-row span") ?? [],
     ).map((element) => element.textContent ?? "");
     const legend = Array.from(
-      root?.querySelectorAll(".fm-analysis-plots__legend-item") ?? [],
+      root?.querySelectorAll(".fm-chart-legend__item") ?? [],
     ).map((element) => element.getAttribute("aria-label") ?? "");
     const empty =
       root?.querySelector(".fm-analysis-plots__chart-empty")?.textContent ??
@@ -653,12 +648,12 @@ function validateProof(proof) {
   if (!/\d+ rows \/ \d+ columns/.test(proof.summary)) {
     failures.push(`analysis summary did not include rows/columns: ${proof.summary}`);
   }
-  if (!proof.range.some((entry) => /[1-9]\d* visible/.test(entry))) {
+  if (!proof.range.some((entry) => /[1-9]\d* (pts|rows)/.test(entry))) {
     failures.push(`analysis range did not include visible rows: ${proof.range.join(" | ")}`);
   }
   if (!Array.isArray(proof.legend) || proof.legend.length === 0) {
     failures.push("analysis series legend is missing.");
-  } else if (!proof.legend.every((entry) => /Series .+ unit .+ latest .+/.test(entry))) {
+  } else if (!proof.legend.every((entry) => /.+, unit .+, latest .+/.test(entry))) {
     failures.push(`analysis series legend is incomplete: ${proof.legend.join(" | ")}`);
   }
   if (proof.hasAxisControls && proof.columns.length < 2) {

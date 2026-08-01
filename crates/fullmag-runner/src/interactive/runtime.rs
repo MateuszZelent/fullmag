@@ -56,6 +56,12 @@ impl InteractiveRuntime {
         self.backend.matches_plan(plan)
     }
 
+    /// Check whether an execution stage can continue on the existing backend
+    /// context without rebuilding solver-owned state.
+    pub fn can_continue_with_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError> {
+        self.backend.can_continue_with_plan(plan)
+    }
+
     /// Get the current display selection.
     pub fn selected_display(&self) -> &DisplaySelection {
         &self.selected_display
@@ -210,10 +216,14 @@ impl InteractiveRuntime {
         interrupt_requested: Option<&AtomicBool>,
         mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     ) -> Result<RunResult, RunError> {
+        crate::require_resolved_runtime_sampling(problem, plan)?;
         if matches!(problem.study, StudyIR::Hysteresis { .. }) {
+            let stage_asset =
+                crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
             let result = crate::hysteresis::run_planned_hysteresis_with_live_preview(
                 problem,
                 plan,
+                stage_asset.as_ref().map(|asset| &asset.identity),
                 until_seconds,
                 output_dir,
                 field_every_n,
@@ -227,7 +237,8 @@ impl InteractiveRuntime {
             return Ok(result);
         }
 
-        let mut artifact_pipeline = ArtifactPipeline::start(
+        let mut artifact_pipeline = ArtifactPipeline::start_for_problem(
+            problem,
             output_dir.to_path_buf(),
             artifacts::build_field_context(problem, plan),
             crate::artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -283,15 +294,15 @@ impl InteractiveRuntime {
             .flat_map(|v| v.iter().copied())
             .collect();
 
-        let (grid, fem_mesh) = match self.backend.geometry() {
+        let (grid, fem_mesh_generation_id) = match self.backend.geometry() {
             BackendGeometry::Fdm { grid } => (grid, None),
-            BackendGeometry::Fem { mesh } => ([0u32, 0, 0], Some(mesh)),
+            BackendGeometry::Fem { mesh } => ([0u32, 0, 0], mesh.generation_id),
         };
 
         on_step(StepUpdate {
             stats: final_stats,
             grid,
-            fem_mesh,
+            fem_mesh_generation_id,
             magnetization: Some(final_m),
             preview_field: None,
             cached_preview_fields: None,

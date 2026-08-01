@@ -1,11 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
+  regionDiagnosticOverlayMode,
   regionOverlayModeShowsAuthored,
   regionOverlayModeShowsRealized,
 } from "./regionOverlayMode";
 
 describe("regionOverlayMode", () => {
+  it("starts diagnostics disabled while retaining auto source selection", () => {
+    expect(DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE).toEqual({
+      source: "auto",
+      visible: false,
+    });
+    expect(
+      regionDiagnosticOverlayMode(DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE),
+    ).toBe("off");
+    expect(
+      regionDiagnosticOverlayMode({ source: "realized", visible: true }),
+    ).toBe("realized");
+  });
   it.each([
     ["off", false, false, false],
     ["off", true, false, false],

@@ -8,8 +8,8 @@ use fullmag_engine::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
-    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
+    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, RegionalFieldDriveTerm,
+    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
@@ -19,10 +19,7 @@ use fullmag_ir::{
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
-use crate::fdm::{
-    artifacts::select_state_observable_field,
-    validate_single_grid_budget,
-};
+use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
@@ -30,7 +27,7 @@ use crate::preview::{
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
     apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
     CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
 };
 use crate::scalar_metrics::{
@@ -462,9 +459,58 @@ fn select_direct_preview_values(
     Ok(None)
 }
 
-pub(crate) fn build_snapshot_problem_and_state(
+fn materialize_reference_problem(
+    mut problem: ExchangeLlgProblem,
     plan: &FdmPlanIR,
-) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
+) -> Result<ExchangeLlgProblem, RunError> {
+    problem.regional_field_drives =
+        resolved_regional_field_drives(plan, plan.time_stage.start_time_s);
+    if let Some(ref pbc) = plan.periodicity {
+        let map_axis = |axis: &fullmag_ir::AxisBoundary| match axis {
+            fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
+        };
+        problem.boundary_policy = FdmBoundaryPolicy {
+            x: map_axis(&pbc.axes[0]),
+            y: map_axis(&pbc.axes[1]),
+            z: map_axis(&pbc.axes[2]),
+        };
+        if let Some(image_counts) = pbc.image_counts {
+            problem.demag_image_counts = image_counts;
+        }
+    }
+    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
+    problem.set_resolved_periodic_workspace(plan.resolved_periodic_images.as_ref().map(
+        |resolved| ResolvedFdmPeriodicWorkspace {
+            image_counts: resolved.resolved_image_counts,
+            padded_counts: resolved.padded_counts,
+            image_terms: resolved.image_terms,
+            estimated_bytes: resolved.estimated_bytes,
+        },
+    ));
+    problem.temperature = plan.temperature.unwrap_or(0.0);
+    if problem.temperature > 0.0 {
+        problem.thermal_seed = plan
+            .thermal_seed_config
+            .as_ref()
+            .and_then(|config| config.seed)
+            .unwrap_or_else(|| (uuid::Uuid::new_v4().as_u128() as u64).max(1));
+    }
+    if let Some(dt) = plan.fixed_timestep {
+        problem.thermal_dt = dt;
+    }
+    problem
+        .with_spatial_fields(
+            plan.material.ms_field.clone(),
+            plan.material.a_field.clone(),
+            plan.material.alpha_field.clone(),
+        )
+        .map_err(|e| RunError {
+            message: format!("Spatial fields: {}", e),
+        })
+}
+
+fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunError> {
     validate_single_grid_budget(plan)?;
     let grid = GridShape::new(
         plan.grid.cells[0] as usize,
@@ -503,7 +549,9 @@ pub(crate) fn build_snapshot_problem_and_state(
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -515,7 +563,7 @@ pub(crate) fn build_snapshot_problem_and_state(
         });
     }
 
-    let mut problem = ExchangeLlgProblem::with_terms_and_mask(
+    let problem = ExchangeLlgProblem::with_terms_and_mask(
         grid,
         cell_size,
         material,
@@ -536,9 +584,12 @@ pub(crate) fn build_snapshot_problem_and_state(
             cubic_anisotropy: plan
                 .material
                 .cubic_anisotropy_kc1
-                .map(|kc1| CubicAnisotropyConfig {
-                    kc1,
+                .or(plan.material.cubic_anisotropy_kc2)
+                .or(plan.material.cubic_anisotropy_kc3)
+                .map(|_| CubicAnisotropyConfig {
+                    kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                     kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                    kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                     axis1: plan
                         .material
                         .cubic_anisotropy_axis1
@@ -560,48 +611,13 @@ pub(crate) fn build_snapshot_problem_and_state(
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
-    problem.regional_field_drives =
-        resolved_regional_field_drives(plan, plan.time_stage.start_time_s);
-    // Wire periodic boundary policy from plan
-    if let Some(ref pbc) = plan.periodicity {
-        let map_axis = |a: &fullmag_ir::AxisBoundary| match a {
-            fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
-            fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
-        };
-    problem.boundary_policy = FdmBoundaryPolicy {
-            x: map_axis(&pbc.axes[0]),
-            y: map_axis(&pbc.axes[1]),
-            z: map_axis(&pbc.axes[2]),
-        };
-        if let Some(ic) = pbc.image_counts {
-            problem.demag_image_counts = ic;
-        }
-    }
-    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
-    problem.set_resolved_periodic_workspace(
-        plan.resolved_periodic_images
-            .as_ref()
-            .map(|resolved| ResolvedFdmPeriodicWorkspace {
-                image_counts: resolved.resolved_image_counts,
-                padded_counts: resolved.padded_counts,
-                image_terms: resolved.image_terms,
-                estimated_bytes: resolved.estimated_bytes,
-            }),
-    );
-    // Set thermal noise parameters
-    problem.temperature = plan.temperature.unwrap_or(0.0);
-    if let Some(dt) = plan.fixed_timestep {
-        problem.thermal_dt = dt;
-    }
-    let problem = problem
-        .with_spatial_fields(
-            plan.material.ms_field.clone(),
-            plan.material.a_field.clone(),
-            plan.material.alpha_field.clone(),
-        )
-        .map_err(|e| RunError {
-            message: format!("Spatial fields: {}", e),
-        })?;
+    materialize_reference_problem(problem, plan)
+}
+
+pub(crate) fn build_snapshot_problem_and_state(
+    plan: &FdmPlanIR,
+) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
+    let problem = build_reference_problem(plan)?;
     let mut state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {
@@ -622,7 +638,6 @@ pub(crate) fn execute_reference_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    validate_single_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -640,135 +655,29 @@ pub(crate) fn execute_reference_fdm(
         });
     }
 
-    let grid = GridShape::new(
-        plan.grid.cells[0] as usize,
-        plan.grid.cells[1] as usize,
-        plan.grid.cells[2] as usize,
-    )
-    .map_err(|e| RunError {
-        message: format!("Grid: {}", e),
-    })?;
-
-    let cell_size = CellSize::new(plan.cell_size[0], plan.cell_size[1], plan.cell_size[2])
-        .map_err(|e| RunError {
-            message: format!("CellSize: {}", e),
-        })?;
-
-    let material = MaterialParameters::new(
-        plan.material.saturation_magnetisation,
-        plan.material.exchange_stiffness,
-        plan.material.damping,
-    )
-    .map_err(|e| RunError {
-        message: format!("Material: {}", e),
-    })?;
-
-    let integrator = match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
-        IntegratorChoice::Heun => TimeIntegrator::Heun,
-        IntegratorChoice::Rk4 => TimeIntegrator::RK4,
-        IntegratorChoice::Rk23 => TimeIntegrator::RK23,
-        IntegratorChoice::Rk45 => TimeIntegrator::RK45,
-        IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
-    };
-
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
-    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
-        .map_err(|e| RunError {
-            message: format!("LLG: {}", e),
-        })?
-        .with_precession_enabled(!pure_damping_relax);
-    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
-        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
-            max_error: adaptive.atol,
-            dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
-            headroom: adaptive.safety,
-            rtol: adaptive.rtol,
-            growth_limit: if adaptive.growth_limit == 0.0 {
-                f64::INFINITY
-            } else {
-                adaptive.growth_limit
-            },
-            shrink_limit: adaptive.shrink_limit,
-        });
-    }
 
-    let mut problem = ExchangeLlgProblem::with_terms_and_mask(
-        grid,
-        cell_size,
-        material,
-        dynamics,
-        EffectiveFieldTerms {
-            exchange: plan.enable_exchange,
-            demag: plan.enable_demag,
-            external_field: plan.external_field,
-            per_node_field: resolved_per_node_external_field(plan, 0.0),
-            magnetoelastic: build_mel(plan),
-            uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
-                UniaxialAnisotropyConfig {
-                    ku1,
-                    ku2: plan.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
-                    axis: plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
-                }
-            }),
-            cubic_anisotropy: plan
-                .material
-                .cubic_anisotropy_kc1
-                .map(|kc1| CubicAnisotropyConfig {
-                    kc1,
-                    kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
-                    axis1: plan
-                        .material
-                        .cubic_anisotropy_axis1
-                        .unwrap_or([1.0, 0.0, 0.0]),
-                    axis2: plan
-                        .material
-                        .cubic_anisotropy_axis2
-                        .unwrap_or([0.0, 1.0, 0.0]),
-                }),
-            interfacial_dmi: plan.interfacial_dmi,
-            bulk_dmi: plan.bulk_dmi,
-            zhang_li_stt: build_zl_stt(plan),
-            slonczewski_stt: build_slon_stt(plan, plan.cell_size[2]),
-            sot: build_sot(plan),
-            oersted_cylinder: build_oersted(plan),
-        },
-        plan.active_mask.clone(),
-    )
-    .map_err(|e| RunError {
-        message: format!("Problem construction: {}", e),
-    })?;
-    problem.regional_field_drives =
-        resolved_regional_field_drives(plan, plan.time_stage.start_time_s);
-    // Wire periodic boundary policy
-    if let Some(ref pbc) = plan.periodicity {
-        let map_axis = |a: &fullmag_ir::AxisBoundary| match a {
-            fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
-            fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
-        };
-        problem.boundary_policy = FdmBoundaryPolicy {
-            x: map_axis(&pbc.axes[0]),
-            y: map_axis(&pbc.axes[1]),
-            z: map_axis(&pbc.axes[2]),
-        };
-        if let Some(ic) = pbc.image_counts {
-            problem.demag_image_counts = ic;
-        }
-    }
-    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
-
-    let mut state = problem
-        .new_state(plan.initial_magnetization.clone())
-        .map_err(|e| RunError {
-            message: format!("State: {}", e),
-        })?;
-    state.time_seconds = plan.time_stage.start_time_s;
+    let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
     let stage_end_time_s = plan.time_stage.start_time_s + until_seconds;
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt =
-        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+    let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
+        matches!(
+            control.algorithm,
+            RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
+        )
+    });
+    let timestep_policy = if is_direct_minimization {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?)
+    };
+    let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
     let mut last_solver_dt = 0.0;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count: u64 = 0;
@@ -786,15 +695,11 @@ pub(crate) fn execute_reference_fdm(
         compute_capability: None,
         cuda_driver_version: None,
         cuda_runtime_version: None,
+        timestep_policy,
+        random_seed: (problem.temperature > 0.0).then_some(problem.thermal_seed),
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
-        matches!(
-            control.algorithm,
-            RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
-        )
-    });
     if is_direct_minimization && problem.soa_fast_path_supported() {
         provenance.energy_minimizer_realization =
             Some(CPU_SOA_DIRECT_MINIMIZER_REALIZATION.to_string());
@@ -818,7 +723,13 @@ pub(crate) fn execute_reference_fdm(
 
     if default_scalar_trace {
         record_scalar_snapshot(
-            &problem, &state, 0, state.time_seconds, 0, &mut steps, &mut artifacts,
+            &problem,
+            &state,
+            0,
+            state.time_seconds,
+            0,
+            &mut steps,
+            &mut artifacts,
         )?;
     } else {
         record_due_outputs(
@@ -846,6 +757,7 @@ pub(crate) fn execute_reference_fdm(
     };
     let mut direct_minimizer_completion: Option<StageCompletionIR> = None;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut completion_metrics = crate::relaxation::RelaxationCompletionMetrics::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
@@ -927,6 +839,7 @@ pub(crate) fn execute_reference_fdm(
         ));
     } else {
         // LLG overdamped (or no relaxation): existing time-stepping loop
+        let mut dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         let needs_initial_live_snapshot = live
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot);
@@ -1002,7 +915,7 @@ pub(crate) fn execute_reference_fdm(
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: Some(flatten_vectors(state.magnetization())),
                         preview_field,
                         cached_preview_fields: None,
@@ -1181,7 +1094,7 @@ pub(crate) fn execute_reference_fdm(
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -1219,16 +1132,9 @@ pub(crate) fn execute_reference_fdm(
             }
 
             let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
-            completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
-                max_torque_apm: Some(latest_stats.max_torque_Apm),
-                accepted_energy_plateau_range_j: energy_plateau_range,
-                steps: step_count,
-                relaxation_time_s: Some(state.time_seconds),
-                numerical_stagnation: false,
-            };
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 step_count >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &latest_stats,
                         energy_plateau_range,
@@ -1237,6 +1143,14 @@ pub(crate) fn execute_reference_fdm(
                         pure_damping_relax,
                     )
             });
+            completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
+                max_torque_apm: Some(latest_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
+                accepted_energy_plateau_range_j: energy_plateau_range,
+                steps: step_count,
+                relaxation_time_s: Some(state.time_seconds),
+                numerical_stagnation: false,
+            };
             if stop_for_relaxation {
                 break;
             }
@@ -1340,6 +1254,7 @@ fn infer_direct_minimizer_completion(
         Some(control),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: final_max_torque.is_finite().then_some(final_max_torque),
+            torque_confirmed: converged,
             accepted_energy_plateau_range_j: final_energy_plateau_range_j
                 .map(|value| crate::relaxation::EnergyPlateauRangeJ { value }),
             steps: steps_taken,
@@ -1382,8 +1297,13 @@ fn record_due_outputs(
         && (!scalar_due || step_report.is_some())
     {
         if let Some(report) = step_report.filter(|_| scalar_due) {
-            let stats =
-                make_step_stats_from_report(step, report, wall_time_ns, state.magnetization(), problem);
+            let stats = make_step_stats_from_report(
+                step,
+                report,
+                wall_time_ns,
+                state.magnetization(),
+                problem,
+            );
             artifacts.record_scalar(&stats)?;
             steps.push(stats);
             advance_due_schedules(scalar_schedules, state.time_seconds);
@@ -1627,7 +1547,10 @@ fn observe_state_with_antenna_field(
             .zip(&drive_field)
             .enumerate()
             .filter(|(index, _)| {
-                !problem.active_mask.as_ref().is_some_and(|mask| !mask[*index])
+                !problem
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[*index])
             })
             .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
             .sum::<f64>();
@@ -1645,10 +1568,8 @@ fn observe_state_with_antenna_field(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let max_torque_apm = max_torque_residual_apm_from_field(
-        &observables.magnetization,
-        &effective_field,
-    );
+    let max_torque_apm =
+        max_torque_residual_apm_from_field(&observables.magnetization, &effective_field);
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -1697,7 +1618,10 @@ fn make_step_stats_from_report(
             .zip(&drive_field)
             .enumerate()
             .filter(|(index, _)| {
-                !problem.active_mask.as_ref().is_some_and(|mask| !mask[*index])
+                !problem
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[*index])
             })
             .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
             .sum::<f64>();
@@ -1853,10 +1777,9 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "eden_ani" => {
                 let magnetization = self.base_values("m", name)?.to_vec();
-                let field = self.base_values("H_ani", name)?.to_vec();
                 Ok(self
                     .problem
-                    .anisotropy_energy_density_from_field(&magnetization, &field))
+                    .anisotropy_energy_density_from_vectors(&magnetization))
             }
             "eden_dmi" => self
                 .problem
@@ -2052,10 +1975,12 @@ fn project_component(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR,
-        FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions,
-        IntegratorChoice, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason,
-        RegionalFieldDriveIR, ResolvedRegionalFieldDriveBasisIR, TimeDependenceIR,
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AxisBoundary as IrAxisBoundary,
+        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
+        FdmMaterialIR, FdmPeriodicityIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
+        FieldTimeOriginIR, GridDimensions, IntegratorChoice, RegionalFieldDriveIR, RelaxStopIR,
+        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedRegionalFieldDriveBasisIR,
+        StageStopReason, TimeDependenceIR,
     };
 
     fn make_test_plan() -> FdmPlanIR {
@@ -2112,20 +2037,143 @@ mod tests {
     }
 
     #[test]
+    fn reference_construction_preserves_fixed_vs_adaptive_embedded_rk_policy() {
+        let fixed = FdmPlanIR {
+            integrator: Some(IntegratorChoice::Rk45),
+            ..make_test_plan()
+        };
+        let (fixed_problem, _) = build_snapshot_problem_and_state(&fixed).expect("fixed problem");
+        assert!(!fixed_problem.dynamics.adaptive_enabled);
+
+        let adaptive = FdmPlanIR {
+            fixed_timestep: None,
+            adaptive_timestep: Some(AdaptiveTimeStepIR {
+                tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial: Some(1e-15),
+                dt_min: 1e-16,
+                dt_max: Some(1e-14),
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            }),
+            ..fixed
+        };
+        let (adaptive_problem, _) =
+            build_snapshot_problem_and_state(&adaptive).expect("adaptive problem");
+        assert!(adaptive_problem.dynamics.adaptive_enabled);
+        assert_eq!(adaptive_problem.dynamics.adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive_problem.dynamics.adaptive.dt_max, 1e-14);
+    }
+
+    #[test]
+    fn batch_and_snapshot_share_plan_materialization_errors() {
+        let mut plan = make_test_plan();
+        plan.material.ms_field = Some(vec![800e3; 15]);
+
+        let snapshot_error = build_snapshot_problem_and_state(&plan)
+            .expect_err("snapshot construction must validate spatial material fields");
+        let batch_error = execute_reference_fdm(&plan, 1e-14, &[], None, None)
+            .expect_err("batch execution must validate the same spatial material fields");
+
+        assert_eq!(batch_error.message, snapshot_error.message);
+        assert!(
+            batch_error.message.contains("Spatial fields"),
+            "{batch_error:?}"
+        );
+        assert!(
+            batch_error.message.contains("ms_field length"),
+            "{batch_error:?}"
+        );
+    }
+
+    #[test]
+    fn reference_problem_keeps_kc3_only_cubic_anisotropy() {
+        let mut plan = make_test_plan();
+        plan.material.cubic_anisotropy_kc3 = Some(4.2e4);
+
+        let (problem, _) = build_snapshot_problem_and_state(&plan).expect("materialized problem");
+        let cubic = problem
+            .terms
+            .cubic_anisotropy
+            .expect("Kc3 alone must enable cubic anisotropy");
+        assert_eq!(cubic.kc1, 0.0);
+        assert_eq!(cubic.kc2, 0.0);
+        assert_eq!(cubic.kc3, 4.2e4);
+    }
+
+    #[test]
+    fn reference_problem_materializes_thermal_spatial_and_periodic_plan_data() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+        plan.temperature = Some(321.0);
+        plan.thermal_seed_config = Some(fullmag_ir::ThermalSeedConfig {
+            policy: fullmag_ir::SeedPolicy::Fixed,
+            seed: Some(77),
+        });
+        plan.fixed_timestep = Some(2e-14);
+        plan.material.ms_field = Some(vec![800e3; 16]);
+        plan.material.a_field = Some(vec![13e-12; 16]);
+        plan.material.alpha_field = Some(vec![0.25; 16]);
+        plan.periodicity = Some(FdmPeriodicityIR {
+            axes: [
+                IrAxisBoundary::Periodic,
+                IrAxisBoundary::Open,
+                IrAxisBoundary::Open,
+            ],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 0, 0]),
+        });
+        plan.resolved_periodic_images = plan
+            .periodicity
+            .as_ref()
+            .expect("periodicity")
+            .resolve_periodic_images(plan.grid.cells, plan.precision)
+            .expect("resolved periodic workspace");
+
+        let (problem, _) = build_snapshot_problem_and_state(&plan).expect("materialized problem");
+
+        assert_eq!(problem.temperature, 321.0);
+        assert_eq!(problem.thermal_dt, 2e-14);
+        assert_eq!(problem.thermal_seed, 77);
+        assert_eq!(problem.ms_field, plan.material.ms_field);
+        assert_eq!(problem.a_field, plan.material.a_field);
+        assert_eq!(problem.alpha_field, plan.material.alpha_field);
+        assert_eq!(problem.boundary_policy.x, AxisBoundary::Periodic);
+        assert_eq!(
+            problem
+                .resolved_periodic_workspace
+                .expect("periodic workspace")
+                .image_counts,
+            [2, 0, 0]
+        );
+    }
+
+    #[test]
     fn regional_drive_produces_distinct_field_and_energy_outputs() {
         let drive = RegionalFieldDriveIR {
-            id: "drive".into(), name: "Drive".into(), kind: FieldDriveKindIR::Regional,
-            enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-            direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+            id: "drive".into(),
+            name: "Drive".into(),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
             waveform: TimeDependenceIR::Constant,
             time_origin: FieldTimeOriginIR::StageLocal,
-            activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+            activation: DriveActivationIR::AllTimeEvolution {},
+            migration: None,
         };
         let h = 1e-3 / crate::MU0;
         let plan = FdmPlanIR {
             enable_exchange: false,
             regional_field_drive_bases: vec![ResolvedRegionalFieldDriveBasisIR {
-                drive: drive.clone(), field_xyz: vec![[0.0, h, 0.0]; 16],
+                drive: drive.clone(),
+                field_xyz: vec![[0.0, h, 0.0]; 16],
                 projection_signature: "test".into(),
             }],
             time_stage: Default::default(),
@@ -2133,13 +2181,22 @@ mod tests {
             ..make_test_plan()
         };
         let outputs = [
-            OutputIR::Field { name: "H_drive".into(), every_seconds: 1e-14 },
-            OutputIR::Scalar { name: "E_drive".into(), every_seconds: 1e-14 },
+            OutputIR::Field {
+                name: "H_drive".into(),
+                every_seconds: 1e-14,
+            },
+            OutputIR::Scalar {
+                name: "E_drive".into(),
+                every_seconds: 1e-14,
+            },
         ];
 
         let executed = execute_reference_fdm(&plan, 1e-14, &outputs, None, None)
             .expect("regional drive reference run should succeed");
-        let field = executed.field_snapshots.iter().find(|snapshot| snapshot.name == "H_drive")
+        let field = executed
+            .field_snapshots
+            .iter()
+            .find(|snapshot| snapshot.name == "H_drive")
             .expect("H_drive snapshot");
         assert!(field.values.iter().all(|value| *value == [0.0, h, 0.0]));
         assert!(executed.result.steps.iter().any(|step| step.e_drive != 0.0));
@@ -2152,17 +2209,28 @@ mod tests {
         plan.time_stage.start_time_s = 10.0;
         let make_basis = |time_origin, waveform| ResolvedRegionalFieldDriveBasisIR {
             drive: RegionalFieldDriveIR {
-                id: "clock".into(), name: "Clock".into(), kind: FieldDriveKindIR::Regional,
-                enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-                direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-                waveform, time_origin, activation: DriveActivationIR::AllTimeEvolution {},
+                id: "clock".into(),
+                name: "Clock".into(),
+                kind: FieldDriveKindIR::Regional,
+                enabled: true,
+                target: FieldTargetIR::Global {},
+                amplitude_b_t: 1e-3,
+                direction: [0.0, 1.0, 0.0],
+                spatial_profile: FieldSpatialProfileIR::Uniform {},
+                waveform,
+                time_origin,
+                activation: DriveActivationIR::AllTimeEvolution {},
                 migration: None,
             },
-            field_xyz: vec![[0.0, 1.0, 0.0]; 16], projection_signature: "clock".into(),
+            field_xyz: vec![[0.0, 1.0, 0.0]; 16],
+            projection_signature: "clock".into(),
         };
         plan.regional_field_drive_bases = vec![make_basis(
             FieldTimeOriginIR::StageLocal,
-            TimeDependenceIR::Pulse { t_on: 1.0, t_off: 2.0 },
+            TimeDependenceIR::Pulse {
+                t_on: 1.0,
+                t_off: 2.0,
+            },
         )];
         let local = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
         assert_eq!(local[0].multiplier_at(11.5), 1.0);
@@ -2170,7 +2238,10 @@ mod tests {
 
         plan.regional_field_drive_bases = vec![make_basis(
             FieldTimeOriginIR::Absolute,
-            TimeDependenceIR::Pulse { t_on: 11.0, t_off: 12.0 },
+            TimeDependenceIR::Pulse {
+                t_on: 11.0,
+                t_off: 12.0,
+            },
         )];
         let absolute = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
         assert_eq!(absolute[0].multiplier_at(11.5), 1.0);
@@ -3785,12 +3856,12 @@ mod tests {
             .observe(&state)
             .expect("observables should assemble")
             .effective_field;
-        assert_ne!(
+        assert_eq!(
             expected_effective,
             problem
                 .effective_field(&state)
                 .expect("public effective field should assemble"),
-            "this regression preserves the current H_eff artifact contract, not the broader stepping helper"
+            "observable H_eff must match the field used by the CPU stepping helper"
         );
         reset_observe_state_calls();
 
@@ -4511,6 +4582,8 @@ mod tests {
     #[test]
     fn direct_minimization_provenance_names_cpu_minimizer_realization() {
         let plan = FdmPlanIR {
+            fixed_timestep: None,
+            adaptive_timestep: None,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
                 stop: fullmag_ir::RelaxStopIR {
@@ -4534,6 +4607,7 @@ mod tests {
             executed.provenance.resolved_energy_minimizer.as_deref(),
             Some("projected_gradient_bb")
         );
+        assert_eq!(executed.provenance.timestep_policy, None);
         assert_eq!(
             executed.provenance.energy_minimizer_realization.as_deref(),
             Some("cpu_soa_tangent_gradient")

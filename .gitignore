@@ -27,6 +27,7 @@ native/build*/
 node_modules/
 .pnpm-store/
 .next/
+storybook-static/
 out/
 *.tsbuildinfo
 
@@ -69,6 +70,7 @@ Thumbs.db
 
 # === Data & artifacts ===
 artifacts/
+*.zarr/
 # data/
 tmp/
 coverage/
@@ -86,6 +88,10 @@ docs/reports/23.04.2026/*
 !docs/reports/2026-07-13/
 !docs/reports/2026-07-13/fem-fdm-mesh-production-audit/
 !docs/reports/2026-07-13/fem-fdm-mesh-production-audit/*.md
+!public_docs/
+!public_docs/fullmag_profesjonalna_dokumentacja_architektura.md
+!public_docs/site/
+!public_docs/site/**/*.md
 # === CUDA ===
 *.cubin
 *.fatbin
@@ -96,3 +102,8 @@ target_agent/*
 target_tmp/debug/*
 target_host/*
 apps/control-room/.next-audit/*
+
+# === Agent worktrees ===
+.worktrees/
+
+public_docs/_build/

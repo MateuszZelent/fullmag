@@ -60,7 +60,15 @@ bool gpu_rk_run_rk4_stage_sequence(
         0.5 * active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
+    if (!fullmag_cuda_normalize_vectors(
+            gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.reductions.scalar_result,
+            n,
+            stream,
+            reason)) {
+        return false;
+    }
     if (!cuda_launch_ok("launch GPU RK4 midpoint-2/normalize", reason)) {
         return false;
     }
@@ -85,7 +93,15 @@ bool gpu_rk_run_rk4_stage_sequence(
         active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
+    if (!fullmag_cuda_normalize_vectors(
+            gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.reductions.scalar_result,
+            n,
+            stream,
+            reason)) {
+        return false;
+    }
     if (!cuda_launch_ok("launch GPU RK4 endpoint/normalize", reason)) {
         return false;
     }

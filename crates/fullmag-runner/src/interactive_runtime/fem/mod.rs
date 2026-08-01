@@ -49,7 +49,7 @@ impl InteractiveFemPreviewRuntime {
                 mesh,
                 node_count: effective_plan.mesh.nodes.len(),
                 plan_signature: normalize_fem_plan_signature(&effective_plan),
-                provenance: fem_gpu_execution_provenance(&effective_plan, &device_info),
+                provenance: fem_gpu_execution_provenance(&effective_plan, &device_info)?,
                 total_steps: 0,
                 total_time: 0.0,
                 antenna_field,

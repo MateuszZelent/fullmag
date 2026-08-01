@@ -1,0 +1,26 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/meshing/fdm-grids.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FDM Cartesian grids are not FEM meshes."},
+    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FDM Cartesian grids are not FEM meshes."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-fdm-grid-centre", "symbols": ["x", "x0", "h"], "sources": ["grid"]},
+    {"id": "eq-numerical-fdm-grid-volume", "symbols": ["V", "h", "Nx", "N"], "sources": ["grid"]}
+  ],
+  "symbols": [
+    {"id": "x", "latex": "$\\mathbf x_{ijk}$", "meaning": "cell centre", "si_unit": "$\\mathrm{m}$"},
+    {"id": "x0", "latex": "$\\mathbf x_0$", "meaning": "grid origin", "si_unit": "$\\mathrm{m}$"},
+    {"id": "h", "latex": "$h_x,h_y,h_z$", "meaning": "cell spacings", "si_unit": "$\\mathrm{m}$"},
+    {"id": "V", "latex": "$V_{\\mathrm{cell}}$", "meaning": "cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Nx", "latex": "$N_x,N_y,N_z$", "meaning": "cell counts", "si_unit": "$1$"},
+    {"id": "N", "latex": "$N$", "meaning": "total cell count", "si_unit": "$1$"}
+  ],
+  "sources": [{"id": "grid", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "FDM grid spacing and serialization."}],
+  "public_api": {"parameters": [
+    {"python": "FDM.default_cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "Cartesian spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.fdm.default_cell`"},
+    {"python": "FDMGrid.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "per-grid spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.fdm.per_magnet`"}
+  ]}
+}

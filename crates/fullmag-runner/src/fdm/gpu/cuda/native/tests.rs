@@ -453,9 +453,12 @@ fn cpu_reference_single_step(
             cubic_anisotropy: plan
                 .material
                 .cubic_anisotropy_kc1
-                .map(|kc1| CubicAnisotropyConfig {
-                    kc1,
+                .or(plan.material.cubic_anisotropy_kc2)
+                .or(plan.material.cubic_anisotropy_kc3)
+                .map(|_| CubicAnisotropyConfig {
+                    kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                     kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                    kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                     axis1: plan
                         .material
                         .cubic_anisotropy_axis1

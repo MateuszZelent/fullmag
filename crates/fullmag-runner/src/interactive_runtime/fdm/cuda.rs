@@ -135,10 +135,15 @@ impl CudaInteractiveFdmPreviewRuntime {
         }
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -156,6 +161,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut current_local_stats = self.backend.snapshot_step_stats(grid)?;
         current_local_stats.step -= base_step;
         current_local_stats.time -= base_time;
+        self.backend
+            .apply_average_m_to_step_stats(&mut current_local_stats)?;
         let initial_display_state = (checkpoint.display_selection)();
         let mut pending_cached_preview_snapshots =
             self.begin_cached_preview_prefetch(&initial_display_state)?;
@@ -202,7 +209,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -284,10 +291,19 @@ impl CudaInteractiveFdmPreviewRuntime {
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
+            let scalar_output_due = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            if scalar_row_due || scalar_output_due {
+                self.backend
+                    .apply_average_m_to_step_stats(&mut local_stats)?;
+                current_local_stats = local_stats.clone();
+                latest_local_stats = Some(local_stats.clone());
+            }
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -320,7 +336,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                     true
                 } else {
                     local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                        || relaxation_converged(
+                        || torque_confirmation.observe_stats(
                             control,
                             &total_stats,
                             energy_plateau_range,
@@ -359,6 +375,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 plan.relaxation.as_ref(),
                 crate::relaxation::RelaxationCompletionMetrics {
                     max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                    torque_confirmed: torque_confirmation.confirmed(),
                     accepted_energy_plateau_range_j: energy_plateau.range(),
                     steps: current_local_stats.step,
                     relaxation_time_s: Some(current_local_stats.time),
@@ -421,10 +438,15 @@ impl CudaInteractiveFdmPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -439,6 +461,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut current_local_stats = self.backend.snapshot_step_stats(grid)?;
         current_local_stats.step -= base_step;
         current_local_stats.time -= base_time;
+        self.backend
+            .apply_average_m_to_step_stats(&mut current_local_stats)?;
         let initial_display_state = (checkpoint.display_selection)();
         let mut pending_cached_preview_snapshots =
             self.begin_cached_preview_prefetch(&initial_display_state)?;
@@ -485,7 +509,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -568,10 +592,19 @@ impl CudaInteractiveFdmPreviewRuntime {
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
+            let scalar_output_due = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            if scalar_row_due || scalar_output_due {
+                self.backend
+                    .apply_average_m_to_step_stats(&mut local_stats)?;
+                current_local_stats = local_stats.clone();
+                latest_local_stats = Some(local_stats.clone());
+            }
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -609,7 +642,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -648,6 +681,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),

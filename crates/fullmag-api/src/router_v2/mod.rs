@@ -65,6 +65,21 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_scene),
         )
         .route(
+            "/v2/sessions/current/model/planar-monitors",
+            get(handlers::model::list_planar_monitors)
+                .post(handlers::model::create_planar_monitor),
+        )
+        .route(
+            "/v2/sessions/current/model/planar-monitors/:monitor_id",
+            get(handlers::model::get_planar_monitor)
+                .patch(handlers::model::patch_planar_monitor)
+                .delete(handlers::model::delete_planar_monitor),
+        )
+        .route(
+            "/v2/sessions/current/model/planar-monitors/:monitor_id/duplicate",
+            post(handlers::model::duplicate_planar_monitor),
+        )
+        .route(
             "/v2/sessions/current/model/geometry/capabilities",
             get(handlers::model::get_authoring_geometry_capabilities),
         )
@@ -354,6 +369,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_current_run),
         )
         .route(
+            "/v2/sessions/current/simulation/preparation",
+            get(handlers::simulation::get_simulation_preparation),
+        )
+        .route(
             "/v2/sessions/current/simulation/runs/:run_id",
             get(handlers::simulation::get_run_by_id),
         )
@@ -465,6 +484,34 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/samples/vector",
             get(handlers::data::get_field_vector),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/meta",
+            get(handlers::data::get_planar_field_meta),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/scalar",
+            get(handlers::data::get_planar_field_scalar),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/vectors",
+            get(handlers::data::get_planar_field_vectors),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/empty-mask",
+            get(handlers::data::get_planar_field_empty_mask),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/mesh-overlay",
+            get(handlers::data::get_planar_field_mesh_overlay),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/probe",
+            get(handlers::data::get_planar_field_probe),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/render.png",
+            get(handlers::data::get_planar_field_render_png),
         )
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/projection/meta",

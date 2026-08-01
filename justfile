@@ -14,8 +14,10 @@ help:
 
 ensure-python:
     mkdir -p "{{repo_root}}/.fullmag/local"
-    if [ ! -x "{{repo_python}}" ]; then python3 -m venv "{{repo_root}}/.fullmag/local/python"; fi
-    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7'
+    if [ ! -x "{{repo_python}}" ]; then if ! python3 -m venv "{{repo_root}}/.fullmag/local/python"; then echo "cannot create the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; fi; fi
+    if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then if ! "{{repo_python}}" -m ensurepip --upgrade; then python3 scripts/bootstrap_fullmag_python_pip.py "{{repo_python}}" --wheel-dir /usr/share/python-wheels || { echo "cannot bootstrap pip in the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; }; fi; fi
+    if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then echo "cannot bootstrap pip in the Fullmag Python environment; ensurepip completed without a usable pip module" >&2; exit 1; fi
+    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7'
 
 build target="fullmag" cpu_only="0":
     bash -euo pipefail -c 'target="{{target}}"; cpu_only="{{cpu_only}}"; case "$target" in target=*) target="${target#target=}" ;; --target=*) target="${target#--target=}" ;; esac; case "$cpu_only" in 1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;; 0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;; *) cpu_only="0" ;; esac; if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; elif [ "$target" = "fullmag-host" ]; then make install-cli; elif [ "$target" = "dev-image" ]; then docker compose build dev; elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; elif [ "$target" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; else echo "unknown build target: $target" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi'
@@ -143,6 +145,80 @@ repo-check:
 verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
+verify-fem-mixed-p1-capability-contract:
+    python3 scripts/validate_mixed_p1_capability_contract.py
+    python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
+    cargo test -p fullmag-runner --no-default-features capabilities::tests::
+
+verify-fem-mixed-prism-airbox-runtime:
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      canonical="tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"; \
+      runtime_manifest=".fullmag/runtimes/fem-gpu-host/manifest.json"; \
+      git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"; \
+      managed_python="$(dirname "$git_common_dir")/.fullmag/local/python/bin/python"; \
+      if [ ! -x "$managed_python" ]; then echo "shared Fullmag Python interpreter is missing: $managed_python" >&2; exit 2; fi; \
+      "$managed_python" -c "import numpy, scipy, gmsh, meshio, trimesh, h5py, zarr"; \
+      durable_root="${FULLMAG_MIXED_PRISM_AIRBOX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
+      report_root="${FULLMAG_MIXED_PRISM_AIRBOX_REPORT_ROOT:-${durable_root}/reports/fullmag/fem-mixed-prism-airbox-runtime}"; \
+      source scripts/lib/managed_fem_runtime_storage.sh; \
+      source scripts/lib/managed_fem_report_storage.sh; \
+      run_dir="$(create_managed_fem_report_run_root \
+        "$durable_root" "$report_root" \
+        "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" \
+        "/sys/block")"; \
+      echo "mixed prism-airbox report root: $run_dir"; \
+      temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-mixed-prism-airbox-runtime.XXXXXX")"; \
+      cleanup() { rm -rf "$temp_dir"; }; \
+      trap cleanup EXIT INT TERM; \
+      bounded="$temp_dir/relax_projected_gradient_bb.max_steps_1.py"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py prepare \
+        "$canonical" "$bounded" --evidence "$run_dir/source.v1.json"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --output "$run_dir/source-snapshot.v2.json"; \
+      cp "$bounded" "$run_dir/bounded_scenario.py"; \
+      cp -L "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
+      mkdir -p "$run_dir/cpu" "$run_dir/gpu"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
+      FULLMAG_PYTHON="$managed_python" just fem-managed-headless cpu "$bounded" "$run_dir/cpu/artifacts" \
+        2>&1 | tee "$run_dir/cpu/runtime.log"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
+        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/cpu/artifacts" \
+        --device cpu --runtime-log "$run_dir/cpu/runtime.log" \
+        --runtime-manifest "$runtime_manifest" \
+        --source-snapshot "$run_dir/source-snapshot.v2.json" \
+        --output "$run_dir/cpu/summary.v4.json"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
+      FULLMAG_PYTHON="$managed_python" just fem-managed-headless gpu "$bounded" "$run_dir/gpu/artifacts" \
+        2>&1 | tee "$run_dir/gpu/runtime.log"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
+        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/gpu/artifacts" \
+        --device gpu --runtime-log "$run_dir/gpu/runtime.log" \
+        --runtime-manifest "$runtime_manifest" \
+        --source-snapshot "$run_dir/source-snapshot.v2.json" \
+        --output "$run_dir/gpu/summary.v4.json"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py compare \
+        --cpu-summary "$run_dir/cpu/summary.v4.json" \
+        --gpu-summary "$run_dir/gpu/summary.v4.json" \
+        --cpu-artifacts "$run_dir/cpu/artifacts" \
+        --gpu-artifacts "$run_dir/gpu/artifacts" \
+        --runtime-manifest "$runtime_manifest" \
+        --output "$run_dir/summary.v3.json" \
+        --csv-output "$run_dir/comparison.v3.csv"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
+      echo "validated managed CPU/GPU mixed prism-airbox runtime evidence: $run_dir/summary.v3.json"'
+
+verify-fem-mixed-p1-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mixed_p1_contract fem_mesh_contract fem_mfem_context_contract fem_material_fields_contract fem_element_quadrature_material_contract fem_step_metrics_contract fem_exchange_contract fem_gpu_state_runtime_contract fem_source_facade_gpu_state_contract fem_transfer_audit fem_demag_poisson_contract fem_cuda_demag_robin_energy_contract fem_cuda_demag_timing_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu native/build/backends/fem/fem_mixed_p1_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cuda native/build/backends/fem/fem_mixed_p1_contract && native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_mfem_context_contract && native/build/backends/fem/fem_material_fields_contract && native/build/backends/fem/fem_element_quadrature_material_contract && native/build/backends/fem/fem_step_metrics_contract && native/build/backends/fem/fem_exchange_contract && native/build/backends/fem/fem_gpu_state_runtime_contract && native/build/backends/fem/fem_source_facade_gpu_state_contract && native/build/backends/fem/fem_transfer_audit && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_cuda_demag_robin_energy_contract && native/build/backends/fem/fem_cuda_demag_timing_contract'
+
 # MESH-GATE-002: cross-backend PBC matrix contract. Managed runtime evidence
 # is deliberately supplied by the case artifacts, not inferred by this recipe.
 verify-fdm-pbc-production:
@@ -152,12 +228,102 @@ verify-fdm-pbc-production:
     python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
 
 verify-fem-relaxation-source-contract:
+    bash scripts/verify_fem_mesh_hot_loop_source_contract.sh
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_stage_completion_contract fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_stage_completion_contract && native/build/backends/fem/fem_rk_explicit_contract'
+
+verify-fem-demag-amg-policy-contract:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_demag_amg_policy_has_one_owner_and_effective_abi_provenance -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu artifacts::tests::demag_profile_metadata_includes_timing_breakdown -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-fem-sys --features build-native tests::regional_field_drive_ffi_layout_matches_native_runtime -- --exact --nocapture'
+
+verify-fem-demag-amg-benchmark-contract:
+    python3 -m pytest -q scripts/test_validate_fem_relaxation_runtime_log.py -k 'demag_amg_profile_sweep_parser_and_policy_identity or amg_relax_qualification_ or demag_amg_qualification_suite_rejects_malformed_runtime_signature or demag_amg_qualification_suite_and_recipe_cover_the_exact_matrix'
+
+verify-fem-dependency-stack-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON && cmake --build native/build --target fem_dependency_stack_contract && native/build/backends/fem/fem_dependency_stack_contract'
 
 verify-fem-time-domain-native-contract:
+    python3 scripts/check_llg_time_domain_contract_docs.py
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract'
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mesh_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_rk_guard_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target cargo test -p fullmag-fem-sys --lib'
+
+verify-fem-mesh-runner-abi-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-runner-abi-target cargo test -p fullmag-runner --features fem-gpu runner_mesh_pack_preserves_all_typed_csr_buffers_and_lifetimes'
+
+verify-fem-llg-time-domain-qualification:
+    rm -rf .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64
+    mkdir -p .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json'
+    python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json
+
+verify-fem-llg-time-domain-qualification-gpu:
+    rm -rf .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
+    mkdir -p .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json gpu'
+    python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json --device gpu
+
+verify-fem-llg-time-domain-qualification-production:
+    just verify-fem-llg-time-domain-qualification
+    just verify-fem-llg-time-domain-qualification-gpu
+    python3 scripts/compare_fem_llg_time_domain_qualification.py --cpu .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json --gpu .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json --output .fullmag/reports/fem-llg-time-domain-qualification/parity-fp64.json
+
+verify-fem-llg-periodic-antidot-qualification-runtime device="cpu":
+    python3 scripts/validate_fem_periodic_antidot_llg_qualification_asset.py examples/assets/fem_periodic_antidot_llg_qualification.problem.json
+    just ensure-managed-fem-runtime
+    mode="{{device}}"; case "$mode" in cpu|gpu) ;; *) echo "device must be cpu or gpu" >&2; exit 2 ;; esac; \
+      root=".fullmag/reports/fem-llg-periodic-antidot-qualification/$mode"; \
+      rm -rf "$root"; mkdir -p "$root"; \
+      if [ "$mode" = cpu ]; then \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu \
+        FULLMAG_FEM_EXECUTION=cpu FULLMAG_RELAX_DEVICE=cpu FULLMAG_FEM_MFEM_DEVICE=cpu \
+        FULLMAG_CPU_THREADS=auto \
+        '{{gpu_runtime_bin}}' examples/fem_periodic_antidot_llg_qualification.py \
+          --backend fem --headless --json --output-dir "$root/artifacts" \
+          2>&1 | tee "$root/runtime.log"; \
+      else \
+        docker compose --profile fem-gpu run --rm \
+          -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+          -e FULLMAG_PYTHON=/usr/bin/python3 \
+          -e FULLMAG_FDM_EXECUTION=cpu \
+          -e FULLMAG_FEM_EXECUTION=gpu \
+          -e FULLMAG_RELAX_DEVICE=gpu \
+          -e FULLMAG_FEM_MFEM_DEVICE=cuda \
+          -e FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson \
+          -e FULLMAG_CPU_THREADS=auto \
+          -e FULLMAG_HOST_UID="$(id -u)" \
+          -e FULLMAG_HOST_GID="$(id -g)" \
+          fem-gpu bash -lc 'cd /workspace && \
+            trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu 2>/dev/null || true'\'' EXIT && \
+            .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+              examples/fem_periodic_antidot_llg_qualification.py \
+              --backend fem --headless --json \
+              --output-dir .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu/artifacts \
+              2>&1 | tee .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu/runtime.log'; \
+      fi; \
+      python3 scripts/validate_fem_periodic_antidot_llg_qualification_runtime.py \
+        "$root" --device "$mode"
+
+verify-fem-llg-periodic-antidot-qualification-production:
+    just verify-fem-llg-periodic-antidot-qualification-runtime cpu
+    just verify-fem-llg-periodic-antidot-qualification-runtime gpu
+    python3 scripts/compare_fem_periodic_antidot_llg_qualification.py \
+      --cpu .fullmag/reports/fem-llg-periodic-antidot-qualification/cpu \
+      --gpu .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu \
+      --output .fullmag/reports/fem-llg-periodic-antidot-qualification/parity-fp64.json
+
+verify-fdm-time-domain-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build-fdm-cpu -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF && cmake --build native/build-fdm-cpu --target fullmag_fdm fdm_llg_time_policy_contract oersted_energy_contract partial_cell_energy_contract && LD_LIBRARY_PATH=/workspace/native/build-fdm-cpu/backends/fdm:${LD_LIBRARY_PATH:-} native/build-fdm-cpu/backends/fdm/fdm_llg_time_policy_contract && native/build-fdm-cpu/backends/fdm/oersted_energy_contract && native/build-fdm-cpu/backends/fdm/partial_cell_energy_contract && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fullmag_fdm fdm_llg_time_policy_contract oersted_energy_contract partial_cell_energy_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fdm:${LD_LIBRARY_PATH:-} native/build/backends/fdm/fdm_llg_time_policy_contract && native/build/backends/fdm/oersted_energy_contract && native/build/backends/fdm/partial_cell_energy_contract'
 
 verify-fem-regional-field-drive-contract:
     docker compose --profile fem-gpu run --rm \
@@ -245,36 +411,41 @@ verify-fem-oersted-observable-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract'
 
-# FEM-TD-PHY-MAT-001: native fail-closed elementwise-Ms legality contract.
+# FEM-TD-PHY-MAT-001: qualified CPU DG0-Ms owner boundary and GPU fail-closed contract.
 verify-fem-material-element-ms-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_material_fields_contract fem_mfem_context_contract fem_element_quadrature_material_contract fem_exchange_contract fem_zeeman_contract fem_zeeman_element_quadrature_contract fem_material_runtime_zeeman_contract fem_uniaxial_element_quadrature_contract fem_material_runtime_uniaxial_contract fem_cubic_element_quadrature_contract fem_material_runtime_cubic_contract fem_demag_poisson_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_material_fields_contract && native/build/backends/fem/fem_mfem_context_contract && native/build/backends/fem/fem_element_quadrature_material_contract && native/build/backends/fem/fem_exchange_contract && native/build/backends/fem/fem_zeeman_contract && native/build/backends/fem/fem_zeeman_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_zeeman_contract && native/build/backends/fem/fem_uniaxial_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_uniaxial_contract && native/build/backends/fem/fem_cubic_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_cubic_contract && native/build/backends/fem/fem_demag_poisson_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_material_fields_contract fem_element_dg0_workflow_contract fem_mfem_context_contract fem_element_quadrature_material_contract fem_exchange_contract fem_zeeman_contract fem_zeeman_element_quadrature_contract fem_material_runtime_zeeman_contract fem_uniaxial_element_quadrature_contract fem_material_runtime_uniaxial_contract fem_cubic_element_quadrature_contract fem_material_runtime_cubic_contract fem_demag_poisson_contract fem_step_metrics_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_material_fields_contract && native/build/backends/fem/fem_element_dg0_workflow_contract && native/build/backends/fem/fem_mfem_context_contract && native/build/backends/fem/fem_element_quadrature_material_contract && native/build/backends/fem/fem_exchange_contract && native/build/backends/fem/fem_zeeman_contract && native/build/backends/fem/fem_zeeman_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_zeeman_contract && native/build/backends/fem/fem_uniaxial_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_uniaxial_contract && native/build/backends/fem/fem_cubic_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_cubic_contract && native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_step_metrics_contract'
+
+# Focused hot-path regression for the allocation-free DG0 step-statistics reduction.
+verify-fem-dg0-step-metrics-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_step_metrics_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_step_metrics_contract'
 
 # FEM-TD-PHY-STT-001: source/algebra contract -> managed rebuild -> freshness -> named CPU/GPU fixture.
 verify-fem-zhang-li-skew-tetra-runtime:
     just verify-fem-time-domain-native-contract
     just rebuild-fem-runtime
     just ensure-managed-fem-runtime
-    mkdir -p .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1
-    set -o pipefail; just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    mkdir -p .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/cpu.XXXXXX)"; set -o pipefail; just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu.log
-    set -o pipefail; just fem-managed-headless gpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/gpu.XXXXXX)"; set -o pipefail; just fem-managed-headless gpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/gpu.log
-    set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=-1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/cpu_reversed.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=-1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu_reversed.log
-    set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/cpu_zero_current.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu_zero_current.log
-    set -o pipefail; FULLMAG_ZHANG_LI_STEPS=32 FULLMAG_ZHANG_LI_DT_S=8.881784197001252e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/dt_0.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_STEPS=32 FULLMAG_ZHANG_LI_DT_S=8.881784197001252e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/dt_0.log
-    set -o pipefail; FULLMAG_ZHANG_LI_STEPS=64 FULLMAG_ZHANG_LI_DT_S=4.440892098500626e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/dt_1.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_STEPS=64 FULLMAG_ZHANG_LI_DT_S=4.440892098500626e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/dt_1.log
-    set -o pipefail; FULLMAG_ZHANG_LI_STEPS=128 FULLMAG_ZHANG_LI_DT_S=2.220446049250313e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/dt_2.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_STEPS=128 FULLMAG_ZHANG_LI_DT_S=2.220446049250313e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/dt_2.log
-    set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/mesh_0.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_0.log
-    set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/mesh_1.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_1.log
-    set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=2 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/mesh_2.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=2 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_2.log
     python3 scripts/validate_fem_zhang_li_skew_tetra_runtime.py \
       --cpu .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu.log \
@@ -442,8 +613,11 @@ verify-fem-frequency-domain-gpu:
 
 verify-fem-demag-poisson-contract:
     just ensure-managed-fem-runtime
+    just verify-fem-demag-poisson-contract-focused
+
+verify-fem-demag-poisson-contract-focused:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract && cmake --build native/build --target fem_cuda_periodic_demag_contract && cmake --build native/build --target fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON && cmake --build native/build --target fem_demag_poisson_contract fem_demag_delta_potential_contract fem_demag_fem_bem_contract fem_cuda_demag_timing_contract fem_cuda_periodic_demag_contract fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_demag_delta_potential_contract && native/build/backends/fem/fem_demag_fem_bem_contract && native/build/backends/fem/fem_cuda_demag_timing_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
 
 verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
@@ -1936,6 +2110,47 @@ verify-fem-frequency-domain-shared-domain-static-periodic-parity-runtime cpu_thr
 verify-fem-relaxation-runtime:
     bash scripts/verify_fem_relaxation_runtime.sh
 
+verify-fem-preview-surface-matrix:
+    if [ -z "${FULLMAG_MATRIX_PYTHON:-}" ]; then just ensure-python; fi
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" -m unittest scripts/test_verify_fem_preview_surface_matrix.py
+    just ensure-managed-fem-runtime
+    just build-static-control-room
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py
+
+verify-fem-preview-energy-qualification:
+    if [ -z "${FULLMAG_MATRIX_PYTHON:-}" ]; then just ensure-python; fi
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" -m unittest scripts/test_verify_fem_preview_surface_matrix.py
+    just ensure-managed-fem-runtime
+    just build-static-control-room
+    rm -rf .fullmag/reports/fem-preview-energy-qualification
+    mkdir -p .fullmag/reports/fem-preview-energy-qualification
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_TASK5_ENERGY_QUALIFICATION=dg0_ms FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py --api-port 18211 --repeats 1 --mode full_cache --cadence 10 --surface interactive_no_browser --skip-retention-proof --report-dir .fullmag/reports/fem-preview-energy-qualification/dg0-ms
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_TASK5_ENERGY_QUALIFICATION=uniaxial FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py --api-port 18212 --repeats 1 --mode full_cache --cadence 10 --surface interactive_no_browser --skip-retention-proof --report-dir .fullmag/reports/fem-preview-energy-qualification/uniaxial
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_TASK5_ENERGY_QUALIFICATION=cubic FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py --api-port 18213 --repeats 1 --mode full_cache --cadence 10 --surface interactive_no_browser --skip-retention-proof --report-dir .fullmag/reports/fem-preview-energy-qualification/cubic
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_TASK5_ENERGY_QUALIFICATION=interfacial_dmi FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py --api-port 18214 --repeats 1 --mode full_cache --cadence 10 --surface interactive_no_browser --skip-retention-proof --report-dir .fullmag/reports/fem-preview-energy-qualification/interfacial-dmi
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_TASK5_ENERGY_QUALIFICATION=bulk_dmi FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py --api-port 18215 --repeats 1 --mode full_cache --cadence 10 --surface interactive_no_browser --skip-retention-proof --report-dir .fullmag/reports/fem-preview-energy-qualification/bulk-dmi
+
+verify-fem-preview-json-roundtrip-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api terminal_preview_json_transport_preserves_f64_bits -- --nocapture'
+
+verify-fem-mixed-wire-cli-contract:
+    docker compose --project-name fullmag --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli --features "cuda fem-gpu" python_bridge::tests::mixed_wire_ -- --nocapture'
+
+verify-fem-preparation-clock-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli simulation_preparation::tests::backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering -- --exact --nocapture'
+
+verify-fem-preparation-api-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api router_v2::tests::simulation_preparation_preserves_backward_clock_adjustment_evidence -- --exact --nocapture'
+
+verify-fem-preview-callback-source-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu tests::fem_preview_materialization_stays_outside_callback_deadline -- --exact --nocapture'
+
+verify-fem-crossover-selection-persistence-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'set -e; cd /workspace; export FULLMAG_USE_MFEM_STACK=ON; cargo +nightly test -p fullmag-runner --features fem-gpu solver_runtime::fem_selection::tests::retained_resolver_uses_the_canonical_effective_request_collision_matrix -- --exact --nocapture; cargo +nightly test -p fullmag-runner --features fem-gpu interactive_runtime::tests::persistent_fem_runtime_keeps_resolved_crossover_after_profile_mutation_and_removal -- --exact --nocapture; cargo +nightly test -p fullmag-runner --features fem-gpu --test backend_source_layout_contract task15_crossover_capability_json_and_adr_match_the_ignored_identity_input_boundary -- --exact --nocapture'
+
+verify-fem-preview-review-unit-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'set -e; export FULLMAG_USE_MFEM_STACK=ON; cargo +nightly test -p fullmag-api session::tests::terminal_preview_json_transport_preserves_f64_bits -- --exact --nocapture; cargo +nightly test -p fullmag-cli orchestrator::tests::wait_for_solve_command_classification_handles_compute_fields_and_run -- --exact --nocapture; cargo +nightly test -p fullmag-cli simulation_preparation::tests::backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering -- --exact --nocapture; cargo +nightly test -p fullmag-api router_v2::tests::simulation_preparation_preserves_backward_clock_adjustment_evidence -- --exact --nocapture; cargo +nightly test -p fullmag-api router_v2::tests::v2_energy_density_meta_exposes_fem_nodal_projection_location -- --exact --nocapture; cargo +nightly test -p fullmag-api router_v2::tests::v2_optional_field_materialization_pending_and_error_preserve_solver_and_last_good_data -- --exact --nocapture; cargo +nightly test -p fullmag-plan tests::fem_cpu_exchange_and_zeeman_plan_preserves_conformal_dg0_ms -- --exact --nocapture; cargo +nightly test -p fullmag-plan tests::fem_planner_elementwise_material_legality_distinguishes_a_from_ms -- --exact --nocapture; cargo +nightly test -p fullmag-api snapshot_terminal_cache_wins_equal_provenance_conflict_with_active_preview -- --nocapture; cargo +nightly test -p fullmag-api field_frame_terminal_cache_wins_equal_provenance_conflict_with_runtime_preview -- --nocapture; cargo +nightly test -p fullmag-api effective_field_source_tracks_shared_latest_preview_precedence_without_revision_churn -- --nocapture; cargo +nightly test -p fullmag-api field_frame_terminal_cache_wins_equal_generation_in_vector_route_body -- --nocapture; cargo +nightly test -p fullmag-api cached_preview_merge_is_idempotent_and_accepts_only_newer_generation -- --nocapture; cargo +nightly test -p fullmag-cli merge_pending_publish_payload_canonicalizes_carried_active_from_terminal_cache -- --nocapture; cargo +nightly test -p fullmag-runner --features fem-gpu tests::fem_preview_materialization_stays_outside_callback_deadline -- --exact --nocapture; cargo +nightly test -p fullmag-runner --features fem-gpu task5_ -- --nocapture'
+
 verify-fem-relaxation-convergence:
     FULLMAG_RELAX_MAX_STEPS="${FULLMAG_RELAX_MAX_STEPS:-16}" \
     FULLMAG_FEM_RELAXATION_MIN_STEPS="${FULLMAG_FEM_RELAXATION_MIN_STEPS:-16}" \
@@ -2297,6 +2512,57 @@ verify-fem-relaxation-cpu-gpu-consistency-smoke:
         --quiet-json-summary \
         --require-cpu-gpu-consistency'
 
+capture-fem-task8-qualification-identity:
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports/task8-qualification
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-250e-9}" \
+      -e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-500e-9}" \
+      -e FULLMAG_BENCH_INTEGRATORS="${FULLMAG_BENCH_INTEGRATORS:-heun}" \
+      -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg}" \
+      -e FULLMAG_BENCH_DEMAG_SOLVERS="${FULLMAG_BENCH_DEMAG_SOLVERS:-CG}" \
+      -e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-AMG,JACOBI}" \
+      -e FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES="${FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES:-18}" \
+      -e FULLMAG_BENCH_DEMAG_AMG_COARSENINGS="${FULLMAG_BENCH_DEMAG_AMG_COARSENINGS:-8}" \
+      -e FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS="${FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS:-6}" \
+      -e FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS="${FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS:-1}" \
+      -e FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS="${FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS:-}" \
+      -e FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS="${FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS:-}" \
+      -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-32}" \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
+      -e FULLMAG_BENCH_THREAD_COUNTS="${FULLMAG_BENCH_THREAD_COUNTS:-1}" \
+      -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-600}" \
+      -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
+      -e FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_TASK8_QUALIFICATION_CANDIDATE="${FULLMAG_BENCH_TASK8_QUALIFICATION_CANDIDATE:-.fullmag/reports/task8-qualification/candidate-identity.json}" \
+      -e FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR="${FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR:-.fullmag/reports/task8-qualification/mesh-cache}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+        --box500-airbox-interaction-consistency-preset \
+        --integrators "$FULLMAG_BENCH_INTEGRATORS" \
+        --relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS" \
+        --demag-solvers "$FULLMAG_BENCH_DEMAG_SOLVERS" \
+        --demag-preconditioners "$FULLMAG_BENCH_DEMAG_PRECONDITIONERS" \
+        --demag-amg-relax-types "$FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES" \
+        --demag-amg-coarsenings "$FULLMAG_BENCH_DEMAG_AMG_COARSENINGS" \
+        --demag-amg-interpolations "$FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS" \
+        --demag-amg-aggressive-coarsenings "$FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS" \
+        --demag-amg-strength-thresholds "$FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS" \
+        --demag-amg-max-levels "$FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS" \
+        --steps "$FULLMAG_BENCH_STEPS" \
+        --repeat "$FULLMAG_BENCH_REPEAT" \
+        --thread-counts "$FULLMAG_BENCH_THREAD_COUNTS" \
+        --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+        --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
+        --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \
+        --cpu-gpu-torque-rtol "$FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL" \
+        --reuse-generated-domain-mesh \
+        --generated-domain-mesh-cache-dir "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" \
+        --write-task8-qualification-identity "$FULLMAG_BENCH_TASK8_QUALIFICATION_CANDIDATE"'
+
 verify-fem-relaxation-production-benchmark:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports
@@ -2319,25 +2585,30 @@ verify-fem-relaxation-production-benchmark:
       -e FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC="${FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC:-demag_solver_apply_wall_time_ms}" \
       -e FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS="${FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS:-}" \
       -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-32}" \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
+      -e FULLMAG_BENCH_THREAD_COUNTS="${FULLMAG_BENCH_THREAD_COUNTS:-1}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-600}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
       -e FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
       -e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
-      -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-11}" \
-      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-4}" \
+      -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}" \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-50}" \
       -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}" \
       -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_relaxation_production_benchmark_summary.json}" \
-      -e FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR="${FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR:-}" \
+      -e FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY="${FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY:-}" \
+      -e FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR="${FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR:-.fullmag/reports/task8-qualification/mesh-cache}" \
       -e FULLMAG_FEM_STEP_PROFILE="${FULLMAG_FEM_STEP_PROFILE:-}" \
       -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC="${FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC:-1}" \
       fem-gpu bash -lc 'cd /workspace && \
         demag_budget_args=(); \
         cache_args=(); \
+        identity_args=(); \
         if [ -n "$FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS" ]; then demag_budget_args+=(--max-demag-solver-apply-ms "$FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS"); fi; \
         if [ -n "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" ]; then cache_args+=(--generated-domain-mesh-cache-dir "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR"); fi; \
+        if [ -n "$FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY" ]; then identity_args+=(--task8-qualification-identity "$FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY"); fi; \
         python3 scripts/analysis/fem_gpu_benchmark.py \
         --box500-airbox-interaction-consistency-preset \
         --integrators "$FULLMAG_BENCH_INTEGRATORS" \
@@ -2352,13 +2623,19 @@ verify-fem-relaxation-production-benchmark:
         --demag-amg-max-levels "$FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS" \
         --demag-convergence-max-iterations "$FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" \
         --require-demag-setup-reused \
+        --require-ncg-accepted-endpoint-reuse \
+        --require-demag-single-setup \
+        --require-zero-strict-gpu-global-sync \
         --steps "$FULLMAG_BENCH_STEPS" \
+        --repeat "$FULLMAG_BENCH_REPEAT" \
+        --thread-counts "$FULLMAG_BENCH_THREAD_COUNTS" \
         --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
         --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \
         --cpu-gpu-torque-rtol "$FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL" \
         --output "$FULLMAG_BENCH_OUTPUT" \
         --cpu-gpu-summary-output "$FULLMAG_BENCH_SUMMARY" \
+        "${identity_args[@]}" \
         --quiet-json-summary \
         --reuse-generated-domain-mesh \
         "${cache_args[@]}" \
@@ -2381,6 +2658,302 @@ verify-fem-relaxation-production-benchmark:
     # versioned Zhang-Li CPU/GPU skew-tetra gate.  Its validator owns the STT
     # oracle and provenance; the relaxation benchmark above remains unchanged.
     just verify-fem-zhang-li-skew-tetra-runtime
+
+calibrate-fem-relaxation-torque-default:
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports/fem-relaxation-torque-calibration/mesh-cache
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_CALIBRATION_STEP_BUDGETS="${FULLMAG_CALIBRATION_STEP_BUDGETS:-128 256 512}" \
+      -e FULLMAG_CALIBRATION_INTEGRATORS="${FULLMAG_CALIBRATION_INTEGRATORS:-rk23,rk45}" \
+      -e FULLMAG_CALIBRATION_SCENARIOS="${FULLMAG_CALIBRATION_SCENARIOS:-relax_exchange_only,relax_exchange_demag}" \
+      -e FULLMAG_CALIBRATION_TIMESTEP_POLICIES="${FULLMAG_CALIBRATION_TIMESTEP_POLICIES:-fixed,adaptive}" \
+      -e FULLMAG_CALIBRATION_BACKENDS="${FULLMAG_CALIBRATION_BACKENDS:-cpu,gpu}" \
+      -e FULLMAG_CALIBRATION_THREAD_COUNTS="${FULLMAG_CALIBRATION_THREAD_COUNTS:-4}" \
+      -e FULLMAG_CALIBRATION_DT_S="${FULLMAG_CALIBRATION_DT_S:-1e-14}" \
+      -e FULLMAG_CALIBRATION_RESOLUTIONS="${FULLMAG_CALIBRATION_RESOLUTIONS:-coarse:20e-9:100e-9 fine:10e-9:50e-9}" \
+      -e FULLMAG_CALIBRATION_CASE_TIMEOUT_S="${FULLMAG_CALIBRATION_CASE_TIMEOUT_S:-900}" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        report_dir=.fullmag/reports/fem-relaxation-torque-calibration; \
+        calibration_inputs=""; \
+        for resolution in $FULLMAG_CALIBRATION_RESOLUTIONS; do \
+          IFS=: read -r label domain_hmax airbox_hmax <<< "$resolution"; \
+          for steps in $FULLMAG_CALIBRATION_STEP_BUDGETS; do \
+            FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" \
+            FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax" \
+            python3 scripts/analysis/fem_gpu_benchmark.py \
+              --meshes examples/assets/bench_box_200x50x10nm.mesh.json,examples/assets/bench_box_fine.mesh.json \
+              --scenarios "$FULLMAG_CALIBRATION_SCENARIOS" \
+              --integrators "$FULLMAG_CALIBRATION_INTEGRATORS" \
+              --relax-algorithms llg_overdamped \
+              --timestep-policies "$FULLMAG_CALIBRATION_TIMESTEP_POLICIES" \
+              --backends "$FULLMAG_CALIBRATION_BACKENDS" \
+              --thread-counts "$FULLMAG_CALIBRATION_THREAD_COUNTS" \
+              --steps "$steps" \
+              --dt "$FULLMAG_CALIBRATION_DT_S" \
+              --relax-torque-tolerance-apm 1e-12 \
+              --case-timeout-s "$FULLMAG_CALIBRATION_CASE_TIMEOUT_S" \
+              --output "$report_dir/raw-${label}-${steps}.csv" \
+              --cpu-gpu-summary-output "$report_dir/raw-${label}-${steps}.summary.json" \
+              --generated-domain-mesh-cache-dir "$report_dir/mesh-cache" \
+              --reuse-generated-domain-mesh \
+              --require-stable-solver-mesh \
+              --require-demag-converged \
+              --require-cpu-gpu-consistency \
+              --quiet-json-summary; \
+            calibration_inputs="$calibration_inputs $report_dir/raw-${label}-${steps}.csv"; \
+          done; \
+        done; \
+        python3 scripts/analysis/calibrate_fem_relaxation_torque_default.py \
+          $calibration_inputs \
+          --summary "$report_dir/calibration_summary.json" \
+          --plot "$report_dir/final_torque_vs_step_budget.png"'
+
+generate-fem-gpu-performance-fixtures:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_GMSH_THREADS=1 \
+      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+        --meshes coarse \
+        --scenarios box500_airbox_exchange_demag \
+        --relax-algorithms nonlinear_cg \
+        --steps 1 \
+        --reuse-generated-domain-mesh \
+        --generated-domain-mesh-cache-dir examples/assets/fem_performance \
+        --write-fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
+        --write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json'
+
+verify-fem-gpu-performance-regression:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
+      -e FULLMAG_BENCH_AIRBOX_HMAX=100e-9 \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 -c '"'"'import csv,json,subprocess; from pathlib import Path; environment=json.loads(Path("benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json").read_text()); row=next(csv.reader([subprocess.check_output(["nvidia-smi", "--query-gpu=uuid,name,compute_cap", "--format=csv,noheader"], text=True).splitlines()[0]], skipinitialspace=True)); actual={"uuid": row[0].strip(), "name": row[1].strip(), "compute_capability": row[2].strip()}; expected=environment["gpu"]; mismatches=[key for key in ("uuid", "name", "compute_capability") if str(actual[key]) != str(expected[key])]; assert not mismatches, f"GPU identity differs from accepted baseline: {mismatches}; expected={expected}; actual={actual}"'"'"'; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes coarse \
+          --scenarios box500_airbox_exchange_demag \
+          --integrators heun \
+          --relax-algorithms nonlinear_cg \
+          --demag-preconditioners AMG \
+          --demag-amg-relax-types 6 \
+          --steps 64 \
+          --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
+          --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+          --require-fixture-identity \
+          --gpu-warmup \
+          --repeat "$FULLMAG_BENCH_REPEAT" \
+          --reuse-generated-domain-mesh \
+          --require-stable-solver-mesh \
+          --accepted-baseline benchmarks/fem-gpu/accepted/rtx4080-sm89/benchmark.csv \
+          --require-accepted-baseline \
+          --max-performance-regression-percent 5 \
+          --require-demag-converged \
+          --require-cpu-gpu-consistency \
+          --require-gpu-strict-residency \
+          --require-gpu-control-readback-budget \
+          --gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP" \
+          --output .fullmag/reports/fem_gpu_performance_regression.csv \
+          --cpu-gpu-summary-output .fullmag/reports/fem_gpu_performance_regression_summary.json'
+
+verify-fem-gpu-relaxation-preconditioner-qualification:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_STEP_PROFILE=1 \
+      -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
+      -e FULLMAG_GMSH_THREADS=1 \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes coarse,medium,fine \
+          --scenarios box500_airbox_exchange_demag \
+          --integrators heun \
+          --backends cpu,gpu \
+          --timestep-policies fixed \
+          --thread-counts 1 \
+          --relax-algorithms nonlinear_cg \
+          --relaxation-preconditioner-strategies none \
+          --demag-solvers CG \
+          --demag-preconditioners AMG \
+          --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 \
+          --steps 64 \
+          --dt 1e-13 \
+          --relax-torque-tolerance-apm 8000 \
+          --repeat 1 \
+          --case-timeout-s 900 \
+          --gpu-warmup \
+          --reuse-generated-domain-mesh \
+          --require-stable-solver-mesh \
+          --require-demag-converged \
+          --require-gpu-strict-residency \
+          --require-gpu-control-readback-budget \
+          --capture-final-magnetization \
+          --task11-relaxation-preconditioner-cpu-gpu-parity-sweep \
+          --task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+          --output .fullmag/reports/task-11-relaxation-preconditioner-cpu-gpu-parity.csv \
+          --quiet-json-summary; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes coarse,medium,fine \
+          --scenarios box500_airbox_exchange_demag \
+          --integrators heun \
+          --backends gpu \
+          --timestep-policies fixed \
+          --thread-counts 1 \
+          --relax-algorithms nonlinear_cg \
+          --relaxation-preconditioner-strategies none,diagonal_mass,lumped_exchange_mass_cg4,lumped_exchange_mass_cg8,stagnation_triggered_cg8 \
+          --demag-solvers CG \
+          --demag-preconditioners AMG \
+          --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 \
+          --steps 64 \
+          --dt 1e-13 \
+          --relax-torque-tolerance-apm 8000 \
+          --repeat 5 \
+          --case-timeout-s 900 \
+          --gpu-warmup \
+          --reuse-generated-domain-mesh \
+          --require-stable-solver-mesh \
+          --require-demag-converged \
+          --require-gpu-strict-residency \
+          --require-gpu-control-readback-budget \
+          --task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+          --output .fullmag/reports/task-11-relaxation-preconditioner.csv \
+          --quiet-json-summary; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --relaxation-preconditioner-qualification-input .fullmag/reports/task-11-relaxation-preconditioner.csv \
+          --relaxation-preconditioner-cpu-gpu-parity-input .fullmag/reports/task-11-relaxation-preconditioner-cpu-gpu-parity.csv \
+          --task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+          --relaxation-preconditioner-qualification-output .fullmag/reports/task-11-relaxation-preconditioner-qualification.json'
+
+verify-fem-gpu-host-thread-policy-qualification:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports/task-12-host-thread-policy/mesh-cache
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
+      -e FULLMAG_GMSH_THREADS=1 \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        FULLMAG_BENCH_THREAD_COUNTS="1,2,4,8"; \
+        FULLMAG_BENCH_REPEAT="5"; \
+        FULLMAG_FEM_STEP_PROFILE=0 python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes fine --scenarios box500_airbox_exchange_demag \
+          --integrators heun --backends gpu --timestep-policies fixed \
+          --thread-counts "$FULLMAG_BENCH_THREAD_COUNTS" \
+          --relax-algorithms projected_gradient_bb \
+          --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
+          --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
+          --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
+          --require-stable-solver-mesh --require-demag-converged \
+          --require-gpu-strict-residency --require-gpu-control-readback-budget \
+          --ui-surface headless \
+          --output .fullmag/reports/task-12-host-thread-policy/headless-profiler-off.csv \
+          --quiet-json-summary; \
+        FULLMAG_FEM_STEP_PROFILE=1 python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes fine --scenarios box500_airbox_exchange_demag \
+          --integrators heun --backends gpu --timestep-policies fixed \
+          --thread-counts "$FULLMAG_BENCH_THREAD_COUNTS" \
+          --relax-algorithms projected_gradient_bb \
+          --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
+          --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
+          --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
+          --require-stable-solver-mesh --require-demag-converged \
+          --require-gpu-strict-residency --require-gpu-control-readback-budget \
+          --ui-surface headless \
+          --output .fullmag/reports/task-12-host-thread-policy/headless-profiler-on.csv \
+          --quiet-json-summary; \
+        FULLMAG_FEM_STEP_PROFILE=0 python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes fine --scenarios box500_airbox_exchange_demag \
+          --integrators heun --backends gpu --timestep-policies fixed \
+          --thread-counts "$FULLMAG_BENCH_THREAD_COUNTS" \
+          --relax-algorithms projected_gradient_bb \
+          --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
+          --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
+          --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
+          --require-stable-solver-mesh --require-demag-converged \
+          --require-gpu-strict-residency --require-gpu-control-readback-budget \
+          --ui-surface interactive \
+          --output .fullmag/reports/task-12-host-thread-policy/interactive-profiler-off.csv \
+          --quiet-json-summary; \
+        FULLMAG_FEM_STEP_PROFILE=1 python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes fine --scenarios box500_airbox_exchange_demag \
+          --integrators heun --backends gpu --timestep-policies fixed \
+          --thread-counts "$FULLMAG_BENCH_THREAD_COUNTS" \
+          --relax-algorithms projected_gradient_bb \
+          --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
+          --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
+          --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
+          --require-stable-solver-mesh --require-demag-converged \
+          --require-gpu-strict-residency --require-gpu-control-readback-budget \
+          --ui-surface interactive \
+          --output .fullmag/reports/task-12-host-thread-policy/interactive-profiler-on.csv \
+          --quiet-json-summary; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --gpu-host-thread-qualification-inputs \
+            .fullmag/reports/task-12-host-thread-policy/headless-profiler-off.csv,.fullmag/reports/task-12-host-thread-policy/headless-profiler-on.csv,.fullmag/reports/task-12-host-thread-policy/interactive-profiler-off.csv,.fullmag/reports/task-12-host-thread-policy/interactive-profiler-on.csv \
+          --gpu-host-thread-qualification-output \
+            .fullmag/reports/task-12-host-thread-policy/qualification.json'
+
+capture-fem-gpu-pre-remediation-performance-baseline:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
+      -e FULLMAG_BENCH_AIRBOX_HMAX=100e-9 \
+      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+        --meshes coarse \
+        --scenarios box500_airbox_exchange_demag \
+        --integrators heun \
+        --relax-algorithms nonlinear_cg \
+        --demag-preconditioners AMG \
+        --demag-amg-relax-types 6 \
+        --steps 64 \
+        --repeat 5 \
+        --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
+        --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --require-fixture-identity \
+        --gpu-warmup \
+        --reuse-generated-domain-mesh \
+        --require-stable-solver-mesh \
+        --require-demag-converged \
+        --require-cpu-gpu-consistency \
+        --require-gpu-strict-residency \
+        --output .fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline.csv \
+        --cpu-gpu-summary-output .fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline_summary.json'
+
+verify-fem-gpu-pre-remediation-runtime-restore:
+    state_file="$(mktemp /tmp/fullmag-fem-gpu-restore-state.XXXXXX.json)"; \
+      trap 'rm -f -- "$state_file"' EXIT; \
+      python3 scripts/verify_fem_gpu_runtime_restore.py capture \
+        --environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --state "$state_file"; \
+      COMPOSE_PROJECT_NAME=fullmag just rebuild-fem-runtime; \
+      python3 scripts/verify_fem_gpu_runtime_restore.py compare \
+        --environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --state "$state_file"
 
 verify-fem-gpu-demag-performance-benchmark:
     just ensure-managed-fem-runtime
@@ -2414,7 +2987,7 @@ verify-fem-gpu-demag-performance-benchmark:
       -e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-4}" \
       -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
       -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}" \
-      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-4}" \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-800}" \
       -e FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-2}" \
       -e FULLMAG_BENCH_ACCEPTED_BASELINE="${FULLMAG_BENCH_ACCEPTED_BASELINE:-}" \
@@ -2449,6 +3022,9 @@ verify-fem-gpu-demag-performance-benchmark:
         --demag-amg-max-levels "$FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS" \
         --demag-convergence-max-iterations "$FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" \
         --require-demag-setup-reused \
+        --require-ncg-accepted-endpoint-reuse \
+        --require-demag-single-setup \
+        --require-zero-strict-gpu-global-sync \
         --steps "$FULLMAG_BENCH_STEPS" \
         --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
@@ -2481,66 +3057,167 @@ verify-fem-gpu-demag-performance-benchmark:
 
 bench-fem-gpu-demag-amg-profile-sweep:
     just ensure-managed-fem-runtime
-    mkdir -p .fullmag/reports
+    just verify-fem-demag-poisson-contract
     docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
-      -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-50e-9}" \
-      -e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-100e-9}" \
-      -e FULLMAG_BENCH_MESHES="${FULLMAG_BENCH_MESHES:-coarse}" \
-      -e FULLMAG_BENCH_SCENARIOS="${FULLMAG_BENCH_SCENARIOS:-box500_airbox_exchange_demag}" \
-      -e FULLMAG_BENCH_INTEGRATORS="${FULLMAG_BENCH_INTEGRATORS:-heun}" \
-      -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-projected_gradient_bb}" \
-      -e FULLMAG_BENCH_DEMAG_SOLVERS="${FULLMAG_BENCH_DEMAG_SOLVERS:-CG}" \
-      -e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-AMG}" \
-      -e FULLMAG_BENCH_DEMAG_RTOLS="${FULLMAG_BENCH_DEMAG_RTOLS:-1e-8}" \
-      -e FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS="${FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS:-100}" \
       -e FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES="${FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES:-18,6}" \
-      -e FULLMAG_BENCH_DEMAG_AMG_COARSENINGS="${FULLMAG_BENCH_DEMAG_AMG_COARSENINGS:-8}" \
-      -e FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS="${FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS:-6}" \
-      -e FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS="${FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS:-1}" \
-      -e FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS="${FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS:-}" \
-      -e FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS="${FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS:-}" \
-      -e FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC="${FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC:-demag_solver_apply_wall_time_ms}" \
-      -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-2}" \
+      -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-projected_gradient_bb,nonlinear_cg}" \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-300}" \
-      -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-1}" \
-      -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_fem_gpu_demag_amg_profile_sweep.csv}" \
-      -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_fem_gpu_demag_amg_profile_sweep_summary.json}" \
-      -e FULLMAG_BENCH_HUMAN_REPORT="${FULLMAG_BENCH_HUMAN_REPORT:-.fullmag/reports/fullmag_fem_gpu_demag_amg_profile_sweep.md}" \
-      -e FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR="${FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR:-}" \
-      -e FULLMAG_FEM_STEP_PROFILE="${FULLMAG_FEM_STEP_PROFILE:-1}" \
-      fem-gpu bash -lc 'cd /workspace && \
-        cache_args=(); \
-        if [ -n "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" ]; then cache_args+=(--generated-domain-mesh-cache-dir "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR"); fi; \
-        python3 scripts/analysis/fem_gpu_benchmark.py \
-        --meshes "$FULLMAG_BENCH_MESHES" \
-        --scenarios "$FULLMAG_BENCH_SCENARIOS" \
-        --integrators "$FULLMAG_BENCH_INTEGRATORS" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        report_dir=.fullmag/reports/fem-amg-relax-policy-qualification; \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" "$report_dir" 2>/dev/null || true'\'' EXIT; \
+        rm -rf "$report_dir"; mkdir -p "$report_dir"; \
+        input_csvs=(); \
+        while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
+          for profiler in off on; do \
+            if [ "$profiler" = on ]; then export FULLMAG_FEM_STEP_PROFILE=1; profile_args=(--require-gpu-phase-timings); else export FULLMAG_FEM_STEP_PROFILE=0; profile_args=(); fi; \
+            export FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax"; \
+            stem="$report_dir/${resolution}-profiler-${profiler}"; \
+            benchmark_args=( \
+              --meshes coarse \
+              --scenarios box500_airbox_exchange_demag \
+              --integrators heun \
+              --backends fem_cpu,fem_gpu \
+              --timestep-policies fixed \
         --relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS" \
-        --demag-solvers "$FULLMAG_BENCH_DEMAG_SOLVERS" \
-        --demag-preconditioners "$FULLMAG_BENCH_DEMAG_PRECONDITIONERS" \
-        --demag-rtols "$FULLMAG_BENCH_DEMAG_RTOLS" \
+              --demag-solvers CG \
+              --demag-preconditioners AMG \
+              --demag-rtols 1e-12 \
         --demag-amg-relax-types "$FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES" \
-        --demag-amg-coarsenings "$FULLMAG_BENCH_DEMAG_AMG_COARSENINGS" \
-        --demag-amg-interpolations "$FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS" \
-        --demag-amg-aggressive-coarsenings "$FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS" \
-        --demag-amg-strength-thresholds "$FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS" \
-        --demag-amg-max-levels "$FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS" \
-        --demag-convergence-max-iterations "$FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" \
-        --steps "$FULLMAG_BENCH_STEPS" \
-        --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
-        --output "$FULLMAG_BENCH_OUTPUT" \
-        --cpu-gpu-summary-output "$FULLMAG_BENCH_SUMMARY" \
-        --human-report-output "$FULLMAG_BENCH_HUMAN_REPORT" \
-        --quiet-json-summary \
-        --gpu-warmup \
-        --reuse-generated-domain-mesh \
-        "${cache_args[@]}" \
-        --emit-best-demag-policy \
-        --best-demag-policy-metric "$FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC" \
-        --require-min-solver-nodes "$FULLMAG_BENCH_MIN_SOLVER_NODES" \
-        --require-gpu-strict-residency'
+              --demag-amg-coarsenings 8 \
+              --demag-amg-interpolations 6 \
+              --demag-amg-aggressive-coarsenings 1 \
+              --steps 64 \
+              --relax-torque-tolerance-t 1e-4 \
+              --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+              --expected-solver-mesh-signature "$solver_mesh_signature" \
+              --qualification-fixture-problem-ir-sha256 "$problem_ir_sha256" \
+              --quiet-json-summary ); \
+            python3 scripts/analysis/fem_gpu_benchmark.py "${benchmark_args[@]}" --repeat 1 --output "$stem-warmup.csv" --cpu-gpu-summary-output "$stem-warmup-summary.json"; \
+            python3 scripts/analysis/fem_gpu_benchmark.py "${benchmark_args[@]}" \
+              --repeat "$FULLMAG_BENCH_REPEAT" \
+              --output "$stem.csv" \
+              --cpu-gpu-summary-output "$stem-summary.json" \
+              --human-report-output "$stem.md" \
+              --emit-best-demag-policy \
+              --best-demag-policy-metric demag_solver_apply_wall_time_ms \
+              --require-best-demag-policy \
+              --require-stable-solver-mesh \
+              --require-demag-converged \
+              --require-cpu-gpu-consistency \
+              --require-gpu-strict-residency \
+              "${profile_args[@]}"; \
+            input_csvs+=("$stem.csv"); \
+          done; \
+        done < <(python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json); \
+        if [ "${#input_csvs[@]}" -ne 6 ]; then echo "expected six measured AMG qualification CSVs" >&2; exit 2; fi; \
+        joined_inputs="$(IFS=,; echo "${input_csvs[*]}")"; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --amg-relax-qualification-inputs "$joined_inputs" \
+          --amg-relax-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --amg-relax-qualification-output "$report_dir/qualification-summary.json" \
+          --amg-relax-cpu-gpu-parity-passed \
+          --amg-relax-pcg-symmetry-passed'
+
+verify-fem-demag-mesh-airbox-convergence:
+    just ensure-managed-fem-runtime
+    just verify-fem-demag-poisson-contract-focused
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
+      -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-64}" \
+      -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-300}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 scripts/test_validate_fem_demag_mesh_airbox_convergence.py; \
+        report_dir=.fullmag/reports/fem-demag-mesh-airbox-convergence; \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" "$report_dir" 2>/dev/null || true'\'' EXIT; \
+        rm -rf "$report_dir"; mkdir -p "$report_dir"; \
+        while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
+          export FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax"; \
+          stem="$report_dir/$resolution"; \
+          benchmark_args=( \
+            --meshes coarse \
+            --scenarios box500_airbox_exchange_demag \
+            --integrators heun \
+            --backends fem_cpu,fem_gpu \
+            --timestep-policies fixed \
+            --relax-algorithms projected_gradient_bb,nonlinear_cg \
+            --demag-solvers CG \
+            --demag-preconditioners AMG \
+            --demag-rtols 1e-12 \
+            --demag-amg-relax-types 6 \
+            --demag-amg-coarsenings 8 \
+            --demag-amg-interpolations 6 \
+            --demag-amg-aggressive-coarsenings 1 \
+            --steps "$FULLMAG_BENCH_STEPS" \
+            --relax-torque-tolerance-t 1e-4 \
+            --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+            --expected-solver-mesh-signature "$solver_mesh_signature" \
+            --qualification-fixture-problem-ir-sha256 "$problem_ir_sha256" \
+            --quiet-json-summary ); \
+          python3 scripts/analysis/fem_gpu_benchmark.py "${benchmark_args[@]}" \
+            --repeat 1 \
+            --output "$stem-warmup.csv" \
+            --cpu-gpu-summary-output "$stem-warmup-summary.json"; \
+          python3 scripts/analysis/fem_gpu_benchmark.py "${benchmark_args[@]}" \
+            --repeat "$FULLMAG_BENCH_REPEAT" \
+            --output "$stem.csv" \
+            --cpu-gpu-summary-output "$stem-summary.json" \
+            --human-report-output "$stem.md" \
+            --require-stable-solver-mesh \
+            --require-demag-converged \
+            --require-cpu-gpu-consistency \
+            --require-gpu-strict-residency; \
+        done < <(python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json); \
+        unset FULLMAG_BENCH_DOMAIN_MESH; \
+        export FULLMAG_BENCH_DOMAIN_HMAX=1e-7 FULLMAG_BENCH_AIRBOX_HMAX=2.5e-7; \
+        for airbox_scale in 1.0 1.5 2.0; do \
+          stem="$report_dir/airbox-$airbox_scale"; \
+          python3 scripts/analysis/fem_gpu_benchmark.py \
+            --meshes coarse \
+            --scenarios box500_airbox_exchange_demag \
+            --integrators heun \
+            --backends fem_cpu,fem_gpu \
+            --timestep-policies fixed \
+            --relax-algorithms nonlinear_cg \
+            --demag-solvers CG \
+            --demag-preconditioners AMG \
+            --demag-rtols 1e-12 \
+            --demag-amg-relax-types 6 \
+            --demag-amg-coarsenings 8 \
+            --demag-amg-interpolations 6 \
+            --demag-amg-aggressive-coarsenings 1 \
+            --steps "$FULLMAG_BENCH_STEPS" \
+            --relax-torque-tolerance-t 1e-4 \
+            --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+            --airbox-extent-scale "$airbox_scale" \
+            --repeat 1 \
+            --reuse-generated-domain-mesh \
+            --output "$stem.csv" \
+            --cpu-gpu-summary-output "$stem-summary.json" \
+            --require-stable-solver-mesh \
+            --require-demag-converged \
+            --require-cpu-gpu-consistency \
+            --require-gpu-strict-residency \
+            --quiet-json-summary; \
+        done; \
+        python3 scripts/validate_fem_demag_mesh_airbox_convergence.py \
+          --fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --mesh-input coarse:"$report_dir/coarse-warmup.csv":"$report_dir/coarse.csv" \
+          --mesh-input medium:"$report_dir/medium-warmup.csv":"$report_dir/medium.csv" \
+          --mesh-input fine:"$report_dir/fine-warmup.csv":"$report_dir/fine.csv" \
+          --airbox-input 1.0:"$report_dir/airbox-1.0.csv" \
+          --airbox-input 1.5:"$report_dir/airbox-1.5.csv" \
+          --airbox-input 2.0:"$report_dir/airbox-2.0.csv" \
+          --repeat "$FULLMAG_BENCH_REPEAT" \
+          --output "$report_dir/qualification-summary.json"'
 
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \
@@ -2618,19 +3295,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         elif [ ! -f "{{local_web_root}}/index.html" ] && [ ! -f "{{control_room_static_out}}/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       fi; \
       if [ "$backend" = "fem" ]; then \
-        if [ "$force" = "true" ]; then just rebuild-fem-runtime; \
-        elif [ "$build" = "true" ]; then just ensure-managed-fem-runtime; \
-        elif [ ! -x "{{gpu_runtime_bin}}" ]; then echo "Managed FEM runtime is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-        if [ "$build" = "false" ]; then \
-          if [ ! -f "{{gpu_runtime_manifest}}" ]; then echo "Managed FEM runtime manifest is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-          stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path '*/.fullmag' -o -path '*/__pycache__' \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
-          if [ -n "$stale_source" ]; then \
-            echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
-            echo "Run: just fullmag build=True fem $device $script" >&2; \
-            echo "Or force a clean runtime export: just fullmag force=True fem $device $script" >&2; \
-            exit 2; \
-          fi; \
-        fi; \
+        if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
       else \
         if [ "$force" = "true" ]; then just build fullmag; \
@@ -3016,27 +3681,144 @@ run-nanoflower-interactive-quadro:
 gpu_runtime_bin := repo_root + "/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu"
 gpu_runtime_manifest := repo_root + "/.fullmag/runtimes/fem-gpu-host/manifest.json"
 
+validate-fem-gpu-runtime-variant variant:
+    variant_root=".fullmag/runtimes/fem-gpu-variants/{{variant}}"; \
+      if [ ! -d "$variant_root" ]; then \
+        echo "Managed FEM runtime variant is missing: $variant_root" >&2; \
+        exit 2; \
+      fi; \
+      python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "$variant_root"
+
+select-fem-gpu-runtime-variant variant:
+    just validate-fem-gpu-runtime-variant "{{variant}}"
+    active=".fullmag/runtimes/fem-gpu-host"; \
+      if [ -e "$active" ] && [ ! -L "$active" ]; then \
+        echo "Refusing to replace non-symlink managed FEM runtime: $active" >&2; \
+        exit 2; \
+      fi; \
+      next=".fullmag/runtimes/.fem-gpu-host.next.$$"; \
+      ln -sfn "fem-gpu-variants/{{variant}}" "$next"; \
+      mv -Tf "$next" "$active"
+    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+
+restore-fem-gpu-runtime-variant variant:
+    just select-fem-gpu-runtime-variant "{{variant}}"
+
+build-fem-gpu-task6-runner-harness candidate_variant:
+    bash scripts/build_managed_fem_gpu_runner_harness.sh "{{candidate_variant}}"
+
+benchmark-fem-gpu-runtime-architecture-ab baseline_variant candidate_variant runner output_dir:
+    python3 scripts/analysis/benchmark_fem_gpu_runtime_architectures.py \
+      --baseline-variant "{{baseline_variant}}" \
+      --candidate-variant "{{candidate_variant}}" \
+      --runner "{{runner}}" \
+      --output-dir "{{output_dir}}"
+
+migrate-active-fem-gpu-runtime-to-variant exact_copy_variant selected_variant:
+    active=".fullmag/runtimes/fem-gpu-host"; \
+      exact_copy=".fullmag/runtimes/fem-gpu-variants/{{exact_copy_variant}}"; \
+      selected=".fullmag/runtimes/fem-gpu-variants/{{selected_variant}}"; \
+      if [ ! -d "$active" ] || [ -L "$active" ]; then \
+        echo "Active managed FEM runtime must be a directory for one-time migration: $active" >&2; \
+        exit 2; \
+      fi; \
+      if [ ! -d "$exact_copy" ]; then \
+        echo "Exact preserved FEM runtime copy is missing: $exact_copy" >&2; \
+        exit 2; \
+      fi; \
+      python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "$active" --compare-exact "$exact_copy"; \
+      just validate-fem-gpu-runtime-variant "{{selected_variant}}"; \
+      backup="${active}.directory-backup.$(date -u +%Y%m%dT%H%M%SZ)"; \
+      if [ -e "$backup" ]; then \
+        echo "Migration backup already exists: $backup" >&2; \
+        exit 2; \
+      fi; \
+      mv "$active" "$backup"; \
+      next=".fullmag/runtimes/.fem-gpu-host.next.$$"; \
+      ln -sfn "fem-gpu-variants/{{selected_variant}}" "$next"; \
+      if ! mv -Tf "$next" "$active" || ! python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "$active"; then \
+        if [ -L "$active" ]; then mv "$active" "${active}.failed-symlink.$$"; fi; \
+        mv "$backup" "$active"; \
+        exit 2; \
+      fi; \
+      echo "Preserved original active runtime directory at: $backup"
+
+restore-active-fem-gpu-runtime-directory-backup backup_name:
+    active=".fullmag/runtimes/fem-gpu-host"; \
+      backup=".fullmag/runtimes/{{backup_name}}"; \
+      if [ ! -L "$active" ]; then \
+        echo "Active managed FEM runtime must be a symlink before directory restore: $active" >&2; \
+        exit 2; \
+      fi; \
+      if [ ! -d "$backup" ] || [ -L "$backup" ]; then \
+        echo "Managed FEM runtime directory backup is missing: $backup" >&2; \
+        exit 2; \
+      fi; \
+      previous_link="${active}.variant-link-backup.$(date -u +%Y%m%dT%H%M%SZ)"; \
+      mv "$active" "$previous_link"; \
+      mv "$backup" "$active"; \
+      test -x "$active/bin/fullmag-fem-gpu"; \
+      test -f "$active/manifest.json"; \
+      echo "Preserved previous active variant symlink at: $previous_link"
+
 run-nanoflower-interactive-quadro-gpu:
     just ensure-python
     just build fullmag-dev
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev -i examples/nanoflower_fem_quadro.py
 
 ensure-managed-fem-runtime:
-    if [ ! -x '{{gpu_runtime_bin}}' ] || [ ! -f '{{gpu_runtime_manifest}}' ]; then \
-        echo "Managed FEM runtime bundle is missing or incomplete; rebuilding it now." >&2; \
-        just rebuild-fem-runtime; \
-    fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path '*/.fullmag' -o -path '*/__pycache__' \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
-    if [ -n "$stale_source" ]; then \
-        echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
-        echo "Rebuilding managed FEM runtime bundle now." >&2; \
-        just rebuild-fem-runtime; \
-    fi
-    if [ ! -x '{{gpu_runtime_bin}}' ] || [ ! -f '{{gpu_runtime_manifest}}' ]; then \
+    bash -euo pipefail -c '\
+      identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
+      trap '\''rm -f -- "$identity_file"'\'' EXIT; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --output "$identity_file"; \
+      git_commit="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["head_commit_full"])'\'' "$identity_file")"; \
+      worktree_state="$(python3 -c '\''import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")'\'' "$identity_file")"; \
+      source_snapshot="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])'\'' "$identity_file")"; \
+      runtime_rebuilt=0; \
+      runtime_reused_for_non_runtime_changes=0; \
+      validate_current() { \
+        python3 scripts/validate_managed_fem_runtime_bundle.py \
+          --runtime-root .fullmag/runtimes/fem-gpu-host \
+          --require-git-commit "$git_commit" \
+          --require-worktree-state "$worktree_state" \
+          --require-source-snapshot-sha256 "$source_snapshot"; \
+      }; \
+      if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
+        echo "Managed FEM runtime bundle is missing or incomplete; restoring the persistent build first." >&2; \
+        bash scripts/restore_persistent_fem_runtime.sh || true; \
+      fi; \
+      if ! validate_current >/dev/null 2>&1; then \
+        echo "Managed FEM runtime bundle is invalid; restoring the persistent build first. Exact source mismatch will rebuild." >&2; \
+        bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
+        if ! validate_current >/dev/null 2>&1; then \
+          if python3 scripts/runtime_source_change_policy.py \
+              --repo-root "{{repo_root}}" \
+              --runtime-root .fullmag/runtimes/fem-gpu-host \
+              --identity "$identity_file"; then \
+            echo "Managed FEM runtime source differs only in documentation, CI, tests, or packaging helpers; reusing the validated binary." >&2; \
+            python3 scripts/validate_managed_fem_runtime_bundle.py \
+              --runtime-root .fullmag/runtimes/fem-gpu-host; \
+            runtime_reused_for_non_runtime_changes=1; \
+          else \
+            FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+            runtime_rebuilt=1; \
+          fi; \
+        fi; \
+      fi; \
+      if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
         echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}} and {{gpu_runtime_manifest}}" >&2; \
         exit 2; \
-    fi
-    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+      fi; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --compare "$identity_file" --allow-source-drift; \
+      if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then \
+        bash scripts/prune_managed_fem_runtimes.sh; \
+      fi; \
+      if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then \
+        python3 scripts/validate_managed_fem_runtime_bundle.py \
+          --runtime-root .fullmag/runtimes/fem-gpu-host; \
+      else \
+        validate_current; \
+      fi'
 
 inspect-managed-fem-frequency-domain-deps:
     just ensure-managed-fem-runtime
@@ -3281,7 +4063,7 @@ run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" 
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
 
-run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+_run-viewport-3d-browser-smoke fixture smoke_script report_name smoke_log_name smoke_label max_steps_env max_steps_default smoke_timeout_env smoke_timeout_default fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
     just ensure-python
     just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
@@ -3289,12 +4071,16 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
       if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
       api_url="http://localhost:{{api_port}}"; \
+      max_steps="$(printenv "{{max_steps_env}}" || true)"; \
+      if [ -z "$max_steps" ]; then max_steps="{{max_steps_default}}"; fi; \
+      smoke_timeout="$(printenv "{{smoke_timeout_env}}" || true)"; \
+      if [ -z "$smoke_timeout" ]; then smoke_timeout="{{smoke_timeout_default}}"; fi; \
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
       else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
-      report_dir="{{repo_root}}/.fullmag/reports/viewport-3d-mixed-target-smoke"; \
+      report_dir="{{repo_root}}/.fullmag/reports/{{report_name}}"; \
       app_log="$report_dir/fullmag-interactive.log"; \
-      smoke_log="$report_dir/mixed-target-smoke.log"; \
+      smoke_log="$report_dir/{{smoke_log_name}}"; \
       mkdir -p "$report_dir"; \
       sim_pid=""; \
       cleanup() { \
@@ -3310,15 +4096,15 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       FULLMAG_RELAX_DEVICE="$mode" \
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_API_PORT="{{api_port}}" \
-      FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS="${FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS:-2000}" \
-      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i examples/viewport_3d_mixed_targets_smoke.py \
+      {{max_steps_env}}="$max_steps" \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "{{fixture}}" \
         > "$app_log" 2>&1 & \
       sim_pid=$!; \
       web_url="http://localhost:{{web_port}}/workspace"; \
       for _ in $(seq 1 600); do \
         curl -fsS "$web_url" >/dev/null 2>&1 && break; \
         if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
-          echo "Viewport 3D mixed-target fixture exited before control room became ready; see $app_log" >&2; \
+          echo "{{smoke_label}} fixture exited before control room became ready; see $app_log" >&2; \
           tail -n 120 "$app_log" >&2 || true; \
           exit 1; \
         fi; \
@@ -3332,11 +4118,78 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       fi; \
       CONTROL_ROOM_API_BASE_URL="$api_url" \
       CONTROL_ROOM_URL="$web_url" \
-      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-180000}" \
-      $PNPM_CMD --dir apps/control-room smoke:viewport-3d-mixed-targets | tee "$smoke_log"; \
-      printf "\nViewport 3D mixed-target smoke logs:\n"; \
+      {{smoke_timeout_env}}="$smoke_timeout" \
+      $PNPM_CMD --dir apps/control-room "{{smoke_script}}" | tee "$smoke_log"; \
+      printf "\n{{smoke_label}} logs:\n"; \
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
+
+run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+    just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_targets_smoke.py" "smoke:viewport-3d-mixed-targets" "viewport-3d-mixed-target-smoke" "mixed-target-smoke.log" "Viewport 3D mixed-target smoke" "FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS" "2000" "CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
+
+run-viewport-3d-mixed-topology-smoke fem_execution="gpu" cpu_threads="auto" web_port="3195" api_port="8196":
+    just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_topology_smoke.py" "smoke:viewport-3d-mixed-topology" "viewport-3d-mixed-topology-smoke" "mixed-topology-smoke.log" "Viewport 3D mixed-topology smoke" "FULLMAG_VIEWPORT3D_MIXED_TOPOLOGY_MAX_STEPS" "50" "CONTROL_ROOM_MIXED_TOPOLOGY_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
+
+run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      backend="{{backend}}"; \
+      device="{{device}}"; \
+      case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend (expected fdm or fem)" >&2; exit 2 ;; esac; \
+      case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      if [ "$backend" = "fdm" ] && [ "$device" != "cpu" ]; then echo "the managed FDM planar smoke currently qualifies cpu only" >&2; exit 2; fi; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      fixture="examples/viewport_2d_planar_monitor_${backend}_smoke.py"; \
+      report_dir="{{repo_root}}/.fullmag/reports/viewport-2d-planar-monitor-smoke/${backend}-${device}"; \
+      browser_dir="$report_dir/browser"; \
+      runtime_log="$report_dir/runtime.log"; \
+      browser_log="$report_dir/browser.log"; \
+      science_report="$report_dir/science-report.json"; \
+      mkdir -p "$browser_dir"; \
+      sim_pid=""; \
+      cleanup() { \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          kill "$sim_pid" >/dev/null 2>&1 || true; \
+          wait "$sim_pid" >/dev/null 2>&1 || true; \
+        fi; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_PLANAR_DEVICE="$device" \
+      FULLMAG_FDM_EXECUTION="$device" \
+      FULLMAG_FEM_EXECUTION="$device" \
+      FULLMAG_RELAX_DEVICE="$device" \
+      FULLMAG_API_PORT="{{api_port}}" \
+      NEXT_PUBLIC_AUDIT_BUILD=1 \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "$fixture" \
+        > "$runtime_log" 2>&1 & \
+      sim_pid=$!; \
+      api_url="http://localhost:{{api_port}}"; \
+      web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        if curl -fsS "$api_url/v2/sessions/current/model/planar-monitors" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          echo "planar fixture exited before API/workspace became ready; see $runtime_log" >&2; \
+          tail -n 120 "$runtime_log" >&2 || true; \
+          exit 1; \
+        fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current/model/planar-monitors" >/dev/null || { echo "planar API did not become ready; see $runtime_log" >&2; exit 1; }; \
+      "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
+        --api-base "$api_url" --backend "$backend" --device "$device" --output "$science_report"; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_PLANAR_BACKEND="$backend" \
+      CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log"; \
+      printf "\nViewport 2D planar-monitor reports:\n"; \
+      printf "  runtime: %s\n" "$runtime_log"; \
+      printf "  browser: %s\n" "$browser_log"; \
+      printf "  science: %s\n" "$science_report"'
 
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"
@@ -3393,17 +4246,59 @@ fem-gpu-headless script:
       ./target/debug/fullmag {{script}} --backend fem --headless --json \
     '
 
-fem-managed-headless fem_execution script:
-    just ensure-python
+fem-managed-headless fem_execution script output_dir="":
+    if [ -z "${FULLMAG_PYTHON:-}" ]; then just ensure-python; fi
     just ensure-managed-fem-runtime
-    mode="{{fem_execution}}"; \
+    managed_python="${FULLMAG_PYTHON:-{{repo_python}}}"; mode="{{fem_execution}}"; output_dir="{{output_dir}}"; output_args=(); \
+    if [ ! -x "$managed_python" ]; then echo "managed FEM Python interpreter is not executable: $managed_python" >&2; exit 2; fi; \
     case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
-    FULLMAG_PYTHON="{{repo_python}}" \
+    if [ -n "$output_dir" ]; then output_args=(--output-dir "$output_dir" --workspace-root "$output_dir/workspace-history"); fi; \
+    FULLMAG_PYTHON="$managed_python" \
     FULLMAG_FDM_EXECUTION=cpu \
     FULLMAG_FEM_EXECUTION="$mode" \
     FULLMAG_RELAX_DEVICE="$mode" \
     FULLMAG_CPU_THREADS=auto \
-    '{{gpu_runtime_bin}}' {{script}} --backend fem --headless --json
+    '{{gpu_runtime_bin}}' {{script}} --backend fem --headless --json "${output_args[@]}"
+
+fem-sp4-run fem_execution output_dir:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; case "$mode" in cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported SP4 FEM device: $mode" >&2; exit 2 ;; esac; \
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="$mode" FULLMAG_RELAX_DEVICE="$mode" FULLMAG_CPU_THREADS=auto \
+    '{{gpu_runtime_bin}}' tests/standard_problems/mumag/sp4/fem/problem.py --backend fem --headless --json --output-dir "{{output_dir}}"
+
+fem-sp4-scenario device script attempt_id build="false" ledger=".fullmag/reports/standard-problems/mumag/sp4/fem/ledger/results.csv":
+    bash scripts/run_fem_sp4_scenario.sh "{{device}}" "{{script}}" "{{attempt_id}}" "{{build}}" "{{ledger}}"
+
+verify-fem-standard-problem-4:
+    just verify-fem-time-domain-native-contract
+    just ensure-managed-fem-runtime
+    FULLMAG_SP4_QUALIFYING=1 ./scripts/verify_fem_standard_problem_4.sh
+
+verify-fem-standard-problem-4-smoke:
+    just verify-fem-time-domain-native-contract
+    just ensure-managed-fem-runtime
+    FULLMAG_SP4_QUALIFYING=0 FULLMAG_SP4_DEVICES="cpu gpu" FULLMAG_SP4_RELAX_ALGORITHMS=llg_overdamped FULLMAG_SP4_MESH_LEVELS=coarse FULLMAG_SP4_CASES="case-a case-b" FULLMAG_SP4_AIRBOXES=baseline FULLMAG_SP4_DURATION_S=1e-14 FULLMAG_SP4_RELAX_MAX_STEPS=1 ./scripts/verify_fem_standard_problem_4.sh
+
+verify-fem-sp4-mixed-matrix-smoke:
+    just ensure-managed-fem-runtime
+    durable_root="${FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
+      report_base="${FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT:-${durable_root}/reports/fullmag/standard-problems/mumag/sp4/fem/mixed-matrix-smoke}"; \
+      source scripts/lib/managed_fem_runtime_storage.sh; \
+      source scripts/lib/managed_fem_report_storage.sh; \
+      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
+      echo "mixed SP4 matrix report root: $report_root"; \
+      python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root" --max-steps 1 --evidence-mode one_step_runtime_smoke
+
+verify-fem-sp4-mixed-matrix:
+    just ensure-managed-fem-runtime
+    durable_root="${FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
+      report_base="${FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT:-${durable_root}/reports/fullmag/standard-problems/mumag/sp4/fem/mixed-matrix}"; \
+      source scripts/lib/managed_fem_runtime_storage.sh; \
+      source scripts/lib/managed_fem_report_storage.sh; \
+      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
+      echo "mixed SP4 matrix report root: $report_root"; \
+      python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root"
 
 fem-managed-container-headless fem_execution script:
     just ensure-managed-fem-runtime
@@ -3429,6 +4324,70 @@ fem-gpu-py-layer-hole-headless:
 # Required after source changes to fullmag-plan, fullmag-runner, fullmag-fem-sys, or backends/fem.
 rebuild-fem-runtime:
     ./scripts/export_fem_gpu_runtime.sh
+
+# Capture the fixed FEM GPU NCG fixture in the managed fem-gpu image. The
+# preflight is fail-closed: missing Nsight tools write status=unavailable and
+# stop before an instrumented runtime rebuild or a fabricated capture.
+capture-fem-gpu-nsight:
+    set -eu; \
+      mkdir -p .fullmag/reports/task-13-nsight; \
+      active=".fullmag/runtimes/fem-gpu-host"; \
+      if [ ! -L "$active" ]; then \
+        echo "status=unavailable: active managed FEM runtime must be a symlink before capture" >&2; \
+        exit 2; \
+      fi; \
+      prior_target="$(readlink "$active")"; \
+      restore_active() { \
+        status=$?; \
+        trap - EXIT; \
+        next=".fullmag/runtimes/.fem-gpu-host.restore.$$"; \
+        ln -sfn "$prior_target" "$next"; \
+        mv -Tf "$next" "$active"; \
+        exit "$status"; \
+      }; \
+      trap restore_active EXIT; \
+      docker compose --profile fem-gpu build fem-gpu; \
+      if ! docker compose --profile fem-gpu run --rm -T \
+        --cap-add SYS_ADMIN \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+          echo "status=unavailable: Nsight preflight failed in managed fem-gpu fixture image" >&2; \
+          exit 2; \
+      fi; \
+      FULLMAG_ENABLE_NVTX=1 just rebuild-fem-runtime; \
+      if ! docker compose --profile fem-gpu run --rm -T \
+        --cap-add SYS_ADMIN \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+          echo "status=unavailable: Nsight preflight failed in rebuilt managed fem-gpu fixture image" >&2; \
+          exit 2; \
+      fi; \
+      docker compose --profile fem-gpu run --rm -T \
+        --cap-add SYS_ADMIN \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        -e FULLMAG_PYTHON=/usr/bin/python3 \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py'
+
+# Build and export one immutable, hash-addressed HYPRE memory-strategy bundle.
+# The exporter atomically selects the resulting bundle as fem-gpu-host only
+# after its manifest and CUDA architecture contract have validated.
+build-fem-hypre-memory-variant variant:
+    variant="{{variant}}"; \
+      case "$variant" in baseline|umpire|cuda_async|thrust_async) ;; \
+        *) echo "unsupported HYPRE memory variant: $variant" >&2; exit 2 ;; \
+      esac; \
+      FULLMAG_HYPRE_MEMORY_VARIANT="$variant" \
+      FULLMAG_FEM_RUNTIME_VARIANT="hypre-${variant//_/-}" \
+      ./scripts/export_fem_gpu_runtime.sh
+
+# Build the three variants supported by the pinned HYPRE release. The fourth
+# requested candidate is invoked last and must fail closed if HYPRE 3.1.0 does
+# not expose --enable-thrust-async; it is never silently mapped to baseline.
+build-all-fem-hypre-memory-variants:
+    just build-fem-hypre-memory-variant baseline
+    just build-fem-hypre-memory-variant umpire
+    just build-fem-hypre-memory-variant cuda_async
+    just build-fem-hypre-memory-variant thrust_async
 
 # Backward-compatible alias.
 rebuild-gpu-runtime:

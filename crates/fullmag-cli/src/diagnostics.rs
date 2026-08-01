@@ -51,6 +51,20 @@ fn near_zero(value: f64) -> bool {
     value.abs() <= 1e-18
 }
 
+fn fem_plan_uses_legacy_diagnostic_topology(plan: &FemPlanIR) -> bool {
+    plan.mesh
+        .cells
+        .types
+        .iter()
+        .all(|cell| *cell == fullmag_ir::FemCellTypeIR::Tet4)
+        && plan
+            .mesh
+            .facets
+            .types
+            .iter()
+            .all(|facet| *facet == fullmag_ir::FemFacetTypeIR::Tri3)
+}
+
 fn add_initial_state_warnings(
     warnings: &mut Vec<String>,
     max_effective_field_amplitude: Option<f64>,
@@ -162,7 +176,9 @@ pub(crate) fn diagnose_initial_fdm_plan(plan: &FdmPlanIR) -> Result<InitialState
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive
+                .dt_max
+                .ok_or_else(|| anyhow!("adaptive timestep requires explicit dt_max"))?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -216,6 +232,23 @@ pub(crate) fn diagnose_initial_fdm_plan(plan: &FdmPlanIR) -> Result<InitialState
 }
 
 pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialStateDiagnostic> {
+    fullmag_ir::validate_mesh_for_execution(&plan.mesh)
+        .map_err(|errors| anyhow!("diagnostic FEM topology error: {}", errors.join("; ")))?;
+    if !fem_plan_uses_legacy_diagnostic_topology(plan) {
+        return diagnose_initial_state(
+            plan.mesh.nodes.len(),
+            Some(plan.mesh.facet_count()),
+            None,
+            None,
+            plan.enable_exchange,
+            plan.enable_demag,
+            plan.external_field,
+            plan.material.damping,
+            plan.relaxation.as_ref(),
+            magnetization_is_uniform(&plan.initial_magnetization),
+        );
+    }
+
     let topology = MeshTopology::from_ir(&plan.mesh)
         .map_err(|error| anyhow!("diagnostic FEM topology error: {}", error))?;
     let material = MaterialParameters::new(
@@ -234,7 +267,9 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive
+                .dt_max
+                .ok_or_else(|| anyhow!("adaptive timestep requires explicit dt_max"))?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -281,7 +316,7 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
             Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) => {
                 let mut diagnostic = diagnose_initial_state(
                     plan.mesh.nodes.len(),
-                    Some(plan.mesh.boundary_faces.len()),
+                    Some(plan.mesh.facet_count()),
                     None,
                     None,
                     plan.enable_exchange,
@@ -375,14 +410,30 @@ fn diagnose_initial_multilayer_plan(plan: &FdmMultilayerPlanIR) -> InitialStateD
 
 pub(crate) fn diagnose_initial_backend_plan(
     backend_plan: &BackendPlanIR,
+    resolved_runtime: &fullmag_runner::RuntimeEngineInfo,
 ) -> Result<InitialStateDiagnostic> {
     match backend_plan {
         BackendPlanIR::Fdm(plan) => diagnose_initial_fdm_plan(plan),
         BackendPlanIR::FdmMultilayer(plan) => Ok(diagnose_initial_multilayer_plan(plan)),
-        BackendPlanIR::Fem(plan) => diagnose_initial_fem_plan(plan),
+        BackendPlanIR::Fem(plan) => {
+            if !fem_plan_uses_legacy_diagnostic_topology(plan)
+                && (resolved_runtime.backend_family != "fem"
+                    || !matches!(
+                        resolved_runtime.engine_id.as_str(),
+                        "fem_cpu_native" | "fem_native_gpu"
+                    ))
+            {
+                anyhow::bail!(
+                    "typed FEM topology requires a resolved native FEM runtime, got backend={} engine={}",
+                    resolved_runtime.backend_family,
+                    resolved_runtime.engine_id,
+                );
+            }
+            diagnose_initial_fem_plan(plan)
+        }
         BackendPlanIR::FemEigen(plan) => diagnose_initial_state(
             plan.mesh.nodes.len(),
-            Some(plan.mesh.boundary_faces.len()),
+            Some(plan.mesh.facet_count()),
             None,
             None,
             plan.enable_exchange,
@@ -398,7 +449,7 @@ pub(crate) fn diagnose_initial_backend_plan(
         ),
         BackendPlanIR::FemFrequencyResponse(plan) => diagnose_initial_state(
             plan.mesh.nodes.len(),
-            Some(plan.mesh.boundary_faces.len()),
+            Some(plan.mesh.facet_count()),
             None,
             None,
             plan.enable_exchange,

@@ -70,10 +70,10 @@ import {
   crossSectionFramePreviewToClip,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { usePlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
-  resolveEffectiveVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
   surfaceColorSourceToColorMode,
@@ -203,6 +203,7 @@ import {
 } from "../viewport3dPrimitiveModel";
 import {
   buildMeshQualityVertexColors,
+  topologySupportsTet4FmmqQuality,
   type MeshQualityColorMetric,
 } from "../viewport3dQualityMapping";
 import { buildViewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
@@ -1286,15 +1287,6 @@ export function resolveViewport3DPartVisualizationSettings({
     target: regionTarget,
     visualizationState: renderingState,
   });
-  if (!objectVisualization.effectiveSettings.visible) {
-    return {
-      ...resolveEffectiveVisualizationSettings({
-        ...regionVisualization.effectiveSettings,
-        visible: false,
-      }),
-      target,
-    };
-  }
   return { ...regionVisualization.effectiveSettings, target };
 }
 
@@ -1377,6 +1369,9 @@ export interface Viewport3DResourceFrameInput {
   dataAvailable: boolean;
   error?: string | null;
   id: string;
+  materializationState?:
+    | components["schemas"]["FieldMaterializationState"]
+    | null;
   payloadRevision: ResourceRevision | null;
   revision: ResourceRevision | null;
   status: ResourceStatus;
@@ -1563,6 +1558,7 @@ export function resolveViewport3DResourceFrameState({
   dataAvailable,
   error,
   id,
+  materializationState,
   payloadRevision,
   revision,
   status,
@@ -1573,7 +1569,12 @@ export function resolveViewport3DResourceFrameState({
     id,
     revision: visiblePayloadAvailable ? payloadRevision ?? revision : revision,
     status:
-      visiblePayloadAvailable && status === "stale" ? "ready" : status,
+      visiblePayloadAvailable &&
+      (status === "stale" ||
+        materializationState === "stale_complete" ||
+        materializationState === "pending")
+        ? "ready"
+        : status,
   };
 }
 
@@ -2278,6 +2279,7 @@ export function useViewport3DSceneModel({
     () => crossSectionFramePreviewToClip(crossSectionFramePreview),
     [crossSectionFramePreview],
   );
+  const planarMonitorFramePreview = usePlanarMonitorFramePreview();
   const cameraRegistryCamera = useCameraRegistryCamera();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
@@ -2649,8 +2651,13 @@ export function useViewport3DSceneModel({
     selection.kind === "mesh.quality" ||
     selection.ref?.type === "mesh-quality-element";
   const meshQualityMetric = resolveSelectionMeshQualityMetric(selection);
+  const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);
   const meshQualityData = useViewport3DMeshQualityData(
-    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),
+    Boolean(
+      fieldCompatibleTopologyRenderModel &&
+        meshQualityOverlayVisible &&
+        tet4FmmqQualitySupported,
+    ),
   );
   const meshQualityColors = useMemo(
     () =>
@@ -3855,6 +3862,12 @@ export function useViewport3DSceneModel({
       decoded.boundaryMarkers.byteLength +
       decoded.elementMarkers.byteLength +
       decoded.indices.byteLength +
+      (decoded.cellNodes?.byteLength ?? 0) +
+      (decoded.cellOffsets?.byteLength ?? 0) +
+      (decoded.cellTypes?.byteLength ?? 0) +
+      (decoded.facetNodes?.byteLength ?? 0) +
+      (decoded.facetOffsets?.byteLength ?? 0) +
+      (decoded.facetTypes?.byteLength ?? 0) +
       decoded.positions.byteLength
     );
   }, [topology.data]);
@@ -3938,6 +3951,7 @@ export function useViewport3DSceneModel({
       dataAvailable: Boolean(fieldVector.data),
       error: fieldVector.error?.message,
       id: "field-vector",
+      materializationState: primaryMagnitudeFieldMeta.data?.state ?? null,
       payloadRevision: fieldVector.payloadRevision ?? null,
       revision: fieldVector.revision,
       status: fieldVector.status,
@@ -4104,6 +4118,7 @@ export function useViewport3DSceneModel({
     crossSectionFrameClip,
     crossSectionFrameRotationDegrees:
       crossSectionFramePreview?.rotationDegrees ?? 0,
+    planarMonitorFramePreview,
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,

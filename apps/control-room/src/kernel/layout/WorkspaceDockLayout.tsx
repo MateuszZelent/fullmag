@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import type { PanelImperativeHandle } from "react-resizable-panels";
 import { GripVertical } from "lucide-react";
 
 import {
@@ -30,6 +31,17 @@ interface SortableWorkspaceColumnProps {
 interface WorkspaceDockState {
   layout: typeof DEFAULT_WORKSPACE_LAYOUT;
   restored: boolean;
+}
+
+function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
+  try {
+    window.localStorage.setItem(
+      WORKSPACE_LAYOUT_STORAGE_KEY,
+      serializeWorkspaceLayout(layout),
+    );
+  } catch {
+    return;
+  }
 }
 
 function SortableWorkspaceColumn({
@@ -67,6 +79,9 @@ export function WorkspaceDockLayout() {
     layout: DEFAULT_WORKSPACE_LAYOUT,
     restored: false,
   });
+  const inspectorPanelRef = useRef<PanelImperativeHandle | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const [inspectorMaxWidth, setInspectorMaxWidth] = useState(560);
 
   useEffect(() => {
     const restoreFromStorage = () => {
@@ -93,16 +108,31 @@ export function WorkspaceDockLayout() {
     };
   }, []);
 
-  function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
-    try {
-      window.localStorage.setItem(
-        WORKSPACE_LAYOUT_STORAGE_KEY,
-        serializeWorkspaceLayout(layout),
-      );
-    } catch {
-      return;
-    }
-  }
+  useEffect(() => {
+    const updateInspectorMaximum = () => {
+      if (resizeFrameRef.current !== null) return;
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        const maximum = Math.max(
+          360,
+          Math.min(560, Math.floor(window.innerWidth * 0.38)),
+        );
+        setInspectorMaxWidth(maximum);
+        if ((inspectorPanelRef.current?.getSize().inPixels ?? 0) > maximum) {
+          inspectorPanelRef.current?.resize(`${maximum}px`);
+        }
+      });
+    };
+
+    updateInspectorMaximum();
+    window.addEventListener("resize", updateInspectorMaximum);
+    return () => {
+      window.removeEventListener("resize", updateInspectorMaximum);
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+    };
+  }, []);
 
   function handleMoveColumn(activeId: string, overId: string): void {
     setDockState((currentState) => {
@@ -190,6 +220,13 @@ export function WorkspaceDockLayout() {
             <ResizablePanelGroup
               autoSaveId={columnAutoSaveId}
               direction="horizontal"
+              onLayoutChanged={() => {
+                if (resizeFrameRef.current !== null) return;
+                resizeFrameRef.current = window.requestAnimationFrame(() => {
+                  resizeFrameRef.current = null;
+                  window.dispatchEvent(new Event("resize"));
+                });
+              }}
               panelCount={visibleColumns.length}
             >
               {visibleColumns.map((column, index) => (
@@ -197,13 +234,40 @@ export function WorkspaceDockLayout() {
                   <ResizablePanel
                     key={column.slotId}
                     defaultSize={column.defaultSize}
+                    groupResizeBehavior={column.resizeBehavior}
                     id={column.slotId}
+                    maxSize={
+                      column.slotId === "panel-right"
+                        ? `${inspectorMaxWidth}px`
+                        : column.maxSize
+                    }
                     minSize={column.minSize}
+                    panelRef={
+                      column.slotId === "panel-right"
+                        ? inspectorPanelRef
+                        : undefined
+                    }
                   >
                     <SortableWorkspaceColumn column={column} />
                   </ResizablePanel>
                   {index < visibleColumns.length - 1 ? (
-                    <ResizableHandle className="fm-resize-handle--vertical" />
+                    <ResizableHandle
+                      className="fm-resize-handle--vertical"
+                      aria-label={
+                        column.slotId === "panel-right" ||
+                        visibleColumns[index + 1]?.slotId === "panel-right"
+                          ? "Resize Inspector"
+                          : "Resize workspace panels"
+                      }
+                      onDoubleClick={() => {
+                        if (
+                          column.slotId === "panel-right" ||
+                          visibleColumns[index + 1]?.slotId === "panel-right"
+                        ) {
+                          inspectorPanelRef.current?.resize("416px");
+                        }
+                      }}
+                    />
                   ) : null}
                 </Fragment>
               ))}

@@ -16,6 +16,10 @@ type ExplorerNodeKind =
   | "session.root"
   | "universe.root"
   | "objects.root"
+  | "definitions.root"
+  | "model.planar.monitors"
+  | "model.planar.monitor"
+  | "model.planar.monitor.draft"
   | "object.root"
   | "object.geometry"
   | "object.antenna"
@@ -79,6 +83,8 @@ type ExplorerNodeKind =
   | "study.stages"
   | "study.stage.action"
   | "study.stage.add_field_drive"
+  | "study.stage.autosave"
+  | "study.stage.fft_response"
   | "study.stage.eigenmodes"
   | "study.stage.eigenmodes.setup"
   | "study.stage.eigenmodes.calculation_mode"
@@ -106,6 +112,7 @@ type ExplorerNodeKind =
   | "study.stage.hysteresis"
   | "study.stage.relax"
   | "study.stage.run"
+  | "study.stage.table_autosave"
   | "study.stage.change_device"
   | "study.stage.save_state"
   | "results.root"
@@ -145,6 +152,7 @@ type ExplorerNodeKind =
   | "results.frequency_domain.comparison"
   | "results.frequency_domain.exports"
   | "results.field_quantity"
+  | "results.quick_chart"
   | "resources.root"
   | "resources.analysis.frequency_domain"
   | "resources.analysis.frequency_domain.manifest"
@@ -250,6 +258,7 @@ export interface ExplorerNode {
   artifactPath?: string;
   branchId?: string;
   calculationMode?: FrequencyDomainCalculationMode;
+  chartId?: string;
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
@@ -269,6 +278,7 @@ export interface ExplorerNode {
   measurementAxis?: string;
   meshIdentity?: string;
   meshPartId?: string;
+  monitorId?: string;
   visualizationTargetId?: string;
   modeIndex?: number;
   objectId?: string;
@@ -277,6 +287,9 @@ export interface ExplorerNode {
   fieldDriveId?: string;
   regionId?: string;
   resourceRef?: string;
+  tableId?: string;
+  xAxisId?: string;
+  yAxisIds?: readonly string[];
   sampleIndex?: number;
   stageId?: string;
   stageIndex?: number;

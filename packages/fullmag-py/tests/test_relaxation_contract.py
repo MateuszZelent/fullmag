@@ -11,7 +11,7 @@ def _outputs():
 class RelaxationContractTests(unittest.TestCase):
     def test_canonical_defaults_are_shared(self):
         stop = fm.RelaxStop()
-        self.assertEqual(stop.torque_tolerance_apm, 1e-4)
+        self.assertEqual(stop.torque_tolerance_apm, 1e-6 / (4.0e-7 * math.pi))
         self.assertEqual(stop.max_steps, 50_000)
 
     def test_direct_minimizer_rejects_llg_dynamics(self):
@@ -42,7 +42,7 @@ class RelaxationContractTests(unittest.TestCase):
         cases = (
             (
                 fm.RelaxStop(torque_tolerance_apm=1e-4),
-                {"tol": 2e-4},
+                {"tolA": 2e-4},
                 "torque_tolerance",
             ),
             (
@@ -89,7 +89,7 @@ class RelaxationContractTests(unittest.TestCase):
             max_steps=None,
             max_relaxation_time_s=None,
         )
-        spec = fm.relax_stage(stop=stop, max_relaxation_time_s=None)
+        spec = fm.relax_stage(stop=stop, max_relaxation_time_s=None, dt=1e-15)
         self.assertIsNone(spec.stop.max_relaxation_time_s)
 
         with self.assertRaisesRegex(ValueError, "max_pseudotime_s conflicts"):
@@ -135,7 +135,7 @@ class RelaxationContractTests(unittest.TestCase):
             energy_tolerance_j=1e-20,
             max_steps=None,
         )
-        spec = fm.relax_stage(stop=stop)
+        spec = fm.relax_stage(stop=stop, dt=1e-15)
         self.assertIsNone(spec.stop.torque_tolerance_apm)
         self.assertIsNone(spec.stop.max_steps)
 

@@ -1,0 +1,44 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The periodic CUDA lane requires policy-specific qualification."},
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "A source-visible CPU reduction does not establish GPU parity."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-periodic-demag-reduction", "symbols": ["Ap", "P", "Ao", "bp", "b", "up"], "sources": ["fem"]},
+    {"id": "eq-numerical-periodic-demag-field-energy", "symbols": ["Hd", "P", "up", "Ed", "mu0", "Omega", "M"], "sources": ["fem"]},
+    {"id": "eq-numerical-periodic-demag-fdm-sum", "symbols": ["Hd", "ri", "I", "N", "M", "t", "n"], "sources": ["fdm"]}
+  ],
+  "symbols": [
+    {"id": "Ap", "latex": "$A_p$", "meaning": "reduced periodic FEM stiffness operator", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Ao", "latex": "$A_{\\mathrm{open}}$", "meaning": "unreduced FEM stiffness operator", "si_unit": "$\\mathrm{m}$"},
+    {"id": "P", "latex": "$P$", "meaning": "periodic representative prolongation", "si_unit": "$1$"},
+    {"id": "bp", "latex": "$b_p$", "meaning": "reduced Poisson right-hand side", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "b", "latex": "$b$", "meaning": "unreduced Poisson right-hand side", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "up", "latex": "$u_p$", "meaning": "reduced scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "ri", "latex": "$\\mathbf r_i$", "meaning": "FDM cell-center position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "t", "latex": "$\\mathbf t_{\\boldsymbol\\ell}$", "meaning": "periodic translation vector", "si_unit": "$\\mathrm{m}$"},
+    {"id": "I", "latex": "$\\mathcal I$", "meaning": "finite image-index set", "si_unit": "$1$"},
+    {"id": "n", "latex": "$n_x,n_y,n_z$", "meaning": "image counts along each axis", "si_unit": "$1$"},
+    {"id": "N", "latex": "$\\mathbf N$", "meaning": "demagnetizing tensor kernel", "si_unit": "$1$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "sources": [
+    {"id": "pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Periodic policy validation and IR lowering."},
+    {"id": "fdm", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_periodic_newell_kernel_spectra", "responsibility": "FDM periodic kernel spectra."},
+    {"id": "fem", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp", "symbol": "solve_demag_periodic_poisson_reduced", "responsibility": "FEM periodic representative reduction and solve."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "FdmPbc.axes", "type": "tuple[bool,bool,bool]", "default": "required", "si_unit": "$1$", "validation": "exactly three Boolean values", "meaning": "periodic status of x, y, z", "backend_support": "FDM planner; FEM mesh planner consumes the same intent", "problem_ir": "`pbc.axes`"},
+      {"python": "FdmPbc.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `truncated_images`, or `periodic_airbox_k0`", "meaning": "demagnetization boundary policy", "backend_support": "FDM supports `open`/`truncated_images`; FEM supports the periodic airbox policy subject to qualification", "problem_ir": "`pbc.demag`"},
+      {"python": "FdmPbc.image_counts", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "exactly three non-negative integers; only with `truncated_images`", "meaning": "finite image counts $n_x,n_y,n_z$", "backend_support": "FDM CPU/GPU image policies as qualified", "problem_ir": "`pbc.image_counts`"}
+    ]
+  }
+}

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -111,6 +112,12 @@ void active_magnetization_normalization_respects_mask() {
     check(m[3] == 2.0, "inactive node is left unchanged");
     check(m[8] == -1.0, "active node 2 normalized");
 
+    m[3] = std::numeric_limits<double>::quiet_NaN();
+    check(
+        fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
+        "nonfinite inactive airbox magnetization must be ignored");
+    check(std::isnan(m[3]), "inactive airbox magnetization remains untouched");
+
     m = {
         1.0, 0.0, 0.0,
         2.0, 0.0, 0.0,
@@ -120,8 +127,42 @@ void active_magnetization_normalization_respects_mask() {
         !fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
         "zero active magnetization must be rejected");
     check(
-        error.find("zero or invalid magnetization norm") != std::string::npos,
+        error.find("zero, subnormal, or invalid magnetization norm") != std::string::npos,
         "zero active magnetization error string");
+
+    for (double invalid : {
+             std::numeric_limits<double>::denorm_min(),
+             std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::infinity(),
+         }) {
+        m = {
+            invalid, 0.0, 0.0,
+            2.0, 0.0, 0.0,
+            0.0, 0.0, -1.0,
+        };
+        check(
+            !fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
+            "subnormal and nonfinite active magnetization must be rejected");
+    }
+}
+
+void active_magnetization_normalization_is_idempotent_at_fp64_roundoff() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.magnetic_node_mask = {1u};
+    std::vector<double> m = {
+        0.9998162380980484,
+        0.019170028388013908,
+        6.86072797124435e-06,
+    };
+    const auto before = m;
+    std::string error;
+    check(
+        fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
+        error.c_str());
+    check(
+        m == before,
+        "already-unit FP64 continuation state must remain bitwise unchanged");
 }
 
 void periodic_projection_copies_representative_vectors() {
@@ -158,6 +199,7 @@ int main() {
     aos_helpers_are_owned_by_runtime_module();
     aos_pack_unpack_and_existing_resize_contract();
     active_magnetization_normalization_respects_mask();
+    active_magnetization_normalization_is_idempotent_at_fp64_roundoff();
     periodic_projection_copies_representative_vectors();
     return 0;
 }

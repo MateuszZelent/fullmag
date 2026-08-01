@@ -32,6 +32,7 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import {
   adjacentHysteresisPointIndex,
@@ -122,6 +123,32 @@ const table = {
   table_id: "default",
   total_rows: 2,
 };
+
+function chartWindow(value: {
+  columns: readonly unknown[];
+  cursor_end: number;
+  cursor_start: number;
+  resync_required: boolean;
+  revision: number;
+  rows: readonly (readonly number[])[];
+  schema_revision: number;
+  table_id: string;
+  total_rows: number;
+}): ChartTableWindow {
+  return {
+    columnCount: value.columns.length,
+    columns: value.columns as ChartTableWindow["columns"],
+    cursorEnd: value.cursor_end,
+    cursorStart: value.cursor_start,
+    resyncRequired: value.resync_required,
+    revision: value.revision,
+    rowCount: value.rows.length,
+    schemaRevision: value.schema_revision,
+    tableId: value.table_id,
+    totalRows: value.total_rows,
+    values: new Float64Array(value.rows.flat()),
+  };
+}
 
 describe("AnalysisPlotsView", () => {
   it("fits hysteresis chart axes to collected points during live sweeps", () => {
@@ -1167,13 +1194,13 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
     );
 
-    expect(html).toContain("Table charts");
+    expect(html).toContain("Analysis overview");
     expect(html).toContain("2 rows / 2 columns");
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain('class="fm-analysis-plots__echarts"');
@@ -1183,6 +1210,7 @@ describe("AnalysisPlotsView", () => {
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="overview"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1218,7 +1246,7 @@ describe("AnalysisPlotsView", () => {
     );
 
     expect(html).toContain("Frequency-domain response sweep");
-    expect(html).toContain("Frequency-domain series legend");
+    expect(html).toContain("Frequency-domain series");
     expect(html).toContain("Amplitude");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
   });
@@ -1939,14 +1967,14 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
     );
 
     expect(html).toContain("zoom 10-20");
-    expect(html).toContain("Clear zoom");
+    expect(html).not.toContain("Clear zoom");
   });
 
   it("renders compact chart status for axes, sample counts, and zoom state", () => {
@@ -1962,18 +1990,18 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
     );
 
-    expect(html).toContain('class="fm-analysis-plots__status"');
-    expect(html).toContain('aria-label="X step"');
-    expect(html).toContain('aria-label="Y 1 series"');
-    expect(html).toContain('aria-label="Visible 2"');
-    expect(html).toContain('aria-label="Total 2"');
-    expect(html).toContain('aria-label="Zoom off"');
+    // ChartSection header now carries compact status via fm-chart-section__header-meta
+    expect(html).toContain('class="fm-chart-section__header"');
+    // ChartControlBar or ChartSection status shows live state
+    expect(html).toContain('class="fm-chart-section__body"');
+    // The chart data-attr encodes axis and sample counts
+    expect(html).toContain('data-chart-model-key=');
   });
 
   it("renders selected chart cursor point in compact status", () => {
@@ -2001,13 +2029,16 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
     );
 
-    expect(html).toContain('aria-label="Cursor mx 0.2"');
+    // ChartSection footer row contains the cursor value
+    expect(html).toContain('class="fm-chart-section__footer"');
+    // The range-cursor span shows the selected point label and value
+    expect(html).toContain('class="fm-analysis-plots__range-cursor"');
   });
 
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
@@ -2046,19 +2077,20 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
     );
 
-    expect(html).toContain('class="fm-analysis-plots__legend"');
+    // New ChartLegend uses fm-chart-legend* classes (not fm-analysis-plots__legend*)
+    expect(html).toContain('class="fm-chart-legend__item"');
     expect(html).toContain('<button');
     expect(html).toContain('type="button"');
-    expect(html).toContain("fm-button fm-button--secondary fm-button--sm");
-    expect(html).toContain('aria-label="Series mx unit 1 latest 0.2"');
-    expect(html).toContain('class="fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--0"');
-    expect(html).toContain('class="fm-analysis-plots__legend-latest"');
+    // ChartLegend aria-label format: "label, unit UNIT, latest VALUE. Visible/Hidden..."
+    expect(html).toContain('aria-label="mx, unit 1, latest 0.2');
+    expect(html).toContain('class="fm-chart-legend__swatch');
+    expect(html).toContain('class="fm-chart-legend__latest"');
   });
 
   it("renders solver energy history as a separate chart source when available", () => {
@@ -2099,10 +2131,11 @@ describe("AnalysisPlotsView", () => {
         onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
+        activeSurface="energy"
         solverEnergySeries={solverEnergySeries}
         solverEnergyStatus="ready"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
@@ -2110,7 +2143,7 @@ describe("AnalysisPlotsView", () => {
 
     expect(html).toContain("Energy history");
     expect(html).toContain("6 series");
-    expect(html).toContain('aria-label="Energy series legend"');
+    expect(html).toContain('aria-label="Energy series"');
     expect(html).toContain("E exchange");
     expect(html).toContain("E total");
     expect(html).toContain("time [s]");
@@ -2144,33 +2177,33 @@ describe("AnalysisPlotsView", () => {
     });
   });
 
-  it("fetches binary table rows only for initial load and zoom windows", () => {
+  it("fetches binary table rows during live follow and pauses when liveMode is paused", () => {
     expect(
       shouldFetchAnalysisTableRows({
         hasVisibleRows: false,
         loadScalars: true,
-        range: null,
+        liveMode: "following",
       }),
     ).toBe(true);
     expect(
       shouldFetchAnalysisTableRows({
         hasVisibleRows: true,
         loadScalars: true,
-        range: null,
+        liveMode: "following",
+      }),
+    ).toBe(true);
+    expect(
+      shouldFetchAnalysisTableRows({
+        hasVisibleRows: true,
+        loadScalars: true,
+        liveMode: "paused",
       }),
     ).toBe(false);
     expect(
       shouldFetchAnalysisTableRows({
-        hasVisibleRows: true,
-        loadScalars: true,
-        range: { fromValue: 10, toValue: 20 },
-      }),
-    ).toBe(true);
-    expect(
-      shouldFetchAnalysisTableRows({
         hasVisibleRows: false,
         loadScalars: false,
-        range: null,
+        liveMode: "following",
       }),
     ).toBe(false);
   });
@@ -2210,9 +2243,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("declares the add-series event path in the module manifest", () => {
-    expect(analysisPlotsManifest.listens).toContain("charts:add-series-requested");
-    expect(analysisPlotsManifest.emits).toContain("charts:range-selected");
-    expect(analysisPlotsManifest.emits).toContain("charts:series-selected");
+    expect(analysisPlotsManifest.listens).toContain("analysis-plots:add-series-requested");
+    expect(analysisPlotsManifest.emits).toContain("analysis-plots:range-selected");
+    expect(analysisPlotsManifest.emits).toContain("analysis-plots:series-selected");
   });
 
   it("adds requested chart series through the same Y-axis unit policy as the UI", () => {

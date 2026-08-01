@@ -1,12 +1,11 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
 import { useMeshSharedDomainManifestResource } from "@/kernel/resources/geometryLifecycleResources";
 import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeResources";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { findCanonicalAirboxPart } from "./airboxMeshInspectorModel";
 import { useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
 
@@ -22,8 +21,8 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
   const part = findCanonicalAirboxPart(manifest.data?.mesh_parts);
 
   return (
-    <Accordion className="fm-inspector-panel" type="multiple" defaultValue={["topology"]}>
-      <InspectorSection value="topology" title="Airbox Mesh Topology" badge={manifest.status}>
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="Airbox Mesh Topology" badge={manifest.status}>
         <FieldRow label="Canonical target" value="airbox" />
         <FieldRow label="Canonical marker" value="not published" />
         <FieldRow label="Mesh id" value={manifest.data?.mesh_id ?? "not available"} />
@@ -43,7 +42,7 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Boundary-face source" value={part?.boundary_face_indices?.length ? "explicit boundary_face_indices" : part ? "boundary_face_start/boundary_face_count range" : "not available"} />
         <FieldRow label="Shared-interface caveat" value="Interface nodes belong to the shared-domain mesh and are not exclusive Airbox ownership." />
         <FieldRow label="Topology source" value="shared-domain manifest metadata (binary topology is not refetched)" />
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

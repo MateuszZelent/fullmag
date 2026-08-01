@@ -10,10 +10,12 @@ import type { KernelEventMap } from "./events/eventTypes";
 import type { LayoutController } from "./layout/LayoutController";
 import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
+import type { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
 import type { DiagnosticRecorderController } from "./performance/diagnostic-recorder/DiagnosticRecorderController";
 import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
+import type { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
@@ -61,6 +63,7 @@ export interface KernelApi {
   readonly api: ControlRoomApi;
   readonly analysisFieldOverlay: AnalysisFieldOverlayController;
   readonly bus: EventBus<KernelEventMap>;
+  readonly chartViewportHandoff: ChartViewportHandoffController;
   readonly cameraRegistry: CameraRegistryController;
   readonly commandDiagnostics: CommandDiagnosticsController;
   readonly commands: CommandRegistry;
@@ -68,6 +71,7 @@ export interface KernelApi {
   readonly diagnosticRecorder: DiagnosticRecorderController;
   readonly modules: ModuleRegistry;
   readonly realtime: RealtimeInvalidationBridge;
+  readonly realtimeConnection: RealtimeConnectionController;
   readonly resources: ResourceInvalidationController;
   readonly selection: SelectionController;
   readonly visualization: ObjectVisualizationController;

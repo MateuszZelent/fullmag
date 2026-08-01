@@ -400,11 +400,13 @@ pub(crate) fn run_planned_hysteresis(
     output_dir: &Path,
     stage_id: Option<&str>,
 ) -> Result<RunResult, RunError> {
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
     let dummy_display = || crate::interactive::DisplaySelectionState::default();
     let mut default_on_step = |_| StepAction::Continue;
     run_planned_hysteresis_with_live_preview(
         problem,
         plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
         until_seconds,
         output_dir,
         1,
@@ -423,12 +425,14 @@ pub(crate) fn run_planned_hysteresis_with_callback(
     output_dir: &Path,
     field_every_n: u64,
     stage_id: Option<&str>,
+    fem_mesh_identity: Option<&crate::types::StageFemMeshIdentity>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
 ) -> Result<RunResult, RunError> {
     let dummy_display = || crate::interactive::DisplaySelectionState::default();
     run_planned_hysteresis_with_live_preview(
         problem,
         plan,
+        fem_mesh_identity,
         until_seconds,
         output_dir,
         field_every_n,
@@ -443,6 +447,7 @@ pub(crate) fn run_planned_hysteresis_with_callback(
 pub(crate) fn run_planned_hysteresis_with_live_preview(
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    fem_mesh_identity: Option<&crate::types::StageFemMeshIdentity>,
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
@@ -521,6 +526,8 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             message: "Expected Hysteresis study stage".to_string(),
         });
     };
+    let fem_mesh_generation_id =
+        fem_mesh_identity.map(|identity| identity.generation_id().to_string());
 
     let u_H = hysteresis_field_axis(orientation.as_ref(), *direction);
     let u_meas = hysteresis_measurement_axis(measurement_axis, u_H, plan)?;
@@ -568,6 +575,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
     let mut steps_stats = Vec::new();
     let mut global_step_count = 0;
     let mut final_status = RunStatus::Completed;
+    let mut final_execution_provenance = crate::types::ExecutionProvenance::default();
     let mut saturation_result: Option<HysteresisSaturationResult> = None;
     let mut stop_after_saturation_probe = false;
     let mut preparation_field_mT =
@@ -586,6 +594,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         };
         let probe_run = run_hysteresis_saturation_probe(
             &plan.backend_plan,
+            &fem_mesh_generation_id,
             problem,
             &current_m,
             u_H,
@@ -612,6 +621,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         let preparation_field_Apm = field_mT_to_h_apm(preparation_field_mT);
         let solve_res = run_settle_at_field(
             &plan.backend_plan,
+            &fem_mesh_generation_id,
             problem,
             &current_m,
             [
@@ -634,6 +644,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             on_step,
         )?;
         final_status = solve_res.executed_run.result.status;
+        final_execution_provenance = solve_res.executed_run.provenance.clone();
         append_stage_steps(
             &mut steps_stats,
             &mut global_step_count,
@@ -653,6 +664,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
 
             let point_run = run_settle_at_field(
                 &plan.backend_plan,
+                &fem_mesh_generation_id,
                 problem,
                 &current_m,
                 H_ext,
@@ -673,6 +685,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
 
             current_m = point_run.executed_run.result.final_magnetization.clone();
             final_status = point_run.executed_run.result.status;
+            final_execution_provenance = point_run.executed_run.provenance.clone();
             let point_non_converged = point_run
                 .trace
                 .iter()
@@ -814,7 +827,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     ..point_stats
                 },
                 grid: hysteresis_magnetization_grid(plan, &current_m),
-                fem_mesh: None,
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization: Some(current_m.iter().flat_map(|v| v.iter().copied()).collect()),
                 preview_field: None,
                 cached_preview_fields: None,
@@ -861,6 +874,11 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         adaptive_refinement.as_ref(),
         stage_id,
     )?;
+    write_hysteresis_json_artifact(
+        output_dir,
+        "hysteresis_execution_provenance.json",
+        &final_execution_provenance,
+    )?;
 
     let mut angular_family_variant_runs: Vec<(String, HysteresisAngularFamilyVariantRun)> =
         Vec::new();
@@ -878,6 +896,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 let variant_run = run_hysteresis_angular_family_variant(
                     variant,
                     plan,
+                    &fem_mesh_generation_id,
                     problem,
                     output_dir,
                     &family_initial_m,
@@ -911,6 +930,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 policy,
                 states,
                 plan,
+                &fem_mesh_generation_id,
                 problem,
                 output_dir,
                 u_H,
@@ -960,6 +980,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     minor_loops,
                     states,
                     &plan,
+                    &fem_mesh_generation_id,
                     problem,
                     output_dir,
                     u_H,
@@ -1183,6 +1204,7 @@ fn append_stage_steps(
 
 fn run_hysteresis_saturation_probe(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     initial_m: &[[f64; 3]],
     u_H: [f64; 3],
@@ -1208,6 +1230,7 @@ fn run_hysteresis_saturation_probe(
         let H_Apm = field_mT_to_h_apm(field_value_mT);
         let solve_res = run_settle_at_field(
             backend_plan,
+            fem_mesh_generation_id,
             problem,
             &current_m,
             [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]],
@@ -2108,6 +2131,7 @@ struct HysteresisProgressContext {
 
 fn run_settle_at_field(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     initial_m: &[[f64; 3]],
     H_ext: [f64; 3],
@@ -2168,6 +2192,7 @@ fn run_settle_at_field(
             let stats = pre_solver_hysteresis_stats(&current_magnetization, H_ext, &averaging);
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
+                &fem_mesh_generation_id,
                 progress.point_idx,
                 progress.field_m_t,
                 settle_idx,
@@ -2228,6 +2253,7 @@ fn run_settle_at_field(
                 retry_timestep_override.or_else(|| settle_step_timestep_s(&step));
             let executed_run = execute_settle_step_at_field(
                 backend_plan,
+                fem_mesh_generation_id,
                 problem,
                 &step_input_magnetization,
                 H_ext,
@@ -2276,6 +2302,7 @@ fn run_settle_at_field(
         if let Some(progress) = hysteresis_progress.as_ref() {
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
+                &fem_mesh_generation_id,
                 progress.point_idx,
                 progress.field_m_t,
                 settle_idx,
@@ -2508,6 +2535,7 @@ fn ensure_fem_settle_timestep(plan: &mut fullmag_ir::FemPlanIR) {
 
 fn execute_settle_step_at_field(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     initial_magnetization: &[[f64; 3]],
     H_ext: [f64; 3],
@@ -2534,7 +2562,7 @@ fn execute_settle_step_at_field(
                 mutated_fdm.adaptive_timestep = None;
             }
 
-            let engine = dispatch::resolve_fdm_engine(problem)?;
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
             let mut live_on_step = |update: StepUpdate| {
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
@@ -2548,9 +2576,25 @@ fn execute_settle_step_at_field(
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
-            dispatch::execute_fdm(engine, &mutated_fdm, until_seconds, &[], Some(live), None)
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
+                &mutated_fdm,
+                until_seconds,
+                &[],
+                Some(live),
+                None,
+            )?;
+            crate::attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
+            let stage_context = crate::types::FemStageExecutionContext::from_mesh_identity(
+                crate::types::StageFemMeshIdentity::from_generation_id(
+                    fem_mesh_generation_id
+                        .clone()
+                        .expect("FEM hysteresis stage generation"),
+                ),
+            );
             let mut mutated_fem = fem.clone();
             mutated_fem.initial_magnetization = initial_magnetization.to_vec();
             mutated_fem.external_field = Some(H_ext);
@@ -2561,8 +2605,11 @@ fn execute_settle_step_at_field(
                 mutated_fem.adaptive_timestep = None;
             }
 
-            let resolution =
-                dispatch::resolve_fem_engine_for_plan_with_trail(problem, &mutated_fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+                problem,
+                &mutated_fem,
+                field_every_n != u64::MAX,
+            )?;
             let mut live_on_step = |update: StepUpdate| {
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
@@ -2576,14 +2623,21 @@ fn execute_settle_step_at_field(
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
-            fem::relax::execute_fem_relax(
+            let mut executed = fem::relax::execute_fem_relax_with_context(
                 fem_engine_kind(resolution.engine),
                 &mutated_fem,
+                &stage_context,
                 until_seconds,
                 &[],
                 Some(live),
                 None,
-            )
+            )?;
+            crate::attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            crate::attach_fem_crossover_decision_to_executed_run(
+                &mut executed,
+                resolution.fem_crossover_decision,
+            );
+            Ok(executed)
         }
         _ => Err(RunError {
             message: "Unsupported backend plan in settle step".to_string(),
@@ -3103,6 +3157,7 @@ fn settle_trace_resolved_parameters(
 
 fn hysteresis_progress_update(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     point_idx: Option<usize>,
     H_mT: f64,
     settle_idx: usize,
@@ -3113,7 +3168,7 @@ fn hysteresis_progress_update(
     StepUpdate {
         stats: stats.cloned().unwrap_or_default(),
         grid: hysteresis_progress_grid(backend_plan, magnetization),
-        fem_mesh: None,
+        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
         magnetization: magnetization
             .map(|values| values.iter().flat_map(|v| v.iter().copied()).collect()),
         preview_field: None,
@@ -3233,13 +3288,16 @@ fn fem_hysteresis_averaging_context(fem: &fullmag_ir::FemPlanIR) -> HysteresisAv
     if fem
         .ms_element_field
         .as_ref()
-        .is_some_and(|values| values.len() != fem.mesh.elements.len())
+        .is_some_and(|values| values.len() != fem.mesh.cell_count())
     {
         return uniform_hysteresis_averaging_context();
     }
+    let Ok(elements) = fem.mesh.require_tet4_elements() else {
+        return uniform_hysteresis_averaging_context();
+    };
 
     let mut weights = vec![0.0; node_count];
-    for (element_idx, element) in fem.mesh.elements.iter().enumerate() {
+    for (element_idx, element) in elements.iter().enumerate() {
         if fem
             .mesh
             .element_markers
@@ -4175,6 +4233,7 @@ fn combine_run_status(left: RunStatus, right: RunStatus) -> RunStatus {
 fn run_hysteresis_angular_family_variant(
     variant: &fullmag_ir::HysteresisAngularVariantIR,
     plan: &ExecutionPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     output_dir: &Path,
     initial_m: &[[f64; 3]],
@@ -4219,6 +4278,7 @@ fn run_hysteresis_angular_family_variant(
         let field_vector_A_per_m = [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]];
         let point_run = run_settle_at_field(
             &plan.backend_plan,
+            fem_mesh_generation_id,
             problem,
             &current_m,
             field_vector_A_per_m,
@@ -4422,6 +4482,7 @@ fn run_hysteresis_adaptive_refinement(
     policy: &AdaptiveRefinementIR,
     major_states: &[HysteresisMajorPointState],
     plan: &ExecutionPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     output_dir: &Path,
     u_H: [f64; 3],
@@ -4492,6 +4553,7 @@ fn run_hysteresis_adaptive_refinement(
             let field_vector_A_per_m = [field_Apm * u_H[0], field_Apm * u_H[1], field_Apm * u_H[2]];
             let solve_res = run_settle_at_field(
                 backend_plan,
+                fem_mesh_generation_id,
                 problem,
                 &parent.magnetization,
                 field_vector_A_per_m,
@@ -4633,6 +4695,7 @@ fn run_hysteresis_minor_loops(
     configured_loops: &[fullmag_ir::MinorLoopIR],
     major_states: &[HysteresisMajorPointState],
     plan: &ExecutionPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     output_dir: &Path,
     u_H: [f64; 3],
@@ -4677,6 +4740,7 @@ fn run_hysteresis_minor_loops(
             } else {
                 let reversal_res = run_settle_at_field(
                     &plan.backend_plan,
+                    fem_mesh_generation_id,
                     problem,
                     &parent.magnetization,
                     reversal_field_vector_A_per_m,
@@ -4802,6 +4866,7 @@ fn run_hysteresis_minor_loops(
             ];
             let solve_res = run_settle_at_field(
                 &plan.backend_plan,
+                fem_mesh_generation_id,
                 problem,
                 &previous_magnetization,
                 field_vector_A_per_m,
@@ -5760,6 +5825,7 @@ mod tests {
             minor_loops: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::Scalar {
                     name: "mz".to_string(),
                     every_seconds: 1.0e-13,
@@ -6039,7 +6105,7 @@ mod tests {
                 ..StepStats::default()
             },
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,
@@ -6105,6 +6171,7 @@ mod tests {
 
         let update = hysteresis_progress_update(
             backend_plan,
+            &None,
             Some(0),
             100.0,
             0,
@@ -6124,6 +6191,7 @@ mod tests {
             Some("projected_gradient_bb")
         );
         assert_eq!(update.grid, [1, 1, 1]);
+        assert_eq!(update.fem_mesh_generation_id, None);
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(6));
         assert!(update.stats.max_h_eff > 79_000.0);
         assert!(update.stats.max_torque_Apm > 79_000.0);
@@ -6188,9 +6256,9 @@ mod tests {
                     [0.0, 0.0, 1.0],
                     [2.0, 0.0, 0.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
                 element_markers: vec![1, 1],
-                boundary_faces: Vec::new(),
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                 boundary_markers: Vec::new(),
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6288,7 +6356,45 @@ mod tests {
             use_consistent_mass: None,
         };
 
-        let averaging = hysteresis_averaging_context(&BackendPlanIR::Fem(plan));
+        crate::types::reset_fem_mesh_fingerprint_count();
+        let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(&plan);
+        let expected_generation = stage_asset.identity.generation_id().to_string();
+        let backend_plan = BackendPlanIR::Fem(plan);
+        let step = SettleStepIR::Minimize {
+            method: "projected_gradient_bb".to_string(),
+            torque_tolerance: 5e-5,
+            energy_tolerance: 1e-20,
+            max_steps: 2,
+            applies_to: None,
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+            on_non_convergence: "fail".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+        for (point, retry) in [(0, 0), (1, 0), (1, 1)] {
+            let update = hysteresis_progress_update(
+                &backend_plan,
+                &Some(expected_generation.clone()),
+                Some(point),
+                10.0 - 20.0 * point as f64,
+                retry,
+                &step,
+                None,
+                None,
+            );
+            assert_eq!(
+                update.fem_mesh_generation_id.as_deref(),
+                Some(expected_generation.as_str())
+            );
+            let _retry_context = crate::types::FemStageExecutionContext::from_mesh_identity(
+                crate::types::StageFemMeshIdentity::from_generation_id(expected_generation.clone()),
+            );
+        }
+        assert_eq!(crate::types::fem_mesh_fingerprint_count(), 1);
+        let averaging = hysteresis_averaging_context(&backend_plan);
         let m_avg = average_hysteresis_magnetization(
             &[
                 [1.0, 0.0, 0.0],
@@ -6435,6 +6541,41 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn auto_fdm_hysteresis_persists_unavailable_cuda_fallback() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-fdm-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("auto FDM hysteresis should execute on CPU when CUDA is unavailable");
+
+        let provenance: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_execution_provenance.json"))
+                .expect("hysteresis provenance artifact should be readable"),
+        )
+        .expect("hysteresis provenance artifact should parse");
+        let fallback = &provenance["resolved_fallback"];
+        assert_eq!(fallback["original_engine"], "fdm_cuda");
+        assert_eq!(fallback["fallback_engine"], "fdm_cpu_reference");
+        assert_eq!(fallback["reason"], "fdm_cuda_unavailable");
+
+        std::fs::remove_dir_all(&output_dir)
+            .expect("temporary hysteresis artifact directory should be removable");
     }
 
     #[test]
@@ -8282,6 +8423,7 @@ mod tests {
 
         let run = run_settle_at_field(
             &plan.backend_plan,
+            &None,
             &problem,
             &[[1.0, 0.0, 0.0]],
             [0.0, 0.0, 0.0],
@@ -8336,6 +8478,7 @@ mod tests {
 
         let run = run_settle_at_field(
             &plan.backend_plan,
+            &None,
             &problem,
             &[[1.0, 0.0, 0.0]],
             [0.0, 0.0, 0.0],

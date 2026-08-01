@@ -84,14 +84,21 @@ describe("ResourceRuntimeStore", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("deduplicates repeated forced loads while the same revision is already in flight", async () => {
+  it("restarts an in-flight forced load when another forced refetch is requested", async () => {
     const store = new ResourceRuntimeStore<string>();
     const first = deferred<string>();
+    const second = deferred<string>();
     const signals: AbortSignal[] = [];
-    const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
-      signals.push(signal);
-      return first.promise;
-    });
+    const load = vi
+      .fn()
+      .mockImplementationOnce(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        return first.promise;
+      })
+      .mockImplementationOnce(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        return second.promise;
+      });
 
     const firstResult = store.ensureLoad({
       externalRevision: 1,
@@ -108,14 +115,60 @@ describe("ResourceRuntimeStore", () => {
       resolveRevision: () => 1,
     });
 
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(signals[0]?.aborted).toBe(false);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
 
-    first.resolve("ready");
+    first.resolve("stale");
+    second.resolve("ready");
     await Promise.all([firstResult, secondResult]);
 
     expect(store.getSnapshot("analysis/topological-charge")).toMatchObject({
       data: "ready",
+      revision: 1,
+      status: "ready",
+    });
+  });
+
+  it("restarts an ordinary in-flight load when a forced refetch is requested", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const ordinary = deferred<string>();
+    const forced = deferred<string>();
+    const signals: AbortSignal[] = [];
+    const ordinaryLoad = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return ordinary.promise;
+    });
+    const forcedLoad = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return forced.promise;
+    });
+
+    void store.ensureLoad({
+      externalRevision: 1,
+      load: ordinaryLoad,
+      resourceKey: "model/scene",
+      resolveRevision: () => 1,
+    });
+    const forcedResult = store.ensureLoad({
+      externalRevision: 1,
+      force: true,
+      load: forcedLoad,
+      resourceKey: "model/scene",
+      resolveRevision: () => 1,
+    });
+
+    expect(ordinaryLoad).toHaveBeenCalledTimes(1);
+    expect(forcedLoad).toHaveBeenCalledTimes(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    ordinary.resolve("stale");
+    forced.resolve("fresh");
+    await forcedResult;
+
+    expect(store.getSnapshot("model/scene")).toMatchObject({
+      data: "fresh",
       revision: 1,
       status: "ready",
     });

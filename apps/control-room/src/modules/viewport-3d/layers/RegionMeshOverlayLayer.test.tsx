@@ -16,25 +16,18 @@ describe("RegionMeshOverlayLayer", () => {
     expect(source).not.toContain("buildRegionMeshOverlayModels(");
   });
 
-  it("uses depth-tested selection-shell policy for realized region surfaces", () => {
+  it("renders realized region diagnostics as feature-edge outlines only", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),
       "utf8",
     );
 
     expect(source).toContain(
-      "renderOrder={RENDER_POLICIES.selectionShell.renderOrder}",
+      "renderOrder={RENDER_POLICIES.featureEdges.renderOrder + 1}",
     );
-    expect(source).toContain('materialPolicyProps("selectionShell")');
-    expect(source).toContain("colorWrite={model.surfaceOverlayVisible}");
-    expect(source).toContain(
-      "model.surfaceOverlayVisible && model.style.fillOpacity >= 1",
-    );
-    expect(source).toContain(
-      "!model.surfaceOverlayVisible || model.style.fillOpacity < 1",
-    );
-    expect(source).not.toContain("depthTest={false}");
-    expect(source).not.toContain("computeVertexNormals");
+    expect(source).toContain('materialPolicyProps("featureEdges")');
+    expect(source).not.toContain('materialPolicyProps("selectionShell")');
+    expect(source).not.toContain("<meshBasicMaterial");
   });
 
   it("routes realized overlay geometry adoption through the GPU upload manager", () => {

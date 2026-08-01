@@ -1,0 +1,42 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Production response slice and dependency gates are separate."},
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "Planner rejects the native frequency-domain study on FDM."},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM frequency-domain lane exists."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-frequency-response-system", "symbols": ["K", "omega", "G", "qhat", "bhat", "C", "hext"], "sources": ["native"]},
+    {"id": "eq-numerical-frequency-response-susceptibility", "symbols": ["chi", "mhat", "hext", "dm", "omega"], "sources": ["native"]}
+  ],
+  "symbols": [
+    {"id": "dm", "latex": "$\\delta\\mathbf m$", "meaning": "dynamic magnetization perturbation", "si_unit": "$1$"},
+    {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex perturbation amplitude", "si_unit": "$1$"},
+    {"id": "hext", "latex": "$\\widehat{\\mathbf h}_{\\mathrm{ext}}$", "meaning": "complex excitation field amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "problem-dependent"},
+    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic/damping matrix", "si_unit": "problem-dependent"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "complex tangent response", "si_unit": "$1$"},
+    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "assembled harmonic right-hand side", "si_unit": "problem-dependent"},
+    {"id": "C", "latex": "$\\mathsf C$", "meaning": "drive coupling operator", "si_unit": "problem-dependent"},
+    {"id": "chi", "latex": "$\\widehat{\\boldsymbol\\chi}$", "meaning": "complex susceptibility", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {"id": "stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class FrequencyResponseStageSpec", "responsibility": "Public response stage schema."},
+    {"id": "builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "frequency_response_stage", "responsibility": "Public stage and solver-policy lowering."},
+    {"id": "validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Native request legality checks."},
+    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_driven_response_contract", "responsibility": "Native driven-response contract and diagnostics."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "FrequencyResponseStageSpec.frequencies_hz", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "finite positive values", "meaning": "response sampling frequencies", "backend_support": "FEM", "problem_ir": "`study.frequencies_hz`"},
+      {"python": "FrequencyResponseStageSpec.excitation_field_au_per_m", "type": "tuple[float,float,float]", "default": "(0,0,1)", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite three-vector", "meaning": "harmonic drive amplitude", "backend_support": "FEM", "problem_ir": "`study.excitation.field_au_per_m`"},
+      {"python": "FrequencyResponseStageSpec.observable", "type": "str", "default": "susceptibility_tensor", "si_unit": "$1$", "validation": "supported response output", "meaning": "requested observable", "backend_support": "FEM", "problem_ir": "`study.outputs`"},
+      {"python": "FrequencyResponseStageSpec.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean", "meaning": "include dynamic demag", "backend_support": "FEM gated", "problem_ir": "`study.operator.include_demag`"},
+      {"python": "FrequencyResponseStageSpec.magnetostatic_bc", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`", "meaning": "magnetostatic closure", "backend_support": "FEM", "problem_ir": "`study.magnetostatic_bc`"},
+      {"python": "FrequencyResponseSolverPolicy.rtol", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "finite positive", "meaning": "algebraic relative tolerance", "backend_support": "FEM", "problem_ir": "`study.solver_policy.rtol`"},
+      {"python": "FrequencyResponseSolverPolicy.max_iterations", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer", "meaning": "iteration ceiling", "backend_support": "FEM", "problem_ir": "`study.solver_policy.max_iterations`"}
+    ]
+  }
+}

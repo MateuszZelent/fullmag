@@ -81,8 +81,8 @@ pub fn resolve_engine_for_plan(
     plan: &FemPlanIR,
 ) -> Result<FemEngineKind, RunError> {
     use crate::dispatch::FemEngine;
-    let engine =
-        crate::dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan).map(|r| r.engine)?;
+    let engine = crate::dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan, false)
+        .map(|r| r.engine)?;
     Ok(match engine {
         FemEngine::CpuNative => FemEngineKind::CpuNative,
         FemEngine::NativeGpu => FemEngineKind::NativeGpu,

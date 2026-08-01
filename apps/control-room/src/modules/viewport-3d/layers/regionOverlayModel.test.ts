@@ -67,11 +67,9 @@ describe("regionOverlayModel", () => {
       radius: 0.5,
       selected: false,
       style: {
-        fillOpacity: 0.14,
-        fillVisible: true,
-        wireframeOpacity: 0,
+        wireframeOpacity: 0.72,
         wireframeScale: 1.004,
-        wireframeVisible: false,
+        wireframeVisible: true,
       },
     });
     expect(models[2]).toMatchObject({
@@ -216,174 +214,23 @@ describe("regionOverlayModel", () => {
     });
   });
 
-  it("uses selected and disabled opacity states", () => {
+  it("keeps authored and realized diagnostics outline-only", () => {
     expect(resolveRegionOverlayStyle({ enabled: true, selected: false })).toMatchObject({
-      fillOpacity: 0.14,
-      fillVisible: true,
-      wireframeOpacity: 0,
-      wireframeScale: 1.004,
-      wireframeVisible: false,
-    });
-    expect(resolveRegionOverlayStyle({ enabled: true, selected: true })).toMatchObject({
-      fillOpacity: 1,
-      fillVisible: true,
-      wireframeOpacity: 0,
-      wireframeScale: 1.008,
-      wireframeVisible: false,
-    });
-    expect(resolveRegionOverlayStyle({ enabled: false, selected: true })).toMatchObject({
-      fillOpacity: 0,
-      fillVisible: false,
-      wireframeOpacity: 0,
-      wireframeScale: 1.008,
-      wireframeVisible: false,
-    });
-  });
-
-  it("uses opaque fill defaults for realized mesh-backed region surfaces", () => {
-    expect(
-      resolveRegionOverlayStyle({
-        enabled: true,
-        realizedSurface: true,
-        selected: false,
-      }),
-    ).toMatchObject({
-      fillOpacity: 1,
-      fillVisible: true,
-      wireframeOpacity: 0,
-      wireframeVisible: false,
-    });
-    expect(
-      resolveRegionOverlayStyle({
-        enabled: true,
-        realizedSurface: true,
-        selected: false,
-        settings: {
-          opacityPercent: 40,
-          shaderVisible: true,
-          visible: true,
-        } as never,
-      }),
-    ).toMatchObject({
-      fillOpacity: 0.4,
-      fillVisible: true,
-    });
-  });
-
-  it("uses solid mono color only when the region surface source is solid", () => {
-    expect(
-      resolveRegionOverlayStyle({
-        enabled: true,
-        selected: false,
-        settings: {
-          shaderMonoColor: "#123456",
-          surfaceColorSource: "orientation",
-        } as never,
-      }),
-    ).toMatchObject({ surfaceColor: null });
-    expect(
-      resolveRegionOverlayStyle({
-        enabled: true,
-        selected: false,
-        settings: {
-          shaderMonoColor: "#123456",
-          surfaceColorSource: "solid",
-        } as never,
-      }),
-    ).toMatchObject({ surfaceColor: "#123456" });
-  });
-
-  it("applies per-region visualization target settings to authored overlays", () => {
-    const [surfaceOnly] = buildRegionOverlayModels(
-      [
-        {
-          enabled: true,
-          name: "Core",
-          owner_object_id: "film",
-          priority: 0,
-          region_id: "film:core",
-          shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
-        },
-      ],
-      {
-        resolveSettings: () =>
-          ({
-            opacityPercent: 50,
-            shaderMonoColor: "#123456",
-            shaderVisible: true,
-            surfaceColorSource: "solid",
-            visible: true,
-            wireframeColor: "#abcdef",
-            wireframeOpacityPercent: 80,
-            wireframeVisible: false,
-          }) as never,
-      },
-    );
-
-    expect(surfaceOnly).toMatchObject({
-      style: {
-        fillOpacity: 0.07,
-        fillVisible: true,
-        surfaceColor: "#123456",
-        wireframeOpacity: 0,
-        wireframeVisible: false,
-        wireframeColor: "#abcdef",
-      },
-    });
-    expect(
-      resolveRegionOverlayStyle({
-        enabled: true,
-        selected: true,
-        settings: {
-          opacityPercent: 40,
-          shaderVisible: true,
-          visible: true,
-          wireframeVisible: true,
-        } as never,
-      }),
-    ).toMatchObject({
-      fillOpacity: 1,
-      fillVisible: true,
-    });
-    expect(
-      resolveRegionOverlayStyle({
-        enabled: true,
-        selected: false,
-        settings: {
-          shaderVisible: false,
-          visible: true,
-          wireframeVisible: true,
-        } as never,
-      }),
-    ).toMatchObject({
-      fillOpacity: 0,
-      fillVisible: false,
+      wireframeColor: null,
       wireframeOpacity: 0.72,
+      wireframeScale: 1.004,
       wireframeVisible: true,
     });
-
-    expect(
-      buildRegionOverlayModels(
-        [
-          {
-            enabled: true,
-            name: "Core",
-            owner_object_id: "film",
-            priority: 0,
-            region_id: "film:core",
-            shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
-          },
-        ],
-        {
-          resolveSettings: () =>
-            ({
-              shaderVisible: true,
-              visible: false,
-              wireframeVisible: true,
-            }) as never,
-        },
-      ),
-    ).toEqual([]);
+    expect(resolveRegionOverlayStyle({ enabled: true, selected: true })).toMatchObject({
+      wireframeOpacity: 1,
+      wireframeScale: 1.008,
+      wireframeVisible: true,
+    });
+    expect(resolveRegionOverlayStyle({ enabled: false, selected: true })).toMatchObject({
+      wireframeOpacity: 0,
+      wireframeScale: 1.008,
+      wireframeVisible: false,
+    });
   });
 
   it("drops invalid or unsupported authored shapes", () => {
@@ -447,14 +294,67 @@ describe("regionOverlayModel", () => {
       objectId: "film",
       regionId: "film:core",
       style: {
-        fillVisible: true,
-        wireframeVisible: false,
+        wireframeVisible: true,
       },
     });
     expect(Array.from(models[0].surfaceIndices ?? [])).toHaveLength(12);
     expect(Array.from(models[0].edgeIndices ?? [])).toEqual([
       0, 1, 0, 2, 0, 3, 1, 2, 1, 3, 2, 3,
     ]);
+  });
+
+  it("builds a prism region overlay from canonical CSR when legacy indices are empty", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      cellCount: 1,
+      cellMarkers: new Uint32Array([1]),
+      cellNodes: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      cellOffsets: new Uint32Array([0, 6]),
+      cellTypes: new Uint32Array([2]),
+      elementCount: 1,
+      elementMarkers: new Uint32Array([1]),
+      indices: new Uint32Array(),
+      nodeCount: 6,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        1, 0, 1,
+        0, 1, 1,
+      ]),
+    };
+
+    const [model] = buildRegionMeshOverlayModels(
+      [{
+        enabled: true,
+        mesh_part_ids: ["part:film:prism"],
+        name: "Prism",
+        owner_object_id: "film",
+        region_id: "film:prism",
+      }],
+      topology,
+      [{
+        element_count: 1,
+        element_start: 0,
+        id: "part:film:prism",
+        object_id: "film",
+      }],
+    );
+
+    expect(model?.edgeIndices).toHaveLength(18);
+    expect(model?.surfaceIndices).toHaveLength(24);
+    const surfaceEdges = Array.from(model?.surfaceEdgeIndices ?? []);
+    const surfaceEdgeKeys = new Set(
+      Array.from({ length: surfaceEdges.length / 2 }, (_unused, index) =>
+        [surfaceEdges[index * 2], surfaceEdges[index * 2 + 1]]
+          .toSorted((left, right) => (left ?? 0) - (right ?? 0))
+          .join(":"),
+      ),
+    );
+    expect(surfaceEdgeKeys.has("0:4")).toBe(false);
   });
 
   it("uses realized mesh part ids instead of primitive centroid fallback", () => {
@@ -583,9 +483,6 @@ describe("regionOverlayModel", () => {
           surface_faces: [[0, 1, 2]],
         },
       ],
-      {
-        renderedSurfacePartIds: new Set(["part:film:core"]),
-      },
     );
 
     const [membershipFallback] = buildRegionMeshOverlayModels(
@@ -609,15 +506,14 @@ describe("regionOverlayModel", () => {
           surface_faces: [[0, 1, 2]],
         },
       ],
-      {
-        renderedSurfacePartIds: new Set(["part:film:core"]),
-      },
     );
 
-    expect(meshBacked?.style.fillVisible).toBe(true);
-    expect(meshBacked?.surfaceOverlayVisible).toBe(false);
-    expect(membershipFallback?.style.fillVisible).toBe(true);
-    expect(membershipFallback?.surfaceOverlayVisible).toBe(true);
+    expect(meshBacked?.style).toMatchObject({
+      wireframeVisible: true,
+    });
+    expect(membershipFallback?.style).toMatchObject({
+      wireframeVisible: true,
+    });
   });
 
   it("shares converted topology positions across mesh-backed region overlays", () => {
@@ -808,14 +704,6 @@ describe("regionOverlayModel", () => {
       ],
       topology,
       [{ element_count: 2, element_start: 0, object_id: "other-film" }],
-      {
-        resolveSettings: () =>
-          ({
-            shaderVisible: true,
-            visible: true,
-            wireframeVisible: false,
-          }) as never,
-      },
     );
 
     expect(models).toEqual([]);
@@ -833,19 +721,10 @@ describe("regionOverlayModel", () => {
       ],
       topology,
       [{ element_count: 2, element_start: 0, object_id: "film" }],
-      {
-        resolveSettings: () =>
-          ({
-            shaderVisible: true,
-            visible: true,
-            wireframeVisible: false,
-          }) as never,
-      },
     );
 
     expect(surfaceOnly?.style).toMatchObject({
-      fillVisible: true,
-      wireframeVisible: false,
+      wireframeVisible: true,
     });
   });
 });

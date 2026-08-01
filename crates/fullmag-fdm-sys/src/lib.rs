@@ -11,8 +11,7 @@ use std::os::raw::c_char;
 // ── Constants ──
 
 pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
-pub const FULLMAG_FDM_MAX_REGION_ID: u32 =
-    (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
+pub const FULLMAG_FDM_MAX_REGION_ID: u32 = (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
 
 // ── Return codes ──
 
@@ -21,6 +20,7 @@ pub const FULLMAG_FDM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FDM_ERR_CUDA: i32 = -2;
 pub const FULLMAG_FDM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FDM_ERR_INTERRUPTED: i32 = -4;
+pub const FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED: i32 = -5;
 
 // ── Enums ──
 
@@ -107,6 +107,13 @@ pub struct fullmag_fdm_exchange_pair_desc {
 pub enum fullmag_fdm_stats_mode {
     FULLMAG_FDM_STATS_FULL = 0,
     FULLMAG_FDM_STATS_NONE = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_adaptive_tolerance_mode {
+    FULLMAG_FDM_ADAPTIVE_MAX_ERROR = 1,
+    FULLMAG_FDM_ADAPTIVE_ADVANCED = 2,
 }
 
 pub type fullmag_fdm_interrupt_poll_fn = Option<unsafe extern "C" fn(*mut c_void) -> i32>;
@@ -273,6 +280,7 @@ pub struct fullmag_fdm_plan_desc {
     pub mel_strain: [f64; 6],
 
     pub temperature: f64,
+    pub thermal_seed: u64,
 
     pub current_density_x: f64,
     pub current_density_y: f64,
@@ -370,6 +378,31 @@ pub struct fullmag_fdm_plan_desc {
     pub stats_stride: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_time_policy_desc_v2 {
+    pub adaptive_enabled: i32,
+    pub adaptive_tolerance_mode: fullmag_fdm_adaptive_tolerance_mode,
+    pub adaptive_atol: f64,
+    pub adaptive_rtol: f64,
+    pub adaptive_dt_min: f64,
+    pub adaptive_dt_max: f64,
+    pub adaptive_safety: f64,
+    pub adaptive_growth_limit: f64,
+    pub adaptive_shrink_limit: f64,
+    pub has_adaptive_max_spin_rotation: i32,
+    pub adaptive_max_spin_rotation: f64,
+    pub has_adaptive_norm_tolerance: i32,
+    pub adaptive_norm_tolerance: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_plan_desc_v2 {
+    pub base: fullmag_fdm_plan_desc,
+    pub time_policy: fullmag_fdm_time_policy_desc_v2,
+}
+
 // ── Step stats ──
 
 #[repr(C)]
@@ -444,6 +477,10 @@ extern "C" {
 
     pub fn fullmag_fdm_backend_create(
         plan: *const fullmag_fdm_plan_desc,
+    ) -> *mut fullmag_fdm_backend;
+
+    pub fn fullmag_fdm_backend_create_time_policy_v2(
+        plan: *const fullmag_fdm_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
     pub fn fullmag_fdm_backend_create_v2(

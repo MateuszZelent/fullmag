@@ -23,6 +23,10 @@ import {
   type VisualizationDebugEvidenceActionEnvironment,
 } from "./visualizationDebugExport";
 
+vi.mock("@/shared/ui/Slider", () => ({
+  Slider: () => null,
+}));
+
 describe("VisualizationDebugPanel mounted interaction", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -104,11 +108,11 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     for (const button of focusOrder) {
       pressTab(dom.document, focusOrder);
       expect(dom.document.activeElement).toBe(button);
-      expect(button.getAttribute("class")).toContain(
-        button === rawJson
-          ? "fm-inspector-section__header"
-          : "fm-visualization-debug-action",
-      );
+      if (button === rawJson) {
+        expect(button.getAttribute("data-slot")).toBe("inspector-group-trigger");
+      } else {
+        expect(button.getAttribute("class")).toContain("fm-visualization-debug-action");
+      }
     }
 
     await act(async () => keyboardActivate(copySnapshot, "Enter"));
@@ -791,6 +795,12 @@ function installInteractiveTestDom(): {
   const previous = new Map<string, PropertyDescriptor | undefined>();
   const document = new TestDocument();
   class TestHtmlIFrameElement extends TestElement {}
+  const getComputedStyle = () => ({ direction: "ltr" });
+  const requestAnimationFrame = (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  };
+  const cancelAnimationFrame = () => undefined;
   const window = {
     document,
     Element: TestElement,
@@ -799,6 +809,9 @@ function installInteractiveTestDom(): {
     HTMLIFrameElement: TestHtmlIFrameElement,
     KeyboardEvent: TestEvent,
     Node: TestNode,
+    cancelAnimationFrame,
+    getComputedStyle,
+    requestAnimationFrame,
     addEventListener() {},
     removeEventListener() {},
   };
@@ -810,6 +823,9 @@ function installInteractiveTestDom(): {
     HTMLElement: TestElement,
     KeyboardEvent: TestEvent,
     Node: TestNode,
+    cancelAnimationFrame,
+    getComputedStyle,
+    requestAnimationFrame,
     window,
     IS_REACT_ACT_ENVIRONMENT: true,
   })) {

@@ -57,14 +57,24 @@ exchange_field_t0_fp64_kernel(
 
     // Skip empty cells
     const double phi0 = volume_fraction[idx];
-    if (phi0 <= 0.0) return;
+    if (phi0 <= 0.0) {
+        hx[idx] = 0.0;
+        hy[idx] = 0.0;
+        hz[idx] = 0.0;
+        return;
+    }
 
     const double m0x = mx[idx];
     const double m0y = my[idx];
     const double m0z = mz[idx];
 
     // Skip zero magnetization
-    if (m0x == 0.0 && m0y == 0.0 && m0z == 0.0) return;
+    if (m0x == 0.0 && m0y == 0.0 && m0z == 0.0) {
+        hx[idx] = 0.0;
+        hy[idx] = 0.0;
+        hz[idx] = 0.0;
+        return;
+    }
 
     // Effective volume for normalization (clamped for stability)
     const double phi_eff = (phi0 > phi_floor) ? phi0 : phi_floor;
@@ -155,9 +165,7 @@ exchange_field_t0_fp64_kernel(
     // Note: when A_ij comes from the LUT it already contains the exchange
     // stiffness value so the prefactor only carries 2/(μ₀ Ms).
     const double MU0 = 4.0 * 3.14159265358979323846 * 1e-7;
-    const double scale = has_region_mask
-        ? (2.0 / (MU0 * Ms) * inv_phi)
-        : (2.0 * A / (MU0 * Ms) * inv_phi);
+    const double scale = 2.0 / (MU0 * Ms) * inv_phi;
     hx[idx] = scale * bx;
     hy[idx] = scale * by;
     hz[idx] = scale * bz;

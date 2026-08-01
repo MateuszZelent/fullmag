@@ -24,9 +24,9 @@ fn make_test_plan() -> FemPlanIR {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -130,16 +130,16 @@ fn make_exchange_only_plan() -> FemPlanIR {
                 [0.0, 0.0, 1.0],
                 [1.0, 1.0, 0.0],
             ],
-            elements: vec![[0, 1, 2, 3], [1, 4, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 4, 2, 3]]),
             element_markers: vec![1, 1],
-            boundary_faces: vec![
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
                 [0, 1, 2],
                 [0, 1, 3],
                 [0, 2, 3],
                 [1, 4, 2],
                 [1, 4, 3],
                 [4, 2, 3],
-            ],
+            ]),
             boundary_markers: vec![1; 6],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -336,8 +336,18 @@ fn run_native_parity_step(plan: &FemPlanIR) -> NativeParityStep {
     let mut backend = NativeFemBackend::create(plan).expect("native fem parity create");
     let stats = backend
         .step(
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .expect("parity plan timestep"),
+            crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                if native_fem_plan_requests_gpu_mfem_device(plan) {
+                    crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                } else {
+                    crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                },
+            )
+            .expect("parity plan timestep")
+            .initial_dt(),
         )
         .expect("native fem parity step");
     let node_count = plan.mesh.nodes.len();
@@ -355,7 +365,7 @@ fn run_native_parity_step(plan: &FemPlanIR) -> NativeParityStep {
 fn assert_same_parity_mesh(cpu_plan: &FemPlanIR, gpu_plan: &FemPlanIR) {
     assert_eq!(cpu_plan.mesh.mesh_name, gpu_plan.mesh.mesh_name);
     assert_eq!(cpu_plan.mesh.nodes, gpu_plan.mesh.nodes);
-    assert_eq!(cpu_plan.mesh.elements, gpu_plan.mesh.elements);
+    assert_eq!(cpu_plan.mesh.cells, gpu_plan.mesh.cells);
     assert_eq!(cpu_plan.precision, ExecutionPrecision::Double);
     assert_eq!(gpu_plan.precision, ExecutionPrecision::Double);
 }
@@ -380,6 +390,7 @@ fn with_poisson_demag(mut plan: FemPlanIR) -> FemPlanIR {
 fn with_adaptive_dt(mut plan: FemPlanIR) -> FemPlanIR {
     plan.fixed_timestep = None;
     plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
         atol: 1e-8,
         rtol: 1e-5,
         dt_initial: Some(2.5e-13),

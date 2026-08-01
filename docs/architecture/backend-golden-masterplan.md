@@ -142,6 +142,9 @@ Po tej relokacji w dokumentach trzeba pisać:
 7. Wymuszony GPU ma jasno failować, gdy brakuje wymagań GPU. Cichy fallback na
    CPU jest dozwolony tylko w jawnych trybach auto/niewymuszonych i musi być
    zapisany w proweniencji.
+   Dla FEM performance crossover działa wyłącznie dla requested `auto`, na
+   podstawie kwalifikowanego profilu z ADR 0021; nie może zmienić explicit
+   `cpu` ani `gpu`.
 8. Publiczna semantyka żyje ponad natywnym rdzeniem. Natywne backendy wykonują
    semantykę, ale widoczne dla użytkownika wielkości, jednostki,
    requested/resolved strategy i status walidacji muszą być reprezentowane w
@@ -255,10 +258,71 @@ Runner nie może zawierać:
 - produkcyjnych kerneli libCEED albo hypre-device,
 - zdublowanych GPU-resident state machines.
 
+### LLG time-domain workflow ownership
+
+Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`,
+`LLG-TD-ATOMIC-V1`.
+
+Public fixed, adaptive, and stiff policies lower through one ProblemIR and
+planner vocabulary. The runner owns typed requested/resolved provenance and
+ABI orchestration, while `backends/fdm` and `backends/fem` own integration.
+Each backend realization owns an attempted-step transaction so candidate
+magnetization, fields, time, caches, controller state, and telemetry commit
+together or roll back together.
+
+CPU and GPU realizations share backend-neutral equations, scalar controller
+semantics, decision reasons, and immutable golden vectors. They do not share a
+mutable hot-loop implementation. Unsupported lane, device, precision, guard,
+or demag semantics fail before execution. There is no hidden explicit-to-stiff fallback
+and no hidden GPU-to-CPU fallback.
+
 `crates/fullmag-runner/src/native_fem.rs` i powiązane moduły runnera są
 fasadami ABI i orkiestracji. Można je dzielić dla utrzymania kodu, ale ich nazwy
 i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w
 `backends/fem`.
+
+### 7.0.1 Docelowa topologia mieszana P1
+
+Kanoniczny kontrakt dla dokładnej warstwy cienkiej folii definiują
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` i ADR 0021.
+Docelowy wspólny mesh solvera używa `prism6` wyłącznie w magnetycznym Boxie,
+`pyramid5` w przejściu powietrznym, `tet4` w dalekim airboxie oraz
+`tri3 | quad4` na fasetach. Ograniczony kontrakt relaksacji akceptuje dokładne
+`layers in {1,2,3}` przy requested = realized = `L` i dokładnie `L+1`
+magnetycznych płaszczyznach węzłów. `layers=1` oznacza więc dokładnie dwie
+płaszczyzny i nadal jest pełnym trójwymiarowym P1, nie modelem 2.5D.
+
+Własność pozostaje backends-first:
+
+- typowany import topologii, bazisy, kwadratura, Jacobiany, exchange, Poisson,
+  recovery, energia, relaksacja i certyfikat mesha należą do `backends/fem`;
+- runner posiada wyłącznie walidację planu przed startem, lowering typowanego
+  ABI, requested/resolved provenance, artefakty i wywołanie backendu;
+- CPU MFEM/hypre i GPU MFEM/libCEED/CUDA realizują jeden kontrakt znaków,
+  jednostek, markerów i ciągłości, ale mają osobne wykonania runtime;
+- strict nigdy nie wywołuje splittera prism-to-tet, nie zmienia mixed P1 na
+  free-tetrahedral i nie wykonuje ukrytego fallbacku GPU->CPU.
+
+Pierwszy cel kwalifikacji to jeden osiowy Box, P1, conforming shared-domain
+airbox, jednorodne `Ms/Aex`, exchange, jednorodny Zeeman, Poisson
+Robin/Dirichlet, double oraz PG-BB/NCG/overdamped LLG. FEM/BEM, PBC/Floquet,
+DMI/STT/thermal/magnetoelastic, regional projections, eigen/frequency-domain,
+DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
+pozostają fail-closed do osobnej kwalifikacji.
+
+Obecny stan jest `implemented` wyłącznie dla jawnego FEM CPU lub GPU/strict/double P1,
+jednego osiowego Boxa i certyfikowanej liczby warstw z dokładnego zbioru
+`{1,2,3}`, z exchange, opcjonalnym
+jednorodnym Zeemanem, Poisson Robin/Dirichlet oraz PG-BB/NCG/overdamped LLG.
+Source i operator contract tests nie są dowodem publicznego managed runtime,
+więc `production_executable` i `validated` pozostają nieprzyznane do czasu
+świeżego publicznego uruchomienia SP4 z immutable reportem. Auto device/backend,
+single, extended i wszystkie szersze kontrakty nadal są
+odrzucane przed alokacją operatorów bez fallbacku. Strict wymaga pustych
+fallbacków zarówno w certyfikacie, jak i nadrzędnym build reporcie oraz
+`degraded=false`.
+Tetrahedralny FMMT v1 pozostaje wyłącznie readerem kompatybilności i nie może
+maskować ani obcinać komórek mieszanych.
 
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 

@@ -5,6 +5,299 @@ use crate::geometry::{
 };
 use std::collections::BTreeMap;
 
+fn resolved_stage_autosave(
+    stage_id: &str,
+    format: AutosaveFormatIR,
+    layout: AutosaveLayoutIR,
+    clock: ResolvedAutosaveClock,
+) -> ResolvedStageAutosave {
+    ResolvedStageAutosave {
+        stage_id: stage_id.into(),
+        target: "main".into(),
+        layout,
+        format,
+        table_quantities: vec!["step".into(), "mx".into()],
+        field_quantities: vec!["m".into()],
+        mesh_identity: "mesh-v1".into(),
+        component_count: 3,
+        clock,
+        requested: serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": layout,
+            "format": format,
+            "table": {"every_steps": 10, "quantities": ["step", "mx"]},
+            "fields": [{"quantity": "m", "every_steps": 10}]
+        }))
+        .unwrap(),
+    }
+}
+
+#[test]
+fn stage_autosave_planning_accepts_relax_and_run_in_one_continuous_target() {
+    let relax = resolved_stage_autosave(
+        "relax",
+        AutosaveFormatIR::Zarr,
+        AutosaveLayoutIR::Continuous,
+        ResolvedAutosaveClock::AcceptedStep,
+    );
+    let mut run = relax.clone();
+    run.stage_id = "run".into();
+    run.clock = ResolvedAutosaveClock::PhysicalTime;
+
+    validate_continuous_autosave_targets(&[relax, run])
+        .expect("stage indexes preserve each clock kind without schema drift");
+}
+
+#[test]
+fn stage_autosave_planning_reports_every_continuous_schema_conflict() {
+    let baseline = resolved_stage_autosave(
+        "first",
+        AutosaveFormatIR::Zarr,
+        AutosaveLayoutIR::Continuous,
+        ResolvedAutosaveClock::AcceptedStep,
+    );
+    let mut conflicting = baseline.clone();
+    conflicting.stage_id = "second".into();
+    conflicting.format = AutosaveFormatIR::Hdf5;
+    conflicting.table_quantities = vec!["step".into(), "my".into()];
+    conflicting.field_quantities = vec!["H_demag".into()];
+    conflicting.mesh_identity = "mesh-v2".into();
+    conflicting.component_count = 1;
+
+    let error = validate_continuous_autosave_targets(&[baseline, conflicting])
+        .expect_err("continuous schema drift must fail closed");
+    for expected in [
+        "format differs",
+        "table schema differs",
+        "field set differs",
+        "mesh identity differs",
+        "component count differs",
+    ] {
+        assert!(
+            error.reasons.iter().any(|reason| reason.contains(expected)),
+            "missing {expected:?} in {:?}",
+            error.reasons
+        );
+    }
+}
+
+#[test]
+fn stage_autosave_planning_keeps_separate_targets_independent() {
+    let first = resolved_stage_autosave(
+        "first",
+        AutosaveFormatIR::Zarr,
+        AutosaveLayoutIR::Separate,
+        ResolvedAutosaveClock::AcceptedStep,
+    );
+    let mut second = first.clone();
+    second.stage_id = "second".into();
+    second.format = AutosaveFormatIR::Txt;
+    second.table_quantities = vec!["step".into()];
+    second.field_quantities.clear();
+
+    validate_continuous_autosave_targets(&[first, second])
+        .expect("separate layouts do not share a schema registry");
+}
+
+#[test]
+fn stage_autosave_hdf5_capability_fails_closed_when_unavailable() {
+    let stage = resolved_stage_autosave(
+        "run",
+        AutosaveFormatIR::Hdf5,
+        AutosaveLayoutIR::Continuous,
+        ResolvedAutosaveClock::PhysicalTime,
+    );
+    let error = validate_stage_autosave_capabilities(&[stage.clone()], false)
+        .expect_err("missing HDF5 capability must fail closed");
+    assert!(error.reasons[0].contains("stage_autosave_hdf5"));
+    validate_stage_autosave_capabilities(&[stage], true)
+        .expect("available HDF5 capability should accept the stage");
+}
+
+#[test]
+fn run_stage_autosave_fields_are_added_to_runtime_outputs_without_duplicates() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.study.sampling_mut().outputs = vec![OutputIR::Field {
+        name: "m".into(),
+        every_seconds: 5e-12,
+    }];
+    problem.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+        }))
+        .unwrap(),
+    );
+    let outputs = crate::sampling::runtime_outputs(&problem);
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| matches!(output, OutputIR::Field { name, .. } if name == "m"))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        outputs.as_slice(),
+        [OutputIR::Field {
+            name,
+            every_seconds
+        }] if name == "m" && *every_seconds == 2e-12
+    ));
+}
+
+fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> ProblemIR {
+    let mut problem = ProblemIR::bootstrap_example();
+    if let Some(stage_id) = active_stage_id {
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), serde_json::json!(stage_id));
+    }
+    problem.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
+        kind: "table_autosave".into(),
+        table_id: "default".into(),
+        sample_period_s: None,
+        sample_period_policy: Some(SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+        }),
+        resolved_sample_period_s: None,
+        every_steps: None,
+        quantities: vec!["t".into(), "my".into()],
+    });
+    problem.study.sampling_mut().outputs = vec![
+        OutputIR::FieldAuto {
+            name: "m".into(),
+            sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        },
+        OutputIR::ScalarAuto {
+            name: "E_total".into(),
+            sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        },
+    ];
+    problem.field_drives = cutoffs_hz
+        .iter()
+        .enumerate()
+        .map(|(index, cutoff_hz)| RegionalFieldDriveIR {
+            id: format!("drive-{}", index + 1),
+            name: format!("Drive {}", index + 1),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::SincPulse {
+                cutoff_hz: *cutoff_hz,
+                t0: 50.0e-12,
+                amplitude: 1.0,
+            },
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: DriveActivationIR::StageIds {
+                stage_ids: vec!["excite".into()],
+            },
+            migration: None,
+        })
+        .collect();
+    problem
+}
+
+#[test]
+fn auto_sampling_uses_maximum_active_sinc_cutoff_with_guard() {
+    let mut problem = auto_sampling_problem(&[3.0e9, 5.0e9], Some("excite"));
+    let resolution = resolve_auto_sampling_for_stage(&mut problem)
+        .expect("automatic sampling should resolve")
+        .expect("automatic policy should produce provenance");
+
+    assert_eq!(resolution.maximum_cutoff_hz, 5.0e9);
+    assert_eq!(resolution.target_nyquist_hz, 6.5e9);
+    assert_eq!(resolution.sampling_frequency_hz, 13.0e9);
+    assert!((resolution.sample_period_s - 1.0 / 13.0e9).abs() < 1e-24);
+    assert_eq!(resolution.source_drive_ids, ["drive-1", "drive-2"]);
+    assert_eq!(resolution.target_stage_id, "excite");
+    assert_eq!(resolution.schema_version, "sampling_resolution.v1");
+
+    let sampling = problem.study.sampling();
+    assert_eq!(
+        sampling
+            .table_autosave
+            .as_ref()
+            .and_then(|table| table.resolved_sample_period_s),
+        Some(1.0 / 13.0e9)
+    );
+    assert!(matches!(
+        sampling.outputs.as_slice(),
+        [OutputIR::FieldResolvedAuto { every_seconds: field_period, .. }, OutputIR::ScalarResolvedAuto { every_seconds: scalar_period, .. }]
+            if *field_period == 1.0 / 13.0e9 && *scalar_period == 1.0 / 13.0e9
+    ));
+    assert_eq!(
+        problem.problem_meta.runtime_metadata["sampling_resolution"],
+        serde_json::to_value(&resolution).expect("resolution must serialize")
+    );
+}
+
+#[test]
+fn auto_sampling_accepts_all_time_evolution_drive_for_anonymous_run_stage() {
+    let mut problem = auto_sampling_problem(&[3.0e9], Some("run-1"));
+    problem.field_drives[0].activation = DriveActivationIR::AllTimeEvolution {};
+
+    let resolution = resolve_auto_sampling_for_stage(&mut problem)
+        .expect("all-time-evolution drive must be active for an anonymous Run stage")
+        .expect("automatic policy should produce provenance");
+
+    assert_eq!(resolution.maximum_cutoff_hz, 3.0e9);
+    assert_eq!(resolution.source_drive_ids, ["drive-1"]);
+    assert_eq!(resolution.target_stage_id, "run-1");
+}
+
+#[test]
+fn auto_sampling_filters_disabled_inactive_and_non_sinc_drives() {
+    let mut problem = auto_sampling_problem(&[3.0e9, 5.0e9], Some("excite"));
+    problem.field_drives[0].enabled = false;
+    problem.field_drives[1].activation = DriveActivationIR::StageIds {
+        stage_ids: vec!["other".into()],
+    };
+    let mut constant = problem.field_drives[0].clone();
+    constant.id = "constant".into();
+    constant.enabled = true;
+    constant.activation = DriveActivationIR::StageIds {
+        stage_ids: vec!["excite".into()],
+    };
+    constant.waveform = TimeDependenceIR::Constant;
+    problem.field_drives.push(constant);
+
+    let error = resolve_auto_sampling_for_stage(&mut problem)
+        .expect_err("automatic sampling must fail without an applicable active sinc drive");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("active sinc") && reason.contains("excite") }));
+}
+
+#[test]
+fn auto_sampling_rejects_standalone_time_evolution_without_stage_context() {
+    let mut problem = auto_sampling_problem(&[5.0e9], None);
+    let error = resolve_auto_sampling_for_stage(&mut problem)
+        .expect_err("standalone automatic sampling must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("active_stage_id") && reason.contains("automatic sampling")
+    }));
+}
+
+#[test]
+fn explicit_sampling_does_not_require_a_stage_or_drive() {
+    let mut problem = ProblemIR::bootstrap_example();
+    let before = problem.clone();
+    assert_eq!(resolve_auto_sampling_for_stage(&mut problem).unwrap(), None);
+    assert_eq!(problem, before);
+}
+
 #[test]
 fn fem_top_surface_selector_resolves_bbox_faces() {
     let mesh = MeshIR {
@@ -17,9 +310,9 @@ fn fem_top_surface_selector_resolves_bbox_faces() {
             [1.0, 0.0, 1.0],
             [0.0, 1.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2], [3, 4, 5]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [3, 4, 5]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -40,7 +333,7 @@ fn fem_top_surface_selector_resolves_bbox_faces() {
         node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 6 },
         boundary_face_indices: Vec::new(),
         node_indices: Vec::new(),
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: Some([0.0, 0.0, 0.0]),
         bounds_max: Some([1.0, 1.0, 1.0]),
         parent_id: None,
@@ -51,7 +344,7 @@ fn fem_top_surface_selector_resolves_bbox_faces() {
 
     assert_eq!(resolved.selector, "top");
     assert_eq!(resolved.boundary_face_indices, vec![1]);
-    assert_eq!(resolved.surface_faces, vec![[3, 4, 5]]);
+    assert_eq!(resolved.facet_global_ordinals, vec![1]);
     assert_eq!(resolved.node_indices, vec![3, 4, 5]);
     assert!((resolved.area - 0.5).abs() < 1e-12);
 }
@@ -66,9 +359,9 @@ fn fem_surface_selector_rejects_unknown_bbox_face() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -96,9 +389,9 @@ fn shared_domain_segmentation_remaps_periodic_node_pairs() {
             [11.0, 1.0, 1.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 4, 5, 6], [1, 2, 3, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 4, 5, 6], [1, 2, 3, 7]]),
         element_markers: vec![0, 1],
-        boundary_faces: vec![[1, 2, 3], [0, 4, 5]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[1, 2, 3], [0, 4, 5]]),
         boundary_markers: vec![11, 99],
         periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -150,9 +443,9 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
             [3.0, 0.0, 0.0],
             [4.0, 0.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -183,7 +476,7 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
         node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 2 },
         boundary_face_indices: Vec::new(),
         node_indices: vec![3, 1],
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: None,
         bounds_max: None,
         parent_id: None,
@@ -229,9 +522,9 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
             [1.0, 0.0, 0.0],
             [20.0, 20.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -262,7 +555,7 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
         node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 2 },
         boundary_face_indices: Vec::new(),
         node_indices: vec![2, 0],
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: None,
         bounds_max: None,
         parent_id: None,
@@ -320,9 +613,9 @@ fn mesh_parts_from_shared_domain_produces_air_and_magnetic() {
             [2.0, 0.0, 1.0],
             [3.0, 0.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![1, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -375,9 +668,9 @@ fn mesh_part_node_indices_cover_air_elements_with_shared_interface_nodes() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -431,9 +724,9 @@ fn mesh_parts_from_merged_magnetic_has_no_air() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -473,9 +766,9 @@ fn mesh_parts_bounds_are_correct() {
             [0.5, 1.5, -2.5],
             [9.0, 9.0, 9.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -513,9 +806,9 @@ fn analyze_detects_interface_between_touching_markers() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -560,7 +853,7 @@ fn analyze_detects_interface_between_touching_markers() {
 
 #[test]
 fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() {
-    let mesh = MeshIR {
+    let mut mesh = MeshIR {
         mesh_name: "shared_with_air".to_string(),
         nodes: vec![
             [0.0, 0.0, 0.0],
@@ -569,9 +862,9 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
             [0, 1, 3],
             [0, 2, 3],
             [1, 2, 3],
@@ -579,12 +872,13 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0, 2, 4],
             [1, 2, 4],
             [0, 1, 2],
-        ],
+        ]),
         boundary_markers: vec![10, 10, 10, 99, 99, 99, 77],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
     };
+    mesh.facets.roles[6] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
 
     let (_reordered, _segments, parts) = crate::mesh::reorder_shared_domain_mesh(
         &mesh,
@@ -605,7 +899,7 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
     assert_eq!(interface_part.geometry_id.as_deref(), Some("flower"));
     assert_eq!(interface_part.parent_id.as_deref(), Some("part:flower"));
     assert!(!interface_part.node_indices.is_empty());
-    assert_eq!(interface_part.surface_faces.len(), 1);
+    assert_eq!(interface_part.facet_global_ordinals.len(), 1);
     assert!(interface_part.bounds_min.is_some());
 
     let boundary_part = parts
@@ -632,9 +926,9 @@ fn analyze_classifies_air_nodes() {
             [3.0, 1.0, 0.0],
             [3.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![10, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -654,6 +948,396 @@ fn analyze_classifies_air_nodes() {
 }
 
 #[test]
+fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
+    let mesh = MeshIR {
+        mesh_name: "mixed_pack".to_string(),
+        nodes: vec![
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+            [4.0, 0.0, 1.0],
+            [3.0, 1.0, 1.0],
+            [6.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [7.0, 1.0, 0.0],
+            [6.0, 1.0, 0.0],
+            [6.5, 0.5, 1.0],
+            [9.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [9.0, 1.0, 0.0],
+            [9.0, 0.0, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Prism6,
+                fullmag_ir::FemCellTypeIR::Pyramid5,
+                fullmag_ir::FemCellTypeIR::Tet4,
+            ],
+            offsets: vec![0, 6, 11, 15],
+            nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+            global_ordinals: vec![91, 12, 44],
+            mesh_parts: vec![
+                fullmag_ir::FemCellMeshPartIR::Magnetic,
+                fullmag_ir::FemCellMeshPartIR::TransitionAir,
+                fullmag_ir::FemCellMeshPartIR::FarAir,
+            ],
+        },
+        element_markers: vec![2, 1, 0],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![
+                fullmag_ir::FemFacetTypeIR::Quad4,
+                fullmag_ir::FemFacetTypeIR::Quad4,
+                fullmag_ir::FemFacetTypeIR::Tri3,
+            ],
+            roles: vec![
+                fullmag_ir::FemFacetRoleIR::Exterior,
+                fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                fullmag_ir::FemFacetRoleIR::Exterior,
+            ],
+            offsets: vec![0, 4, 8, 11],
+            nodes: vec![0, 1, 4, 3, 6, 9, 8, 7, 11, 13, 12],
+            global_ordinals: vec![90, 11, 45],
+        },
+        boundary_markers: vec![20, 10, 99],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let analysis = crate::mesh::analyze_shared_domain_mesh(
+        &mesh,
+        &[
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "pyramid".to_string(),
+                marker: 1,
+            },
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "prism".to_string(),
+                marker: 2,
+            },
+        ],
+    )
+    .expect("mixed analysis should succeed");
+
+    let (packed, segments, _) =
+        crate::mesh::pack_mesh_by_analysis(&mesh, &analysis).expect("mixed packing should succeed");
+
+    assert_eq!(
+        packed.cells.types,
+        vec![
+            fullmag_ir::FemCellTypeIR::Pyramid5,
+            fullmag_ir::FemCellTypeIR::Prism6,
+            fullmag_ir::FemCellTypeIR::Tet4,
+        ]
+    );
+    assert_eq!(packed.element_markers, vec![1, 2, 0]);
+    assert_eq!(packed.cells.global_ordinals, vec![12, 91, 44]);
+    assert_eq!(
+        packed.cells.mesh_parts,
+        vec![
+            fullmag_ir::FemCellMeshPartIR::TransitionAir,
+            fullmag_ir::FemCellMeshPartIR::Magnetic,
+            fullmag_ir::FemCellMeshPartIR::FarAir,
+        ]
+    );
+    assert_eq!(packed.cells.offsets, vec![0, 5, 11, 15]);
+    assert_eq!(
+        packed.facets.types,
+        vec![
+            fullmag_ir::FemFacetTypeIR::Quad4,
+            fullmag_ir::FemFacetTypeIR::Quad4,
+            fullmag_ir::FemFacetTypeIR::Tri3,
+        ]
+    );
+    assert_eq!(
+        packed.facets.roles,
+        vec![
+            fullmag_ir::FemFacetRoleIR::MaterialInterface,
+            fullmag_ir::FemFacetRoleIR::Exterior,
+            fullmag_ir::FemFacetRoleIR::Exterior,
+        ]
+    );
+    assert_eq!(packed.boundary_markers, vec![10, 20, 99]);
+    assert_eq!(packed.facets.global_ordinals, vec![11, 90, 45]);
+    assert_eq!(segments[0].element_start, 0);
+    assert_eq!(segments[1].element_start, 1);
+}
+
+fn adjacent_hex_interface_mesh(right_marker: u32) -> MeshIR {
+    MeshIR {
+        mesh_name: format!("hex_interface_{right_marker}"),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [2.0, 1.0, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Hex8,
+                fullmag_ir::FemCellTypeIR::Hex8,
+            ],
+            offsets: vec![0, 8, 16],
+            nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 1, 8, 9, 2, 5, 10, 11, 6],
+            global_ordinals: vec![501, 902],
+            mesh_parts: Vec::new(),
+        },
+        element_markers: vec![1, right_marker],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 4],
+            nodes: vec![1, 2, 6, 5],
+            global_ordinals: vec![700],
+        },
+        boundary_markers: vec![27],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
+#[test]
+fn packing_preserves_magnetic_magnetic_quad_interface_once() {
+    let mesh = adjacent_hex_interface_mesh(2);
+    let analysis = crate::mesh::analyze_shared_domain_mesh(
+        &mesh,
+        &[
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "left".into(),
+                marker: 1,
+            },
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "right".into(),
+                marker: 2,
+            },
+        ],
+    )
+    .unwrap();
+    let (packed, _, parts) = crate::mesh::pack_mesh_by_analysis(&mesh, &analysis).unwrap();
+    assert_eq!(packed.facets.types, vec![fullmag_ir::FemFacetTypeIR::Quad4]);
+    assert_eq!(
+        packed.facets.roles,
+        vec![fullmag_ir::FemFacetRoleIR::MaterialInterface]
+    );
+    assert_eq!(packed.facets.global_ordinals, vec![700]);
+    let interface = parts
+        .iter()
+        .find(|part| part.role == fullmag_ir::FemMeshPartRole::Interface)
+        .unwrap();
+    assert_eq!(interface.boundary_face_indices, vec![0]);
+}
+
+#[test]
+fn packing_preserves_air_magnetic_quad_interface_once() {
+    let mesh = adjacent_hex_interface_mesh(0);
+    let analysis = crate::mesh::analyze_shared_domain_mesh(
+        &mesh,
+        &[fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "film".into(),
+            marker: 1,
+        }],
+    )
+    .unwrap();
+    let (packed, _, parts) = crate::mesh::pack_mesh_by_analysis(&mesh, &analysis).unwrap();
+    assert_eq!(packed.facets.types, vec![fullmag_ir::FemFacetTypeIR::Quad4]);
+    assert_eq!(packed.facets.global_ordinals, vec![700]);
+    let interface = parts
+        .iter()
+        .find(|part| part.role == fullmag_ir::FemMeshPartRole::Interface)
+        .unwrap();
+    assert_eq!(interface.boundary_face_indices, vec![0]);
+    assert_eq!(interface.object_id.as_deref(), Some("film"));
+}
+
+#[test]
+fn mixed_mesh_part_slice_retains_global_ordinals_and_variable_arity() {
+    let mesh = MeshIR {
+        mesh_name: "mixed_slice".to_string(),
+        nodes: vec![[0.0, 0.0, 0.0]; 15],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Prism6,
+                fullmag_ir::FemCellTypeIR::Tet4,
+                fullmag_ir::FemCellTypeIR::Pyramid5,
+            ],
+            offsets: vec![0, 6, 10, 15],
+            nodes: (0..15).collect(),
+            global_ordinals: vec![80, 12, 44],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::TransitionAir],
+        },
+        element_markers: vec![1, 0, 0],
+        facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let segment = fullmag_ir::FemObjectSegmentIR {
+        object_id: "__air__".to_string(),
+        geometry_id: None,
+        node_start: 6,
+        node_count: 9,
+        element_start: 1,
+        element_count: 2,
+        boundary_face_start: 0,
+        boundary_face_count: 0,
+    };
+    let parts = crate::mesh::build_mesh_parts_from_segments(
+        &mesh,
+        std::slice::from_ref(&segment),
+        fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir,
+    );
+    let part = &parts[0];
+    let fullmag_ir::FemMeshPartSelector::ElementRange { start, count } = part.element_selector
+    else {
+        panic!("mesh part should retain an element range")
+    };
+    let sliced = mesh
+        .cells
+        .iter()
+        .skip(start as usize)
+        .take(count as usize)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sliced
+            .iter()
+            .map(|cell| cell.global_ordinal)
+            .collect::<Vec<_>>(),
+        vec![12, 44]
+    );
+    assert_eq!(
+        sliced.iter().map(|cell| cell.cell_type).collect::<Vec<_>>(),
+        vec![
+            fullmag_ir::FemCellTypeIR::Tet4,
+            fullmag_ir::FemCellTypeIR::Pyramid5,
+        ]
+    );
+    assert_eq!(sliced[0].nodes, &[6, 7, 8, 9]);
+    assert_eq!(sliced[1].nodes, &[10, 11, 12, 13, 14]);
+    assert!(part.node_indices.is_empty());
+    assert_eq!(
+        part.node_selector,
+        fullmag_ir::FemMeshPartSelector::NodeRange { start: 6, count: 9 }
+    );
+}
+
+#[test]
+fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
+    let prism = MeshIR {
+        mesh_name: "prism".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![40],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::Magnetic],
+        },
+        element_markers: vec![1],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::Exterior],
+            offsets: vec![0, 4],
+            nodes: vec![0, 1, 4, 3],
+            global_ordinals: vec![70],
+        },
+        boundary_markers: vec![3],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let pyramid = MeshIR {
+        mesh_name: "pyramid".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.5, 0.5, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Pyramid5],
+            offsets: vec![0, 5],
+            nodes: vec![0, 1, 2, 3, 4],
+            global_ordinals: vec![40],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::TransitionAir],
+        },
+        element_markers: vec![1],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Tri3],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 3],
+            nodes: vec![0, 1, 4],
+            global_ordinals: vec![70],
+        },
+        boundary_markers: vec![4],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+
+    let (merged, segments) = crate::mesh::merge_fem_meshes(&[
+        ("left".to_string(), prism),
+        ("right".to_string(), pyramid),
+    ])
+    .expect("mixed merge should succeed");
+
+    assert_eq!(
+        merged.cells.types,
+        vec![
+            fullmag_ir::FemCellTypeIR::Prism6,
+            fullmag_ir::FemCellTypeIR::Pyramid5,
+        ]
+    );
+    assert_eq!(merged.cells.offsets, vec![0, 6, 11]);
+    assert_eq!(merged.cells.global_ordinals, vec![0, 1]);
+    assert_eq!(
+        merged.cells.mesh_parts,
+        vec![
+            fullmag_ir::FemCellMeshPartIR::Magnetic,
+            fullmag_ir::FemCellMeshPartIR::TransitionAir,
+        ]
+    );
+    assert_eq!(merged.cells.item_nodes(0), Some(&[0, 1, 2, 3, 4, 5][..]));
+    assert_eq!(merged.cells.item_nodes(1), Some(&[6, 7, 8, 9, 10][..]));
+    assert_eq!(
+        merged.facets.types,
+        vec![
+            fullmag_ir::FemFacetTypeIR::Quad4,
+            fullmag_ir::FemFacetTypeIR::Tri3,
+        ]
+    );
+    assert_eq!(
+        merged.facets.roles,
+        vec![
+            fullmag_ir::FemFacetRoleIR::Exterior,
+            fullmag_ir::FemFacetRoleIR::MaterialInterface,
+        ]
+    );
+    assert_eq!(merged.boundary_markers, vec![3, 4]);
+    assert_eq!(merged.facets.global_ordinals, vec![0, 1]);
+    assert_eq!(segments[0].element_start, 0);
+    assert_eq!(segments[1].element_start, 1);
+    assert_eq!(segments[1].node_start, 6);
+}
+
+#[test]
 fn validate_rejects_shared_nodes_for_now() {
     let mesh = MeshIR {
         mesh_name: "touching".to_string(),
@@ -664,9 +1348,9 @@ fn validate_rejects_shared_nodes_for_now() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -703,9 +1387,9 @@ fn validate_accepts_shared_nodes_when_solver_supports_conformal() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -732,7 +1416,7 @@ fn validate_accepts_shared_nodes_when_solver_supports_conformal() {
 
 #[test]
 fn pack_duplicates_shared_interface_nodes_per_region() {
-    let mesh = MeshIR {
+    let mut mesh = MeshIR {
         mesh_name: "touching".to_string(),
         nodes: vec![
             [0.0, 0.0, 0.0],
@@ -741,14 +1425,19 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
-        boundary_markers: vec![10, 20],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 1, 3],
+            [0, 1, 4],
+            [0, 1, 2],
+        ]),
+        boundary_markers: vec![10, 20, 30],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
     };
+    mesh.facets.roles[2] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
     let region_markers = vec![
         fullmag_ir::FemDomainRegionMarkerIR {
             geometry_name: "left".to_string(),
@@ -766,7 +1455,10 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
         .expect("packing should duplicate shared interface nodes");
 
     assert_eq!(packed.nodes.len(), 8);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [4, 6, 5, 7]]);
+    assert_eq!(
+        packed.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [4, 6, 5, 7]]
+    );
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "left");
     assert_eq!(segments[0].node_count, 4);
@@ -782,7 +1474,7 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
 
 #[test]
 fn pack_preserves_shared_interface_nodes_within_one_object() {
-    let mesh = MeshIR {
+    let mut mesh = MeshIR {
         mesh_name: "object_with_region".to_string(),
         nodes: vec![
             [0.0, 0.0, 0.0],
@@ -791,17 +1483,18 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: Vec::new(),
-        boundary_markers: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+        boundary_markers: vec![10],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
     };
+    mesh.facets.roles[0] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
     let analysis = crate::mesh::SharedDomainAnalysis {
         node_owner: vec![1, 1, 1, 1, 2],
-        face_owner: std::collections::BTreeMap::new(),
+        face_owner: [([0, 1, 2].to_vec(), 1)].into_iter().collect(),
         ordered_regions: vec![
             crate::mesh::SharedDomainRegionEntry {
                 object_id: "body".to_string(),
@@ -816,7 +1509,8 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         ],
         shared_interface_nodes: vec![(0, vec![1, 2]), (1, vec![1, 2]), (2, vec![1, 2])],
         interface_faces: vec![crate::mesh::SharedInterfaceFace {
-            face: [0, 1, 2],
+            facet_global_ordinal: 0,
+            facet_type: fullmag_ir::FemFacetTypeIR::Tri3,
             markers: vec![1, 2],
         }],
     };
@@ -825,7 +1519,10 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         .expect("packing should preserve one H1 field within an object");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
+    assert_eq!(
+        packed.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [0, 2, 1, 4]]
+    );
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -917,9 +1614,9 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 6, 5, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 6, 5, 7]]),
         element_markers: vec![1, 2],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -948,7 +1645,10 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
         .expect("same-object coincident region nodes should merge");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
+    assert_eq!(
+        packed.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [0, 2, 1, 4]]
+    );
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -998,9 +1698,9 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -1020,7 +1720,10 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
     };
 
     assert_eq!(fem.mesh.nodes.len(), 5);
-    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
+    assert_eq!(
+        fem.mesh.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [0, 2, 1, 4]]
+    );
     assert_eq!(fem.initial_magnetization.len(), 5);
     assert_eq!(fem.object_segments.len(), 2);
     assert!(fem
@@ -1133,9 +1836,17 @@ fn pack_produces_same_result_as_before() {
             [8.0, 1.0, 0.0],
             [8.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [8, 9, 10, 11],
+        ]),
         element_markers: vec![1, 2, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6], [8, 9, 10]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 1, 2],
+            [4, 5, 6],
+            [8, 9, 10],
+        ]),
         boundary_markers: vec![10, 20, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -1182,6 +1893,18 @@ fn bootstrap_example_plans_successfully() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn fdm_plan_preserves_signed_uniaxial_easy_plane_anisotropy() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].uniaxial_anisotropy = Some(-0.5e6);
+
+    let plan = plan(&ir).expect("signed Ku1 material must remain plannable");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(fdm.material.uniaxial_anisotropy_ku1, Some(-0.5e6));
 }
 
 #[test]
@@ -1367,6 +2090,27 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
         .as_ref()
         .expect("FDM plan should carry a grid certificate")
         .region_legend;
+    assert!(
+        fdm.grid_certificate
+            .as_ref()
+            .expect("FDM plan should carry a grid certificate")
+            .object_ids
+            .iter()
+            .any(|object_id| object_id == &legend[0].object_id),
+        "grid certificate must bind the realized single-grid object identity"
+    );
+    let round_tripped: fullmag_ir::FdmPlanIR =
+        serde_json::from_value(serde_json::to_value(&fdm).expect("FDM plan should serialize"))
+            .expect("FDM plan should deserialize");
+    round_tripped
+        .grid_certificate
+        .as_ref()
+        .expect("round-tripped plan should retain the grid certificate")
+        .validate_against_masks(
+            round_tripped.active_mask.as_deref(),
+            &round_tripped.region_mask,
+        )
+        .expect("serialized execution-plan membership must retain its certificate identity");
     assert_eq!(legend.len(), 1);
     assert_eq!(legend[0].numeric_id, 1);
     assert_eq!(legend[0].region_id, region_id);
@@ -2087,9 +2831,9 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2140,6 +2884,7 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 fullmag_ir::OutputIR::Field {
                     name: "H_mel".to_string(),
@@ -2219,6 +2964,7 @@ fn fem_quasistatic_magnetoelastic_is_explicitly_rejected_until_mechanics_solver_
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::Field {
                 name: "H_mel".to_string(),
                 every_seconds: 1e-12,
@@ -2249,6 +2995,7 @@ fn fem_elastodynamic_magnetoelastic_is_explicitly_rejected_until_mechanics_solve
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::Field {
                 name: "H_mel".to_string(),
                 every_seconds: 1e-12,
@@ -2277,6 +3024,7 @@ fn fem_mechanics_observables_are_rejected_until_mechanics_solver_exists() {
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 fullmag_ir::OutputIR::Field {
                     name: "u".to_string(),
@@ -2344,9 +3092,9 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2435,9 +3183,13 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [3, 5, 4, 0], [6, 7, 8, 9]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                    [0, 1, 2, 3],
+                    [3, 5, 4, 0],
+                    [6, 7, 8, 9],
+                ]),
                 element_markers: vec![1, 1, 0],
-                boundary_faces: vec![[0, 1, 2], [3, 5, 4]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [3, 5, 4]]),
                 boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_periodic".to_string(),
@@ -2451,21 +3203,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                     orientation: None,
                     pairing_policy: None,
                 }],
-                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 0,
-                    node_b: 3,
-                },
-                fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 1,
-                    node_b: 4,
-                },
-                fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 2,
-                    node_b: 5,
-                }],
+                periodic_node_pairs: vec![
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 0,
+                        node_b: 3,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 1,
+                        node_b: 4,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 2,
+                        node_b: 5,
+                    },
+                ],
                 per_domain_quality: std::collections::HashMap::new(),
             }),
             region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
@@ -2575,11 +3329,9 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .demag = fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0;
     let demag_planned =
         plan(&demag_ir).expect("periodic FEM static demag with periodic-airbox PBC should plan");
-    assert!(demag_planned
-        .provenance
-        .notes
-        .iter()
-        .any(|note| note.contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
+    assert!(
+        demag_planned.provenance.notes.iter().any(|note| note
+            .contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
             && note.contains("topology=sha256:")
             && note.contains("magnetic_classes=3")
             && note.contains("scalar_classes=3")),
@@ -2614,9 +3366,11 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     for point in &mut mesh.nodes {
         *point = [point[2], point[1], point[0]];
     }
-    for element in &mut mesh.elements {
+    let mut elements = mesh.require_tet4_elements().unwrap();
+    for element in &mut elements {
         element.swap(1, 2);
     }
+    mesh.set_tet4_cells(elements);
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "z_periodic".to_string(),
         source_marker: None,
@@ -2685,7 +3439,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("test problem should carry an inline FEM domain mesh");
-    mesh.element_markers = vec![1; mesh.elements.len()];
+    mesh.element_markers = vec![1; mesh.cell_count()];
     let err = plan(&missing_air).expect_err("periodic FEM demag without air should reject");
     assert!(
         err.reasons.iter().any(|reason| {
@@ -2787,9 +3541,9 @@ fn fem_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2860,9 +3614,9 @@ fn fem_plan_serializes_mesh_parts() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2898,9 +3652,9 @@ fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
             [0.0, 0.0, 1.0],
             [1.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
             [0, 1, 2],
             [0, 1, 3],
             [0, 2, 3],
@@ -2908,7 +3662,7 @@ fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
             [1, 3, 4],
             [2, 3, 4],
             [1, 2, 3],
-        ],
+        ]),
         boundary_markers: vec![1, 1, 1, outer_marker, outer_marker, outer_marker, 10],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -2920,7 +3674,7 @@ fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
     use std::collections::BTreeMap;
 
     let mut topology: BTreeMap<[u32; 3], Vec<bool>> = BTreeMap::new();
-    for (index, element) in mesh.elements.iter().enumerate() {
+    for (index, element) in mesh.require_tet4_elements().unwrap().iter().enumerate() {
         let is_air = mesh.element_markers.get(index).copied().unwrap_or(1) == 0;
         for mut face in [
             [element[0], element[1], element[2]],
@@ -2933,7 +3687,8 @@ fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
         }
     }
     let existing = mesh
-        .boundary_faces
+        .require_tri3_boundary_faces()
+        .unwrap()
         .iter()
         .map(|face| {
             let mut key = *face;
@@ -2968,7 +3723,7 @@ fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
             [first, second] if first != second => interface_marker,
             _ => continue,
         };
-        mesh.boundary_faces.push(face);
+        mesh.push_tri3_facet(face).unwrap();
         mesh.boundary_markers.push(marker);
     }
 }
@@ -3030,9 +3785,9 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3053,14 +3808,15 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("airbox fixture mesh");
-    mesh.boundary_faces.extend([
+    mesh.extend_tri3_facets([
         [0, 1, 3],
         [0, 2, 3],
         [1, 2, 3],
         [4, 5, 7],
         [4, 6, 7],
         [5, 6, 7],
-    ]);
+    ])
+    .unwrap();
     mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let plan = plan(&ir).expect("FEM air-box mesh asset should produce an air-box config");
     match plan.backend_plan {
@@ -3142,9 +3898,9 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3165,14 +3921,15 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("airbox fixture mesh");
-    mesh.boundary_faces.extend([
+    mesh.extend_tri3_facets([
         [0, 1, 3],
         [0, 2, 3],
         [1, 2, 3],
         [4, 5, 7],
         [4, 6, 7],
         [5, 6, 7],
-    ]);
+    ])
+    .unwrap();
     mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let result = plan(&ir).expect(
         "strict mode should accept marker 99 (well-known gmsh convention) without explicit air_box_policy",
@@ -3310,9 +4067,9 @@ fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3376,9 +4133,14 @@ fn fem_backend_fredkin_koehler_demag_plans_on_body_only_mesh_without_airbox() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                    [0, 2, 1],
+                    [0, 1, 3],
+                    [0, 3, 2],
+                    [1, 2, 3],
+                ]),
                 boundary_markers: vec![1, 1, 1, 1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3467,9 +4229,9 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3537,9 +4299,9 @@ fn fem_backend_populates_domain_frame_and_domain_mesh_mode() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3633,9 +4395,9 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3719,7 +4481,7 @@ fn fem_backend_with_mesh_source_json_plans_successfully() {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.mesh_name, "strip");
             assert_eq!(fem.mesh.nodes.len(), 4);
-            assert_eq!(fem.mesh.elements.len(), 1);
+            assert_eq!(fem.mesh.cell_count(), 1);
         }
         _ => panic!("expected FEM plan"),
     }
@@ -3802,9 +4564,9 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3822,9 +4584,9 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3839,7 +4601,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
     match plan.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.nodes.len(), 8);
-            assert_eq!(fem.mesh.elements.len(), 2);
+            assert_eq!(fem.mesh.cell_count(), 2);
             assert_eq!(fem.initial_magnetization.len(), 8);
             assert_eq!(fem.object_segments.len(), 2);
             assert_eq!(fem.object_segments[0].object_id, "free");
@@ -3934,9 +4696,9 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3954,9 +4716,9 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -3997,9 +4759,9 @@ fn fem_plan_rejects_invalid_cubic_anisotropy_axes() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4091,9 +4853,9 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4111,9 +4873,9 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4214,9 +4976,9 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4234,9 +4996,9 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4326,9 +5088,9 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
                     [0.0, 0.0, 1.0],
                     [0.0, 0.0, -1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
                 element_markers: vec![1, 2],
-                boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
                 boundary_markers: vec![10, 20],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4439,9 +5201,9 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "study_domain".to_string(),
                 nodes,
-                elements,
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
                 element_markers,
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4514,6 +5276,7 @@ fn inactive_term_output_is_rejected_for_execution() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs,
         },
     };
@@ -4539,9 +5302,9 @@ fn attach_unit_fem_domain_mesh(ir: &mut ProblemIR) {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4566,6 +5329,7 @@ fn fem_dmi_field_outputs_require_matching_dmi_terms() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::Field {
                     name: "H_dmi".to_string(),
@@ -4603,6 +5367,7 @@ fn fem_bulk_dmi_field_output_plans_when_bulk_dmi_is_active() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::Field {
                 name: "H_dmi_bulk".to_string(),
                 every_seconds: 1e-12,
@@ -4628,6 +5393,7 @@ fn fem_material_dmi_constants_lower_to_native_plan() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::Field {
                     name: "H_dmi".to_string(),
@@ -4744,8 +5510,7 @@ fn fem_demag_projected_gradient_bb_resolves_strict_armijo_policy() {
 
 #[test]
 fn fem_demag_direct_minimizer_rejects_explicit_solver_policy_too_loose_for_armijo() {
-    let mut ir =
-        fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
+    let mut ir = fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
     ir.backend_policy
         .discretization_hints
         .as_mut()
@@ -5213,9 +5978,9 @@ fn single_precision_is_rejected_for_phase_one_cpu_execution() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -5284,9 +6049,9 @@ fn single_precision_is_rejected_with_gpu_specific_reason_when_cuda_device_reques
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -5384,7 +6149,6 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
                 common_cells: None,
                 common_cells_xy: None,
             }),
@@ -5471,7 +6235,6 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
                 common_cells: None,
                 common_cells_xy: None,
             }),
@@ -5558,7 +6321,6 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
                 common_cells: None,
                 common_cells_xy: None,
             }),
@@ -5580,7 +6342,6 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
             d: 1.5e-3,
             interface_normal: None,
         },
-        fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
         fullmag_ir::EnergyTermIR::Demag {
             realization: fullmag_ir::RequestedFemDemagIR::Auto,
         },
@@ -5641,6 +6402,10 @@ fn staged_multilayer_rejects_abm3() {
 #[test]
 fn staged_multilayer_rejects_adaptive_rk23() {
     let mut ir = stacked_two_body_multilayer_problem();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu"}),
+    );
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
         panic!("bootstrap study should be time evolution");
     };
@@ -5653,6 +6418,7 @@ fn staged_multilayer_rejects_adaptive_rk23() {
     *integrator = "rk23".to_string();
     *fixed_timestep = None;
     *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
         atol: 1.0e-6,
         rtol: 1.0e-4,
         dt_initial: Some(1.0e-13),
@@ -5670,6 +6436,185 @@ fn staged_multilayer_rejects_adaptive_rk23() {
         .reasons
         .iter()
         .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+}
+
+#[test]
+fn staged_multilayer_rejects_adaptive_rk23_max_error_convenience() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        unreachable!()
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    *integrator = "rk23".to_string();
+    *fixed_timestep = None;
+    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+        atol: 1e-6,
+        rtol: 0.0,
+        dt_initial: Some(1e-15),
+        dt_min: 1e-16,
+        dt_max: Some(1e-14),
+        safety: 0.9,
+        growth_limit: 2.0,
+        shrink_limit: 0.2,
+        max_spin_rotation: None,
+        norm_tolerance: None,
+    });
+    let err = plan(&ir).expect_err("staged CPU multilayer must reject max-error RK23");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+}
+
+fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranceModeIR) {
+    let dynamics = match &mut problem.study {
+        fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
+        | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. }
+        | fullmag_ir::StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
+        fullmag_ir::StudyIR::Relaxation {
+            dynamics: Some(dynamics),
+            ..
+        } => dynamics,
+        _ => panic!("fixture must have dynamics"),
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    *integrator = "rk45".to_string();
+    *fixed_timestep = None;
+    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode: mode,
+        atol: 1e-6,
+        rtol: 1e-4,
+        dt_initial: Some(1e-15),
+        dt_min: 1e-16,
+        dt_max: Some(1e-14),
+        safety: 0.9,
+        growth_limit: 2.0,
+        shrink_limit: 0.2,
+        max_spin_rotation: None,
+        norm_tolerance: None,
+    });
+}
+
+#[test]
+fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_or_cuda_routes() {
+    for device in [None, Some("auto")] {
+        let mut ir = ProblemIR::bootstrap_example();
+        set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+        if let Some(device) = device {
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".into(),
+                serde_json::json!({"device": device}),
+            );
+        }
+        let err = plan(&ir).expect_err("automatic adaptive FDM route must fail");
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires explicit") && reason.contains("device='cpu'")));
+    }
+    let mut cpu = ProblemIR::bootstrap_example();
+    set_adaptive_rk45(&mut cpu, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+    cpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    plan(&cpu).expect("explicit CPU adaptive FDM should remain legal");
+    for device in ["cuda", "gpu"] {
+        let mut cuda = ProblemIR::bootstrap_example();
+        set_adaptive_rk45(&mut cuda, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+        cuda.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({"device": device}),
+        );
+        let err = plan(&cuda)
+            .expect_err("adaptive FDM CUDA must fail before a runtime timestep identity exists");
+        assert!(err.reasons.iter().any(|reason| {
+            reason.contains("adaptive_timestep")
+                && reason.contains("CUDA")
+                && reason.contains("no executable timestep capability identity")
+        }));
+    }
+}
+
+#[test]
+fn adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified() {
+    let mut ir = ProblemIR::bootstrap_example();
+    set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    ir.temperature = Some(300.0);
+
+    let err = plan(&ir).expect_err("adaptive Brown dynamics must fail closed");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("adaptive_timestep")
+            && reason.contains("Brown thermal noise")
+            && reason.contains("fixed-step Heun")
+    }));
+}
+
+#[test]
+fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
+    for zero_field in ["atol", "rtol"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+            unreachable!()
+        };
+        let fullmag_ir::DynamicsIR::Llg {
+            adaptive_timestep, ..
+        } = dynamics;
+        let adaptive = adaptive_timestep.as_mut().unwrap();
+        if zero_field == "atol" {
+            adaptive.atol = 0.0;
+        } else {
+            adaptive.rtol = 0.0;
+        }
+        adaptive.safety = 1.0;
+        adaptive.max_spin_rotation = Some(0.2);
+        adaptive.norm_tolerance = Some(1.0e-3);
+        let mut errors = Vec::new();
+        let controls = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
+        assert!(errors.is_empty(), "{zero_field}: {errors:?}");
+        let resolved = controls.adaptive_timestep.expect("adaptive controls");
+        assert_eq!(resolved.max_spin_rotation, Some(0.2));
+        assert_eq!(resolved.norm_tolerance, Some(1.0e-3));
+    }
+
+    let mut max_error = ProblemIR::bootstrap_example();
+    max_error.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    set_adaptive_rk45(
+        &mut max_error,
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+    );
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut max_error.study else {
+        unreachable!()
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        adaptive_timestep, ..
+    } = dynamics;
+    let adaptive = adaptive_timestep.as_mut().expect("adaptive policy");
+    adaptive.rtol = 0.0;
+    let mut errors = Vec::new();
+    validate::planned_study_controls(&max_error, BackendTarget::Fem, &mut errors);
+    assert!(errors.is_empty(), "maximum-error FEM controls: {errors:?}");
 }
 
 #[test]
@@ -5805,6 +6750,35 @@ fn multilayer_planner_rejects_oersted_until_rhs_coverage_exists() {
 }
 
 #[test]
+fn multilayer_planner_rejects_field_drives_until_plan_owns_them() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "multilayer-drive".to_string(),
+        name: "Multilayer drive".to_string(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1.0e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+
+    let error = plan(&ir).expect_err("multilayer FDM must not drop an authored field drive");
+
+    assert!(
+        error.reasons.iter().any(
+            |reason| reason.contains("RegionalFieldDrive") && reason.contains("multilayer FDM")
+        ),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
 fn stacked_two_body_problem_lowers_to_multilayer_plan() {
     let mut ir = stacked_two_body_multilayer_problem_with_dmi();
     ir.problem_meta.runtime_metadata.insert(
@@ -5851,7 +6825,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
                 "multilayer_convolution"
             );
             assert_eq!(multilayer.interfacial_dmi, Some(1.5e-3));
-            assert_eq!(multilayer.bulk_dmi, Some(2.5e-3));
+            assert_eq!(multilayer.bulk_dmi, None);
         }
         other => panic!("expected FDM multilayer plan, got {other:?}"),
     }
@@ -5998,9 +6972,9 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6034,6 +7008,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
@@ -6153,9 +7128,9 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6186,6 +7161,7 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -6290,9 +7266,9 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -6398,6 +7374,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -6441,9 +7418,9 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
                     [2.0, 1.0, 0.0],
                     [2.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -6556,6 +7533,7 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -6631,9 +7609,9 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
                     [0.0, 0.0, 1.0],
                     [1.0, 1.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
                 element_markers: vec![1, 2],
-                boundary_faces: vec![[0, 1, 3], [1, 2, 4]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [1, 2, 4]]),
                 boundary_markers: vec![10, 10],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6685,6 +7663,7 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -6747,9 +7726,9 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6783,6 +7762,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -6840,9 +7820,9 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6886,6 +7866,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -6955,9 +7936,9 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![],
                 periodic_node_pairs: vec![],
@@ -6987,6 +7968,7 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7028,9 +8010,9 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -7082,6 +8064,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7120,9 +8103,9 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -7174,6 +8157,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7217,16 +8201,16 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
-                boundary_markers: vec![10, 99],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
+                boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
                     source_marker: None,
                     destination_marker: None,
                     marker_a: 10,
-                    marker_b: 99,
+                    marker_b: 11,
                     translation: None,
                     tolerance: None,
                     axis_hint: None,
@@ -7289,6 +8273,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7391,9 +8376,9 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![],
                 periodic_node_pairs: vec![],
@@ -7428,6 +8413,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
         magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7607,7 +8593,7 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
         [-2.0, 2.0, -2.0],
         [-2.0, -2.0, 2.0],
     ]);
-    domain_mesh.elements.push([4, 5, 6, 7]);
+    domain_mesh.push_tet4_cell([4, 5, 6, 7]).unwrap();
     domain_mesh.element_markers.push(0);
     geometry_assets.fem_domain_mesh_asset = Some(fullmag_ir::FemDomainMeshAssetIR {
         mesh_source: None,
@@ -7668,7 +8654,8 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("supported frequency-domain slices")
-            && reason.contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
+            && reason
+                .contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
     }));
 
     let mut periodic_without_pairs = fem_frequency_response_mesh_asset_problem();
@@ -8279,9 +9266,9 @@ fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -8315,6 +9302,7 @@ fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -8344,9 +9332,13 @@ fn fem_frequency_response_periodic_airbox_domain_problem() -> ProblemIR {
                 [-1.0, 2.0, -1.0],
                 [-1.0, -1.0, 2.0],
             ],
-            elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
             element_markers: vec![1, 0],
-            boundary_faces: vec![[0, 1, 2], [1, 2, 3], [4, 5, 6]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                [0, 1, 2],
+                [1, 2, 3],
+                [4, 5, 6],
+            ]),
             boundary_markers: vec![10, 11, 99],
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x_faces".to_string(),
@@ -8437,6 +9429,7 @@ fn fdm_frequency_response_remains_explicitly_not_executable() {
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -8459,6 +9452,7 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
         integrator: "heun".to_string(),
         fixed_timestep: Some(1.0e-13),
         adaptive_timestep: Some(fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1.0e-6,
             rtol: 1.0e-6,
             dt_initial: Some(1.0e-13),
@@ -8497,6 +9491,7 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -8552,6 +9547,7 @@ fn frequency_response_planner_controls_ignore_invalid_time_integrator_alias() {
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -8629,9 +9625,9 @@ fn fem_plan_fails_when_shared_domain_requested_but_no_domain_mesh_asset() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -8714,9 +9710,9 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -8737,9 +9733,9 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -8827,9 +9823,9 @@ fn fem_plan_homogeneous_multi_body_populates_region_materials() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -8847,9 +9843,9 @@ fn fem_plan_homogeneous_multi_body_populates_region_materials() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -8911,9 +9907,9 @@ fn reorder_shared_domain_mesh_preserves_per_domain_quality() {
             [-2.0, 2.0, -2.0],
             [-2.0, -2.0, 2.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![1, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -8973,9 +9969,9 @@ fn merge_multibody_mesh_preserves_per_domain_quality() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -8989,9 +9985,9 @@ fn merge_multibody_mesh_preserves_per_domain_quality() {
             [0.0, 1.0, 2.0],
             [0.0, 0.0, 3.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -9023,9 +10019,9 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -9035,7 +10031,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
         object_region_markers: Vec::new(),
         build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
             build_mode: "component_aware".to_string(),
-            fallbacks_triggered: vec![],
+            fallbacks_triggered: Some(vec![]),
             effective_airbox_target: None,
             effective_airbox_hmax: Some(100e-9),
             effective_per_object_targets: std::collections::HashMap::new(),
@@ -9052,6 +10048,8 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             selector_resolution: Vec::new(),
             orphan_entities: Vec::new(),
             rejected_element_types: Vec::new(),
+            mixed_layer_topology_certificate: None,
+            mixed_topology_provenance: None,
         }),
     };
     assert!(asset.validate().is_ok());
@@ -9071,9 +10069,9 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -9139,6 +10137,42 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
             );
         }
         _ => panic!("expected FDM plan"),
+    }
+}
+
+#[test]
+fn fdm_boundary_correction_rejects_geometry_without_supported_sdf() {
+    for tier in ["volume", "full"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.geometry.entries = vec![GeometryEntryIR::Box {
+            name: "box".to_string(),
+            size: [100e-9, 50e-9, 10e-9],
+        }];
+        ir.regions[0].geometry = "box".to_string();
+        ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+            fdm: Some(fullmag_ir::FdmHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
+                boundary_correction: Some(tier.to_string()),
+                boundary_phi_floor: None,
+                boundary_delta_min: None,
+            }),
+            fem: None,
+            hybrid: None,
+        });
+
+        let error = plan(&ir).expect_err("unsupported boundary SDF must fail closed");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("boundary_correction")
+                    && reason.contains("does not have a supported SDF")),
+            "tier={tier}, reasons={:?}",
+            error.reasons
+        );
     }
 }
 
@@ -9223,9 +10257,16 @@ fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
     };
     assert_eq!(fdm.origin_m, [0.0, -20e-9, -2e-9]);
     let serialized = serde_json::to_value(&fdm).expect("FDM plan should serialize");
-    assert_eq!(serialized["origin_m"], serde_json::json!([0.0, -20e-9, -2e-9]));
-    let boundary = fdm.boundary_geometry.expect("translated base must retain SDF");
-    let active_mask = fdm.active_mask.expect("cylinder should have an active mask");
+    assert_eq!(
+        serialized["origin_m"],
+        serde_json::json!([0.0, -20e-9, -2e-9])
+    );
+    let boundary = fdm
+        .boundary_geometry
+        .expect("translated base must retain SDF");
+    let active_mask = fdm
+        .active_mask
+        .expect("cylinder should have an active mask");
     let active_index = active_mask
         .iter()
         .position(|active| *active)
@@ -9270,9 +10311,8 @@ fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
         .expect("the same geometry must lower for multilayer");
     let expected_origin = std::array::from_fn(|axis| asset_origin[axis] + placed.translation[axis]);
     assert_eq!(single.origin_m, expected_origin);
-    let first_active_cell: [f64; 3] = std::array::from_fn(|axis| {
-        single.origin_m[axis] + 0.5 * single.cell_size[axis]
-    });
+    let first_active_cell: [f64; 3] =
+        std::array::from_fn(|axis| single.origin_m[axis] + 0.5 * single.cell_size[axis]);
     for (actual, expected) in first_active_cell.into_iter().zip([29e-9, -11e-9, 4e-9]) {
         assert!((actual - expected).abs() < 1e-21);
     }
@@ -9363,9 +10403,21 @@ fn fdm_boundary_params_none_when_not_set() {
 fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
     let axes = [
         [AxisBoundary::Open, AxisBoundary::Open, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Periodic],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+        ],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+        ],
     ];
     for device in [None, Some("cuda")] {
         for axis_set in axes {
@@ -9389,9 +10441,7 @@ fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
                     image_counts: Some([4, 4, 4]),
                 });
                 let result = plan(&ir);
-                let has_periodic_axis = axis_set
-                    .iter()
-                    .any(|axis| *axis == AxisBoundary::Periodic);
+                let has_periodic_axis = axis_set.iter().any(|axis| *axis == AxisBoundary::Periodic);
                 if demag == FdmDemagPeriodicityIR::Open && has_periodic_axis {
                     let error = result.expect_err("periodic + open demag must fail closed");
                     assert!(
@@ -9439,6 +10489,43 @@ fn fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity() {
 }
 
 #[test]
+fn fdm_cuda_fp32_subcell_boundary_is_capability_gated_until_field_energy_parity() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![GeometryEntryIR::Cylinder {
+        name: "disk".to_string(),
+        radius: 50e-9,
+        height: 6e-9,
+        axis: [0.0, 0.0, 1.0],
+    }];
+    ir.regions[0].geometry = "disk".to_string();
+    ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+
+    let error = plan(&ir).expect_err("unqualified CUDA FP32 T0/T1 must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("execution_precision='single'")
+            && reason.contains("boundary_correction='full'")
+            && reason.contains("FP32 sub-cell field/energy parity")
+    }));
+}
+
+#[test]
 fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.pbc = Some(FdmPeriodicityIR {
@@ -9453,8 +10540,7 @@ fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
 
     let error = plan(&ir).expect_err("multilayer periodic kernels must fail closed");
     assert!(error.reasons.iter().any(|reason| {
-        reason.contains("multilayer periodic axes")
-            && reason.contains("self/shifted demag kernels")
+        reason.contains("multilayer periodic axes") && reason.contains("self/shifted demag kernels")
     }));
 }
 
@@ -9614,8 +10700,8 @@ fn fdm_cuda_pbc_dmi_plans() {
     ir.pbc = Some(FdmPeriodicityIR {
         axes: [
             AxisBoundary::Periodic,
-            AxisBoundary::Open,
-            AxisBoundary::Open,
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
         ],
         demag: FdmDemagPeriodicityIR::Open,
         image_counts: None,
@@ -9626,6 +10712,58 @@ fn fdm_cuda_pbc_dmi_plans() {
         BackendPlanIR::Fdm(fdm) => assert_eq!(fdm.periodicity, ir.pbc),
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn fdm_bulk_dmi_rejects_open_boundaries_until_natural_boundary_is_qualified() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::BulkDmi { d: 1.0e-3 });
+
+    let error = plan(&ir)
+        .expect_err("open-boundary BulkDmi must not plan without its natural boundary condition");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("BulkDmi")
+                && reason.contains("natural exchange+DMI free-surface boundary condition")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn fdm_interfacial_dmi_rejects_non_z_interface_normal_instead_of_ignoring_it() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::InterfacialDmi {
+        d: 1.0e-3,
+        interface_normal: Some([1.0, 0.0, 0.0]),
+    });
+
+    let error = plan(&ir).expect_err("FDM must not silently discard an unsupported iDMI normal");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("InterfacialDmi.interface_normal")
+                && reason.contains("+z interface normal")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn fdm_rejects_spatial_dmi_material_fields_before_the_native_abi() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].dind_field = Some(vec![1.0e-3; 8]);
+
+    let error = plan(&ir).expect_err("FDM must reject material DMI fields it cannot materialize");
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("dind_field") && reason.contains("not executable")),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
 }
 
 #[test]
@@ -9793,25 +10931,44 @@ fn fdm_regional_field_drive_activation_is_resolved_for_active_stage() {
             {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
         ]}),
     );
-    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("relax"));
-    ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), serde_json::json!(2e-12));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("active_stage_id".into(), serde_json::json!("relax"));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("stage_start_time_s".into(), serde_json::json!(2e-12));
     ir.field_drives.push(RegionalFieldDriveIR {
-        id: "excite-only".into(), name: "Excite only".into(), kind: FieldDriveKindIR::Regional,
-        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::Constant, time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::StageIds { stage_ids: vec!["excite".into()] }, migration: None,
+        id: "excite-only".into(),
+        name: "Excite only".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds {
+            stage_ids: vec!["excite".into()],
+        },
+        migration: None,
     });
     let relaxed = plan(&ir).expect("inactive drive should plan");
-    let BackendPlanIR::Fdm(relaxed) = relaxed.backend_plan else { panic!("expected FDM") };
+    let BackendPlanIR::Fdm(relaxed) = relaxed.backend_plan else {
+        panic!("expected FDM")
+    };
     assert!(relaxed.field_drives.is_empty());
     assert!(relaxed.regional_field_drive_bases.is_empty());
     assert_eq!(relaxed.time_stage.active_stage_id.as_deref(), Some("relax"));
     assert_eq!(relaxed.time_stage.start_time_s, 2e-12);
 
-    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("excite"));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("active_stage_id".into(), serde_json::json!("excite"));
     let excited = plan(&ir).expect("active drive should plan");
-    let BackendPlanIR::Fdm(excited) = excited.backend_plan else { panic!("expected FDM") };
+    let BackendPlanIR::Fdm(excited) = excited.backend_plan else {
+        panic!("expected FDM")
+    };
     assert_eq!(excited.field_drives.len(), 1);
     assert_eq!(excited.regional_field_drive_bases.len(), 1);
 }
@@ -9867,12 +11024,22 @@ fn all_time_evolution_drive_is_planned_only_for_time_evolution() {
 fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.field_drives.push(RegionalFieldDriveIR {
-        id: "pulse".into(), name: "Pulse".into(), kind: FieldDriveKindIR::Regional,
-        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        id: "pulse".into(),
+        name: "Pulse".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 20e9,
+            t0: 50e-12,
+            amplitude: 1.0,
+        },
         time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
     });
     if let StudyIR::TimeEvolution {
         dynamics: DynamicsIR::Llg { integrator, .. },
@@ -9883,7 +11050,10 @@ fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
     }
 
     let error = plan(&ir).expect_err("ABM3 drive must fail before runtime");
-    assert!(error.reasons.iter().any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive")));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive")));
 }
 
 #[test]
@@ -9908,9 +11078,10 @@ fn fdm_cuda_regional_field_drive_fails_closed() {
         migration: None,
     });
     let error = plan(&ir).expect_err("CUDA FDM must not silently ignore field drives");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("fdm_cuda_regional_field_drive_unsupported")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("fdm_cuda_regional_field_drive_unsupported") }));
 }
 
 fn fem_minimal_test_ir() -> ProblemIR {
@@ -9939,9 +11110,9 @@ fn fem_minimal_test_ir() -> ProblemIR {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -9956,6 +11127,994 @@ fn fem_minimal_test_ir() -> ProblemIR {
         }),
     });
     ir
+}
+
+fn valid_mixed_certificate_asset_for_version(
+    fingerprint_version: &str,
+) -> fullmag_ir::FemDomainMeshAssetIR {
+    use fullmag_ir::{
+        FemCellMeshPartIR, FemCellTypeIR, FemConnectivityIR, FemFacetConnectivityIR,
+        FemFacetRoleIR, FemFacetTypeIR, MeshIR,
+    };
+
+    let cells = vec![
+        (
+            FemCellTypeIR::Prism6,
+            vec![0, 1, 2, 4, 5, 6],
+            FemCellMeshPartIR::Magnetic,
+            1,
+        ),
+        (
+            FemCellTypeIR::Prism6,
+            vec![0, 2, 3, 4, 6, 7],
+            FemCellMeshPartIR::Magnetic,
+            1,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![1, 2, 6, 5, 8],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![0, 4, 7, 3, 9],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![2, 3, 7, 6, 10],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![0, 1, 5, 4, 11],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![4, 5, 6, 12],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![4, 6, 7, 12],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![0, 2, 1, 13],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![0, 3, 2, 13],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![1, 2, 8, 14],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![15, 17, 16, 18],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![19, 21, 20, 22],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![23, 25, 24, 26],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+    ];
+    let mut cell_offsets = vec![0];
+    let mut cell_nodes = Vec::new();
+    for (_, nodes, _, _) in &cells {
+        cell_nodes.extend(nodes);
+        cell_offsets.push(cell_nodes.len() as u32);
+    }
+    let mut mesh = MeshIR {
+        mesh_name: "mixed-certified-reorder".to_string(),
+        nodes: vec![
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [-2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, -2.0, 0.0],
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, -2.0],
+            [2.0, 0.0, -2.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 0.875, 0.875],
+        ],
+        cells: FemConnectivityIR {
+            types: cells.iter().map(|cell| cell.0).collect(),
+            offsets: cell_offsets,
+            nodes: cell_nodes,
+            global_ordinals: (0..cells.len() as u64).collect(),
+            mesh_parts: cells.iter().map(|cell| cell.2).collect(),
+        },
+        element_markers: cells.iter().map(|cell| cell.3).collect(),
+        facets: FemFacetConnectivityIR::empty(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let local_faces: &[&[&[usize]]] = &[
+        &[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[2, 0, 3]],
+        &[
+            &[0, 2, 1],
+            &[3, 4, 5],
+            &[0, 1, 4, 3],
+            &[1, 2, 5, 4],
+            &[2, 0, 3, 5],
+        ],
+        &[
+            &[0, 3, 2, 1],
+            &[0, 1, 4],
+            &[1, 2, 4],
+            &[2, 3, 4],
+            &[3, 0, 4],
+        ],
+        &[
+            &[0, 3, 2, 1],
+            &[4, 5, 6, 7],
+            &[0, 1, 5, 4],
+            &[1, 2, 6, 5],
+            &[2, 3, 7, 6],
+            &[3, 0, 4, 7],
+        ],
+    ];
+    let mut adjacency = BTreeMap::<Vec<u32>, Vec<(usize, u32)>>::new();
+    for (ordinal, cell_type) in mesh.cells.types.iter().enumerate() {
+        let family = match cell_type {
+            FemCellTypeIR::Tet4 => local_faces[0],
+            FemCellTypeIR::Prism6 => local_faces[1],
+            FemCellTypeIR::Pyramid5 => local_faces[2],
+            FemCellTypeIR::Hex8 => local_faces[3],
+        };
+        let nodes = mesh.cells.item_nodes(ordinal).unwrap();
+        for face in family {
+            let mut key = face.iter().map(|index| nodes[*index]).collect::<Vec<_>>();
+            key.sort_unstable();
+            adjacency
+                .entry(key)
+                .or_default()
+                .push((ordinal, mesh.element_markers[ordinal]));
+        }
+    }
+    let mut offsets = vec![0];
+    for (face, owners) in adjacency {
+        let role_marker = if owners.len() == 1 {
+            Some((FemFacetRoleIR::Exterior, 3))
+        } else if owners.len() == 2 && owners[0].1 != owners[1].1 {
+            Some((FemFacetRoleIR::MaterialInterface, 2))
+        } else {
+            None
+        };
+        if let Some((role, marker)) = role_marker {
+            mesh.facets.types.push(if face.len() == 3 {
+                FemFacetTypeIR::Tri3
+            } else {
+                FemFacetTypeIR::Quad4
+            });
+            mesh.facets.roles.push(role);
+            mesh.facets.nodes.extend(face);
+            offsets.push(mesh.facets.nodes.len() as u32);
+            mesh.boundary_markers.push(marker);
+        }
+    }
+    mesh.facets.offsets = offsets;
+    mesh.facets.global_ordinals = (0..mesh.facets.types.len() as u64).collect();
+    let fingerprint = mesh
+        .mixed_topology_fingerprint_for_version(fingerprint_version)
+        .unwrap();
+    let mut certificate: serde_json::Value = serde_json::from_str(
+        r#"{
+            "schema_version":"mixed_layer_topology_certificate.v1","certificate_status":"accepted",
+            "requested_sweep_direction":"z","resolved_sweep_direction":"z",
+            "requested_layer_count":1,"realized_layer_count":1,
+            "magnetic_plane_coordinates_m":[-1.0,1.0],"plane_tolerance_m":2.0e-8,
+            "transition_shell_thickness_m":1.0,"transition_shell_interface_tri3_count":1,
+            "interface_marker":2,"outer_boundary_marker":3,
+            "magnetic_bounds_min_m":[-1.0,-1.0,-1.0],"magnetic_bounds_max_m":[1.0,1.0,1.0],
+            "airbox_bounds_min_m":[-2.0,-2.0,-2.0],"airbox_bounds_max_m":[2.0,2.0,2.0],
+            "magnetic_bounds_relative_error":0.0,"airbox_bounds_relative_error":0.0,
+            "cell_family_counts_by_marker":{"0":{"pyramid5":4,"tet4":8},"1":{"prism6":2}},
+            "cell_family_counts_by_part":{"far_air":{"tet4":4},"magnetic":{"prism6":2},"transition_air":{"pyramid5":4,"tet4":4}},
+            "facet_family_counts_by_role_marker":{"exterior:3":{"tri3":38},"material_interface:2":{"quad4":4,"tri3":4}},
+            "jacobian_minima_m3_by_family":{"prism6":3.999999999999999,"pyramid5":0.20779754131836622,"tet4":4.0},
+            "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
+            "scaled_jacobian_minima_by_family":{"prism6":0.4082482904638629,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "scaled_jacobian_p05_by_family":{"prism6":0.4311862178478971,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "magnetic_volume_m3":8.0,"expected_magnetic_volume_m3":8.0,
+            "magnetic_relative_volume_error":0.0,"air_volume_m3":56.0,
+            "shared_domain_volume_m3":64.0,"expected_shared_domain_volume_m3":64.0,
+            "shared_domain_relative_volume_error":0.0,"marker_coverage_complete":true,
+            "nonconforming_face_count":0,"orphan_face_count":0,"nonmanifold_face_count":0,
+            "coincident_interface_face_count":0,"topology_fingerprint_version":"v3",
+            "topology_fingerprint":"placeholder","gmsh_version":"4.15.2",
+            "strategy":"shared_geo_extrusion_partitioned_pyramid_tet.v2","effective_gmsh_thread_count":1,
+            "deterministic_inputs":{"algorithm_2d":6,"algorithm_3d":1,"element_order":1,"gmsh_version":"4.15.2","random_factor":0.0,"thread_count":1,"transition_partition":"cartesian_3x3x3_minus_magnetic_center","transition_volume_count":26,"pyramid_apex_optimizer":"bounded_per_apex_outward_scale_line_search","pyramid_apex_scale_step":0.001,"pyramid_apex_scale_max":1.25,"scaled_jacobian_p05_min":0.1},
+            "fallbacks_triggered":[]
+        }"#,
+    )
+    .unwrap();
+    certificate["topology_fingerprint_version"] = serde_json::json!(fingerprint_version);
+    certificate["topology_fingerprint"] = serde_json::json!(fingerprint);
+    let certificate = serde_json::from_value(certificate).unwrap();
+    let region_markers = vec![fullmag_ir::FemDomainRegionMarkerIR {
+        geometry_name: "strip".to_string(),
+        marker: 1,
+    }];
+    fullmag_ir::FemDomainMeshAssetIR {
+        mesh_source: None,
+        mesh: Some(mesh),
+        region_markers: region_markers.clone(),
+        object_region_markers: Vec::new(),
+        build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
+            build_mode: "shared_domain".to_string(),
+            fallbacks_triggered: Some(Vec::new()),
+            effective_airbox_target: None,
+            effective_airbox_hmax: None,
+            effective_per_object_targets: std::collections::HashMap::new(),
+            region_markers,
+            object_region_markers: Vec::new(),
+            used_size_field_kinds: Vec::new(),
+            size_fields_realized: Vec::new(),
+            operation_statuses: Vec::new(),
+            thin_film_diagnostics: Vec::new(),
+            magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
+            degraded: false,
+            authored_regions_count: Some(1),
+            realized_regions_count: Some(1),
+            mixed_layer_topology_certificate: Some(certificate),
+            mixed_topology_provenance: None,
+        }),
+    }
+}
+
+fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
+    valid_mixed_certificate_asset_for_version("v3")
+}
+
+fn python_mixed_certificate_asset_for_layers(layer_count: u32) -> fullmag_ir::FemDomainMeshAssetIR {
+    let payload: serde_json::Value = serde_json::from_str(match layer_count {
+        2 => include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_2_python_golden.json"
+        ),
+        3 => include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_3_python_golden.json"
+        ),
+        4 => include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_4_python_golden.json"
+        ),
+        _ => panic!("layered Python fixture exists only for layer counts 2 through 4"),
+    })
+    .expect("layered mixed topology fixture must be valid JSON");
+    let mesh: fullmag_ir::MeshIR = serde_json::from_value(payload["mesh"].clone())
+        .expect("layered mixed topology mesh must deserialize");
+    let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+        serde_json::from_value(payload["certificate"].clone())
+            .expect("layered mixed topology certificate must deserialize");
+    let region_markers = vec![fullmag_ir::FemDomainRegionMarkerIR {
+        geometry_name: "strip".to_string(),
+        marker: 1,
+    }];
+    fullmag_ir::FemDomainMeshAssetIR {
+        mesh_source: None,
+        mesh: Some(mesh),
+        region_markers: region_markers.clone(),
+        object_region_markers: Vec::new(),
+        build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
+            build_mode: "shared_domain".to_string(),
+            fallbacks_triggered: Some(Vec::new()),
+            effective_airbox_target: None,
+            effective_airbox_hmax: None,
+            effective_per_object_targets: std::collections::HashMap::new(),
+            region_markers,
+            object_region_markers: Vec::new(),
+            used_size_field_kinds: Vec::new(),
+            size_fields_realized: Vec::new(),
+            operation_statuses: Vec::new(),
+            thin_film_diagnostics: Vec::new(),
+            magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
+            degraded: false,
+            authored_regions_count: Some(1),
+            realized_regions_count: Some(1),
+            mixed_layer_topology_certificate: Some(certificate),
+            mixed_topology_provenance: None,
+        }),
+    }
+}
+
+fn mixed_cpu_relaxation_ir(
+    algorithm: fullmag_ir::RelaxationAlgorithmIR,
+    demag_realization: fullmag_ir::RequestedFemDemagIR,
+) -> ProblemIR {
+    let mut ir = fem_minimal_test_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    let dynamics = ir.study.dynamics().clone();
+    let sampling = ir.study.sampling().clone();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: demag_realization,
+        },
+    ];
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm,
+        dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+            .then_some(dynamics),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1.0e-4),
+            energy_tolerance_j: None,
+            max_steps: Some(16),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.geometry_assets
+        .as_mut()
+        .expect("geometry assets")
+        .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
+    ir
+}
+
+#[test]
+fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certificate() {
+    for (algorithm, demag_realization) in [
+        (
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        ),
+        (
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+            fullmag_ir::RequestedFemDemagIR::PoissonDirichlet,
+        ),
+        (
+            fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        ),
+    ] {
+        let ir = mixed_cpu_relaxation_ir(algorithm, demag_realization);
+        let asset = ir
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .expect("mixed fixture must carry a domain asset");
+        asset
+            .validate()
+            .expect("mixed certificate fixture must be valid");
+        let source_mesh = asset
+            .mesh
+            .as_ref()
+            .expect("fixture must carry an inline mesh");
+        let source_fingerprint = source_mesh.mixed_topology_fingerprint_v3().unwrap();
+        let analysis = crate::mesh::analyze_shared_domain_mesh(source_mesh, &asset.region_markers)
+            .expect("valid mixed fixture must be analyzable");
+        let (packed_mesh, _, _) = crate::mesh::pack_mesh_by_analysis(source_mesh, &analysis)
+            .expect("valid mixed fixture must be packable");
+        assert_ne!(
+            source_mesh.topology_fingerprint_v6(),
+            packed_mesh.topology_fingerprint_v6()
+        );
+        ir.validate()
+            .expect("problem with valid mixed certificate must pass IR validation");
+
+        let planned = plan(&ir).expect("qualified mixed P1 CPU relaxation must plan");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("qualified mixed P1 relaxation must resolve to FEM");
+        };
+        let final_fingerprint = fem.mesh.mixed_topology_fingerprint_v3().unwrap();
+        assert_ne!(source_fingerprint, final_fingerprint);
+        let report = fem
+            .mesh_build_report
+            .expect("qualified mixed P1 plan must preserve its build report");
+        assert_eq!(report.fallbacks_triggered.as_deref(), Some([].as_slice()));
+        assert!(!report.degraded);
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .expect("qualified mixed P1 plan must carry a final certificate");
+        assert_eq!(certificate.topology_fingerprint, final_fingerprint);
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&certificate, &fem.mesh)
+            .expect("rebound certificate must validate against the final packed mesh");
+        let provenance = report
+            .mixed_topology_provenance
+            .expect("qualified mixed P1 plan must bind requested and resolved intent");
+        assert_eq!(
+            provenance.requested_topology,
+            fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        );
+        assert_eq!(
+            provenance.resolved_topology,
+            fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        );
+        assert_eq!(
+            provenance.accepted_certificate_fingerprint,
+            final_fingerprint
+        );
+        assert_eq!(
+            provenance.requested_device,
+            fullmag_ir::ExecutionDevice::Cpu
+        );
+        assert_eq!(
+            provenance.capability_status,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+        );
+        assert_eq!(
+            source_fingerprint,
+            ir.geometry_assets
+                .as_ref()
+                .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+                .and_then(|asset| asset.mesh.as_ref())
+                .as_ref()
+                .expect("source asset remains present")
+                .mixed_topology_fingerprint_v3()
+                .unwrap(),
+            "planning must pack a clone and never mutate the certified source asset",
+        );
+    }
+}
+
+#[test]
+fn fem_planner_accepts_certified_cpu_and_gpu_exact_layer_matrix() {
+    for device in ["cpu", "gpu"] {
+        for layer_count in [1, 2, 3] {
+            let mut ir = mixed_cpu_relaxation_ir(
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            );
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": device, "precision": "double"}),
+            );
+            let asset = if layer_count == 1 {
+                valid_mixed_certificate_asset()
+            } else {
+                python_mixed_certificate_asset_for_layers(layer_count)
+            };
+            asset
+                .validate()
+                .expect("certified stacked prism fixture must bind to its certificate");
+            ir.geometry_assets
+                .as_mut()
+                .expect("geometry assets")
+                .fem_domain_mesh_asset = Some(asset);
+
+            let planned = plan(&ir).unwrap_or_else(|error| {
+                panic!(
+                    "qualified {device} exact layer {layer_count} mixed P1 relaxation must plan: {error:?}"
+                )
+            });
+            let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+                panic!("qualified mixed P1 relaxation must resolve to FEM");
+            };
+            let certificate = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                .expect("qualified multi-layer plan must retain its certificate");
+            assert_eq!(certificate.requested_layer_count, layer_count);
+            assert_eq!(certificate.realized_layer_count, layer_count);
+            assert_eq!(
+                certificate.magnetic_plane_coordinates_m.len(),
+                layer_count as usize + 1
+            );
+            assert_eq!(
+                fem.mesh
+                    .cells
+                    .types
+                    .iter()
+                    .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
+                    .count(),
+                2 * layer_count as usize,
+                "fixture must contain genuine stacked prism topology",
+            );
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
+                certificate,
+                &fem.mesh,
+            )
+            .expect("packed multi-layer certificate must remain bound to the mesh");
+            let provenance = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_topology_provenance.as_ref())
+                .expect("qualified matrix entry must retain topology provenance");
+            assert_eq!(
+                provenance.requested_device,
+                if device == "cpu" {
+                    fullmag_ir::ExecutionDevice::Cpu
+                } else {
+                    fullmag_ir::ExecutionDevice::Gpu
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn fem_planner_rejects_correctly_bound_exact_four_layer_cpu_and_gpu_before_backend() {
+    for device in ["cpu", "gpu"] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device, "precision": "double"}),
+        );
+        let asset = python_mixed_certificate_asset_for_layers(4);
+        asset
+            .validate()
+            .expect("the L=4 rejection fixture must be correctly certificate-bound");
+        ir.geometry_assets
+            .as_mut()
+            .expect("geometry assets")
+            .fem_domain_mesh_asset = Some(asset);
+
+        let reason = plan(&ir)
+            .expect_err("exact L=4 must reject before backend selection")
+            .reasons
+            .join("\n");
+        assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
+        assert!(reason.contains("exact_1_to_3_layers"), "{reason}");
+        assert!(reason.contains("fallback=none"), "{reason}");
+    }
+}
+
+#[test]
+fn fem_planner_accepts_certified_mixed_p1_gpu_double_and_binds_gpu_provenance() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+
+    let planned = plan(&ir).expect("qualified mixed P1 GPU relaxation must plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("qualified mixed P1 GPU relaxation must resolve to FEM")
+    };
+    let report = fem
+        .mesh_build_report
+        .as_ref()
+        .expect("qualified mixed P1 GPU plan must preserve its build report");
+    let certificate = report
+        .mixed_layer_topology_certificate
+        .as_ref()
+        .expect("qualified mixed P1 GPU plan must carry its accepted certificate");
+    let provenance = report
+        .mixed_topology_provenance
+        .as_ref()
+        .expect("qualified mixed P1 GPU plan must bind mixed-topology provenance");
+
+    assert_eq!(
+        provenance.requested_device,
+        fullmag_ir::ExecutionDevice::Gpu
+    );
+    assert_eq!(
+        provenance.accepted_certificate_fingerprint,
+        certificate.topology_fingerprint
+    );
+    assert_eq!(
+        provenance.capability_status,
+        fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+    );
+}
+
+#[test]
+fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset =
+        Some(valid_mixed_certificate_asset_for_version("v2"));
+
+    let planned = plan(&ir).expect("legacy v2 mixed certificate must remain plannable");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("mixed relaxation must resolve to FEM")
+    };
+    let certificate = fem
+        .mesh_build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+        .expect("packed plan must retain a certificate");
+    assert_eq!(certificate.topology_fingerprint_version, "v2");
+    assert_eq!(
+        certificate.topology_fingerprint,
+        fem.mesh.topology_fingerprint_v6()
+    );
+}
+
+#[test]
+fn fem_planner_uses_managed_cpu_and_gpu_overrides_without_erasing_authored_device_request() {
+    for (device, expected) in [
+        ("cpu", fullmag_ir::ExecutionDevice::Cpu),
+        ("gpu", fullmag_ir::ExecutionDevice::Gpu),
+    ] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto", "precision": "double"}),
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": device, "source": "managed_launcher"}),
+        );
+
+        let planned = plan(&ir).expect("managed override must feed the effective plan request");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("mixed relaxation must resolve to FEM")
+        };
+        let provenance = fem
+            .mesh_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_topology_provenance.as_ref())
+            .expect("mixed plan must bind effective execution provenance");
+        assert_eq!(
+            ir.problem_meta.runtime_metadata["runtime_selection"]["device"], "auto",
+            "planning must not rewrite authored script intent",
+        );
+        assert_eq!(
+            ir.problem_meta.runtime_metadata["runtime_device_override"]["source"],
+            "managed_launcher",
+        );
+        assert_eq!(
+            provenance.requested_device, expected,
+            "plan provenance must bind the effective launcher request for {device}",
+        );
+    }
+}
+
+#[test]
+fn fem_planner_rejects_valid_mixed_certificate_when_build_report_is_degraded() {
+    for case in ["report_fallback", "degraded"] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        {
+            let report = ir
+                .geometry_assets
+                .as_mut()
+                .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+                .and_then(|asset| asset.build_report.as_mut())
+                .expect("mixed fixture must carry a build report");
+            match case {
+                "report_fallback" => {
+                    report.fallbacks_triggered =
+                        Some(vec!["mesh_size_field_simplified".to_string()]);
+                }
+                "degraded" => report.degraded = true,
+                _ => unreachable!(),
+            }
+        }
+        let report = ir
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.build_report.as_ref())
+            .expect("mixed fixture must carry a build report");
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .as_ref()
+            .expect("mixed fixture must retain a valid certificate");
+        let mesh = ir
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.mesh.as_ref())
+            .expect("mixed fixture must retain its source mesh");
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh)
+            .expect("the regression must isolate enclosing build-report state");
+
+        let error = plan(&ir).expect_err("strict mixed planning must reject a degraded report");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("fem_mixed_p1_build_report_rejected")),
+            "case={case}: {:?}",
+            error.reasons
+        );
+    }
+}
+
+#[test]
+fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4_scope() {
+    for case in [
+        "backend_auto",
+        "device_auto",
+        "single",
+        "extended",
+        "time_evolution",
+        "missing_exchange",
+        "dmi",
+        "fem_bem",
+        "high_order",
+        "non_box",
+        "pbc",
+    ] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        match case {
+            "backend_auto" => ir.backend_policy.requested_backend = BackendTarget::Auto,
+            "device_auto" => {
+                ir.problem_meta.runtime_metadata.insert(
+                    "runtime_selection".to_string(),
+                    serde_json::json!({"device": "auto"}),
+                );
+            }
+            "single" => {
+                ir.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+            }
+            "extended" => {
+                ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+            }
+            "time_evolution" => {
+                ir.study = ProblemIR::bootstrap_example().study;
+            }
+            "missing_exchange" => {
+                ir.energy_terms
+                    .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Exchange));
+            }
+            "dmi" => ir
+                .energy_terms
+                .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 }),
+            "fem_bem" => {
+                ir.energy_terms = vec![
+                    fullmag_ir::EnergyTermIR::Exchange,
+                    fullmag_ir::EnergyTermIR::Demag {
+                        realization: fullmag_ir::RequestedFemDemagIR::FredkinKoehler,
+                    },
+                ];
+            }
+            "high_order" => {
+                ir.backend_policy
+                    .discretization_hints
+                    .as_mut()
+                    .and_then(|hints| hints.fem.as_mut())
+                    .expect("mixed fixture has FEM hints")
+                    .order = 2;
+            }
+            "non_box" => {
+                ir.geometry.entries = vec![fullmag_ir::GeometryEntryIR::Cylinder {
+                    name: "strip".to_string(),
+                    radius: 10e-9,
+                    height: 6e-9,
+                    axis: [0.0, 0.0, 1.0],
+                }];
+            }
+            "pbc" => {
+                ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+                    axes: [
+                        fullmag_ir::AxisBoundary::Periodic,
+                        fullmag_ir::AxisBoundary::Open,
+                        fullmag_ir::AxisBoundary::Open,
+                    ],
+                    demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+                    image_counts: None,
+                });
+            }
+            _ => unreachable!(),
+        }
+
+        let reason = plan(&ir)
+            .expect_err("unsupported mixed P1 tuple must fail closed")
+            .reasons
+            .join("\n");
+        assert!(
+            reason.contains("fem_mixed_p1_scope_rejected"),
+            "case={case}: {reason}"
+        );
+        assert!(reason.contains("fallback=none"), "case={case}: {reason}");
+    }
+}
+
+#[test]
+fn fem_planner_rejects_uncertified_mixed_topology_before_backend_startup() {
+    let mut ir = fem_minimal_test_ir();
+    let mut asset = valid_mixed_certificate_asset();
+    asset
+        .build_report
+        .as_mut()
+        .expect("fixture build report")
+        .mixed_layer_topology_certificate = None;
+    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset = Some(asset);
+    ir.validate()
+        .expect("typed mixed topology without a certificate is valid IR intent");
+
+    let error = plan(&ir).expect_err("uncertified mixed topology must fail closed in planning");
+    let reason = error.reasons.join("\n");
+    assert!(
+        reason.contains("fem_mixed_p1_certificate_required"),
+        "{reason}"
+    );
+    assert!(reason.contains("prism6"), "{reason}");
+    assert!(reason.contains("pyramid5"), "{reason}");
+    assert!(reason.contains("fallback=none"), "{reason}");
+}
+
+#[test]
+fn fem_planner_rejects_uncertified_mixed_per_object_asset_before_backend_startup() {
+    let mut ir = fem_minimal_test_ir();
+    let mesh = valid_mixed_certificate_asset()
+        .mesh
+        .expect("fixture carries inline mixed mesh");
+    let assets = ir.geometry_assets.as_mut().expect("geometry assets");
+    assets.fem_domain_mesh_asset = None;
+    assets.fem_mesh_assets = vec![fullmag_ir::FemMeshAssetIR {
+        geometry_name: "strip".to_string(),
+        mesh_source: None,
+        mesh: Some(mesh),
+    }];
+    ir.validate()
+        .expect("typed per-object mixed topology is valid IR intent");
+
+    let reason = plan(&ir)
+        .expect_err("per-object mixed topology must not bypass the shared-domain guard")
+        .reasons
+        .join("\n");
+    assert!(
+        reason.contains("fem_mixed_p1_certificate_required"),
+        "{reason}"
+    );
+    assert!(reason.contains("prism6"), "{reason}");
+    assert!(reason.contains("pyramid5"), "{reason}");
+}
+
+#[test]
+fn fem_planner_rejects_auto_mixed_p1_requested_device_without_fallback() {
+    for device in ["auto"] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device}),
+        );
+
+        let reason = plan(&ir)
+            .expect_err("automatic mixed P1 execution must fail closed")
+            .reasons
+            .join("\n");
+        assert!(
+            reason.contains("fem_mixed_p1_scope_rejected"),
+            "device={device}: {reason}"
+        );
+        assert!(
+            reason.contains(&format!("requested_device={device}")),
+            "device={device}: {reason}"
+        );
+        assert!(reason.contains("fallback=none"), "{reason}");
+    }
+}
+
+#[test]
+fn auto_backend_rejects_mixed_fem_topology_for_all_modes_and_devices() {
+    let fdm_hint = ProblemIR::bootstrap_example()
+        .backend_policy
+        .discretization_hints
+        .and_then(|hints| hints.fdm)
+        .expect("bootstrap fixture carries an FDM hint");
+
+    for mode in [
+        fullmag_ir::ExecutionMode::Strict,
+        fullmag_ir::ExecutionMode::Extended,
+    ] {
+        for device in ["cpu", "gpu", "auto"] {
+            let mut ir = mixed_cpu_relaxation_ir(
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            );
+            ir.backend_policy.requested_backend = BackendTarget::Auto;
+            ir.backend_policy
+                .discretization_hints
+                .as_mut()
+                .expect("FEM fixture carries discretization hints")
+                .fdm = Some(fdm_hint.clone());
+            ir.validation_profile.execution_mode = mode;
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": device}),
+            );
+            let reason = plan(&ir)
+                .expect_err("backend=auto must not route mixed FEM topology into FDM")
+                .reasons
+                .join("\n");
+            assert!(
+                reason.contains("fem_mixed_p1_scope_rejected"),
+                "mode={mode:?}, device={device}: {reason}"
+            );
+            assert!(
+                reason.contains(&format!("requested_device={device}")),
+                "mode={mode:?}, device={device}: {reason}"
+            );
+            assert!(reason.contains("fallback=none"), "{reason}");
+        }
+    }
+}
+
+#[test]
+fn fem_planner_does_not_mislabel_hex8_as_qualified_mixed_p1() {
+    let mut mesh = fem_minimal_test_ir()
+        .geometry_assets
+        .and_then(|assets| assets.fem_domain_mesh_asset)
+        .and_then(|asset| asset.mesh)
+        .expect("baseline FEM mesh");
+    mesh.cells.types = vec![fullmag_ir::FemCellTypeIR::Hex8];
+    mesh.facets.types = vec![fullmag_ir::FemFacetTypeIR::Quad4];
+
+    let reason =
+        crate::mesh::reject_unsupported_mixed_topology(&fem_minimal_test_ir(), &mesh, None)
+            .expect_err("hex8 must remain fail-closed without mixed-P1 diagnostics");
+    assert!(reason.contains("fem_typed_topology_unsupported_before_backend"));
+    assert!(!reason.contains("mesh.transition.pyramid_tet"));
+}
+
+#[test]
+fn legacy_tetrahedral_plan_remains_compatible_without_mixed_topology_provenance() {
+    let plan = plan(&fem_minimal_test_ir()).expect("tetrahedral FEM baseline must plan");
+    let encoded = serde_json::to_value(&plan).expect("plan serializes");
+    let decoded: ExecutionPlanIR =
+        serde_json::from_value(encoded).expect("legacy-compatible plan deserializes");
+    let BackendPlanIR::Fem(fem) = decoded.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem.mesh_build_report.is_none());
 }
 
 #[test]
@@ -9981,7 +12140,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.external_field = Some([1.0, 0.0, 0.0]),
-            expected: Some(("Ms_element_field", "Zeeman interaction", "cpu")),
+            expected: None,
         },
         Case {
             name: "CPU Ms demag",
@@ -9989,7 +12148,37 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.enable_demag = true,
-            expected: Some(("Ms_element_field", "demag interaction", "cpu")),
+            expected: None,
+        },
+        Case {
+            name: "CPU Ms missing consistent mass",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.use_consistent_mass = None,
+            expected: Some(("Ms_element_field", "lumped-mass exchange projection", "cpu")),
+        },
+        Case {
+            name: "CPU Ms Zeeman-only",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.enable_exchange = false;
+                fem.external_field = Some([1.0, 0.0, 0.0]);
+            },
+            expected: Some(("Ms_element_field", "exchange-disabled plan", "cpu")),
+        },
+        Case {
+            name: "CPU Ms demag-only",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.enable_exchange = false;
+                fem.enable_demag = true;
+            },
+            expected: Some(("Ms_element_field", "exchange-disabled plan", "cpu")),
         },
         Case {
             name: "CPU Ms uniaxial anisotropy",
@@ -10083,11 +12272,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.enable_exchange = false,
-            expected: Some((
-                "Ms_element_field",
-                "native FEM handle lifecycle fallback",
-                "cpu",
-            )),
+            expected: Some(("Ms_element_field", "exchange-disabled plan", "cpu")),
         },
         Case {
             name: "GPU Ms upload precedes active owners",
@@ -10098,11 +12283,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
                 fem.external_field = Some([1.0, 0.0, 0.0]);
                 fem.enable_demag = true;
             },
-            expected: Some((
-                "Ms_element_field",
-                "GPU material-state upload",
-                "gpu",
-            )),
+            expected: Some(("Ms_element_field", "GPU material-state upload", "gpu")),
         },
         Case {
             name: "CPU A Zeeman",
@@ -10134,29 +12315,27 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |_| {},
-            expected: Some((
-                "Ms_element_field",
-                "native FEM handle lifecycle fallback",
-                "cpu",
-            )),
+            expected: None,
         },
         Case {
             name: "CPU Ms relaxation metric",
             include_ms: true,
             include_a: false,
             gpu: false,
-            configure: |fem| fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
-                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-                stop: fullmag_ir::RelaxStopIR {
-                    torque_tolerance_apm: Some(1e-3),
-                    energy_tolerance_j: None,
-                    max_steps: Some(1),
-                    max_relaxation_time_s: None,
-                },
-            }),
+            configure: |fem| {
+                fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                    algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                    stop: fullmag_ir::RelaxStopIR {
+                        torque_tolerance_apm: Some(1e-3),
+                        energy_tolerance_j: None,
+                        max_steps: Some(1),
+                        max_relaxation_time_s: None,
+                    },
+                })
+            },
             expected: Some((
                 "Ms_element_field",
-                "native FEM handle lifecycle fallback",
+                "native FEM relaxation algorithms",
                 "cpu",
             )),
         },
@@ -10166,6 +12345,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
         let mut fem = base.clone();
         fem.ms_element_field = case.include_ms.then_some(vec![0.8e6]);
         fem.a_element_field = case.include_a.then_some(vec![13e-12]);
+        fem.use_consistent_mass = case.include_ms.then_some(true);
         (case.configure)(&mut fem);
 
         match (
@@ -10185,7 +12365,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
                     assert_eq!(
                         error,
                         format!(
-                            "Ms_element_field is unsupported for {term} on resolved device '{device}': this runtime has no common element/quadrature material accessor"
+                            "Ms_element_field is unsupported for {term} on resolved device '{device}': this owner does not consume the common element/quadrature material accessor"
                         ),
                         "{} must preserve the native elementwise-Ms diagnostic convention",
                         case.name
@@ -10329,9 +12509,9 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
             if let Some(mesh) = domain_asset.mesh.as_mut() {
                 mesh.nodes.push([0.0, 0.0, -1.0]);
-                mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+                mesh.set_tet4_cells(vec![[0, 2, 1, 4], [0, 1, 2, 3]]);
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+                mesh.set_tri3_facets(vec![[0, 1, 3], [0, 2, 4]]);
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset
@@ -10343,9 +12523,8 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         }
     }
 
-    let planned = plan(&ir).expect(
-        "CPU exchange must accept distinct nodal Ms and conformal element A realizations",
-    );
+    let planned = plan(&ir)
+        .expect("CPU exchange must accept distinct nodal Ms and conformal element A realizations");
     let BackendPlanIR::Fem(fem_plan) = planned.backend_plan else {
         panic!("expected FEM plan");
     };
@@ -10358,6 +12537,83 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         fem_plan.a_element_field.as_deref(),
         Some(&[8e-12, 13e-12][..]),
         "the conformal DG0 A payload must survive planning"
+    );
+}
+
+#[test]
+fn fem_cpu_exchange_and_zeeman_plan_preserves_conformal_dg0_ms() {
+    let mut ir = fem_minimal_test_ir();
+    ir.materials[0].saturation_magnetisation = 0.7e6;
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Zeeman {
+            b: [0.02, 0.0, 0.0],
+        },
+    ];
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:conformal_ms".to_string(),
+        owner_object: "strip".to_string(),
+        name: "conformal_ms".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(1.1e6),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    let domain_asset = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .expect("inline FEM domain asset");
+    let mesh = domain_asset.mesh.as_mut().expect("inline FEM mesh");
+    mesh.nodes.push([0.0, 0.0, -1.0]);
+    mesh.set_tet4_cells(vec![[0, 2, 1, 4], [0, 1, 2, 3]]);
+    mesh.element_markers = vec![1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 3], [0, 2, 4]]);
+    mesh.boundary_markers = vec![1, 2];
+    domain_asset
+        .object_region_markers
+        .push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "strip:conformal_ms".to_string(),
+            marker: 2,
+        });
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let planned = plan(&ir).expect(
+        "canonical CPU planner must admit conformal DG0 Ms for the qualified exchange+Zeeman owner set",
+    );
+    let BackendPlanIR::Fem(fem_plan) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem_plan.material.ms_field.is_none());
+    assert_eq!(
+        fem_plan.ms_element_field.as_deref(),
+        Some(&[0.7e6, 1.1e6][..])
+    );
+    assert!(fem_plan.enable_exchange);
+    assert_eq!(
+        fem_plan.use_consistent_mass,
+        Some(true),
+        "canonical conformal DG0 Ms planning must select consistent-mass exchange"
+    );
+    assert_eq!(
+        fem_plan.external_field,
+        Some([0.02 / crate::util::MU0, 0.0, 0.0])
     );
 }
 
@@ -10645,7 +12901,7 @@ fn fem_sharp_aex_region_requires_conformal_in_strict() {
 }
 
 #[test]
-fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
+fn fem_sharp_conformal_ms_and_aex_use_exclusive_cpu_dg0_realizations() {
     let mut ir = fem_minimal_test_ir();
     ir.materials[0].saturation_magnetisation = 0.7e6;
     ir.materials[0].exchange_stiffness = 8e-12;
@@ -10697,9 +12953,9 @@ fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
                     [0.0, 0.0, -1.0],
                 ];
                 // The two region markers meet at the shared face (0, 1, 2).
-                mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+                mesh.set_tet4_cells(vec![[0, 2, 1, 4], [0, 1, 2, 3]]);
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+                mesh.set_tri3_facets(vec![[0, 1, 3], [0, 2, 4]]);
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset
@@ -10712,33 +12968,27 @@ fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
     }
     ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
 
-    let err = plan(&ir).expect_err("conflicting sharp and nodal Ms realizations must fail");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("Ms")
-                && reason.contains("material.ms_field")
-                && reason.contains("ms_element_field")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
-    );
+    let planned = plan(&ir).expect("conformal CPU Ms/Aex must remain exclusively DG0");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem.material.ms_field.is_none());
+    assert!(fem.material.a_field.is_none());
+    assert_eq!(fem.ms_element_field.as_deref(), Some(&[0.7e6, 1.1e6][..]));
+    assert_eq!(fem.a_element_field.as_deref(), Some(&[8e-12, 13e-12][..]));
 
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
         serde_json::json!({"device": "gpu"}),
     );
-    let err = plan(&ir)
-        .expect_err("conflicting sharp and nodal Ms realizations must fail on GPU requests too");
+    let err = plan(&ir).expect_err("GPU requests must still fail closed for DG0 material upload");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("Ms")
-                && reason.contains("material.ms_field")
-                && reason.contains("ms_element_field")
+            reason.contains("Ms_element_field") && reason.contains("GPU material-state upload")
         }),
         "unexpected planner errors: {:?}",
         err.reasons
     );
-
 }
 
 #[test]
@@ -10820,9 +13070,9 @@ fn fem_planner_rejects_conflicting_nodal_and_element_coefficient_realizations() 
             .as_mut()
             .expect("conflicting-realization test mesh is inline");
         mesh.nodes.push([0.0, 0.0, -1.0]);
-        mesh.elements.push([0, 2, 1, 4]);
+        mesh.push_tet4_cell([0, 2, 1, 4]).unwrap();
         mesh.element_markers.push(2);
-        mesh.boundary_faces.push([0, 2, 4]);
+        mesh.push_tri3_facet([0, 2, 4]).unwrap();
         mesh.boundary_markers.push(2);
         domain_asset
             .object_region_markers
@@ -10945,13 +13195,13 @@ fn fem_cpu_relaxation_rejects_conflicting_nodal_and_element_ms_before_native_cre
         [0.0, 1.0, 4.0],
         [0.0, 0.0, 5.0],
     ]);
-    mesh.elements.push([4, 5, 6, 7]);
+    mesh.push_tet4_cell([4, 5, 6, 7]).unwrap();
     mesh.element_markers.push(2);
-    mesh.boundary_faces.push([4, 5, 6]);
+    mesh.push_tri3_facet([4, 5, 6]).unwrap();
     mesh.boundary_markers.push(2);
-    mesh.elements.push([8, 9, 10, 11]);
+    mesh.push_tet4_cell([8, 9, 10, 11]).unwrap();
     mesh.element_markers.push(3);
-    mesh.boundary_faces.push([8, 9, 10]);
+    mesh.push_tri3_facet([8, 9, 10]).unwrap();
     mesh.boundary_markers.push(3);
     domain_asset
         .region_markers
@@ -11195,9 +13445,9 @@ fn fem_sharp_aex_project_policy_with_real_marker_still_uses_projection_warning()
                     [0.0, 0.05, 0.0],
                     [0.0, 0.0, 0.05],
                 ];
-                mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+                mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 2], [4, 5, 6]];
+                mesh.set_tri3_facets(vec![[0, 1, 2], [4, 5, 6]]);
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset
@@ -11294,6 +13544,7 @@ fn minimal_hysteresis_study() -> StudyIR {
         minor_loops: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::Scalar {
                 name: "mx".to_string(),
                 every_seconds: 1.0e-12,
@@ -11376,9 +13627,10 @@ fn fdm_grid_count_overflow_is_rejected() {
         .reasons
         .iter()
         .any(|reason| reason.contains("fdm_grid_count_overflow")));
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("4294967295") && reason.contains("requested_counts")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("4294967295") && reason.contains("requested_counts") }));
 }
 
 #[test]
@@ -11391,9 +13643,10 @@ fn fdm_grid_memory_budget_is_rejected() {
         .reasons
         .iter()
         .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded")));
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("1000") && reason.contains("requested_counts")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("1000") && reason.contains("requested_counts") }));
 }
 
 #[test]
@@ -11422,7 +13675,9 @@ fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
     };
 
     assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);
-    assert!(cell_for_magnet(&hints, "missing").unwrap_err().contains("missing"));
+    assert!(cell_for_magnet(&hints, "missing")
+        .unwrap_err()
+        .contains("missing"));
     assert!(fdm_default_cell(&hints).is_err());
 }
 
@@ -11511,9 +13766,14 @@ fn fdm_multilayer_plan_rejects_missing_or_conflicting_per_magnet_cells() {
     fdm.default_cell = None;
     fdm.per_magnet = Some(only_free);
     let error = plan(&missing).expect_err("missing layer override must fail closed");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("ref") && reason.contains("missing cell override")
-    }), "unexpected reasons: {:?}", error.reasons);
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("ref") && reason.contains("missing cell override") }),
+        "unexpected reasons: {:?}",
+        error.reasons
+    );
 
     let mut conflicting = stacked_two_body_multilayer_problem();
     let mut per_magnet = BTreeMap::new();
@@ -11568,7 +13828,10 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
     .expect("difference should lower");
     let mut errors = Vec::new();
     let (_size, mask, cells, origin) = voxelize_shape(&shape, [1.0; 3], &mut errors);
-    assert!(errors.is_empty(), "unexpected voxelization errors: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "unexpected voxelization errors: {errors:?}"
+    );
     assert_eq!(cells, [4, 4, 4]);
     assert_eq!(origin, [-2.0, -2.0, -2.0]);
     let mask = mask.expect("bounded CSG should produce a mask");
@@ -11599,7 +13862,10 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
     .expect("box difference should lower");
     let mut box_errors = Vec::new();
     let (_, box_mask, _, _) = voxelize_shape(&box_shape, [1.0; 3], &mut box_errors);
-    assert!(box_errors.is_empty(), "unexpected box CSG errors: {box_errors:?}");
+    assert!(
+        box_errors.is_empty(),
+        "unexpected box CSG errors: {box_errors:?}"
+    );
     let box_removed: Vec<usize> = box_mask
         .expect("bounded CSG should produce a mask")
         .iter()

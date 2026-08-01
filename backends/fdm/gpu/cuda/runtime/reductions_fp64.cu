@@ -12,6 +12,7 @@
  */
 
 #include "context.hpp"
+#include "adaptive_step_decision.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -102,23 +103,31 @@ __global__ void adaptive_error_policy_kernel(
     const double *max_error_sq,
     double *policy_out,
     double dt,
-    double adaptive_max_error,
+    double adaptive_threshold,
     double adaptive_dt_min,
     double adaptive_dt_max,
-    double adaptive_headroom,
+    double adaptive_safety,
+    double adaptive_growth_limit,
+    double adaptive_shrink_limit,
     double exponent)
 {
     double max_sq = max_error_sq != nullptr ? max_error_sq[0] : 0.0;
     double error = max_sq > 0.0 ? sqrt(max_sq) : 0.0;
     double dt_candidate = dt;
     if (error > 0.0) {
-        dt_candidate = adaptive_headroom * dt * pow(adaptive_max_error / error, exponent);
+        dt_candidate = adaptive_safety * dt * pow(adaptive_threshold / error, exponent);
+        double ratio = dt_candidate / dt;
+        ratio = fmin(ratio, adaptive_growth_limit);
+        ratio = fmax(ratio, adaptive_shrink_limit);
+        dt_candidate = dt * ratio;
         dt_candidate = fmin(dt_candidate, adaptive_dt_max);
         dt_candidate = fmax(dt_candidate, adaptive_dt_min);
     } else {
         dt_candidate = adaptive_dt_max;
     }
-    double accepted = (error <= adaptive_max_error || dt <= adaptive_dt_min) ? 1.0 : 0.0;
+    // A failed attempt at the lower bound is terminal: dt_min_exhausted.
+    double accepted = error <= adaptive_threshold ? 1.0
+        : (dt <= adaptive_dt_min ? -1.0 : 0.0);
     policy_out[0] = error;
     policy_out[1] = dt_candidate;
     policy_out[2] = accepted;
@@ -578,12 +587,18 @@ __global__ void external_energy_blocks_kernel(
     const Scalar *mx,
     const Scalar *my,
     const Scalar *mz,
+    const double *volume_fraction,
     double *block_out,
     uint64_t n,
+    int has_volume_fraction,
     double coeff,
     double hx,
     double hy,
-    double hz)
+    double hz,
+    const Scalar *oe_x,
+    const Scalar *oe_y,
+    const Scalar *oe_z,
+    double oe_scale)
 {
     __shared__ double shared[REDUCTION_BLOCK_SIZE];
     uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -591,8 +606,18 @@ __global__ void external_energy_blocks_kernel(
 
     double energy = 0.0;
     for (; idx < n; idx += stride) {
-        double mdoth = to_f64(mx[idx]) * hx + to_f64(my[idx]) * hy + to_f64(mz[idx]) * hz;
-        energy += coeff * mdoth;
+        const double phi_i = has_volume_fraction ? volume_fraction[idx] : 1.0;
+        double field_x = hx;
+        double field_y = hy;
+        double field_z = hz;
+        if (oe_x != nullptr) {
+            field_x += oe_scale * to_f64(oe_x[idx]);
+            field_y += oe_scale * to_f64(oe_y[idx]);
+            field_z += oe_scale * to_f64(oe_z[idx]);
+        }
+        double mdoth =
+            to_f64(mx[idx]) * field_x + to_f64(my[idx]) * field_y + to_f64(mz[idx]) * field_z;
+        energy += coeff * phi_i * mdoth;
     }
 
     shared[threadIdx.x] = energy;
@@ -614,8 +639,10 @@ __global__ void uniaxial_anisotropy_energy_blocks_kernel(
     const Scalar *mx,
     const Scalar *my,
     const Scalar *mz,
+    const double *volume_fraction,
     double *block_out,
     uint64_t n,
+    int has_volume_fraction,
     double coeff,
     double Ku1,
     double Ku2,
@@ -631,11 +658,12 @@ __global__ void uniaxial_anisotropy_energy_blocks_kernel(
 
     double energy = 0.0;
     for (; idx < n; idx += stride) {
+        const double phi_i = has_volume_fraction ? volume_fraction[idx] : 1.0;
         double ku1_val = ku1_field ? ku1_field[idx] : Ku1;
         double ku2_val = ku2_field ? ku2_field[idx] : Ku2;
         double m_dot_u = to_f64(mx[idx]) * ux + to_f64(my[idx]) * uy + to_f64(mz[idx]) * uz;
         double m_dot_u_sq = m_dot_u * m_dot_u;
-        energy += coeff * (ku1_val * m_dot_u_sq + ku2_val * m_dot_u_sq * m_dot_u_sq);
+        energy += coeff * phi_i * (ku1_val * m_dot_u_sq + ku2_val * m_dot_u_sq * m_dot_u_sq);
     }
 
     shared[threadIdx.x] = energy;
@@ -771,14 +799,53 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         dst = tmp;
     }
 
+    if (ctx.adaptive_canonical_controller) {
+        double max_sq = 0.0;
+        cudaError_t err = cudaMemcpyAsync(&max_sq, src, sizeof(double), cudaMemcpyDeviceToHost, stream);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpyAsync(reduce_adaptive_error_policy)", err);
+            context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
+            return policy;
+        }
+        fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
+        err = cudaStreamSynchronize(stream);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
+            context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
+            return policy;
+        }
+        fullmag_fdm_record_control_scalar_host_sync(ctx);
+        if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) return policy;
+        policy.error = max_sq > 0.0 ? std::sqrt(max_sq) : 0.0;
+        const int order_est = exponent == 0.2 ? 4 : 2;
+        const auto decision = adaptive::decide_adaptive_step(
+            {order_est, ctx.adaptive_dt_min, ctx.adaptive_dt_max, ctx.adaptive_safety,
+             ctx.adaptive_growth_limit, ctx.adaptive_shrink_limit},
+            {dt, policy.error, ctx.adaptive_previous_error, ctx.adaptive_has_previous_error});
+        policy.dt_candidate = decision.dt_next;
+        policy.accepted = decision.kind == adaptive::AdaptiveDecisionKind::accepted ? 1 : 0;
+        policy.dt_min_exhausted =
+            decision.reason == adaptive::AdaptiveDecisionReason::dt_min_exhausted;
+        if (policy.accepted) {
+            ctx.adaptive_has_previous_error = policy.error > 0.0;
+            ctx.adaptive_previous_error = policy.error > 0.0 ? policy.error : 0.0;
+        }
+        if (decision.kind == adaptive::AdaptiveDecisionKind::failed && !policy.dt_min_exhausted) {
+            ctx.last_error = adaptive::adaptive_decision_reason_id(decision.reason);
+        }
+        return policy;
+    }
+
     adaptive_error_policy_kernel<<<1, 1, 0, stream>>>(
         src,
         ctx.adaptive_policy_scratch,
         dt,
-        ctx.adaptive_max_error,
+        1.0,
         ctx.adaptive_dt_min,
         ctx.adaptive_dt_max,
-        ctx.adaptive_headroom,
+        ctx.adaptive_safety,
+        ctx.adaptive_growth_limit,
+        ctx.adaptive_shrink_limit,
         exponent);
 
     double host_values[3] = {0.0, dt, 0.0};
@@ -802,6 +869,7 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
     policy.error = host_values[0];
     policy.dt_candidate = host_values[1];
     policy.accepted = host_values[2] >= 0.5 ? 1 : 0;
+    policy.dt_min_exhausted = host_values[2] < -0.5;
     return policy;
 }
 
@@ -1035,40 +1103,60 @@ double reduce_demag_energy_fp32(Context &ctx) {
 }
 
 double reduce_external_energy_fp64(Context &ctx) {
-    if (!ctx.has_external_field) {
+    if (!ctx.has_external_field && !ctx.has_oersted_field) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = -MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
+    const auto *oe_x = ctx.has_oersted_field ? static_cast<const double *>(ctx.h_oe_static.x) : nullptr;
+    const auto *oe_y = ctx.has_oersted_field ? static_cast<const double *>(ctx.h_oe_static.y) : nullptr;
+    const auto *oe_z = ctx.has_oersted_field ? static_cast<const double *>(ctx.h_oe_static.z) : nullptr;
     external_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const double *>(ctx.m.x),
         static_cast<const double *>(ctx.m.y),
         static_cast<const double *>(ctx.m.z),
+        ctx.volume_fraction,
         ctx.reduction_scratch,
         ctx.cell_count,
+        has_vf,
         coeff,
         ctx.external_field[0],
         ctx.external_field[1],
-        ctx.external_field[2]);
+        ctx.external_field[2],
+        oe_x,
+        oe_y,
+        oe_z,
+        oersted_field_scale(ctx));
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 
 double reduce_external_energy_fp32(Context &ctx) {
-    if (!ctx.has_external_field) {
+    if (!ctx.has_external_field && !ctx.has_oersted_field) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = -MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
+    const auto *oe_x = ctx.has_oersted_field ? static_cast<const float *>(ctx.h_oe_static.x) : nullptr;
+    const auto *oe_y = ctx.has_oersted_field ? static_cast<const float *>(ctx.h_oe_static.y) : nullptr;
+    const auto *oe_z = ctx.has_oersted_field ? static_cast<const float *>(ctx.h_oe_static.z) : nullptr;
     external_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const float *>(ctx.m.x),
         static_cast<const float *>(ctx.m.y),
         static_cast<const float *>(ctx.m.z),
+        ctx.volume_fraction,
         ctx.reduction_scratch,
         ctx.cell_count,
+        has_vf,
         coeff,
         ctx.external_field[0],
         ctx.external_field[1],
-        ctx.external_field[2]);
+        ctx.external_field[2],
+        oe_x,
+        oe_y,
+        oe_z,
+        oersted_field_scale(ctx));
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 
@@ -1077,13 +1165,16 @@ double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = -1.0 * ctx.dx * ctx.dy * ctx.dz;  // Energy is -Ku1*(m.u)^2 ...
     uniaxial_anisotropy_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const double *>(ctx.m.x),
         static_cast<const double *>(ctx.m.y),
         static_cast<const double *>(ctx.m.z),
+        ctx.volume_fraction,
         ctx.reduction_scratch,
         ctx.cell_count,
+        has_vf,
         coeff,
         ctx.Ku1,
         ctx.Ku2,
@@ -1100,13 +1191,16 @@ double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = -1.0 * ctx.dx * ctx.dy * ctx.dz;
     uniaxial_anisotropy_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const float *>(ctx.m.x),
         static_cast<const float *>(ctx.m.y),
         static_cast<const float *>(ctx.m.z),
+        ctx.volume_fraction,
         ctx.reduction_scratch,
         ctx.cell_count,
+        has_vf,
         coeff,
         ctx.Ku1,
         ctx.Ku2,
@@ -1122,7 +1216,8 @@ double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx) {
 template <typename Scalar>
 __global__ void cubic_anisotropy_energy_blocks_kernel(
     const Scalar *mx, const Scalar *my, const Scalar *mz,
-    double *block_out, uint64_t n, double coeff,
+    const double *volume_fraction, double *block_out, uint64_t n,
+    int has_volume_fraction, double coeff,
     double Kc1, double Kc2, double Kc3,
     double c1x, double c1y, double c1z,
     double c2x, double c2y, double c2z,
@@ -1139,6 +1234,7 @@ __global__ void cubic_anisotropy_energy_blocks_kernel(
 
     double energy = 0.0;
     for (; idx < n; idx += stride) {
+        const double phi_i = has_volume_fraction ? volume_fraction[idx] : 1.0;
         double kc1_val = kc1_field ? kc1_field[idx] : Kc1;
         double kc2_val = kc2_field ? kc2_field[idx] : Kc2;
         double kc3_val = kc3_field ? kc3_field[idx] : Kc3;
@@ -1148,7 +1244,7 @@ __global__ void cubic_anisotropy_energy_blocks_kernel(
         double m3 = mmx * c3x + mmy * c3y + mmz * c3z;
         double m1sq = m1 * m1, m2sq = m2 * m2, m3sq = m3 * m3;
         double sigma = m1sq * m2sq + m2sq * m3sq + m1sq * m3sq;
-        energy += coeff * (kc1_val * sigma + kc2_val * m1sq * m2sq * m3sq + kc3_val * sigma * sigma);
+        energy += coeff * phi_i * (kc1_val * sigma + kc2_val * m1sq * m2sq * m3sq + kc3_val * sigma * sigma);
     }
 
     shared[threadIdx.x] = energy;
@@ -1240,12 +1336,13 @@ __global__ void dmi_energy_blocks_kernel(
 double reduce_cubic_anisotropy_energy_fp64(Context &ctx) {
     if (!ctx.has_cubic_anisotropy) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = ctx.dx * ctx.dy * ctx.dz;
     cubic_anisotropy_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const double *>(ctx.m.x),
         static_cast<const double *>(ctx.m.y),
         static_cast<const double *>(ctx.m.z),
-        ctx.reduction_scratch, ctx.cell_count, coeff,
+        ctx.volume_fraction, ctx.reduction_scratch, ctx.cell_count, has_vf, coeff,
         ctx.Kc1, ctx.Kc2, ctx.Kc3,
         ctx.cubic_axis1[0], ctx.cubic_axis1[1], ctx.cubic_axis1[2],
         ctx.cubic_axis2[0], ctx.cubic_axis2[1], ctx.cubic_axis2[2],
@@ -1256,12 +1353,13 @@ double reduce_cubic_anisotropy_energy_fp64(Context &ctx) {
 double reduce_cubic_anisotropy_energy_fp32(Context &ctx) {
     if (!ctx.has_cubic_anisotropy) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = ctx.dx * ctx.dy * ctx.dz;
     cubic_anisotropy_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const float *>(ctx.m.x),
         static_cast<const float *>(ctx.m.y),
         static_cast<const float *>(ctx.m.z),
-        ctx.reduction_scratch, ctx.cell_count, coeff,
+        ctx.volume_fraction, ctx.reduction_scratch, ctx.cell_count, has_vf, coeff,
         ctx.Kc1, ctx.Kc2, ctx.Kc3,
         ctx.cubic_axis1[0], ctx.cubic_axis1[1], ctx.cubic_axis1[2],
         ctx.cubic_axis2[0], ctx.cubic_axis2[1], ctx.cubic_axis2[2],

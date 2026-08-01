@@ -223,7 +223,7 @@ def _remesh_csg(
         emit_progress(
             f"AFEM: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,

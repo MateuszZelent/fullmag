@@ -4,7 +4,12 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
+#include "cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -36,6 +41,57 @@ void check_near(double actual, double expected, double tol, const char *msg) {
     }
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+void fem_bem_rejects_one_iteration_candidate_without_publishing_it() {
+    fullmag::fem::Context ctx;
+    ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_JACOBI;
+    ctx.demag.solver.relative_tolerance = 1.0e-14;
+    ctx.demag.solver.has_absolute_tolerance = 0;
+    ctx.demag.solver.absolute_tolerance = 0.0;
+    ctx.demag.solver.max_iterations = 1;
+    ctx.demag.solver.print_level = 0;
+
+    mfem::SparseMatrix op(8, 8);
+    for (int i = 0; i < 8; ++i) {
+        op.Add(i, i, 3.0 + static_cast<double>(i));
+        if (i + 1 < 8) {
+            op.Add(i, i + 1, -1.0);
+            op.Add(i + 1, i, -1.0);
+        }
+    }
+    op.Finalize();
+    mfem::Vector rhs(8);
+    mfem::Vector solution(8);
+    for (int i = 0; i < 8; ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+        solution(i) = 17.0 + static_cast<double>(i);
+    }
+    const mfem::Vector original(solution);
+    int iterations = -1;
+    double residual = -1.0;
+    fullmag::fem::FemBemHypreCache *cache = nullptr;
+    std::string error;
+    setenv("FULLMAG_FEM_FEM_BEM_LINEAR_SOLVER", "hypre", 1);
+    const bool ok = fullmag::fem::solve_demag_fem_bem_sparse_system(
+        ctx, op, rhs, solution, iterations, residual, cache, error);
+    unsetenv("FULLMAG_FEM_FEM_BEM_LINEAR_SOLVER");
+    check(!ok, "FEM/BEM Hypre demag must reject a nonconverged one-iteration solve");
+    for (int i = 0; i < solution.Size(); ++i) {
+        check(solution(i) == original(i),
+              "failed FEM/BEM demag must not publish the candidate solution");
+    }
+    check(error.find("solver_kind=") != std::string::npos, "FEM/BEM failure includes solver kind");
+    check(error.find("iterations=1") != std::string::npos, "FEM/BEM failure includes iterations");
+    check(error.find("residual=") != std::string::npos, "FEM/BEM failure includes residual");
+    check(error.find("relative_tolerance=") != std::string::npos,
+          "FEM/BEM failure includes tolerance");
+    check(error.find("max_iterations=1") != std::string::npos,
+          "FEM/BEM failure includes maximum iterations");
+    fullmag::fem::destroy_fem_bem_hypre_cache(cache);
+}
+#endif
+
 std::string read_text_file(const std::filesystem::path &path) {
     std::ifstream in(path);
     if (!in) {
@@ -55,25 +111,6 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
-std::filesystem::path repo_root() {
-    auto path = fem_source_root();
-    for (int depth = 0; depth < 8; ++depth) {
-        if (std::filesystem::exists(path / "Cargo.toml") &&
-            std::filesystem::exists(path / "justfile")) {
-            return path;
-        }
-        if (!path.has_parent_path()) {
-            break;
-        }
-        path = path.parent_path();
-    }
-    std::fprintf(
-        stderr,
-        "FAIL: unable to locate repository root from %s\n",
-        fem_source_root().string().c_str());
-    std::exit(1);
-}
-
 fullmag::fem::Context unit_tet_context() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -84,17 +121,17 @@ fullmag::fem::Context unit_tet_context() {
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.mesh.elements = {0, 1, 2, 3};
-    ctx.mesh.element_markers = {1};
+    ctx.mesh.cell_nodes = {0, 1, 2, 3};
+    ctx.mesh.cell_markers = {1};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.magnetic_node_mask = {1, 1, 1, 1};
-    ctx.mesh.boundary_faces = {
+    ctx.mesh.facet_nodes = {
         0, 2, 1,
         0, 1, 3,
         0, 3, 2,
         1, 2, 3,
     };
-    ctx.mesh.boundary_markers = {1, 1, 1, 1};
+    ctx.mesh.facet_markers = {1, 1, 1, 1};
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
     return ctx;
@@ -467,11 +504,11 @@ void fem_bem_boundary_value_rhs_is_owned_by_boundary_values_module() {
     const char *symbols[] = {
         "bool set_demag_fem_bem_boundary_values(",
         "bool prepare_demag_fem_bem_dirichlet_rhs(",
-        "boundary_values_global(tdof) = boundary_values[i]",
+        "global_data[tdof] = boundary_values[i]",
         "stiffness_form.SpMat().Mult(",
         "laplace_rhs *= -1.0",
-        "laplace_rhs(tdof) = boundary_values_global(tdof)",
-        "u2(tdof) = boundary_values_global(tdof)",
+        "laplace_data[tdof] = global_data[tdof]",
+        "u2_data[tdof] = global_data[tdof]",
     };
     for (const char *symbol : symbols) {
         check(
@@ -551,9 +588,9 @@ void fem_bem_potential_trace_is_owned_by_potential_module() {
         "bool extract_demag_fem_bem_boundary_trace(",
         "bool combine_demag_fem_bem_total_potential(",
         "boundary_trace.assign(boundary_nodes.size(), 0.0)",
-        "boundary_trace[i] = potential(tdof)",
+        "boundary_trace[i] = potential_data[tdof]",
         "total_potential.SetSize(u1.Size())",
-        "total_potential(i) = u1(i) + u2(i)",
+        "total_data[i] = u1_data[i] + u2_data[i]",
     };
     for (const char *symbol : symbols) {
         check(
@@ -610,8 +647,8 @@ void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
     const char *symbols[] = {
         "bool prepare_demag_fem_bem_neumann_rhs(",
         "neumann_rhs.SetSize(source_rhs.Size())",
-        "neumann_rhs(i) = source_rhs(i)",
-        "neumann_rhs(0) = 0.0",
+        "neumann_data[i] = src_data[i]",
+        "neumann_data[0] = 0.0",
     };
     for (const char *symbol : symbols) {
         check(
@@ -623,38 +660,12 @@ void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
     }
 }
 
-void progress_report_marks_open_boundary_fem_bem_demag_split_contract_covered() {
-    const std::string progress = read_text_file(
-        repo_root() / "docs" / "reports" / "16.05.2026" /
-        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
-
-    check(
-        progress.find("| Wydzielic open-boundary FEM/BEM demag | zrobione kontraktowo |") !=
-            std::string::npos,
-        "progress report must mark open-boundary FEM/BEM demag split as contract-covered");
-    check(
-        progress.find("`fem_demag_fem_bem_contract`") != std::string::npos &&
-            progress.find("`fem_interaction_docs_contract`") != std::string::npos &&
-            progress.find("demag_fem_bem_surface.*") != std::string::npos &&
-            progress.find("demag_fem_bem_operator.*") != std::string::npos &&
-            progress.find("demag_fem_bem_linear_solve.*") != std::string::npos &&
-            progress.find("demag_fem_bem_rhs.*") != std::string::npos &&
-            progress.find("demag_fem_bem_boundary_values.*") != std::string::npos &&
-            progress.find("demag_fem_bem_workspace.*") != std::string::npos &&
-            progress.find("demag_fem_bem_potential.*") != std::string::npos &&
-            progress.find("demag_fem_bem_telemetry.*") != std::string::npos &&
-            progress.find("demag_fem_bem_energy.*") != std::string::npos &&
-            progress.find("demag_fem_bem_solve.*") != std::string::npos,
-        "progress report must cite FEM/BEM demag contracts and owner modules");
-    check(
-        progress.find("aktywna walidacja runtime FEM/BEM demag MFEM-stack pozostaje osobna") !=
-            std::string::npos,
-        "progress report must keep active FEM/BEM demag runtime validation separate from module split coverage");
-}
-
 } // namespace
 
 int main() {
+#if FULLMAG_HAS_MFEM_STACK
+    fem_bem_rejects_one_iteration_candidate_without_publishing_it();
+#endif
     boundary_surface_extracts_closed_body_only_tet();
     dense_bem_operator_is_finite_and_has_constant_sanity();
     fem_bem_energy_matches_demag_energy_contract();
@@ -671,6 +682,5 @@ int main() {
     fem_bem_potential_trace_is_owned_by_potential_module();
     fem_bem_telemetry_is_owned_by_telemetry_module();
     fem_bem_neumann_rhs_is_owned_by_rhs_module();
-    progress_report_marks_open_boundary_fem_bem_demag_split_contract_covered();
     return 0;
 }

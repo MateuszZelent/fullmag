@@ -16,7 +16,7 @@ use num_complex::Complex64;
 use sha2::{Digest, Sha256};
 
 use crate::native_fem;
-use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
+use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::types::{
     AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StepAction, StepStats,
 };
@@ -780,10 +780,13 @@ fn tetra_volume_abs(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 {
 fn periodic_domain_pair_stats(
     mesh: &fullmag_ir::MeshIR,
 ) -> Result<PeriodicDomainPairStats, RunError> {
+    let elements = mesh.require_tet4_elements().map_err(|error| RunError {
+        message: format!("periodic eigen domain statistics are tet4-only: {error}"),
+    })?;
     let mut magnetic_nodes = std::collections::BTreeSet::new();
     let mut airbox_nodes = std::collections::BTreeSet::new();
     let mut magnetic_node_lumped_volumes = vec![0.0; mesh.nodes.len()];
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    for (element_index, element) in elements.iter().enumerate() {
         let marker = mesh
             .element_markers
             .get(element_index)
@@ -3877,6 +3880,7 @@ fn materialize_equilibrium(
             },
         };
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         while steps_taken < RELAX_MAX_STEPS {
             let report = problem
                 .step(&mut state, RELAX_DT)
@@ -3898,7 +3902,7 @@ fn materialize_equilibrium(
                 ..StepStats::default()
             };
             let energy_plateau_range = energy_plateau.record(report.total_energy_joules);
-            if relaxation_converged(
+            if torque_confirmation.observe_stats(
                 &control,
                 &stats,
                 energy_plateau_range,
@@ -5608,7 +5612,11 @@ fn add_surface_anisotropy_real(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let Some(row) = reduction.node_map[face[i] as usize] else {
@@ -5634,7 +5642,11 @@ fn add_surface_anisotropy_complex(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let node_i = face[i] as usize;
@@ -5728,7 +5740,11 @@ fn add_surface_anisotropy_2x2_complex(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let node_i = face[i] as usize;
@@ -5792,7 +5808,11 @@ fn add_surface_anisotropy_2x2(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let Some(row) = reduction.node_map[face[i] as usize] else {
@@ -7285,9 +7305,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -7969,7 +7989,7 @@ mod tests {
             [2.0, 1.0, 0.0],
             [2.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8035,7 +8055,7 @@ mod tests {
             [2.0, 1.0, 0.0],
             [2.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8124,7 +8144,12 @@ mod tests {
             [3.0, 1.0, 0.0],
             [3.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 4, 2, 5], [6, 7, 8, 9], [7, 10, 8, 11]];
+        plan.mesh.set_tet4_cells(vec![
+            [0, 1, 2, 3],
+            [1, 4, 2, 5],
+            [6, 7, 8, 9],
+            [7, 10, 8, 11],
+        ]);
         plan.mesh.element_markers = vec![1, 1, 0, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8209,7 +8234,7 @@ mod tests {
             [2.0, 1.0, 0.0],
             [2.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8288,7 +8313,12 @@ mod tests {
             [4.0, 1.0, 0.0],
             [3.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 4, 2, 5], [6, 7, 8, 9], [7, 10, 8, 11]];
+        plan.mesh.set_tet4_cells(vec![
+            [0, 1, 2, 3],
+            [1, 4, 2, 5],
+            [6, 7, 8, 9],
+            [7, 10, 8, 11],
+        ]);
         plan.mesh.element_markers = vec![1, 1, 0, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8382,7 +8412,8 @@ mod tests {
             [20.0, 1.0, 0.0],
             [20.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]);
         plan.mesh.element_markers = vec![1, 1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8469,7 +8500,7 @@ mod tests {
             [30.0e-9, 20.0e-9, 0.0],
             [30.0e-9, 0.0, 20.0e-9],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8574,7 +8605,7 @@ mod tests {
             [30.0e-9, 20.0e-9, 0.0],
             [30.0e-9, 0.0, 20.0e-9],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8672,7 +8703,7 @@ mod tests {
             [2.0, 1.0, 0.0],
             [2.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -8791,7 +8822,7 @@ mod tests {
             [2.0, 1.0, 0.0],
             [2.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -9035,9 +9066,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
             boundary_markers: vec![10, 11],
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x_faces".to_string(),
@@ -9100,9 +9131,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
             boundary_markers: vec![10, 11],
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x_faces".to_string(),

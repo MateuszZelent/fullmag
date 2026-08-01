@@ -101,8 +101,9 @@ study.k0_kittel_validation(
 
 study.stages.add_relax(
     algorithm="llg_overdamped",
+    dt=1e-15,
     max_steps=8,
-    tol=1e-3,
+    tolA=1e-3,
     relax_alpha=1.0,
 )
 study.stages.add_eigenmodes(

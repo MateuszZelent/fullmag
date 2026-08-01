@@ -78,7 +78,7 @@ export function resolveTopologyConstrainedVisualizationSettings(
   return {
     ...settings,
     geometryScope: "surface",
-    opacityPercent: Math.min(settings.opacityPercent, 35),
+    surfaceOpacityPercent: Math.min(settings.surfaceOpacityPercent, 35),
     pointsVisible: false,
     renderMode: "wireframe",
     shaderVisible: false,

@@ -210,9 +210,8 @@ fn classify_region_transition(
 mod tests {
     use super::*;
     use crate::{
-        SceneInitialMagnetization, SceneRegionFrame, SceneRegionOverride,
+        SceneInitialMagnetization, SceneObjectRegion, SceneRegionFrame, SceneRegionOverride,
         SceneRegionRealizationPolicy, SceneRegionShape, SceneTextureOverride,
-        SceneObjectRegion,
     };
     use serde_json::json;
 
@@ -346,8 +345,7 @@ mod tests {
         );
 
         let mut topology = before.clone();
-        topology.objects[0].regions[0].realization_policy =
-            SceneRegionRealizationPolicy::Conformal;
+        topology.objects[0].regions[0].realization_policy = SceneRegionRealizationPolicy::Conformal;
         assert_eq!(
             classify_region_realization_impact(&before, &topology),
             RegionRealizationImpact {

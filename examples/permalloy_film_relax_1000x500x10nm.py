@@ -84,9 +84,14 @@ film.mesh(
     maximum_element_size=OBJECT_HMAX,
     minimum_element_size=OBJECT_HMAX,
     mesh_strategy="swept_prism",
+    topology="prismatic",
     through_thickness_elements=1,
     through_thickness_distribution="fixed",
     sweep_face_meshing="triangular",
+    sweep_direction="auto",
+    element_family="prism",
+    transition_policy="pyramid_to_tetrahedra",
+    exact_layer_count=True,
     order=1,
     algorithm_2d=6,
     algorithm_3d=1,
@@ -113,7 +118,7 @@ study.solver(integrator="rk23", max_error=1e-4, gamma=GAMMA)
 study.tableautosave(10e-12)
 study.stages.add_relax(
     algorithm="llg_overdamped",
-    tol=1e-4,
+    tolA=1e-4,
     max_steps=MAX_STEPS,
 )
 

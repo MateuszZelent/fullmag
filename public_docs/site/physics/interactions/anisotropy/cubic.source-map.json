@@ -1,0 +1,78 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/anisotropy/cubic.md",
+    "title": "Cubic magnetocrystalline anisotropy",
+    "interaction": "cubic magnetocrystalline anisotropy"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision cell-local reference field and energy realization."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64/FP32 local CUDA field and energy paths are present; executed-device qualification is separate."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Strict crystal-frame validation and nodal/quadrature paths are present."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device cubic field/energy kernels and reductions are present; executed-device parity remains a gate."}
+  ],
+  "sources": [
+    {"id": "python-cubic", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class CubicAnisotropy", "responsibility": "Compatibility public constructor and serialization."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical Kc constants, axes, and spatial fields."},
+    {"id": "python-migration", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "_migrate_legacy_anisotropy_energy_terms", "responsibility": "Conflict-checked migration to material-owned IR."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM native cubic material resolution."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM cubic material resolution and axis legality."},
+    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "anisotropy_field", "responsibility": "FDM CPU cubic field composition."},
+    {"id": "fdm-cpu-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "anisotropy_energy_density_from_vectors", "responsibility": "FDM CPU cubic energy density."},
+    {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "anisotropy_field_fp64_kernel", "responsibility": "FDM CUDA FP64 local cubic field kernel."},
+    {"id": "fdm-gpu-fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "anisotropy_field_fp32_kernel", "responsibility": "FDM CUDA FP32 local cubic field kernel."},
+    {"id": "fdm-gpu-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_cubic_anisotropy_energy_fp64", "responsibility": "FDM CUDA cubic energy reduction."},
+    {"id": "fem-cpu-field", "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp", "symbol": "compute_cubic_anisotropy_field", "responsibility": "FEM CPU cubic field and lumped energy."},
+    {"id": "fem-cpu-quadrature", "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp", "symbol": "cubic_anisotropy_energy_from_element_quadrature_material", "responsibility": "FEM CPU spatial-material energy."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "cubic_anisotropy_field_energy_blocks_kernel", "responsibility": "FEM CUDA cubic field and energy block kernel."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu", "symbol": "gpu_rk_compute_anisotropy_field_contributions", "responsibility": "FEM CUDA field dispatch and device checks."},
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_anisotropy_energy_terms", "responsibility": "FEM CUDA cubic final energy reduction."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "c1", "latex": "$\\mathbf c_1$", "meaning": "first crystal axis", "si_unit": "$1$"},
+    {"id": "c2", "latex": "$\\mathbf c_2$", "meaning": "second crystal axis", "si_unit": "$1$"},
+    {"id": "c3", "latex": "$\\mathbf c_3$", "meaning": "derived third crystal axis $\\mathbf c_1\\times\\mathbf c_2$", "si_unit": "$1$"},
+    {"id": "alpha", "latex": "$\\alpha_a$", "meaning": "direction cosine $\\mathbf m\\cdot\\mathbf c_a$", "si_unit": "$1$"},
+    {"id": "Sigma", "latex": "$\\Sigma$", "meaning": "first cubic invariant", "si_unit": "$1$"},
+    {"id": "Kc1", "latex": "$K_{c1}$", "meaning": "first cubic anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Kc2", "latex": "$K_{c2}$", "meaning": "second cubic anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Kc3", "latex": "$K_{c3}$", "meaning": "third cubic anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "ga", "latex": "$g_a$", "meaning": "crystal-frame effective-field component", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hc", "latex": "$\\mathbf H_{\\mathrm c}$", "meaning": "cubic anisotropy effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "wc", "latex": "$w_{\\mathrm c}$", "meaning": "local cubic anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Ec", "latex": "$E_{\\mathrm c}$", "meaning": "total cubic anisotropy energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "i", "latex": "$i$", "meaning": "discrete cell or node index", "si_unit": "$1$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "wi", "latex": "$w_i^{\\mathrm{lump}}$", "meaning": "FEM nodal lumped integration weight", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {"id": "eq-cubic-crystal-frame", "symbols": ["c1", "c2", "c3", "alpha", "m"], "sources": ["fdm-cpu-field", "fem-cpu-field"]},
+    {"id": "eq-cubic-invariant", "symbols": ["Sigma", "alpha"], "sources": ["fdm-cpu-field", "fem-cpu-field"]},
+    {"id": "eq-cubic-energy", "symbols": ["wc", "Kc1", "Kc2", "Kc3", "Sigma", "alpha", "Ec", "Omega"], "sources": ["fdm-cpu-energy", "fem-cpu-field"]},
+    {"id": "eq-cubic-field-components", "symbols": ["ga", "Kc1", "Kc2", "Kc3", "alpha", "Sigma", "mu0", "Ms"], "sources": ["fem-cpu-field", "fem-gpu-kernel"]},
+    {"id": "eq-cubic-effective-field", "symbols": ["Hc", "ga", "c1", "c2", "c3"], "sources": ["fem-cpu-field", "fem-gpu-kernel"]},
+    {"id": "eq-cubic-fdm-energy", "symbols": ["Ec", "Kc1", "Kc2", "Kc3", "Sigma", "alpha", "i", "Vi"], "sources": ["fdm-cpu-energy", "fdm-gpu-energy"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.CubicAnisotropy", "fullmag.Material"],
+    "parameters": [
+      {"python": "CubicAnisotropy.kc1", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "first cubic constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_kc1`"},
+      {"python": "CubicAnisotropy.kc2", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "second cubic constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_kc2`"},
+      {"python": "CubicAnisotropy.kc3", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "third cubic constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_kc3`"},
+      {"python": "CubicAnisotropy.axis1", "type": "Sequence[float]", "default": "(1,0,0)", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "first crystal axis", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_axis1`"},
+      {"python": "CubicAnisotropy.axis2", "type": "Sequence[float]", "default": "(0,1,0)", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "second crystal axis", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_axis2`"},
+      {"python": "Material.Kc1", "type": "float \\| None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical first cubic value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_kc1`"},
+      {"python": "Material.Kc2", "type": "float \\| None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical second cubic value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_kc2`"},
+      {"python": "Material.Kc3", "type": "float \\| None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical third cubic value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_kc3`"},
+      {"python": "Material.anisC1", "type": "tuple[float,float,float] \\| None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "first crystal axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_axis1`"},
+      {"python": "Material.anisC2", "type": "tuple[float,float,float] \\| None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "second crystal axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_axis2`"},
+      {"python": "Material.Kc1_field", "type": "list[float] \\| None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality downstream", "meaning": "spatial Kc1 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].kc1_field`"},
+      {"python": "Material.Kc2_field", "type": "list[float] \\| None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality downstream", "meaning": "spatial Kc2 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].kc2_field`"},
+      {"python": "Material.Kc3_field", "type": "list[float] \\| None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality downstream", "meaning": "spatial Kc3 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].kc3_field`"}
+    ]
+  }
+}

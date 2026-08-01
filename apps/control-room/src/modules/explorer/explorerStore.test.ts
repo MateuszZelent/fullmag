@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   collapseExplorerNodes,
   expandExplorerNodes,
+  ensureExplorerModelObjectDefaults,
   explorerStore,
   revealExplorerNode,
   resetExplorerStoreForTests,
@@ -14,6 +15,33 @@ import {
 describe("explorerStore", () => {
   beforeEach(() => {
     resetExplorerStoreForTests();
+  });
+
+  it("opens Objects by default and keeps the shared Mesh branch collapsed", () => {
+    const state = explorerStore.getSnapshot();
+
+    expect(state.expandedIds.model.has("model:objects")).toBe(true);
+    expect(state.expandedIds.model.has("model:mesh")).toBe(false);
+  });
+
+  it("expands dynamic model object roots once without reopening collapsed roots", () => {
+    ensureExplorerModelObjectDefaults(["model:object:film"]);
+    expect(explorerStore.getSnapshot().expandedIds.model.has("model:object:film")).toBe(
+      true,
+    );
+
+    collapseExplorerNodes("model", ["model:object:film"]);
+    ensureExplorerModelObjectDefaults([
+      "model:object:film",
+      "model:object:reference",
+    ]);
+
+    expect(explorerStore.getSnapshot().expandedIds.model.has("model:object:film")).toBe(
+      false,
+    );
+    expect(
+      explorerStore.getSnapshot().expandedIds.model.has("model:object:reference"),
+    ).toBe(true);
   });
 
   it("keeps active tab, filter, and expansion state as module-local UI state", () => {

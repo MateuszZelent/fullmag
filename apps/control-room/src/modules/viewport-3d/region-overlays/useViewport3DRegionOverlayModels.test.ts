@@ -21,7 +21,6 @@ describe("useViewport3DRegionOverlayModels", () => {
       domainId: "shared-domain",
       regionSignature: "film:core|part:film:core",
       sessionId: "current",
-      targetVisualizationRevision: "targets-4",
       topologyRevision: "mesh-7",
     });
 
@@ -41,14 +40,12 @@ describe("useViewport3DRegionOverlayModels", () => {
       domainId: "shared-domain",
       regionSignature: "film:core|part:film:core",
       sessionId: "current",
-      targetVisualizationRevision: "targets-4",
       topologyRevision: "mesh-7",
     });
     const second = createViewport3DRegionOverlayBuildReference({
       domainId: "shared-domain",
       regionSignature: "film:core|part:film:core",
       sessionId: "current",
-      targetVisualizationRevision: "targets-5",
       topologyRevision: "mesh-7",
     });
 
@@ -65,7 +62,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds: null,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",
@@ -75,7 +71,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds: null,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",
@@ -89,7 +84,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds: null,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",
@@ -99,7 +93,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds: null,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",
@@ -114,14 +107,12 @@ describe("useViewport3DRegionOverlayModels", () => {
     const topology = {};
     const magneticParts = {};
     const regions = {};
-    const renderedSurfacePartIds = {};
 
     expect(
       viewport3DRegionOverlayTopologyIdentityIsCompatible(
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds,
           selectedObjectId: "film",
           selectedRegionId: "film:core",
           regionSignature: "selected-film",
@@ -131,7 +122,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",
@@ -145,7 +135,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",
@@ -155,7 +144,6 @@ describe("useViewport3DRegionOverlayModels", () => {
         {
           magneticParts,
           regions,
-          renderedSurfacePartIds,
           selectedObjectId: null,
           selectedRegionId: null,
           regionSignature: "default",

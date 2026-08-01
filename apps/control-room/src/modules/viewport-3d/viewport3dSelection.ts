@@ -1,4 +1,7 @@
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import type {
+  MeshElementFamily,
+  Selection,
+} from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import type { SemanticRenderTargetAddress } from "@/kernel/selection/semanticRenderTargetCatalog";
 
@@ -66,6 +69,8 @@ export function viewportSelectionForMeshPart(
   hit: {
     boundaryFaceIndex?: number | null;
     carrierPartId: string;
+    elementFamily?: MeshElementFamily | null;
+    globalCellOrdinal?: string | null;
     label: string;
   },
 ): ViewportSelectionPatch {
@@ -78,6 +83,8 @@ export function viewportSelectionForMeshPart(
       ref: {
         boundaryFaceIndex: hit.boundaryFaceIndex,
         carrierPartId: hit.carrierPartId,
+        elementFamily: hit.elementFamily,
+        globalCellOrdinal: hit.globalCellOrdinal,
         kind: "airbox.root",
         nodeId: address.explorerNodeId,
         type: "airbox",
@@ -96,6 +103,8 @@ export function viewportSelectionForMeshPart(
       ref: {
         boundaryFaceIndex: hit.boundaryFaceIndex,
         carrierPartId: hit.carrierPartId,
+        elementFamily: hit.elementFamily,
+        globalCellOrdinal: hit.globalCellOrdinal,
         kind: "object.root",
         nodeId: address.explorerNodeId,
         objectId,
@@ -113,6 +122,8 @@ export function viewportSelectionForMeshPart(
     ref: {
       boundaryFaceIndex: hit.boundaryFaceIndex,
       carrierPartId: hit.carrierPartId,
+      elementFamily: hit.elementFamily,
+      globalCellOrdinal: hit.globalCellOrdinal,
       kind: "mesh-part",
       nodeId: address.explorerNodeId,
       objectId: null,

@@ -9,6 +9,7 @@ import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsP
 import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
+import { QuickChartInspectorPanel } from "./panels/QuickChartInspectorPanel";
 import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import { RegionalFieldDrivePanel } from "./panels/RegionalFieldDrivePanel";
@@ -105,6 +106,8 @@ import {
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
+import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPanel";
+import { PlanarMonitorDraftInspectorPanel } from "./panels/PlanarMonitorDraftInspectorPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
@@ -449,10 +452,28 @@ const frequencyDomainPanels: InspectorPanelContribution[] =
 
 const PANELS: InspectorPanelContribution[] = [
   {
+    id: "planar-monitor-draft",
+    title: "Planar Monitor Draft",
+    selectionKinds: ["model.planar.monitor.draft"],
+    component: PlanarMonitorDraftInspectorPanel,
+  },
+  {
+    id: "planar-monitor",
+    title: "Planar Monitor",
+    selectionKinds: ["model.planar.monitor"],
+    component: PlanarMonitorInspectorPanel,
+  },
+  {
     id: "chart",
     title: "Charts",
     selectionKinds: ["analysis.chart", "analysis.chart-point"],
     component: ChartInspectorPanel,
+  },
+  {
+    id: "quick-chart",
+    title: "Quick Chart",
+    selectionKinds: ["results.quick_chart"],
+    component: QuickChartInspectorPanel,
   },
   {
     id: "object-general",
@@ -692,9 +713,12 @@ const PANELS: InspectorPanelContribution[] = [
     selectionKinds: [
       "study.stage.action",
       "study.stage.add_field_drive",
+      "study.stage.autosave",
+      "study.stage.fft_response",
       "study.stage.hysteresis",
       "study.stage.relax",
       "study.stage.run",
+      "study.stage.table_autosave",
       "study.stage.change_device",
       "study.stage.save_state",
     ],

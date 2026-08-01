@@ -1,0 +1,43 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native GPU sources exist; executed-device qualification is reported separately."},
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA path exists; device availability and parity evidence are separate gates."}
+  ],
+  "equations": [
+    {"id": "eq-relax-llg-damping", "symbols": ["m", "gamma0", "alpha", "H_eff"], "sources": ["physics-llg", "runner-mode"]},
+    {"id": "eq-relax-llg-effective-field", "symbols": ["H_eff", "mu0", "Ms", "E", "tau"], "sources": ["physics-llg", "python-relaxation"]},
+    {"id": "eq-relax-llg-stop-metric", "symbols": ["tau", "tau_max", "epsilon_tau"], "sources": ["runner-completion"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "M", "latex": "\\mathbf M", "meaning": "dimensional magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "total effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "Fullmag reduced gyromagnetic ratio", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping parameter", "si_unit": "1"},
+    {"id": "t", "latex": "t", "meaning": "relaxation integration coordinate", "si_unit": "\\mathrm{s}"},
+    {"id": "tau", "latex": "\\boldsymbol\\tau_i", "meaning": "local effective-field torque residual", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_max", "latex": "\\tau_{\\max}", "meaning": "maximum accepted-state torque", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "torque stopping threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"}
+  ],
+  "sources": [
+    {"id": "physics-llg", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Canonical relaxation equilibrium payload and algorithm semantics."},
+    {"id": "python-relaxation", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public relaxation algorithm and ProblemIR serialization."},
+    {"id": "python-stop", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class RelaxStop", "responsibility": "Public stopping criteria and validation."},
+    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first Python lowering and adaptive LLG policy."},
+    {"id": "runner-mode", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "llg_overdamped_uses_pure_damping", "responsibility": "Resolves precession-disabled relaxation mode."},
+    {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Evaluates accepted-state relaxation completion."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "StudyStagesBuilder.add_relax(algorithm=...)", "type": "str", "default": "\"llg_overdamped\"", "si_unit": "$1$", "validation": "one supported algorithm identifier", "meaning": "selects relaxation realization", "backend_support": "FEM/FDM; planner decides lane", "problem_ir": "study.algorithm"},
+      {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; mutually exclusive with `tolA`", "meaning": "user torque threshold", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "hard iteration budget", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.max_steps"}
+    ]
+  }
+}

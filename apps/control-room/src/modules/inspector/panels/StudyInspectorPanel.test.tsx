@@ -26,6 +26,7 @@ import {
 } from "./StudyInspectorPanel";
 import {
   StudyPipelineSection,
+  StudySolverPolicyFields,
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
@@ -166,6 +167,49 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("periodic_airbox_k0 requires a periodic certificate.");
     expect(html).toContain("periodic_airbox_k0 requires an accepted equilibrium.");
     expect(html).toContain("Strict GPU K0 modal demag prerequisites are unavailable.");
+  });
+
+  it("renders global advanced adaptive guard controls", () => {
+    const html = renderToStaticMarkup(
+      <StudySolverPolicyFields
+        algorithmsAvailable={["llg_overdamped"]}
+        draft={{
+          adaptiveTimestep: {
+            atol: "1e-8",
+            dtInitial: "",
+            dtMax: "1e-13",
+            dtMin: "1e-16",
+            growthLimit: "2",
+            maxSpinRotation: "0.15",
+            normTolerance: "2e-6",
+            rtol: "1e-5",
+            safety: "0.9",
+            shrinkLimit: "0.2",
+          },
+          demagInterval: "",
+          dtInitial: "",
+          dtMax: "",
+          dtMin: "",
+          energyTolerance: "",
+          fixDt: "",
+          integrator: "rk45",
+          maxErr: "",
+          maxRelaxSteps: "",
+          relaxAlgorithm: "llg_overdamped",
+          timestepMode: "adaptive_advanced",
+          torqueTolerance: "",
+        }}
+        onUpdate={() => undefined}
+        requestedBackend="fdm"
+        requestedDevice="cpu"
+        requestedPrecision="double"
+      />,
+    );
+
+    expect(html).toContain("Max spin rotation");
+    expect(html).toContain("Norm tolerance");
+    expect(html).toContain('value="0.15"');
+    expect(html).toContain('value="2e-6"');
   });
 
   it("renders command detail provenance in the dialog", () => {
@@ -656,6 +700,12 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Field every");
     expect(html).toContain("RK45");
     expect(html).toContain("Timestep mode");
+    expect(html).toContain(
+      "LLG relaxation requires an explicit fixed or adaptive timestep policy.",
+    );
+    expect(html).toMatch(
+      /<button[^>]*disabled=""[^>]*title="Fix stage validation errors before saving\."[^>]*>.*Save stages<\/button>/,
+    );
     expect(html).not.toContain("Fixed dt");
     expect(html).not.toContain("Initial dt");
     expect(html).not.toContain("Adaptive dt min");
@@ -973,7 +1023,7 @@ describe("StudyInspectorPanel", () => {
       />,
     );
 
-    expect(html).toContain("Minor loop branches");
+    expect(html).toContain("Minor loops");
     expect(html).toContain("Loop 1");
     expect(html).toContain("Reversal field");
     expect(html).toContain("Return field");
@@ -1011,7 +1061,7 @@ describe("StudyInspectorPanel", () => {
       />,
     );
 
-    expect(html).toContain("Settle tree branches");
+    expect(html).toContain("Settle branches");
     expect(html).toContain("Branch 1");
     expect(html).toContain("Branch ID");
     expect(html).toContain("Trigger");
@@ -1095,10 +1145,11 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Stage ID is required.");
   });
 
-  it("renders editable global study settings", () => {
+  it("renders editable global settings and applies production capability validation", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["boundary"]}>
         <StudyBoundarySection
+          algorithmsAvailable={[]}
           authoringBusy={false}
           authoringFeedback={null}
           draft={{
@@ -1111,8 +1162,22 @@ describe("StudyInspectorPanel", () => {
             requestedCpuThreads: "8",
             requestedDevice: "gpu",
             requestedMode: "strict",
-            requestedPrecision: "double",
-            solver: '{"integrator":"rk45"}',
+            requestedPrecision: "single",
+            solver: {
+              adaptiveTimestep: null,
+              demagInterval: "",
+              dtInitial: "",
+              dtMax: "1e-14",
+              dtMin: "1e-16",
+              energyTolerance: "",
+              fixDt: "",
+              integrator: "rk45",
+              maxErr: "1e-6",
+              maxRelaxSteps: "",
+              relaxAlgorithm: "",
+              timestepMode: "adaptive_max_error",
+              torqueTolerance: "",
+            },
           }}
           model={{
             boundary: testBoundary({
@@ -1170,9 +1235,15 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Demag enabled");
     expect(html).toContain("Poisson Robin");
     expect(html).toContain("External field");
-    expect(html).toContain("Solver");
+    expect(html).toContain("Timestep policy");
+    expect(html).toContain("Maximum embedded vector error");
+    expect(html).not.toContain("Study solver override JSON object");
     expect(html).toContain("FEM demag policy");
     expect(html).toContain("Current CPU threads");
+    expect(html).toContain("LLG is not advertised by the active session.");
+    expect(html).toContain(
+      "Adaptive execution is qualified only for double precision.",
+    );
     expect(html).toContain("Save globals");
   });
 

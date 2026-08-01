@@ -1,0 +1,294 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_prefix:
+        description: 'Iterative version prefix (e.g. 0.1.0)'
+        required: true
+        default: '0.1.0'
+        type: string
+      custom_tag:
+        description: 'Explicit tag override (leave blank to auto-generate v<prefix>-YYYYMMDD-HHMMSS)'
+        required: false
+        default: ''
+        type: string
+      is_prerelease:
+        description: 'Mark as GitHub pre-release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.tag_name }}
+      timestamp: ${{ steps.tag.outputs.timestamp }}
+      version_prefix: ${{ steps.tag.outputs.version_prefix }}
+      is_prerelease: ${{ inputs.is_prerelease }}
+    steps:
+      - name: Compute release tag
+        id: tag
+        env:
+          VERSION_PREFIX_INPUT: ${{ inputs.version_prefix }}
+          CUSTOM_TAG_INPUT: ${{ inputs.custom_tag }}
+        run: |
+          set -euo pipefail
+          TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
+          PREFIX="$VERSION_PREFIX_INPUT"
+          CUSTOM_TAG="$CUSTOM_TAG_INPUT"
+
+          if [[ ! "$PREFIX" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid semantic version prefix: $PREFIX" >&2
+            exit 2
+          fi
+
+          if [ -n "$CUSTOM_TAG" ]; then
+            if [[ ! "$CUSTOM_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "invalid custom tag: $CUSTOM_TAG" >&2
+              exit 2
+            fi
+            TAG_NAME="$CUSTOM_TAG"
+          else
+            TAG_NAME="v${PREFIX}-${TIMESTAMP}"
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
+          echo "version_prefix=${PREFIX}" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: ${TAG_NAME}"
+
+  build-linux:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Build Control Room Web App
+        env:
+          FULLMAG_CONTROL_ROOM_STATIC_EXPORT: 1
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir apps/control-room build
+
+      - name: Build Rust binaries (CLI, API & UI)
+        run: cargo build --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
+
+      - name: Build Python wheel package
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build packages/fullmag-py
+
+      - name: Assemble Linux release bundle
+        env:
+          TAG: ${{ needs.prepare-release.outputs.tag_name }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BUNDLE="fullmag-${TAG}-linux-x86_64"
+          DIST_DIR="dist/${BUNDLE}"
+          WEB_DIR="${DIST_DIR}/.fullmag/local/web"
+          mkdir -p "${DIST_DIR}/bin" "${WEB_DIR}" "${DIST_DIR}/python"
+
+          cp target/release/fullmag "${DIST_DIR}/bin/fullmag"
+          cp target/release/fullmag-api "${DIST_DIR}/bin/fullmag-api"
+          cp target/release/fullmag-ui "${DIST_DIR}/bin/fullmag-ui"
+          test -x "${DIST_DIR}/bin/fullmag"
+          test -x "${DIST_DIR}/bin/fullmag-api"
+          test -x "${DIST_DIR}/bin/fullmag-ui"
+          test -f apps/control-room/out/index.html
+          cp -a apps/control-room/out/. "${WEB_DIR}/"
+          test -f "${WEB_DIR}/index.html"
+          compgen -G "packages/fullmag-py/dist/*.whl" >/dev/null
+          cp packages/fullmag-py/dist/*.whl "${DIST_DIR}/python/"
+          if [ -f "README.md" ]; then cp README.md "${DIST_DIR}/"; fi
+          printf '{"product":"fullmag","tag":"%s","git_sha":"%s","platform":"linux-x86_64"}\n' \
+            "$TAG" "$GIT_SHA" > "${DIST_DIR}/release-manifest.json"
+
+          ARCHIVE="${BUNDLE}.tar.gz"
+          tar -czf "$ARCHIVE" -C dist "$BUNDLE"
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/bin/fullmag-api" >/dev/null
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/.fullmag/local/web/index.html" >/dev/null
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/release-manifest.json" >/dev/null
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64
+          path: fullmag-*-linux-x86_64.tar.gz
+
+  build-windows:
+    needs: prepare-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+
+      - name: Build Rust binaries (CLI & UI)
+        shell: powershell
+        run: cargo build --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
+
+      - name: Build Control Room Web App
+        shell: powershell
+        env:
+          FULLMAG_CONTROL_ROOM_STATIC_EXPORT: 1
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir apps/control-room build
+
+      - name: Assemble Windows release bundle
+        shell: powershell
+        env:
+          TAG: ${{ needs.prepare-release.outputs.tag_name }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          $TAG = $env:TAG
+          $BUNDLE = "fullmag-$TAG-windows-x86_64"
+          $DIST = "dist\$BUNDLE"
+          $WEB = "$DIST\.fullmag\local\web"
+          New-Item -ItemType Directory -Force -Path "$DIST\bin", $WEB
+
+          Copy-Item target\release\fullmag.exe "$DIST\bin\"
+          Copy-Item target\release\fullmag-api.exe "$DIST\bin\"
+          Copy-Item target\release\fullmag-ui.exe "$DIST\bin\"
+          if (-not (Test-Path apps\control-room\out\index.html)) {
+            throw "Static Control Room export is missing apps\control-room\out\index.html"
+          }
+          Copy-Item -Recurse apps\control-room\out\* "$WEB\"
+          if (Test-Path README.md) { Copy-Item README.md "$DIST\" }
+          @{ product = "fullmag"; tag = $TAG; git_sha = $env:GIT_SHA; platform = "windows-x86_64" } |
+            ConvertTo-Json -Compress | Set-Content "$DIST\release-manifest.json" -Encoding UTF8
+
+          $required = @(
+            "$DIST\bin\fullmag.exe",
+            "$DIST\bin\fullmag-api.exe",
+            "$DIST\bin\fullmag-ui.exe",
+            "$WEB\index.html",
+            "$DIST\release-manifest.json"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path -PathType Leaf)) { throw "Missing required release file: $path" }
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archivePath = [System.IO.Path]::GetFullPath("$BUNDLE.zip")
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path $DIST).Path,
+            $archivePath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $true
+          )
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+          try {
+            $archiveEntries = @(
+              $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
+            )
+            foreach ($entry in @(
+              "$BUNDLE/bin/fullmag.exe",
+              "$BUNDLE/bin/fullmag-api.exe",
+              "$BUNDLE/bin/fullmag-ui.exe",
+              "$BUNDLE/.fullmag/local/web/index.html",
+              "$BUNDLE/release-manifest.json"
+            )) {
+              if (-not ($archiveEntries -contains $entry)) {
+                throw "Windows release archive is missing $entry"
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64
+          path: fullmag-*-windows-x86_64.zip
+
+  publish-release:
+    needs: [prepare-release, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Display downloaded artifacts
+        run: ls -la release-artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag_name }}
+          name: Fullmag Release ${{ needs.prepare-release.outputs.tag_name }}
+          body: |
+            ## Fullmag Release `${{ needs.prepare-release.outputs.tag_name }}`
+
+            - **Release Tag**: `${{ needs.prepare-release.outputs.tag_name }}`
+            - **Base Iteration**: `${{ needs.prepare-release.outputs.version_prefix }}`
+            - **Build Timestamp (UTC)**: `${{ needs.prepare-release.outputs.timestamp }}`
+            - **Commit**: `${{ github.sha }}`
+            - **Target Platforms**: Linux (x86_64), Windows (x86_64)
+
+            ### Package Assets
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64.tar.gz`
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64.zip`
+          prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
+          files: release-artifacts/*
+          token: ${{ secrets.GITHUB_TOKEN }}

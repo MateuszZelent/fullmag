@@ -1,13 +1,16 @@
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { DecodedTopology } from "@/kernel/api/codecs";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-
-import { buildSurfaceEdgeIndices } from "../viewport3dSurfaceEdges";
 import {
   buildPartSurfaceIndices,
-  buildTetraVolumeEdgeIndices,
   type Viewport3DSurfacePart,
 } from "../viewport3dRenderModel";
+import {
+  buildPartSurfaceEdgeIndicesWithSupplemental,
+  buildTopologySurfaceIndicesForElements,
+  buildTopologySurfaceEdgeIndicesForElements,
+  buildTopologyVolumeEdgeIndicesForElements,
+  topologyCellAt,
+} from "../viewport3dTopologyIndexModel";
 
 export type RegionOverlayTheme = "latte" | "mocha";
 
@@ -32,19 +35,12 @@ export interface RegionOverlayInput {
 }
 
 export interface RegionOverlayOptions {
-  resolveSettings?: (
-    region: RegionOverlayInput,
-  ) => VisualizationTargetSettings | undefined;
-  renderedSurfacePartIds?: ReadonlySet<string>;
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
   theme?: RegionOverlayTheme;
 }
 
 export interface RegionOverlayStyle {
-  fillOpacity: number;
-  fillVisible: boolean;
-  surfaceColor: string | null;
   wireframeOpacity: number;
   wireframeScale: number;
   wireframeVisible: boolean;
@@ -118,7 +114,6 @@ export interface RegionMeshOverlayOwnerPart {
 export interface RegionMeshOverlayModel extends RegionOverlayBaseModel {
   edgeIndices: Uint32Array | null;
   positions: Float32Array;
-  surfaceOverlayVisible: boolean;
   surfaceEdgeIndices: Uint32Array | null;
   surfaceIndices: Uint32Array | null;
 }
@@ -173,43 +168,17 @@ export function resolveRegionOverlayColor(
 
 export function resolveRegionOverlayStyle({
   enabled,
-  realizedSurface = false,
   selected,
-  settings,
 }: {
   enabled: boolean;
-  realizedSurface?: boolean;
   selected: boolean;
-  settings?: VisualizationTargetSettings | null;
 }): RegionOverlayStyle {
-  const targetVisible = settings?.visible ?? true;
-  const fillVisible = enabled && targetVisible && (settings?.shaderVisible ?? true);
-  const wireframeRequested = settings?.wireframeVisible ?? true;
-  const wireframeVisible =
-    enabled && targetVisible && wireframeRequested && !fillVisible;
-  const opacityScale = Math.max(0, Math.min(100, settings?.opacityPercent ?? 100)) / 100;
-  const wireframeOpacityScale =
-    Math.max(0, Math.min(100, settings?.wireframeOpacityPercent ?? 100)) / 100;
-  const fillOpacityBase = realizedSurface ? 1 : selected ? 1 : 0.14;
+  const wireframeVisible = enabled;
   return {
-    fillOpacity: fillVisible
-      ? selected
-        ? fillOpacityBase
-        : fillOpacityBase * opacityScale
-      : 0,
-    fillVisible,
-    surfaceColor:
-      settings &&
-      (settings.surfaceColorSource === undefined ||
-        settings.surfaceColorSource === "solid")
-        ? settings.shaderMonoColor
-        : null,
-    wireframeOpacity: wireframeVisible
-      ? (selected ? 1 : 0.72) * wireframeOpacityScale
-      : 0,
+    wireframeOpacity: wireframeVisible ? (selected ? 1 : 0.72) : 0,
     wireframeScale: selected ? 1.008 : 1.004,
     wireframeVisible,
-    wireframeColor: settings?.wireframeColor ?? null,
+    wireframeColor: null,
   };
 }
 
@@ -235,7 +204,7 @@ export function buildRegionMeshOverlayModels(
   ownerParts: readonly RegionMeshOverlayOwnerPart[],
   options: RegionOverlayOptions = {},
 ): RegionMeshOverlayModel[] {
-  if (!topology || topology.indices.length < 4 || topology.positions.length < 3) {
+  if (!topology || topology.elementCount < 1 || topology.positions.length < 3) {
     return [];
   }
 
@@ -267,10 +236,6 @@ export function buildRegionMeshOverlayModels(
         selected: region.selected,
         slot: region.slot,
         style: region.style,
-        surfaceOverlayVisible: !meshPartSurfaceAlreadyRendered(
-          region.meshPartIds,
-          options.renderedSurfacePartIds,
-        ),
         surfaceEdgeIndices: geometry.surfaceEdgeIndices,
         surfaceIndices: geometry.surfaceIndices,
         transform: defaultRegionTransform(),
@@ -298,30 +263,72 @@ function cachedRegionMeshOverlayGeometry(
   const cached = topologyCache.get(key);
   if (cached) return cached;
 
-  const selectedTetraIndices = new Uint32Array(selectedElements.length * 4);
-  selectedElements.forEach((elementIndex, targetElement) => {
-    const source = elementIndex * 4;
-    const target = targetElement * 4;
-    selectedTetraIndices[target] = topology.indices[source] ?? 0;
-    selectedTetraIndices[target + 1] = topology.indices[source + 1] ?? 0;
-    selectedTetraIndices[target + 2] = topology.indices[source + 2] ?? 0;
-    selectedTetraIndices[target + 3] = topology.indices[source + 3] ?? 0;
-  });
+  const selectedElementSet = new Set(selectedElements);
 
   const surfaceIndices =
     selectedMeshParts.length > 0
       ? surfaceIndicesForMeshOverlayParts(selectedMeshParts, topology) ??
-        buildSelectedTetraBoundarySurfaceIndices(topology, selectedElements)
-      : buildSelectedTetraBoundarySurfaceIndices(topology, selectedElements);
-  const edgeIndices = buildTetraVolumeEdgeIndices(selectedTetraIndices);
+        buildTopologySurfaceIndicesForElements(topology, selectedElementSet)
+      : buildTopologySurfaceIndicesForElements(topology, selectedElementSet);
+  const edgeIndices = buildTopologyVolumeEdgeIndicesForElements(
+    topology,
+    selectedElementSet,
+  );
+  const surfaceEdgeIndices = selectedMeshParts.length > 0
+    ? surfaceEdgeIndicesForMeshOverlayParts(selectedMeshParts, topology)
+    : buildTopologySurfaceEdgeIndicesForElements(topology, selectedElementSet);
   const geometry: RegionMeshOverlayGeometryBuffers = {
     edgeIndices: edgeIndices.length > 0 ? edgeIndices : null,
-    surfaceEdgeIndices: buildSurfaceEdgeIndices(surfaceIndices),
+    surfaceEdgeIndices,
     surfaceIndices,
   };
   topologyCache.set(key, geometry);
   evictOldestRegionMeshOverlayGeometryEntries(topologyCache);
   return geometry;
+}
+
+function surfaceEdgeIndicesForMeshOverlayParts(
+  parts: readonly RegionMeshOverlayOwnerPart[],
+  topology: DecodedTopology,
+): Uint32Array | null {
+  const edges = parts.flatMap((part) => {
+    const buffer = buildPartSurfaceEdgeIndicesWithSupplemental(
+      normalizeRegionMeshOverlaySurfacePart(part),
+      topology,
+      [],
+    );
+    return buffer ? Array.from(buffer) : [];
+  });
+  const deduped: number[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index + 1 < edges.length; index += 2) {
+    const left = edges[index] ?? 0;
+    const right = edges[index + 1] ?? 0;
+    const a = Math.min(left, right);
+    const b = Math.max(left, right);
+    const key = `${a}:${b}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(a, b);
+  }
+  return deduped.length ? Uint32Array.from(deduped) : null;
+}
+
+function normalizeRegionMeshOverlaySurfacePart(
+  part: RegionMeshOverlayOwnerPart,
+): Viewport3DSurfacePart {
+  return {
+    boundary_face_count: Math.max(
+      0,
+      Math.floor(finiteNumber(part.boundary_face_count) ?? 0),
+    ),
+    boundary_face_indices: part.boundary_face_indices ?? undefined,
+    boundary_face_start: Math.max(
+      0,
+      Math.floor(finiteNumber(part.boundary_face_start) ?? 0),
+    ),
+    surface_faces: part.surface_faces ?? undefined,
+  };
 }
 
 function evictOldestRegionMeshOverlayGeometryEntries(
@@ -363,14 +370,6 @@ function regionMeshOverlayOwnerPartCacheKey(
   });
 }
 
-function meshPartSurfaceAlreadyRendered(
-  meshPartIdsValue: readonly string[] | null,
-  renderedSurfacePartIds: ReadonlySet<string> | null | undefined,
-): boolean {
-  if (!meshPartIdsValue?.length || !renderedSurfacePartIds?.size) return false;
-  return meshPartIdsValue.every((id) => renderedSurfacePartIds.has(id));
-}
-
 function positionsForTopology(topology: DecodedTopology): Float32Array {
   const cached = topologyPositionCache.get(topology);
   if (cached) return cached;
@@ -399,18 +398,7 @@ function surfaceIndicesForMeshOverlayParts(
 ): Uint32Array | null {
   const buffers = parts.flatMap((part) => {
     const surfaceIndices = buildPartSurfaceIndices(
-      {
-        boundary_face_count: Math.max(
-          0,
-          Math.floor(finiteNumber(part.boundary_face_count) ?? 0),
-        ),
-        boundary_face_indices: part.boundary_face_indices ?? undefined,
-        boundary_face_start: Math.max(
-          0,
-          Math.floor(finiteNumber(part.boundary_face_start) ?? 0),
-        ),
-        surface_faces: part.surface_faces ?? undefined,
-      } satisfies Viewport3DSurfacePart,
+      normalizeRegionMeshOverlaySurfacePart(part),
       topology,
     );
     return surfaceIndices?.length ? [surfaceIndices] : [];
@@ -478,14 +466,11 @@ function buildRegionMeshOverlaySelectionModels(
 
       const enabled = region.enabled !== false;
       const selected = options.selectedRegionId === regionId;
-      const settings = options.resolveSettings?.(region) ?? null;
       const style = resolveRegionOverlayStyle({
         enabled,
-        realizedSurface: true,
         selected,
-        settings,
       });
-      if (!style.fillVisible && !style.wireframeVisible) return [];
+      if (!style.wireframeVisible) return [];
 
       return [
         {
@@ -528,9 +513,8 @@ function normalizeRegionOverlayModel(
 
   const enabled = region.enabled !== false;
   const selected = options.selectedRegionId === regionId;
-  const settings = options.resolveSettings?.(region) ?? null;
-  const style = resolveRegionOverlayStyle({ enabled, selected, settings });
-  if (!style.fillVisible && !style.wireframeVisible) return [];
+  const style = resolveRegionOverlayStyle({ enabled, selected });
+  if (!style.wireframeVisible) return [];
   const frame = nonEmptyString(region.frame)?.toLowerCase() ?? "object";
   const transform =
     frame === "world" ? defaultRegionTransform() : ownerTransform(region);
@@ -649,7 +633,7 @@ function regionMeshElementIndices(
   if (ownerElementCandidates.length === 0) return [];
 
   return ownerElementCandidates.filter((elementIndex) => {
-    const centroid = tetraCentroid(topology, elementIndex);
+    const centroid = cellCentroid(topology, elementIndex);
     return centroid ? regionContainsWorldPoint(region, centroid) : false;
   });
 }
@@ -695,7 +679,7 @@ function elementIndicesForPart(
   part: RegionMeshOverlayOwnerPart,
   topology: DecodedTopology,
 ): number[] {
-  const topologyElementCount = Math.floor(topology.indices.length / 4);
+  const topologyElementCount = topology.elementCount;
   if (part.element_indices?.length) {
     const elements = new Set<number>();
     for (const index of part.element_indices) {
@@ -722,12 +706,8 @@ function elementIndicesForPart(
 
   const elements: number[] = [];
   for (let element = 0; element < topologyElementCount; element += 1) {
-    const source = element * 4;
-    const a = topology.indices[source] ?? 0;
-    const b = topology.indices[source + 1] ?? 0;
-    const c = topology.indices[source + 2] ?? 0;
-    const d = topology.indices[source + 3] ?? 0;
-    if (nodeSet.has(a) && nodeSet.has(b) && nodeSet.has(c) && nodeSet.has(d)) {
+    const cell = topologyCellAt(topology, element);
+    if (cell && cell.nodes.every((node) => nodeSet.has(node))) {
       elements.push(element);
     }
   }
@@ -766,18 +746,13 @@ function objectIdsMatch(left: string, right: string): boolean {
   return cleanLeft === cleanRight;
 }
 
-function tetraCentroid(
+function cellCentroid(
   topology: DecodedTopology,
   elementIndex: number,
 ): NumericVector3 | null {
-  const source = elementIndex * 4;
-  if (source + 3 >= topology.indices.length) return null;
-  const nodes = [
-    topology.indices[source] ?? 0,
-    topology.indices[source + 1] ?? 0,
-    topology.indices[source + 2] ?? 0,
-    topology.indices[source + 3] ?? 0,
-  ];
+  const cell = topologyCellAt(topology, elementIndex);
+  if (!cell || cell.nodes.length === 0) return null;
+  const nodes = cell.nodes;
   const centroid: [number, number, number] = [0, 0, 0];
   for (const node of nodes) {
     const offset = node * 3;
@@ -786,7 +761,11 @@ function tetraCentroid(
     centroid[1] += topology.positions[offset + 1] ?? 0;
     centroid[2] += topology.positions[offset + 2] ?? 0;
   }
-  return [centroid[0] / 4, centroid[1] / 4, centroid[2] / 4];
+  return [
+    centroid[0] / nodes.length,
+    centroid[1] / nodes.length,
+    centroid[2] / nodes.length,
+  ];
 }
 
 function regionContainsWorldPoint(
@@ -883,43 +862,6 @@ function vectorLengthSq(vector: NumericVector3): number {
 
 function dot(left: NumericVector3, right: NumericVector3): number {
   return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
-}
-
-function buildSelectedTetraBoundarySurfaceIndices(
-  topology: DecodedTopology,
-  selectedElements: readonly number[],
-): Uint32Array | null {
-  const faces = new Map<string, { count: number; face: [number, number, number] }>();
-  for (const elementIndex of selectedElements) {
-    const source = elementIndex * 4;
-    const a = topology.indices[source] ?? 0;
-    const b = topology.indices[source + 1] ?? 0;
-    const c = topology.indices[source + 2] ?? 0;
-    const d = topology.indices[source + 3] ?? 0;
-    pushBoundaryFaceCandidate(faces, [a, b, c]);
-    pushBoundaryFaceCandidate(faces, [a, b, d]);
-    pushBoundaryFaceCandidate(faces, [a, c, d]);
-    pushBoundaryFaceCandidate(faces, [b, c, d]);
-  }
-
-  const surface: number[] = [];
-  for (const entry of faces.values()) {
-    if (entry.count === 1) surface.push(...entry.face);
-  }
-  return surface.length > 0 ? Uint32Array.from(surface) : null;
-}
-
-function pushBoundaryFaceCandidate(
-  faces: Map<string, { count: number; face: [number, number, number] }>,
-  face: [number, number, number],
-): void {
-  const key = face.toSorted((left, right) => left - right).join(":");
-  const current = faces.get(key);
-  if (current) {
-    current.count += 1;
-  } else {
-    faces.set(key, { count: 1, face });
-  }
 }
 
 function positiveModulo(value: number, divisor: number): number {

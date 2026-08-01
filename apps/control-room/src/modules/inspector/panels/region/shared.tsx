@@ -1,7 +1,7 @@
 import { Button } from "@/shared/ui/Button";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { MaterialParameterFieldListResource } from "@/kernel/api/apiTypes";
 import type {
   ObjectRegionDraft,
@@ -69,7 +69,7 @@ export function ObjectRegionInlineDiagnostics({
 
 export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPanelModel }) {
   return (
-    <InspectorSection value="regions" title="Authored Subregion" collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Authored Subregion" collapsible defaultOpen>
       <FieldRow label="Owner object ID" value={model.objectId} />
       <FieldRow label="Subregion ID" value={model.regionId} />
       <FieldRow label="Source" value={model.source} />
@@ -85,7 +85,7 @@ export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPane
         label="Realization"
         value={model.realizationStatus ?? model.realizationPolicy ?? "inherits object"}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -125,7 +125,7 @@ export function ObjectRegionActionsSection({
           )
           .join("; ");
   return (
-    <InspectorSection value="actions" title="Actions">
+    <InspectorGroup title="Actions">
       <FieldRow label="Mesh realization" value={regionMeshLifecycle.status} />
       <FieldRow label="Mesh status" value={regionMeshLifecycle.reason} />
       <FieldRow
@@ -209,6 +209,6 @@ export function ObjectRegionActionsSection({
         }
       />
       {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

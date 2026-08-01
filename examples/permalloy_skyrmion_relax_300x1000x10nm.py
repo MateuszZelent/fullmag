@@ -50,7 +50,7 @@ study.build_domain_mesh()
 study.stages.add_minimize(
     method="bb",
     max_steps=1000,
-    tol=1e-30,
+    tolA=1e-30,
 )
 study.tableautosave(1e-13, quantities=["time", "step", "mx", "my", "mz", "E_total"])
 study.stages.add_relax(
@@ -59,5 +59,5 @@ study.stages.add_relax(
     max_error=1e-6,
     dt_min=1e-17,
     max_steps=350,
-    tol=1e-4,
+    tolA=1e-4,
 )

@@ -11,11 +11,13 @@ import { KernelContext } from "../KernelContext";
 import { LayoutController } from "../layout/LayoutController";
 import { ModuleRegistry } from "../module/ModuleRegistry";
 import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
 import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
+import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "./CameraRegistryController";
 import { ObjectVisualizationController } from "./ObjectVisualizationController";
 import { VisualizationDebugController } from "./VisualizationDebugController";
@@ -33,6 +35,7 @@ function makeKernel(): KernelApi {
   return {
     api,
     analysisFieldOverlay: new AnalysisFieldOverlayController(),
+  chartViewportHandoff: new ChartViewportHandoffController(),
     bus,
     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),
@@ -44,6 +47,7 @@ function makeKernel(): KernelApi {
     layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
     realtime: new RealtimeInvalidationBridge(resources),
+    realtimeConnection: new RealtimeConnectionController(),
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),

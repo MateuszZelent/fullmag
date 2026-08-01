@@ -26,6 +26,10 @@ void gpu_mesh_geometry_is_owned_by_cuda_mesh_module() {
         read_text_file(root / "gpu" / "cuda" / "mesh" / "mesh_geometry_upload.hpp");
     const std::string mesh_geometry_upload_source =
         read_text_file(root / "gpu" / "cuda" / "mesh" / "mesh_geometry_upload.cpp");
+    const std::string gpu_state_runtime_header =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
+    const std::string gpu_state_runtime_source =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
     const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string dmi_field_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_fields.cu");
@@ -120,6 +124,27 @@ void gpu_mesh_geometry_is_owned_by_cuda_mesh_module() {
             rk_plan_source.find("ctx.gpu_state.device.mesh_geometry_uploaded") ==
                 std::string::npos,
         "GPU RK readiness planning must use the mesh-geometry substate");
+    check(
+        gpu_state_runtime_header.find(
+            "bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)") !=
+                std::string::npos &&
+            gpu_state_runtime_source.find(
+                "gpu_state_requires_tetrahedral_mesh_geometry(ctx) &&") !=
+                std::string::npos,
+        "GPU-state bootstrap must gate tetrahedral geometry upload by actual consumers");
+    check(
+        gpu_state_runtime_source.find("ctx.dmi.interfacial_enabled") !=
+                std::string::npos &&
+            gpu_state_runtime_source.find("ctx.dmi.bulk_enabled") !=
+                std::string::npos &&
+            gpu_state_runtime_source.find("ctx.stt.zhang_li_enabled") !=
+                std::string::npos,
+        "DMI and Zhang-Li STT must remain the explicit tetrahedral geometry consumers");
+    check(
+        mesh_geometry_upload_source.find(
+            "mesh geometry upload requires tetrahedral element connectivity") !=
+            std::string::npos,
+        "consumer-gated geometry upload must remain strict tetrahedral and fail closed");
 }
 
 

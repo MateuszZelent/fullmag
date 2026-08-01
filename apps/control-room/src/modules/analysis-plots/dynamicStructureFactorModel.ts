@@ -27,9 +27,14 @@ export function dynamicStructureFactorCells(
     if (resource.frequency_count / frequencyStride >= resource.wavevector_count / wavevectorStride) frequencyStride += 1;
     else wavevectorStride += 1;
   }
-  const maximum = powers.reduce((value, candidate) => Math.max(value, candidate), 0);
-  const positive = powers.filter((value) => value > 0);
-  const floor = positive.length > 0 ? Math.min(...positive) : 1;
+  let maximum = 0;
+  let floor = Number.POSITIVE_INFINITY;
+  for (const power of powers) {
+    if (!Number.isFinite(power)) continue;
+    maximum = Math.max(maximum, power);
+    if (power > 0) floor = Math.min(floor, power);
+  }
+  if (!Number.isFinite(floor)) floor = 1;
   const logRange = maximum > floor ? Math.log10(maximum / floor) : 1;
   const cells: StructureFactorCell[] = [];
   for (let frequencyIndex = 0; frequencyIndex < resource.frequency_count; frequencyIndex += frequencyStride) {

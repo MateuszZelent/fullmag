@@ -49,6 +49,30 @@ _INTERACTION_ORDER = (
 )
 
 
+def _stage_relax_algorithm(stage: dict[str, Any]) -> object:
+    has_canonical = "algorithm" in stage
+    has_legacy = "relax_algorithm" in stage
+    if has_canonical and has_legacy:
+        raise ValueError(
+            "stage must not contain both 'algorithm' and legacy 'relax_algorithm'"
+        )
+    if has_canonical:
+        return stage.get("algorithm")
+    return stage.get("relax_algorithm")
+
+
+def _canonical_scene_stage(raw_stage: object) -> object:
+    if not isinstance(raw_stage, dict):
+        return raw_stage
+    stage = dict(raw_stage)
+    algorithm = _stage_relax_algorithm(stage)
+    had_algorithm = "algorithm" in stage or "relax_algorithm" in stage
+    stage.pop("relax_algorithm", None)
+    if had_algorithm:
+        stage["algorithm"] = algorithm
+    return stage
+
+
 def _normalize_axis3(value: object) -> list[float]:
     if isinstance(value, list) and len(value) == 3:
         try:
@@ -272,13 +296,16 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         "field_drives": {
             "drives": builder.get("field_drives") or [],
         },
+        "monitors": {
+            "planar": builder.get("planar_monitors") or [],
+        },
         "couplings": builder.get("couplings") or [],
         "study": {
             "backend": builder.get("backend"),
             "requested_backend": "auto",
             "requested_device": "auto",
             "requested_precision": "double",
-            "requested_mode": "strict",
+            "requested_mode": builder.get("requested_mode", "strict"),
             "requested_cpu_threads": builder.get("cpu_threads"),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
             "exchange_enabled": bool(builder.get("exchange_enabled", True)),
@@ -289,7 +316,10 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "universe_mesh": builder.get("universe"),
             "shared_domain_mesh": builder.get("mesh") or {},
             "mesh_defaults": builder.get("mesh") or {},
-            "stages": builder.get("stages") or [],
+            "stages": [
+                _canonical_scene_stage(stage)
+                for stage in (builder.get("stages") or [])
+            ],
             "study_pipeline": builder.get("study_pipeline"),
             "table_autosave": builder.get("table_autosave"),
             "initial_state": builder.get("initial_state"),
@@ -395,6 +425,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     return {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend"),
+        "requested_mode": study.get("requested_mode", "strict"),
         "cpu_threads": study.get("requested_cpu_threads"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
         "exchange_enabled": bool(study.get("exchange_enabled", True)),
@@ -412,6 +443,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "couplings": scene.get("couplings") or [],
         "current_modules": current_modules.get("modules") or [],
         "field_drives": field_drives.get("drives") or [],
+        "planar_monitors": (scene.get("monitors") or {}).get("planar") or [],
         "excitation_analysis": current_modules.get("excitation_analysis"),
     }
 
@@ -419,6 +451,39 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     builder = build_builder_from_scene_document(scene)
     solver = dict(builder.get("solver") or {})
+    advanced_adaptive = solver.get("adaptive_timestep")
+    advanced_adaptive_override = None
+    if isinstance(advanced_adaptive, dict):
+        advanced_adaptive_override = {
+            key: _number_or_none(advanced_adaptive.get(key))
+            for key in (
+                "atol",
+                "rtol",
+                "dt_initial",
+                "dt_min",
+                "dt_max",
+                "safety",
+                "growth_limit",
+                "shrink_limit",
+                "max_spin_rotation",
+                "norm_tolerance",
+            )
+            if key in advanced_adaptive
+        }
+    solver_override: dict[str, Any] = {}
+    if "integrator" in solver:
+        solver_override["integrator"] = solver.get("integrator") or None
+    for key in ("fixed_timestep", "dt_initial", "dt_min", "dt_max", "max_err"):
+        if key in solver:
+            solver_override[key] = _number_or_none(solver.get(key))
+    if "adaptive_timestep" in solver:
+        solver_override["adaptive_timestep"] = advanced_adaptive_override
+    solver_override["relax"] = {
+        "algorithm": solver.get("relax_algorithm") or None,
+        "torque_tolerance": _number_or_none(solver.get("torque_tolerance")),
+        "energy_tolerance": _number_or_none(solver.get("energy_tolerance")),
+        "max_steps": _int_or_none(solver.get("max_relax_steps")),
+    }
     mesh = dict(builder.get("mesh") or {})
     return {
         "runtime_selection": {
@@ -438,16 +503,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             and len(builder.get("external_field")) == 3
             else None
         ),
-        "solver": {
-            "integrator": solver.get("integrator") or None,
-            "fixed_timestep": _number_or_none(solver.get("fixed_timestep")),
-            "relax": {
-                "algorithm": solver.get("relax_algorithm") or None,
-                "torque_tolerance": _number_or_none(solver.get("torque_tolerance")),
-                "energy_tolerance": _number_or_none(solver.get("energy_tolerance")),
-                "max_steps": _int_or_none(solver.get("max_relax_steps")),
-            },
-        },
+        "solver": solver_override,
         "mesh": {
             "algorithm_2d": mesh.get("algorithm_2d"),
             "algorithm_3d": mesh.get("algorithm_3d"),
@@ -498,8 +554,17 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "entrypoint_kind": stage.get("entrypoint_kind"),
                 "integrator": stage.get("integrator") or None,
                 "fixed_timestep": _number_or_none(stage.get("fixed_timestep")),
+                **(
+                    {
+                        "adaptive_timestep": _stage_adaptive_timestep_override(
+                            stage.get("adaptive_timestep")
+                        )
+                    }
+                    if "adaptive_timestep" in stage
+                    else {}
+                ),
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
-                "relax_algorithm": stage.get("relax_algorithm") or None,
+                "relax_algorithm": _stage_relax_algorithm(stage) or None,
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
                 "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
@@ -534,9 +599,34 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
         "couplings": builder.get("couplings") or [],
+        "planar_monitors": builder.get("planar_monitors") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+
+
+def _stage_adaptive_timestep_override(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    override = {
+        key: _number_or_none(value.get(key))
+        for key in (
+            "atol",
+            "rtol",
+            "dt_initial",
+            "dt_min",
+            "dt_max",
+            "safety",
+            "growth_limit",
+            "shrink_limit",
+            "max_spin_rotation",
+            "norm_tolerance",
+        )
+        if key in value
+    }
+    if "tolerance_mode" in value:
+        override["tolerance_mode"] = value.get("tolerance_mode")
+    return override
 
 
 def _number_or_none(value: Any) -> float | str | None:

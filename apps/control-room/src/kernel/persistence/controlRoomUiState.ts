@@ -2,6 +2,7 @@ import type { JsonObject, JsonValue } from "../api/apiTypes";
 import type { CommandContext } from "../commands/commandTypes";
 import {
   DEFAULT_LAYOUT,
+  type BottomPanelTabId,
   type LayoutState,
   type PanelPosition,
   type RibbonTabId,
@@ -44,6 +45,14 @@ const SLOT_IDS: readonly SlotId[] = [
 
 const PANEL_POSITIONS: readonly PanelPosition[] = ["left", "right", "bottom"];
 
+const BOTTOM_PANEL_TABS: readonly BottomPanelTabId[] = [
+  "diagnostics",
+  "engine",
+  "logs",
+  "mesh",
+  "telemetry",
+];
+
 export function exportControlRoomUiState(
   context: Pick<CommandContext, "layout">,
 ): JsonObject {
@@ -78,6 +87,7 @@ export function applyControlRoomUiState(
 
 function layoutStateToJson(state: LayoutState): JsonObject {
   return {
+    activeBottomPanelTab: state.activeBottomPanelTab,
     activeModuleTab: state.activeModuleTab,
     activeViewportMainModuleId: state.activeViewportMainModuleId,
     focusedSlot: state.focusedSlot,
@@ -93,6 +103,7 @@ function readLayoutState(record: JsonObject | null): LayoutState | null {
   if (!record) return null;
 
   const activeModuleTab = readRibbonTab(record.activeModuleTab);
+  const activeBottomPanelTab = readBottomPanelTab(record.activeBottomPanelTab);
   const activeViewportMainModuleId =
     readModuleId(record.activeViewportMainModuleId) ??
     DEFAULT_LAYOUT.activeViewportMainModuleId;
@@ -101,11 +112,21 @@ function readLayoutState(record: JsonObject | null): LayoutState | null {
   if (!activeModuleTab || !panelVisible) return null;
 
   return {
+    activeBottomPanelTab,
     activeModuleTab,
     activeViewportMainModuleId,
     focusedSlot,
     panelVisible,
   };
+}
+
+function readBottomPanelTab(
+  value: JsonValue | undefined,
+): BottomPanelTabId {
+  return typeof value === "string" &&
+    BOTTOM_PANEL_TABS.includes(value as BottomPanelTabId)
+    ? (value as BottomPanelTabId)
+    : DEFAULT_LAYOUT.activeBottomPanelTab;
 }
 
 function readPanelVisible(

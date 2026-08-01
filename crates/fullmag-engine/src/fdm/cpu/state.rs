@@ -24,6 +24,7 @@ pub struct ExchangeLlgStateSoA {
     pub time_seconds: f64,
     /// FSAL (First Same As Last) buffer for Dormand–Prince 5(4).
     pub(crate) k_fsal: Option<VectorFieldSoA>,
+    pub(crate) adaptive_previous_error: Option<f64>,
     /// ABM(3) history: stores the last 3 RHS evaluations (SoA layout).
     pub(crate) abm_history: AbmHistorySoA,
 }
@@ -36,6 +37,7 @@ impl ExchangeLlgStateSoA {
             magnetization: VectorFieldSoA::from_aos(&state.magnetization),
             time_seconds: state.time_seconds,
             k_fsal: state.k_fsal.as_ref().map(|k| VectorFieldSoA::from_aos(k)),
+            adaptive_previous_error: state.adaptive_previous_error,
             abm_history: AbmHistorySoA::from_aos(&state.abm_history),
         }
     }
@@ -47,6 +49,7 @@ impl ExchangeLlgStateSoA {
             magnetization: self.magnetization.gather_to_aos(),
             time_seconds: self.time_seconds,
             k_fsal: self.k_fsal.as_ref().map(|k| k.gather_to_aos()),
+            adaptive_previous_error: self.adaptive_previous_error,
             abm_history: self.abm_history.to_aos(),
         }
     }
@@ -56,6 +59,7 @@ impl ExchangeLlgStateSoA {
         self.magnetization.gather_into_aos(&mut state.magnetization);
         state.time_seconds = self.time_seconds;
         state.k_fsal = self.k_fsal.as_ref().map(|k| k.gather_to_aos());
+        state.adaptive_previous_error = self.adaptive_previous_error;
         state.abm_history = self.abm_history.to_aos();
     }
 
@@ -165,6 +169,7 @@ pub struct ExchangeLlgState {
     pub time_seconds: f64,
     /// FSAL (First Same As Last) buffer for Dormand–Prince 5(4).
     pub(crate) k_fsal: Option<Vec<Vector3>>,
+    pub(crate) adaptive_previous_error: Option<f64>,
     /// ABM(3) history: stores the last 3 RHS evaluations for multi-step prediction.
     pub(crate) abm_history: AbmHistory,
 }
@@ -189,6 +194,7 @@ impl ExchangeLlgState {
             magnetization,
             time_seconds: 0.0,
             k_fsal: None,
+            adaptive_previous_error: None,
             abm_history: AbmHistory::new(),
         })
     }
@@ -204,6 +210,7 @@ impl ExchangeLlgState {
     /// Invalidate the FSAL buffer (e.g. after external state modification).
     pub fn invalidate_fsal(&mut self) {
         self.k_fsal = None;
+        self.adaptive_previous_error = None;
     }
 
     /// Check whether a valid FSAL RHS is available.

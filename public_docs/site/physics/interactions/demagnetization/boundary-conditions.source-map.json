@@ -1,0 +1,59 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/demagnetization/boundary-conditions.md",
+    "title": "Boundary Conditions",
+    "interaction": "demagnetization"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Open convolution boundary."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA open convolution."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM boundary operator."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Device path qualification is separate."}
+  ],
+  "sources": [
+    {"id": "api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Validate and normalize the public demagnetization boundary request."},
+    {"id": "fem-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "Resolve the FEM realization and capabilities."},
+    {"id": "mesh-marker", "path": "crates/fullmag-plan/src/mesh.rs", "symbol": "certified_airbox_boundary_marker", "responsibility": "Select the certified outer airbox boundary marker."},
+    {"id": "boundary", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "initialize_demag_poisson_boundary_operator", "responsibility": "Construct the Robin or Dirichlet FEM boundary operator."},
+    {"id": "hypre-cpu", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp", "symbol": "solve_demag_poisson_hypre", "responsibility": "Consume the conditioned FEM operator under the linear-solver policy."},
+    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp", "symbol": "upload_demag_poisson_operators", "responsibility": "Transfer device CSR operators and boundary state."},
+    {"id": "fdm-cpu", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "Construct the FDM open or periodic convolution spectra."},
+    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_upload_demag_kernel_spectra", "responsibility": "Upload the FDM convolution spectra to the device."}
+  ],
+  "symbols": [
+    {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "normal", "latex": "$\\mathbf n$", "meaning": "outward unit normal on $\\Gamma_a$", "si_unit": "$1$"},
+    {"id": "partial_n_u", "latex": "$\\partial_n u$", "meaning": "outward normal derivative of the scalar potential", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "c", "latex": "$c$", "meaning": "dimensionless Robin coefficient selected by runtime policy", "si_unit": "$1$"},
+    {"id": "R_star", "latex": "$R_\\star$", "meaning": "mesh reference radius for Robin scaling", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Omega_m", "latex": "$\\Omega_m$", "meaning": "magnetic subdomain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Omega_a", "latex": "$\\Omega_a$", "meaning": "complete magnetic-plus-air FEM domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Gamma_a", "latex": "$\\Gamma_a$", "meaning": "selected outer airbox boundary", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "A_open", "latex": "$\\mathcal A_{\\mathrm open}$", "meaning": "set of non-periodic coordinate axes", "si_unit": "$1$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field in the magnetic subdomain", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "V", "latex": "$V$", "meaning": "FEM trial/test-function space", "si_unit": "$1$"},
+    {"id": "K", "latex": "$K$", "meaning": "assembled volume stiffness matrix", "si_unit": "$\\mathrm{m}$"},
+    {"id": "B_boundary", "latex": "$B_{\\Gamma_a}$", "meaning": "assembled boundary mass matrix on $\\Gamma_a$", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "A_R", "latex": "$A_{\\mathrm R}$", "meaning": "Robin-conditioned sparse operator", "si_unit": "$\\mathrm{m}$"},
+    {"id": "v", "latex": "$v$", "meaning": "FEM test function", "si_unit": "$1$"},
+    {"id": "x_extrema", "latex": "$x_{d,\\max},x_{d,\\min}$", "meaning": "mesh extrema on open axis $d$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "marker", "latex": "$\\mathrm{marker}$", "meaning": "integer physical boundary attribute", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-demag-boundary-open", "symbols": ["u"], "sources": ["boundary"]},
+    {"id": "eq-demag-boundary-dirichlet", "symbols": ["u", "Gamma_a"], "sources": ["boundary"]},
+    {"id": "eq-demag-boundary-robin", "symbols": ["partial_n_u", "beta", "Gamma_a", "normal"], "sources": ["boundary"]},
+    {"id": "eq-demag-boundary-robin-weak", "symbols": ["Omega_a", "u", "v", "beta", "Gamma_a", "Omega_m", "M", "V"], "sources": ["boundary"]},
+    {"id": "eq-demag-boundary-robin-discrete", "symbols": ["A_R", "K", "beta", "B_boundary"], "sources": ["boundary"]},
+    {"id": "eq-demag-boundary-beta-scaling", "symbols": ["beta", "c", "R_star", "A_open", "x_extrema"], "sources": ["boundary", "mesh-marker"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Demag"],
+    "parameters": [
+      {"python": "Demag.model", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Must be `airbox` when a boundary `variant` is supplied; accepted model names are `airbox`, `bem`, `fredkin_koehler`, and `fmm`.", "meaning": "Selects the realization family.", "backend_support": "FEM airbox for this chapter.", "problem_ir": "`energy[].realization`"},
+      {"python": "Demag.variant", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "For `airbox`, allowed values are `auto`, `robin`, and `dirichlet`; `auto` normalizes to Robin.", "meaning": "Selects the finite-airbox outer closure.", "backend_support": "FEM Poisson CPU/GPU subject to qualification.", "problem_ir": "`energy[].realization`"},
+      {"python": "Demag.realization", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Legacy values are validated against the canonical and compatibility realization vocabulary; it cannot be combined with `model`.", "meaning": "Selects the legacy demagnetization realization.", "backend_support": "Legacy FDM/FEM realization paths according to the resolved value.", "problem_ir": "`energy[].realization`"}
+    ]
+  }
+}

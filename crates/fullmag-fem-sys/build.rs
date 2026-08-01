@@ -30,6 +30,7 @@ fn rerun_if_changed_tree(path: impl AsRef<std::path::Path>) {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=FULLMAG_CUDA_ARCHITECTURES");
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fem");
@@ -51,6 +52,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_WITH_SLEPC");
+    println!("cargo:rerun-if-env-changed=FULLMAG_ENABLE_NVTX");
 
     if std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_none() {
         return;
@@ -66,6 +68,7 @@ fn main() {
     let cmake = std::env::var("FULLMAG_CMAKE").unwrap_or_else(|_| "cmake".to_string());
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
+    let enable_nvtx = env_flag("FULLMAG_ENABLE_NVTX");
     let with_slepc = std::env::var("FULLMAG_FEM_WITH_SLEPC").unwrap_or_else(|_| {
         if use_mfem_stack {
             "ON".to_string()
@@ -93,7 +96,17 @@ fn main() {
             "-DFULLMAG_USE_MFEM_STACK={}",
             if use_mfem_stack { "ON" } else { "OFF" }
         ))
+        .arg(format!(
+            "-DFULLMAG_ENABLE_NVTX={}",
+            if enable_nvtx { "ON" } else { "OFF" }
+        ))
         .arg(format!("-DFULLMAG_FEM_WITH_SLEPC={}", with_slepc));
+    if let Ok(value) = std::env::var("FULLMAG_CUDA_ARCHITECTURES") {
+        let value = value.trim();
+        if !value.is_empty() {
+            configure.arg(format!("-DCMAKE_CUDA_ARCHITECTURES={value}"));
+        }
+    }
 
     let configure_status = configure
         .status()

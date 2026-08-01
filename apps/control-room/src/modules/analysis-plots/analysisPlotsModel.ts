@@ -3,10 +3,12 @@ import {
   type ChartSeries,
   type ChartValueRange,
   DEFAULT_TABLE_CHART_COLUMNS,
+  isTableTimeAxisId,
   type TableRowsQuery,
   tableRowsVisibleRangeQuery,
 } from "./chartTableModel";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import type { AnalysisChartRangeMode } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { ANALYSIS_SCALAR_COLUMNS } from "./tableRowsAdapter";
 import {
   type AxisColumnUnit,
@@ -23,16 +25,55 @@ export function formatAnalysisPointValue(value: number, unit: string): string {
 }
 
 export function buildAnalysisPlotsTableQuery({
+  columns = ANALYSIS_SCALAR_COLUMNS,
   cursor,
+  latestX,
   range,
+  rangeMode = { mode: "follow" },
+  targetPoints = 1_600,
   xAxisId,
 }: {
+  columns?: readonly string[];
   cursor: number | undefined;
+  latestX?: number | null;
   range: ChartValueRange | null;
+  rangeMode?: AnalysisChartRangeMode;
+  targetPoints?: number;
   xAxisId: string;
 }): TableRowsQuery {
+  if (rangeMode.mode === "tailRows") {
+    return buildTableRowsQuery({
+      columns,
+      cursor,
+      includeTail: true,
+      limit: rangeMode.rows,
+      targetPoints: rangeMode.rows,
+    });
+  }
+  if (
+    rangeMode.mode === "tailTime" &&
+    isTableTimeAxisId(xAxisId) &&
+    Number.isFinite(latestX)
+  ) {
+    return buildTableRowsQuery({
+      columns,
+      range: {
+        fromT: (latestX as number) - rangeMode.durationS,
+        toT: latestX as number,
+      },
+      targetPoints,
+    });
+  }
+  if (rangeMode.mode === "fullDecimated") {
+    return buildTableRowsQuery({
+      columns,
+      includeTail: false,
+      limit: targetPoints,
+      targetPoints,
+    });
+  }
   return buildTableRowsQuery({
-    columns: ANALYSIS_SCALAR_COLUMNS,
+    columns,
     cursor,
     range: range
       ? tableRowsVisibleRangeQuery({
@@ -41,21 +82,35 @@ export function buildAnalysisPlotsTableQuery({
           xAxisId,
         })
       : null,
-    targetPoints: 1_600,
+    targetPoints,
   });
 }
 
 export function shouldFetchAnalysisTableRows({
   hasVisibleRows,
   loadScalars,
-  range,
+  liveMode = "following",
 }: {
   hasVisibleRows: boolean;
   loadScalars: boolean;
-  range: ChartValueRange | null;
+  liveMode?: import("@/kernel/workspace/analysisPlotsWorkspace").ChartLiveMode;
+  range?: ChartValueRange | null;
 }): boolean {
   if (!loadScalars) return false;
-  return !hasVisibleRows || range !== null;
+  // When paused, freeze updates if rows are already loaded.
+  // Resuming (liveMode -> 'following') returns true, immediately triggering a fetch.
+  if (liveMode === "paused" && hasVisibleRows) return false;
+  return true;
+}
+
+/** A `tailTime` preference has no server meaning unless the selected X axis is simulation time. */
+export function normalizeTableRangeModeForXAxis(
+  rangeMode: AnalysisChartRangeMode,
+  xAxisId: string,
+): AnalysisChartRangeMode {
+  return rangeMode.mode === "tailTime" && !isTableTimeAxisId(xAxisId)
+    ? { mode: "follow" }
+    : rangeMode;
 }
 
 export function resolveAnalysisPlotsYAxisIds(
@@ -112,7 +167,7 @@ export function analysisPlotsRangeSelectedEvent({
 }: {
   range: ChartValueRange | null;
   xAxisId: string;
-}): Omit<KernelEventMap["charts:range-selected"], "source"> {
+}): Omit<KernelEventMap["analysis-plots:range-selected"], "source"> {
   return {
     chartId: "default",
     range,
@@ -123,7 +178,7 @@ export function analysisPlotsRangeSelectedEvent({
 
 export function analysisPlotsSeriesSelectedEvent(
   series: ChartSeries,
-): Omit<KernelEventMap["charts:series-selected"], "source"> {
+): Omit<KernelEventMap["analysis-plots:series-selected"], "source"> {
   return {
     chartId: series.source.tableId,
     quantity: series.quantity,

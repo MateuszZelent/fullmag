@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildViewport3DTopologyIndicesOffMainThread } from "./viewport3dTopologyIndexScheduler";
+import {
+  buildViewport3DTopologyIndicesOffMainThread,
+  estimateTopologyIndexBuildOutputBytes,
+  type Viewport3DTopologyIndexBuildRequest,
+} from "./viewport3dTopologyIndexScheduler";
+import { topologyIndexBundleByteLength } from "./viewport3dTopologyIndexModel";
 import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
 
 describe("viewport3dTopologyIndexScheduler", () => {
@@ -87,6 +92,8 @@ describe("viewport3dTopologyIndexScheduler", () => {
       "this.worker.postMessage(request, transferables)",
     );
     expect(schedulerSource).toContain("addArrayBufferTransferable");
+    expect(schedulerSource).toContain("cellGlobalOrdinals");
+    expect(workerSource).toContain("cellGlobalOrdinals");
     expect(workerSource).toContain("transferablesForTopologyIndexBundle(data)");
     expect(modelSource).toContain("transferablesForTopologyIndexBundle");
   });
@@ -95,24 +102,25 @@ describe("viewport3dTopologyIndexScheduler", () => {
     vi.stubGlobal("Worker", undefined);
     const records: Viewport3DBuildDiagnosticRecord[] = [];
 
-    await buildViewport3DTopologyIndicesOffMainThread(
-      {
-        airboxParts: [],
-        magneticParts: [
-          {
-            boundary_face_count: 0,
-            boundary_face_start: 0,
-            element_count: 1,
-            element_start: 0,
-            id: "magnetic",
-          },
-        ],
-        topology: {
-          boundaryFaces: new Uint32Array([]),
-          indices: new Uint32Array([0, 1, 2, 3]),
-          nodeCount: 4,
+    const request: Viewport3DTopologyIndexBuildRequest = {
+      airboxParts: [],
+      magneticParts: [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 1,
+          element_start: 0,
+          id: "magnetic",
         },
+      ],
+      topology: {
+        boundaryFaces: new Uint32Array([]),
+        indices: new Uint32Array([0, 1, 2, 3]),
+        nodeCount: 4,
       },
+    };
+    await buildViewport3DTopologyIndicesOffMainThread(
+      request,
       {
         buildKey: "topology-index:session=current:topology=mesh-7",
         groupKey: "topology-index:session=current",
@@ -129,11 +137,53 @@ describe("viewport3dTopologyIndexScheduler", () => {
         key: "topology-index:session=current:topology=mesh-7",
         lane: "topology-index",
         mainAdoptMs: 0,
-        outputBytes: 16,
+        outputBytes: 368,
         queueWaitMs: expect.any(Number),
         revisionSummary: "topology=mesh-7",
         state: "ready",
       }),
     ]);
+  });
+
+  it("includes aligned surface cell identity arrays in output byte estimates", async () => {
+    vi.stubGlobal("Worker", undefined);
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+
+    const request: Viewport3DTopologyIndexBuildRequest = {
+      airboxParts: [],
+      magneticParts: [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          element_count: 1,
+          element_start: 0,
+          id: "magnetic",
+        },
+      ],
+      topology: {
+        boundaryFaces: new Uint32Array([0, 1, 2]),
+        cellGlobalOrdinals: new BigUint64Array([
+          BigInt("9007199254740993"),
+        ]),
+        indices: new Uint32Array([0, 1, 2, 3]),
+        nodeCount: 4,
+      },
+    };
+    const bundle = await buildViewport3DTopologyIndicesOffMainThread(
+      request,
+      {
+        buildKey: "topology-index:identity-bytes",
+        onDiagnosticRecord: (record) => records.push(record),
+      },
+    );
+
+    expect(records.at(-1)).toMatchObject({
+      inputBytes: 36,
+      outputBytes: 272,
+      state: "ready",
+    });
+    expect(estimateTopologyIndexBuildOutputBytes(request)).toBeGreaterThanOrEqual(
+      topologyIndexBundleByteLength(bundle),
+    );
   });
 });

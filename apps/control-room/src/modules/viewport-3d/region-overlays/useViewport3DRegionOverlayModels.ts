@@ -3,8 +3,6 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { DecodedTopology } from "@/kernel/api/codecs";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-
 import { buildViewport3DRegionOverlayJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import type {
   RegionMeshOverlayModel,
@@ -20,7 +18,6 @@ export interface Viewport3DRegionOverlayBuildReferenceInput {
   readonly domainId: string;
   readonly regionSignature: string;
   readonly sessionId: string;
-  readonly targetVisualizationRevision: string | number | null;
   readonly topologyRevision: string | number | null;
 }
 
@@ -33,7 +30,6 @@ export interface Viewport3DRegionOverlayBuildReference {
 export interface Viewport3DRegionOverlayIdentity {
   readonly magneticParts: unknown;
   readonly regions: unknown;
-  readonly renderedSurfacePartIds: unknown;
   readonly selectedObjectId: string | null;
   readonly selectedRegionId: string | null;
   readonly regionSignature: string;
@@ -169,7 +165,6 @@ export function viewport3DRegionOverlayIdentityIsCompatible(
     previous.topology === next.topology &&
     previous.magneticParts === next.magneticParts &&
     previous.regions === next.regions &&
-    previous.renderedSurfacePartIds === next.renderedSurfacePartIds &&
     previous.selectedObjectId === next.selectedObjectId &&
     previous.selectedRegionId === next.selectedRegionId &&
     previous.regionSignature === next.regionSignature &&
@@ -184,8 +179,7 @@ export function viewport3DRegionOverlayTopologyIdentityIsCompatible(
   return (
     previous.topology === next.topology &&
     previous.magneticParts === next.magneticParts &&
-    previous.regions === next.regions &&
-    previous.renderedSurfacePartIds === next.renderedSurfacePartIds
+    previous.regions === next.regions
   );
 }
 
@@ -301,12 +295,9 @@ export function useViewport3DRegionOverlayModels({
   enabled,
   magneticParts,
   regions,
-  renderedSurfacePartIds,
   selectedObjectId = null,
   selectedRegionId = null,
   sessionId = "current",
-  settingsByRegionId,
-  targetVisualizationRevision,
   theme = "mocha",
   topology,
   topologyRevision,
@@ -315,15 +306,9 @@ export function useViewport3DRegionOverlayModels({
   readonly enabled: boolean;
   readonly magneticParts: readonly RegionMeshOverlayOwnerPart[];
   readonly regions: readonly RegionOverlayInput[];
-  readonly renderedSurfacePartIds?: readonly string[];
   readonly selectedObjectId?: string | null;
   readonly selectedRegionId?: string | null;
   readonly sessionId?: string;
-  readonly settingsByRegionId?: readonly (readonly [
-    string,
-    VisualizationTargetSettings,
-  ])[];
-  readonly targetVisualizationRevision?: string | number | null;
   readonly theme?: RegionOverlayTheme;
   readonly topology: DecodedTopology | null | undefined;
   readonly topologyRevision?: string | number | null;
@@ -339,18 +324,14 @@ export function useViewport3DRegionOverlayModels({
     () =>
       createViewport3DRegionOverlaySignature({
         regions,
-        renderedSurfacePartIds,
         selectedObjectId,
         selectedRegionId,
-        settingsByRegionId,
         theme,
       }),
     [
       regions,
-      renderedSurfacePartIds,
       selectedObjectId,
       selectedRegionId,
-      settingsByRegionId,
       theme,
     ],
   );
@@ -360,7 +341,6 @@ export function useViewport3DRegionOverlayModels({
         ? {
             magneticParts,
             regions,
-            renderedSurfacePartIds: renderedSurfacePartIds ?? null,
             selectedObjectId,
             selectedRegionId,
             regionSignature,
@@ -371,7 +351,6 @@ export function useViewport3DRegionOverlayModels({
     [
       magneticParts,
       regions,
-      renderedSurfacePartIds,
       selectedObjectId,
       selectedRegionId,
       regionSignature,
@@ -385,14 +364,12 @@ export function useViewport3DRegionOverlayModels({
         domainId,
         regionSignature,
         sessionId,
-        targetVisualizationRevision: targetVisualizationRevision ?? null,
         topologyRevision: topologyRevision ?? null,
       }),
     [
       domainId,
       regionSignature,
       sessionId,
-      targetVisualizationRevision,
       topologyRevision,
     ],
   );
@@ -496,10 +473,8 @@ export function useViewport3DRegionOverlayModels({
       {
         magneticParts,
         regions,
-        renderedSurfacePartIds,
         selectedObjectId,
         selectedRegionId,
-        settingsByRegionId,
         theme,
         topology,
       },
@@ -543,10 +518,8 @@ export function useViewport3DRegionOverlayModels({
     identity,
     magneticParts,
     regions,
-    renderedSurfacePartIds,
     selectedObjectId,
     selectedRegionId,
-    settingsByRegionId,
     shouldBuild,
     theme,
     topology,
@@ -572,20 +545,13 @@ export function useViewport3DRegionOverlayModels({
 
 function createViewport3DRegionOverlaySignature({
   regions,
-  renderedSurfacePartIds,
   selectedObjectId,
   selectedRegionId,
-  settingsByRegionId,
   theme,
 }: {
   readonly regions: readonly RegionOverlayInput[];
-  readonly renderedSurfacePartIds?: readonly string[];
   readonly selectedObjectId: string | null;
   readonly selectedRegionId: string | null;
-  readonly settingsByRegionId?: readonly (readonly [
-    string,
-    VisualizationTargetSettings,
-  ])[];
   readonly theme: RegionOverlayTheme;
 }): string {
   return [
@@ -601,11 +567,9 @@ function createViewport3DRegionOverlaySignature({
         ].join(":"),
       )
       .join("|") || "none",
-    `surface=${renderedSurfacePartIds?.join(",") ?? "all"}`,
     `selectedObject=${selectedObjectId ?? "none"}`,
     `selectedRegion=${selectedRegionId ?? "none"}`,
     `theme=${theme}`,
-    `settings=${settingsSignature(settingsByRegionId)}`,
   ].join(";");
 }
 
@@ -619,30 +583,6 @@ function meshPartSignature(value: unknown): string {
         .toSorted()
         .join(",")
     : "";
-}
-
-function settingsSignature(
-  settingsByRegionId:
-    | readonly (readonly [string, VisualizationTargetSettings])[]
-    | undefined,
-): string {
-  return (
-    settingsByRegionId
-      ?.map(([regionId, settings]) =>
-        [
-          regionId,
-          settings.visible ?? true,
-          settings.shaderVisible ?? true,
-          settings.wireframeVisible ?? true,
-          settings.opacityPercent ?? 100,
-          settings.wireframeOpacityPercent ?? 100,
-          settings.surfaceColorSource ?? "solid",
-          settings.shaderMonoColor ?? "",
-          settings.wireframeColor ?? "",
-        ].join(":"),
-      )
-      .join("|") ?? "default"
-  );
 }
 
 function finiteString(value: unknown): string {

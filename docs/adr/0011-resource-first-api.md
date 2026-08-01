@@ -57,6 +57,29 @@ Heavy data is fetched lazily from dedicated resource endpoints:
 Control-plane JSON and data-plane binary are separate by design.
 `status` remains thin; field vectors and topology stay out of the status payload.
 
+Runtime throughput follows the same single-owner rule. The revisioned
+`diagnostics/solver-profile` resource owns three explicit rate objects:
+`solver_steps_per_second` is accepted steps divided by
+`native_solver_wall_time_ns` from one closed profiler window;
+`end_to_end_steps_per_second` uses the accepted-step count and monotonic span
+from that same window; and `published_steps_per_second` uses the accepted-step
+delta between the first and latest ordered, same-run publication endpoints
+whose HTTP delta or full-snapshot fallback completed successfully. Duplicate
+or out-of-order endpoints do not advance the window; a new run establishes a
+new zero-count boundary.
+Every object carries `value`, `window_step_count`,
+`window_wall_time_ns`, and `source_revision`.
+
+The legacy `status.metrics.steps_per_second` scalar is a deprecated
+compatibility alias of the end-to-end value. It is absent without a closed
+monotonic span and never falls back to lifetime steps divided by the last-step
+time. `simulation/stages/execution` exclusively owns
+`time_to_tolerance_seconds`, present only when the canonical completion record
+has a coherent torque or energy metric kind/name, finite non-negative value and
+threshold, and `value <= threshold`. Gradient/numerical-stagnation completion
+fails closed until the canonical metric vocabulary distinguishes a genuine
+gradient tolerance.
+
 ### 3. Revision-based cache
 
 Every resource carries a revision (`field_revision`, `domain_generation_id`,
@@ -100,6 +123,19 @@ hashing, so artifact insertion order cannot change the validator. A matching
 `If-None-Match` returns `304`; any semantic snapshot change returns a fresh
 `200` even when pair cardinality and mesh revision remain unchanged. Realtime
 events only invalidate this resource; the next HTTP GET remains authoritative.
+
+#### 3c. 2026-07-21 addendum: field materialization freshness
+
+The `data/fields` catalog and per-quantity field metadata, rather than thin
+session status, own asynchronous materialization freshness. They expose the
+source step and revision, materialization timestamp and wall time, derived
+step staleness, and the state vocabulary `complete | stale_complete | pending
+| error`.
+
+`stale_complete` is a usable completed payload. The Control Room retains it
+while topology generation remains compatible, including while a newer
+materialization is pending. Thin status continues to publish only the field
+resource revision pointer; it does not duplicate per-quantity freshness.
 
 ### 4. Workspace and authoring are first-class resource families
 

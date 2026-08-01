@@ -59,6 +59,13 @@ state for following stages. Consequently a preceding relax snapshot has no
 drive at all; it is not merely a globally declared drive with a false enabled
 flag. Global declaration plus activation remains compatibility input.
 
+Source removal is the symmetrical typed zero-duration `RemoveFieldDrive`
+action. It identifies the physical source by `RegionalFieldDrive.id`, preserves
+the incoming magnetization/runtime state, and removes only that drive from the
+persistent problem state for following stages. The optional action `stage_id`
+names the removal instruction; it does not identify a Run or the earlier add
+instruction. Removing an unknown identifier fails at the action boundary.
+
 Sampling/output/response-analysis policy is owned by the following compute
 stage. Stage-local values override global compatibility defaults, are exported
 to canonical Python, and are preserved in runtime provenance.
@@ -123,6 +130,29 @@ Before execution, the UI evaluates the authored waveform on the effective
 stage-local sampling clock and labels FFT metrics as planned. After execution,
 the Gamma analysis resource supplies actual timestamps and metrics. Uniform
 sampling is validated; no layer silently resamples a nonuniform response.
+
+### 11. Run is a compute command, not a configuration container
+
+The Python and UI authoring surfaces use independent, ordered, zero-duration
+configuration stages for table autosave, field/scalar autosave, and FFT
+response analysis.
+`study.stages.add_run(stage_id=..., until=...)` has no output or analysis
+payload. It only advances LLG time integration from the complete state produced
+by the preceding instruction.
+
+The most recent enabled `tableautosave()` stage before a Run is the
+authoritative `t_sampling` used by the antenna preview and response FFT
+contract. A later disabled stage clears it. For a sinc cutoff `f_c`, UI
+validation requires
+
+```text
+f_c <= 1 / (2 t_sampling),
+t_sampling <= 1 / (2 f_c).
+```
+
+The UI exposes each setting as its own stage inspector and labels the stage id
+that supplies the effective sampling clock. The internal runtime metadata key
+used to materialize the analysis artifact is not shown as a nested Run option.
 
 ## Consequences
 

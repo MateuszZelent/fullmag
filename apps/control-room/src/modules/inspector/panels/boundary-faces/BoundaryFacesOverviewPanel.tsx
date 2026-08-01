@@ -7,7 +7,7 @@ import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeRe
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 
 export function BoundaryFacesOverviewPanel({ selection }: InspectorPanelProps) {
   void selection;
@@ -25,7 +25,7 @@ export function BoundaryFacesOverviewPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection
+      <InspectorGroup
         badge={outerBoundaryCarriers.length > 0 ? "realized" : "unavailable"}
         title="Boundary Faces Overview"
       >
@@ -48,7 +48,7 @@ export function BoundaryFacesOverviewPanel({ selection }: InspectorPanelProps) {
           label="Scope"
           value="Universe boundary; not an Airbox or unassigned mesh target"
         />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
+import type { KernelEventMap } from "../events/eventTypes";
 
 import {
   realtimeReconnectDelayMs,
@@ -25,9 +26,13 @@ interface RealtimeClientOptions {
   bridge: RealtimeBridge;
   createSocket?: (url: string, protocol: string) => RealtimeWebSocketLike;
   diagnostics?: RequestDiagnosticsController;
+  onStatusChange?: (status: RealtimeConnectionStatus) => void;
   scheduleReconnect?: (callback: () => void, delayMs: number) => () => void;
   url: string;
 }
+
+export type RealtimeConnectionStatus =
+  KernelEventMap["session:status-changed"]["status"];
 
 export class RealtimeClient {
   private closedByClient = false;
@@ -38,12 +43,17 @@ export class RealtimeClient {
     const socket = this.socket;
     if (socket) {
       socket.removeEventListener("message", this.handleMessage);
+      socket.removeEventListener("open", this.handleOpen);
       socket.removeEventListener("close", this.handleClose);
     }
     this.socket = null;
     if (!this.closedByClient) {
+      this.notifyStatus("disconnected");
       this.scheduleReconnect();
     }
+  };
+  private readonly handleOpen = () => {
+    this.notifyStatus("connected");
   };
   private readonly handleMessage = (event: MessageEventLike) => {
     const byteLength = byteLengthFromText(event.data);
@@ -97,6 +107,7 @@ export class RealtimeClient {
     this.closedByClient = false;
     this.reconnectCancel?.();
     this.reconnectCancel = null;
+    this.notifyStatus("connecting");
 
     const url = this.connectionUrl();
     const socket = this.options.createSocket?.(
@@ -117,6 +128,7 @@ export class RealtimeClient {
       status: null,
     });
     socket.addEventListener("message", this.handleMessage);
+    socket.addEventListener("open", this.handleOpen);
     socket.addEventListener("close", this.handleClose);
     this.socket = socket;
   }
@@ -126,13 +138,20 @@ export class RealtimeClient {
     this.reconnectCancel?.();
     this.reconnectCancel = null;
     if (!this.socket) {
+      this.notifyStatus("idle");
       return;
     }
 
     this.socket.removeEventListener("message", this.handleMessage);
+    this.socket.removeEventListener("open", this.handleOpen);
     this.socket.removeEventListener("close", this.handleClose);
     this.socket.close();
     this.socket = null;
+    this.notifyStatus("idle");
+  }
+
+  private notifyStatus(status: RealtimeConnectionStatus): void {
+    this.options.onStatusChange?.(status);
   }
 
   private scheduleReconnect(): void {

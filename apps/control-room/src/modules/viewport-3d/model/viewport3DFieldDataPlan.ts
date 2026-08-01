@@ -52,6 +52,7 @@ export interface Viewport3DScalarRangePolicy {
 export interface Viewport3DTargetRenderPlan {
   colorbar: {
     inspectorVisible: boolean;
+    scalarColorMode: string | null;
     viewportVisible: boolean;
   };
   label: string;
@@ -234,10 +235,21 @@ export function buildViewport3DTargetRenderPlan({
     visible && settings.shaderVisible
       ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
       : null;
-  const colorbarAvailable = fieldColorModeScalarComponent(scalarColorMode) !== null;
+  const vectorScalarColorMode =
+    visible && settings.vectorsVisible
+      ? settings.vectorColorMode
+      : null;
+  const colorbarScalarColorMode =
+    fieldColorModeScalarComponent(scalarColorMode) !== null
+      ? scalarColorMode
+      : fieldColorModeScalarComponent(vectorScalarColorMode) !== null
+        ? vectorScalarColorMode
+        : null;
+  const colorbarAvailable = colorbarScalarColorMode !== null;
   return {
     colorbar: {
       inspectorVisible: colorbarAvailable,
+      scalarColorMode: colorbarScalarColorMode,
       viewportVisible:
         visible && settings.viewportColorbarVisible && colorbarAvailable,
     },
@@ -329,9 +341,9 @@ export function buildViewport3DPassDemands(
     });
   }
 
-  if (plan.colorbar.viewportVisible && plan.shader.scalarColorMode) {
+  if (plan.colorbar.viewportVisible && plan.colorbar.scalarColorMode) {
     demands.push({
-      component: componentDemandForColorMode(plan.shader.scalarColorMode),
+      component: componentDemandForColorMode(plan.colorbar.scalarColorMode),
       completeness: "complete",
       maxSamples: null,
       passId: `${plan.targetId}:colorbar`,

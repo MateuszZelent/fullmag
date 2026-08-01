@@ -3,9 +3,9 @@ use super::math::flatten_vectors_f64;
 #[cfg(feature = "cuda")]
 use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
-use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "cuda")]
 use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
+#[cfg(feature = "cuda")]
+use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
 use crate::types::RunError;
 #[cfg(feature = "cuda")]
@@ -119,7 +119,10 @@ impl NativeFdmBackend {
                         .unwrap_or(0.0),
                     uniaxial_anisotropy_k2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                     anisotropy_axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
-                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some() {
+                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some()
+                        || layer.material.cubic_anisotropy_kc2.is_some()
+                        || layer.material.cubic_anisotropy_kc3.is_some()
+                    {
                         1
                     } else {
                         0
@@ -359,9 +362,7 @@ impl NativeFdmBackend {
                     plan.cell_size[2],
                     plan.periodicity
                         .as_ref()
-                        .map(|pbc| {
-                            [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)]
-                        })
+                        .map(|pbc| [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)])
                         .unwrap_or([false, false, false]),
                     image_counts,
                 ))
@@ -500,7 +501,10 @@ impl NativeFdmBackend {
             ku1_field: std::ptr::null(),
             ku2_field: std::ptr::null(),
 
-            has_cubic_anisotropy: if plan.material.cubic_anisotropy_kc1.is_some() {
+            has_cubic_anisotropy: if plan.material.cubic_anisotropy_kc1.is_some()
+                || plan.material.cubic_anisotropy_kc2.is_some()
+                || plan.material.cubic_anisotropy_kc3.is_some()
+            {
                 1
             } else {
                 0
@@ -535,6 +539,11 @@ impl NativeFdmBackend {
             mel_strain: plan.mel_uniform_strain.unwrap_or([0.0; 6]),
 
             temperature: plan.temperature.unwrap_or(0.0),
+            thermal_seed: plan
+                .thermal_seed_config
+                .as_ref()
+                .and_then(|config| config.seed)
+                .unwrap_or(0),
 
             demag_kernel_xx_spectrum: demag_kernel_spectra
                 .as_ref()

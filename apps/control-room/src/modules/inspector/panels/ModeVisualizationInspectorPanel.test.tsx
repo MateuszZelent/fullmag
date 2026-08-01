@@ -23,6 +23,14 @@ const mockKernel = {
     emit: () => {},
     on: () => () => {},
   },
+  layout: {
+    get: () => ({
+      activeViewportMainModuleId: "viewport-3d",
+      lastSpatialViewportMainModuleId: "viewport-3d",
+    }),
+    setActiveViewportMainModule: () => {},
+    subscribe: () => () => {},
+  },
   resources: {
     getRevision: () => 0,
     subscribe: () => () => {},

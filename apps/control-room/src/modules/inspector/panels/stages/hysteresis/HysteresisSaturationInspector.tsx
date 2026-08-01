@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisSaturationInspector({
@@ -15,8 +15,7 @@ export function HysteresisSaturationInspector({
 >) {
   const saturationNotice = hysteresisSaturationStatusNotice(metrics?.saturation_status ?? null);
   return (
-    <InspectorSection
-      value="hysteresis-saturation"
+    <InspectorGroup
       title="Auto-Saturation"
       badge={draft?.saturationMode || "none"}
     >
@@ -48,7 +47,7 @@ export function HysteresisSaturationInspector({
           <FieldRow label="Probe points" value={String(saturationPoints.length)} />
         </>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
