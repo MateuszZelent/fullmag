@@ -2729,6 +2729,47 @@ generate-fem-gpu-performance-fixtures:
         --write-fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
         --write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json'
 
+# Task 1 writes only meshes exported from the canonical execution-plan metadata.
+# The recipe is intentionally separate from the historical v1 generator until
+# the managed runtime can be regenerated and the strict builder gate passes.
+generate-fem-performance-fixture-v2:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_GMSH_THREADS=1 \
+      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+        --meshes coarse \
+        --scenarios box500_airbox_exchange_demag \
+        --relax-algorithms nonlinear_cg \
+        --demag-rtols 1e-12 \
+        --demag-amg-relax-types 6 \
+        --steps 1 \
+        --reuse-generated-domain-mesh \
+        --generated-domain-mesh-cache-dir examples/assets/fem_performance \
+        --write-fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json \
+        --write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v2.json'
+
+verify-fem-performance-fixture-v2:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    test -f examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json
+    test -f examples/assets/fem_performance/amg_qualification_suite_v2.json
+    target_slug="$(basename "$PWD" | sed 's/[^A-Za-z0-9._-]/-/g')"; \
+      target_digest="$(printf '%s' "$PWD" | sha256sum | cut -c1-64)"; \
+      target_dir="/mnt/fullmag-zfn2-native/managed-fem-runtime/${target_slug}-${target_digest}"; \
+      test -d "$target_dir" && test -w "$target_dir"; \
+      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+        -v "$target_dir:/workspace/target" \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        -e FULLMAG_PYTHON=/usr/bin/python3 \
+        -e FULLMAG_FEM_EXECUTION=cpu \
+        fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+          build_dir=/workspace/target/task1-performance-fixture-v2/native; \
+          cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON; \
+          cmake --build "$build_dir" --target fem_mixed_p1_contract; \
+          LD_LIBRARY_PATH="$build_dir/backends/fem:${LD_LIBRARY_PATH:-}" FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu "$build_dir/backends/fem/fem_mixed_p1_contract"; \
+          python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v2.json >/dev/null'
+
 verify-fem-gpu-performance-regression:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
     COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \

@@ -323,8 +323,10 @@ NATIVE_FEM_LIBRARY_NAMES = (
     "libfullmag_fem.dylib",
     "fullmag_fem.dll",
 )
-PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
-PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
+PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v2"
+PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v2"
+LEGACY_PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
+LEGACY_PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
 TASK11_QUALIFICATION_IDENTITY_SCHEMA = (
     "fullmag.fem_gpu.relaxation_preconditioner_qualification_identity.v1"
 )
@@ -357,8 +359,148 @@ class PerformanceFixture:
     relaxation_algorithm: str
     node_count: int
     element_count: int
+    cell_count: int
+    facet_count: int
+    exterior_facet_count: int
+    interface_facet_count: int
     demag_policy: dict[str, object]
     stop_condition: dict[str, object]
+
+
+_PERFORMANCE_FIXTURE_CELL_FACES = {
+    "tet4": ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1)),
+    "prism6": ((0, 2, 1), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)),
+    "pyramid5": ((3, 2, 1, 0), (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)),
+    "hex8": (
+        (3, 2, 1, 0),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+        (4, 5, 6, 7),
+    ),
+}
+_PERFORMANCE_FIXTURE_CELL_ARITIES = {
+    "tet4": 4,
+    "prism6": 6,
+    "pyramid5": 5,
+    "hex8": 8,
+}
+_PERFORMANCE_FIXTURE_FACET_ARITIES = {"tri3": 3, "quad4": 4}
+
+
+def _typed_connectivity_items(
+    connectivity: Mapping[str, object],
+    *,
+    kind: str,
+    arities: Mapping[str, int],
+) -> list[tuple[str, tuple[int, ...]]]:
+    """Decode one canonical CSR connectivity block and validate its shape."""
+    types = connectivity.get("types")
+    offsets = connectivity.get("offsets")
+    nodes = connectivity.get("nodes")
+    if not isinstance(types, list):
+        raise ValueError(f"typed performance fixture mesh is missing {kind}.types")
+    if not isinstance(offsets, list) or len(offsets) != len(types) + 1:
+        raise ValueError(f"typed performance fixture mesh has invalid {kind}.offsets")
+    if not isinstance(nodes, list):
+        raise ValueError(f"typed performance fixture mesh is missing {kind}.nodes")
+    if offsets[:1] != [0] or offsets[-1:] != [len(nodes)]:
+        raise ValueError(f"typed performance fixture mesh has invalid {kind} CSR bounds")
+    if any(
+        not isinstance(value, int) or value < 0 for value in offsets + nodes
+    ) or any(left > right for left, right in zip(offsets, offsets[1:])):
+        raise ValueError(f"typed performance fixture mesh has invalid {kind} connectivity")
+
+    items: list[tuple[str, tuple[int, ...]]] = []
+    for index, item_type in enumerate(types):
+        if not isinstance(item_type, str) or item_type not in arities:
+            raise ValueError(
+                f"typed performance fixture mesh has unknown {kind} type {item_type!r}"
+            )
+        item_nodes = tuple(nodes[offsets[index] : offsets[index + 1]])
+        if len(item_nodes) != arities[item_type]:
+            raise ValueError(
+                f"typed performance fixture mesh {kind} {index} has invalid arity"
+            )
+        items.append((item_type, item_nodes))
+    return items
+
+
+def typed_mesh_topology_counts(mesh: Mapping[str, object]) -> dict[str, int]:
+    """Validate typed connectivity and return canonical topology role counts.
+
+    This deliberately accepts only the execution-plan typed representation. The
+    legacy ``elements``/``boundary_faces`` representation is not converted here;
+    strict-builder ownership semantics cannot be reconstructed from it.
+    """
+    nodes = mesh.get("nodes")
+    cells = mesh.get("cells")
+    facets = mesh.get("facets")
+    if not isinstance(nodes, list):
+        raise ValueError("typed performance fixture mesh is missing nodes")
+    if not isinstance(cells, Mapping):
+        raise ValueError("typed performance fixture mesh is missing cells")
+    if not isinstance(facets, Mapping):
+        raise ValueError("typed performance fixture mesh is missing facets")
+
+    cell_items = _typed_connectivity_items(
+        cells, kind="cells", arities=_PERFORMANCE_FIXTURE_CELL_ARITIES
+    )
+    facet_items = _typed_connectivity_items(
+        facets, kind="facets", arities=_PERFORMANCE_FIXTURE_FACET_ARITIES
+    )
+    if any(
+        node_index >= len(nodes)
+        for _, item_nodes in cell_items + facet_items
+        for node_index in item_nodes
+    ):
+        raise ValueError("typed performance fixture mesh connectivity exceeds node count")
+
+    roles = facets.get("roles")
+    if not isinstance(roles, list):
+        raise ValueError("typed performance fixture mesh is missing facets.roles")
+    if len(roles) != len(facet_items):
+        raise ValueError(
+            "typed performance fixture mesh facets.roles length differs from facets.types"
+        )
+
+    owner_counts: dict[tuple[int, ...], int] = {}
+    for cell_type, cell_nodes in cell_items:
+        for face in _PERFORMANCE_FIXTURE_CELL_FACES[cell_type]:
+            key = tuple(sorted(cell_nodes[index] for index in face))
+            owner_counts[key] = owner_counts.get(key, 0) + 1
+
+    exterior_count = 0
+    interface_count = 0
+    for index, ((_, facet_nodes), role) in enumerate(
+        zip(facet_items, roles, strict=True)
+    ):
+        owner_count = owner_counts.get(tuple(sorted(facet_nodes)), 0)
+        if role == "exterior":
+            if owner_count != 1:
+                raise ValueError(
+                    f"typed performance fixture exterior facet {index} has {owner_count} owners"
+                )
+            exterior_count += 1
+        elif role == "material_interface":
+            if owner_count != 2:
+                raise ValueError(
+                    f"typed performance fixture interface facet {index} has {owner_count} owners"
+                )
+            interface_count += 1
+        else:
+            raise ValueError(
+                f"typed performance fixture mesh has unknown facet role {role!r}"
+            )
+
+    return {
+        "node_count": len(nodes),
+        "cell_count": len(cell_items),
+        "facet_count": len(facet_items),
+        "exterior_facet_count": exterior_count,
+        "interface_facet_count": interface_count,
+    }
 
 
 def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
@@ -2548,7 +2690,8 @@ def load_fixture_manifest(
             f"expected {expected_manifest_sha256}, got {manifest_sha256}"
         )
     payload = json.loads(manifest_bytes)
-    if payload.get("schema") != PERFORMANCE_FIXTURE_SCHEMA:
+    schema = payload.get("schema")
+    if schema not in {PERFORMANCE_FIXTURE_SCHEMA, LEGACY_PERFORMANCE_FIXTURE_SCHEMA}:
         raise ValueError("unsupported FEM GPU performance fixture schema")
     mesh_path = (manifest_path.parent / str(payload["solver_mesh_path"])).resolve()
     actual_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
@@ -2557,6 +2700,22 @@ def load_fixture_manifest(
         raise ValueError(
             f"solver mesh sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
         )
+    if schema == PERFORMANCE_FIXTURE_SCHEMA:
+        mesh_payload = json.loads(mesh_path.read_bytes())
+        topology_counts = typed_mesh_topology_counts(mesh_payload)
+        for key, value in topology_counts.items():
+            if payload.get(key) != value:
+                raise ValueError(
+                    "solver mesh typed topology counts differ from fixture manifest"
+                )
+    else:
+        topology_counts = {
+            "node_count": int(payload["node_count"]),
+            "cell_count": int(payload["element_count"]),
+            "facet_count": int(payload.get("boundary_face_count", 0)),
+            "exterior_facet_count": int(payload.get("boundary_face_count", 0)),
+            "interface_facet_count": 0,
+        }
     return PerformanceFixture(
         manifest_path=manifest_path,
         manifest_sha256=manifest_sha256,
@@ -2566,8 +2725,12 @@ def load_fixture_manifest(
         problem_ir_sha256=str(payload["problem_ir_sha256"]),
         scenario=str(payload["scenario"]),
         relaxation_algorithm=str(payload["relaxation_algorithm"]),
-        node_count=int(payload["node_count"]),
-        element_count=int(payload["element_count"]),
+        node_count=topology_counts["node_count"],
+        element_count=topology_counts["cell_count"],
+        cell_count=topology_counts["cell_count"],
+        facet_count=topology_counts["facet_count"],
+        exterior_facet_count=topology_counts["exterior_facet_count"],
+        interface_facet_count=topology_counts["interface_facet_count"],
         demag_policy=dict(payload["demag_policy"]),
         stop_condition=dict(payload["stop_condition"]),
     )
@@ -2575,7 +2738,11 @@ def load_fixture_manifest(
 
 def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema") != PERFORMANCE_FIXTURE_SUITE_SCHEMA:
+    schema = payload.get("schema")
+    if schema not in {
+        PERFORMANCE_FIXTURE_SUITE_SCHEMA,
+        LEGACY_PERFORMANCE_FIXTURE_SUITE_SCHEMA,
+    }:
         raise ValueError("unsupported FEM AMG qualification fixture suite schema")
     fixtures = payload.get("fixtures")
     if not isinstance(fixtures, list) or len(fixtures) != 3:
@@ -2605,12 +2772,16 @@ def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
                 f"FEM AMG qualification mesh sha256 mismatch: {mesh_path}"
             )
         mesh = json.loads(mesh_bytes)
-        if len(mesh.get("nodes", [])) != fixture.get("node_count") or len(
+        if schema == PERFORMANCE_FIXTURE_SUITE_SCHEMA:
+            counts = typed_mesh_topology_counts(mesh)
+            if any(counts[key] != fixture.get(key) for key in counts):
+                raise ValueError(
+                    f"FEM AMG qualification mesh typed topology mismatch: {mesh_path}"
+                )
+        elif len(mesh.get("nodes", [])) != fixture.get("node_count") or len(
             mesh.get("elements", [])
         ) != fixture.get("element_count"):
-            raise ValueError(
-                f"FEM AMG qualification mesh size mismatch: {mesh_path}"
-            )
+            raise ValueError(f"FEM AMG qualification mesh size mismatch: {mesh_path}")
         resolved.append({**fixture, "solver_mesh_path": str(mesh_path)})
     return resolved
 
@@ -5170,13 +5341,45 @@ def qualification_mesh_size(mesh_path: Path) -> str | None:
 
 def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
     payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+    cells = payload.get("cells")
+    typed_cell_types = cells.get("types") if isinstance(cells, Mapping) else None
+    elements = payload.get("elements")
+    element_count = (
+        len(elements)
+        if isinstance(elements, list)
+        else len(typed_cell_types)
+        if isinstance(typed_cell_types, list)
+        else 0
+    )
+    facets = payload.get("facets")
+    typed_facets = facets.get("types") if isinstance(facets, Mapping) else None
+    roles = facets.get("roles") if isinstance(facets, Mapping) else None
+    typed_facet_count = len(typed_facets) if isinstance(typed_facets, list) else None
     return {
         "mesh_name": payload.get("mesh_name", mesh_path.stem),
         "mesh_path": str(mesh_path),
         "mesh_size": qualification_mesh_size(mesh_path),
         "node_count": len(payload.get("nodes", [])),
-        "element_count": len(payload.get("elements", [])),
+        "element_count": element_count,
         "boundary_face_count": len(payload.get("boundary_faces", [])),
+        **(
+            {
+                "cell_count": element_count,
+                "facet_count": typed_facet_count,
+                "exterior_facet_count": sum(
+                    role == "exterior" for role in roles
+                )
+                if isinstance(roles, list)
+                else None,
+                "interface_facet_count": sum(
+                    role == "material_interface" for role in roles
+                )
+                if isinstance(roles, list)
+                else None,
+            }
+            if isinstance(typed_cell_types, list) and isinstance(typed_facets, list)
+            else {}
+        ),
         "periodic_boundary_pair_count": len(payload.get("periodic_boundary_pairs", [])),
         "periodic_node_pair_count": len(payload.get("periodic_node_pairs", [])),
     }
@@ -5546,6 +5749,10 @@ def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str
         has_magnetic = any(marker != 0 for marker in element_markers)
         stats["solver_mesh_has_air"] = has_air and has_magnetic
     stats["solver_mesh_signature"] = mesh_signature(mesh)
+    if isinstance(mesh.get("cells"), Mapping) and isinstance(
+        mesh.get("facets"), Mapping
+    ):
+        stats.update(typed_mesh_topology_counts(mesh))
     for source_key, output_key in (
         ("nodes", "node_count"),
         ("elements", "element_count"),
@@ -5557,6 +5764,26 @@ def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str
         if isinstance(value, list):
             stats[output_key] = len(value)
     return stats
+
+
+def execution_plan_typed_mesh(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    """Extract and validate the canonical typed FEM mesh from runtime metadata."""
+    if metadata is None:
+        raise ValueError("runtime did not publish execution-plan metadata")
+    execution_plan = metadata.get("execution_plan")
+    if not isinstance(execution_plan, Mapping):
+        raise ValueError("runtime metadata is missing execution_plan")
+    backend_plan = execution_plan.get("backend_plan")
+    if not isinstance(backend_plan, Mapping) or str(
+        backend_plan.get("kind", "")
+    ).lower() not in {"fem", "fem_eigen"}:
+        raise ValueError("runtime metadata is missing a canonical FEM execution plan")
+    mesh = backend_plan.get("mesh")
+    if not isinstance(mesh, Mapping):
+        raise ValueError("canonical FEM execution plan is missing its typed mesh")
+    typed_mesh = json.loads(json.dumps(mesh))
+    typed_mesh_topology_counts(typed_mesh)
+    return typed_mesh
 
 
 def parse_benchmark_result(output: str) -> dict[str, object] | None:
@@ -6275,7 +6502,9 @@ def load_task11_qualification_identity(
                     canonical_problem_ir_bytes(problem_ir)
                 ).hexdigest(),
                 "node_count": fixture["node_count"],
-                "element_count": fixture["element_count"],
+                "element_count": fixture.get(
+                    "cell_count", fixture.get("element_count")
+                ),
             }
         )
     return {
@@ -6370,7 +6599,7 @@ def performance_fixture_mesh_path(manifest_path: Path, resolution: str) -> Path:
     if resolution == "fine":
         name = manifest_path.name.removesuffix(".fixture.json") + ".mesh.json"
     else:
-        name = f"box500_airbox_exchange_demag_amg_{resolution}_v1.mesh.json"
+        name = f"box500_airbox_exchange_demag_amg_{resolution}_v2.mesh.json"
     return manifest_path.parent / name
 
 
@@ -6383,7 +6612,7 @@ def write_performance_fixture_files(
         Path(args.write_fixture_manifest)
         if args.write_fixture_manifest is not None
         else Path(args.write_fixture_suite).parent
-        / "box500_airbox_exchange_demag_v1.fixture.json"
+        / "box500_airbox_exchange_demag_v2.fixture.json"
     )
     suite_path = (
         Path(args.write_fixture_suite)
@@ -6412,39 +6641,61 @@ def write_performance_fixture_files(
                 PERFORMANCE_FIXTURE_TORQUE_TARGET_APM
             ),
         }
-        export_generated_domain_mesh(
-            mesh_path=input_mesh_path,
-            scenario=PERFORMANCE_FIXTURE_SCENARIO,
-            integrator="heun",
-            steps=1,
-            dt=args.dt,
-            timestep_policy="fixed",
-            thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
-            extra_env=fixture_env,
-            output_path=mesh_path,
-            timeout_s=args.case_timeout_s,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix=f"fullmag_fem_fixture_{resolution}_", dir=manifest_path.parent
+        ) as temporary_dir:
+            generated_mesh_path = Path(temporary_dir) / "generated-domain.mesh.json"
+            export_generated_domain_mesh(
+                mesh_path=input_mesh_path,
+                scenario=PERFORMANCE_FIXTURE_SCENARIO,
+                integrator="heun",
+                steps=1,
+                dt=args.dt,
+                timestep_policy="fixed",
+                thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
+                extra_env=fixture_env,
+                output_path=generated_mesh_path,
+                timeout_s=args.case_timeout_s,
+            )
+            realization_row = run_backend(
+                backend_label="fem_cpu",
+                binary=FULLMAG_CPU,
+                mesh_path=input_mesh_path,
+                scenario=PERFORMANCE_FIXTURE_SCENARIO,
+                integrator="heun",
+                relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
+                steps=1,
+                dt=args.dt,
+                timestep_policy="fixed",
+                thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
+                timeout_s=args.case_timeout_s,
+                ui_surface=args.ui_surface,
+                extra_env={
+                    "FULLMAG_FEM_EXECUTION": "cpu",
+                    "FULLMAG_BENCH_DOMAIN_MESH": str(generated_mesh_path),
+                    **fixture_env,
+                },
+                canonical_mesh_output_path=mesh_path,
+            )
+        if realization_row.get("status") != "ok":
+            raise RuntimeError(
+                f"canonical typed mesh realization failed for {resolution}: "
+                f"{realization_row.get('error') or realization_row.get('returncode')}"
+            )
         mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        topology_counts = typed_mesh_topology_counts(mesh_payload)
+        if resolution == "fine" and topology_counts != {
+            "node_count": 1200,
+            "cell_count": 5138,
+            "facet_count": 1504,
+            "exterior_facet_count": 1440,
+            "interface_facet_count": 64,
+        }:
+            raise RuntimeError(
+                "blocked_by_measurement: canonical fine typed mesh identity differs "
+                f"from the approved fixture: {topology_counts}"
+            )
         mesh_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
-        realization_row = run_backend(
-            backend_label="fem_cpu",
-            binary=FULLMAG_CPU,
-            mesh_path=input_mesh_path,
-            scenario=PERFORMANCE_FIXTURE_SCENARIO,
-            integrator="heun",
-            relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
-            steps=1,
-            dt=args.dt,
-            timestep_policy="fixed",
-            thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
-            timeout_s=args.case_timeout_s,
-            ui_surface=args.ui_surface,
-            extra_env={
-                "FULLMAG_FEM_EXECUTION": "cpu",
-                "FULLMAG_BENCH_DOMAIN_MESH": str(mesh_path),
-                **fixture_env,
-            },
-        )
         fixture_problem_ir = canonical_problem_ir(
             mesh_path=input_mesh_path,
             domain_mesh_path=mesh_path,
@@ -6466,8 +6717,7 @@ def write_performance_fixture_files(
             "solver_mesh_sha256": mesh_sha256,
             "solver_mesh_signature": fixture_solver_mesh_signature(realization_row),
             "problem_ir_sha256": problem_ir_sha256,
-            "node_count": len(mesh_payload.get("nodes", [])),
-            "element_count": len(mesh_payload.get("elements", [])),
+            **topology_counts,
             "domain_hmax_m": domain_hmax,
             "airbox_hmax_m": airbox_hmax,
         }
@@ -6539,6 +6789,7 @@ def run_backend(
     capture_final_magnetization: bool = False,
     require_reported_execution_identity: bool = False,
     ui_surface: str = "headless",
+    canonical_mesh_output_path: Path | None = None,
 ) -> dict[str, object]:
     row = {
         "backend": backend_label,
@@ -6797,6 +7048,13 @@ def run_backend(
             - child_cpu_started.ru_stime
         )
         metadata = load_run_metadata(execution_dir)
+        if completed.returncode == 0 and canonical_mesh_output_path is not None:
+            canonical_mesh = execution_plan_typed_mesh(metadata)
+            canonical_mesh_output_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_mesh_output_path.write_text(
+                json.dumps(canonical_mesh, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         final_scalar_row = load_final_scalar_row(execution_dir)
         artifact_payload = load_authoritative_benchmark_payload(execution_dir)
         energy_monotonicity_evidence = load_energy_monotonicity_evidence(execution_dir)

@@ -111,6 +111,130 @@ def write_performance_fixture(
     return manifest
 
 
+def _typed_v2_test_mesh() -> dict[str, object]:
+    """Return a small typed mesh with one exterior and one interface facet."""
+    return {
+        "mesh_name": "typed-v2-test",
+        "nodes": [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        "cells": {
+            "types": ["tet4", "tet4"],
+            "offsets": [0, 4, 8],
+            "nodes": [0, 1, 2, 3, 0, 2, 1, 4],
+            "global_ordinals": [0, 1],
+        },
+        "element_markers": [1, 0],
+        "facets": {
+            "types": ["tri3", "tri3"],
+            "roles": ["material_interface", "exterior"],
+            "offsets": [0, 3, 6],
+            "nodes": [0, 1, 2, 0, 1, 3],
+            "global_ordinals": [0, 1],
+        },
+        "boundary_markers": [2, 3],
+    }
+
+
+def test_legacy_fixture_is_not_strict() -> None:
+    benchmark = load_benchmark_module()
+    mesh_path = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.mesh.json"
+    )
+    mesh = json.loads(mesh_path.read_text(encoding="utf-8"))
+    owners: dict[tuple[int, ...], int] = {}
+    for element in mesh["elements"]:
+        for face in (
+            (element[0], element[1], element[2]),
+            (element[0], element[1], element[3]),
+            (element[0], element[2], element[3]),
+            (element[1], element[2], element[3]),
+        ):
+            key = tuple(sorted(face))
+            owners[key] = owners.get(key, 0) + 1
+    owner_counts = [owners[tuple(sorted(face))] for face in mesh["boundary_faces"]]
+    assert owner_counts.count(2) == 64
+    assert any(count != 1 for count in owner_counts)
+    with pytest.raises(ValueError, match="typed performance fixture mesh"):
+        benchmark.typed_mesh_topology_counts(mesh)
+
+
+def test_typed_mesh_topology_counts_requires_exact_roles_and_owners() -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    assert benchmark.typed_mesh_topology_counts(mesh) == {
+        "node_count": 5,
+        "cell_count": 2,
+        "facet_count": 2,
+        "exterior_facet_count": 1,
+        "interface_facet_count": 1,
+    }
+
+    invalid = json.loads(json.dumps(mesh))
+    invalid["facets"]["roles"][0] = "exterior"
+    with pytest.raises(ValueError, match="exterior facet 0 has 2 owners"):
+        benchmark.typed_mesh_topology_counts(invalid)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing_cells_types", "missing cells.types"),
+        ("missing_facets_types", "missing facets.types"),
+        ("unknown_role", "unknown facet role"),
+        ("one_owner_interface", "interface facet 0 has 1 owners"),
+    ],
+)
+def test_typed_mesh_topology_counts_rejects_malformed_schema(
+    mutation: str, message: str
+) -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    if mutation == "missing_cells_types":
+        del mesh["cells"]["types"]
+    elif mutation == "missing_facets_types":
+        del mesh["facets"]["types"]
+    elif mutation == "unknown_role":
+        mesh["facets"]["roles"][0] = "invented"
+    elif mutation == "one_owner_interface":
+        mesh["facets"]["nodes"][:3] = [0, 1, 3]
+    else:  # pragma: no cover - parametrization protects this branch
+        raise AssertionError(mutation)
+    with pytest.raises(ValueError, match=message):
+        benchmark.typed_mesh_topology_counts(mesh)
+
+
+def test_typed_fixture_v2_manifest_preserves_topology_identity(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    mesh_path = tmp_path / "typed.mesh.json"
+    mesh_path.write_text(json.dumps(_typed_v2_test_mesh()), encoding="utf-8")
+    counts = benchmark.typed_mesh_topology_counts(
+        json.loads(mesh_path.read_text(encoding="utf-8"))
+    )
+    manifest = {
+        "schema": "fullmag.fem_gpu.performance_fixture.v2",
+        "solver_mesh_path": mesh_path.name,
+        "solver_mesh_sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
+        "solver_mesh_signature": "fixture-mesh",
+        "problem_ir_sha256": "a" * 64,
+        **counts,
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "nonlinear_cg",
+        "demag_policy": {"solver": "CG", "preconditioner": "AMG", "rtol": 1e-12},
+        "stop_condition": {"kind": "torque_or_max_steps", "max_steps": 1},
+    }
+    manifest_path = tmp_path / "typed.fixture.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    fixture = benchmark.load_fixture_manifest(manifest_path)
+    assert fixture.node_count == counts["node_count"]
+    assert fixture.element_count == counts["cell_count"]
+
+
 def test_benchmark_summary_reports_distribution() -> None:
     benchmark = load_benchmark_module()
     summary = benchmark.summarize_distribution([10.0, 11.0, 12.0, 20.0, 30.0])
@@ -1865,6 +1989,21 @@ def test_fixture_generation_recipe_uses_managed_runtime() -> None:
     assert "--reuse-generated-domain-mesh" in recipe
     assert "--write-fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json" in recipe
     assert "--write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json" in recipe
+
+
+def test_typed_fixture_v2_recipes_are_managed_and_strict() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    generation = just_recipe_source(justfile, "generate-fem-performance-fixture-v2")
+    verification = just_recipe_source(justfile, "verify-fem-performance-fixture-v2")
+    assert "just ensure-managed-fem-runtime" in generation
+    assert "FULLMAG_GMSH_THREADS=1" in generation
+    assert "--demag-rtols 1e-12" in generation
+    assert "--demag-amg-relax-types 6" in generation
+    assert "box500_airbox_exchange_demag_v2.fixture.json" in generation
+    assert "amg_qualification_suite_v2.json" in generation
+    assert "--target fem_mixed_p1_contract" in verification
+    assert "FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu" in verification
+    assert "--list-amg-qualification-fixture-suite" in verification
 
 
 def test_runtime_restore_manifest_rejects_library_hash_drift(tmp_path) -> None:
