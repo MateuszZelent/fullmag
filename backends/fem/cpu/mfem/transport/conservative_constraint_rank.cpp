@@ -1,12 +1,12 @@
 #include "cpu/mfem/transport/conservative_constraint_rank.hpp"
 
-#include <boost/multiprecision/cpp_dec_float.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <boost/rational.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <set>
@@ -34,6 +34,30 @@ std::uint64_t checked_add(
     return left + right;
 }
 
+std::uint64_t checked_multiply(
+    std::uint64_t left,
+    std::uint64_t right,
+    const char *what)
+{
+    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left) {
+        throw ConstraintRankResourceLimitExceeded(
+            std::string("constraint-rank counter overflow: ") + what);
+    }
+    return left * right;
+}
+
+std::uint64_t checked_subtract(
+    std::uint64_t left,
+    std::uint64_t right,
+    const char *what)
+{
+    if (right > left) {
+        throw std::runtime_error(
+            std::string("constraint-rank accounting underflow: ") + what);
+    }
+    return left - right;
+}
+
 std::uint64_t integer_bit_length(const BigInteger &value)
 {
     if (value == 0) {
@@ -54,190 +78,269 @@ bool strict_nonzero_element_key(const std::array<std::uint64_t, 4> &key)
 
 class ResourceBudget {
 public:
-    explicit ResourceBudget(ResourceCounts counts) : counts_(counts)
+    ResourceBudget(ResourceCounts counts, ResourceCounts limits)
+        : counts_(counts), limits_(limits)
     {
-        ConservativeConstraintRank::ValidateResourceCounts(counts_);
+        validate();
     }
 
     void add_work(std::uint64_t amount)
     {
         counts_.bareiss_work_units = checked_add(
             counts_.bareiss_work_units, amount, "work units");
-        ConservativeConstraintRank::ValidateResourceCounts(counts_);
+        validate();
     }
 
-    void observe_integer(const BigInteger &value)
+    void observe_exact_state(
+        std::uint64_t nonzeros,
+        std::uint64_t storage_bits,
+        std::uint64_t maximum_bit_length)
     {
+        counts_.maximum_intermediate_nonzeros = std::max(
+            counts_.maximum_intermediate_nonzeros, nonzeros);
+        counts_.intermediate_storage_bits = std::max(
+            counts_.intermediate_storage_bits, storage_bits);
         counts_.maximum_intermediate_bit_length = std::max(
             counts_.maximum_intermediate_bit_length,
-            integer_bit_length(value));
-        ConservativeConstraintRank::ValidateResourceCounts(counts_);
-    }
-
-    void observe_sparse_integer_matrix(
-        const std::vector<SparseIntegerRow> &matrix)
-    {
-        std::uint64_t nonzeros = 0;
-        std::uint64_t storage_bits = 0;
-        for (const auto &row : matrix) {
-            nonzeros = checked_add(nonzeros,
-                static_cast<std::uint64_t>(row.size()),
-                "intermediate nonzeros");
-            for (const auto &[column, value] : row) {
-                (void)column;
-                const auto bits = integer_bit_length(value);
-                storage_bits = checked_add(
-                    storage_bits, bits, "intermediate storage bits");
-                counts_.maximum_intermediate_bit_length = std::max(
-                    counts_.maximum_intermediate_bit_length, bits);
-            }
-        }
-        counts_.maximum_intermediate_nonzeros = std::max(
-            counts_.maximum_intermediate_nonzeros, nonzeros);
-        counts_.intermediate_storage_bits = std::max(
-            counts_.intermediate_storage_bits, storage_bits);
-        ConservativeConstraintRank::ValidateResourceCounts(counts_);
-    }
-
-    void observe_rational(const ExactRational &value)
-    {
-        const auto numerator_bits = integer_bit_length(value.numerator());
-        const auto denominator_bits = integer_bit_length(value.denominator());
-        counts_.maximum_intermediate_bit_length = std::max({
-            counts_.maximum_intermediate_bit_length,
-            numerator_bits,
-            denominator_bits});
-        ConservativeConstraintRank::ValidateResourceCounts(counts_);
-    }
-
-    template <typename Basis>
-    void observe_rational_basis(const Basis &basis)
-    {
-        std::uint64_t nonzeros = 0;
-        std::uint64_t storage_bits = 0;
-        for (const auto &[pivot, entry] : basis) {
-            (void)pivot;
-            nonzeros = checked_add(nonzeros,
-                static_cast<std::uint64_t>(entry.coefficients.size()),
-                "rational basis nonzeros");
-            for (const auto &[column, value] : entry.coefficients) {
-                (void)column;
-                observe_rational(value);
-                storage_bits = checked_add(storage_bits,
-                    integer_bit_length(value.numerator()),
-                    "rational numerator storage");
-                storage_bits = checked_add(storage_bits,
-                    integer_bit_length(value.denominator()),
-                    "rational denominator storage");
-            }
-            observe_rational(entry.rhs);
-            storage_bits = checked_add(storage_bits,
-                integer_bit_length(entry.rhs.numerator()),
-                "rational RHS numerator storage");
-            storage_bits = checked_add(storage_bits,
-                integer_bit_length(entry.rhs.denominator()),
-                "rational RHS denominator storage");
-        }
-        counts_.maximum_intermediate_nonzeros = std::max(
-            counts_.maximum_intermediate_nonzeros, nonzeros);
-        counts_.intermediate_storage_bits = std::max(
-            counts_.intermediate_storage_bits, storage_bits);
-        ConservativeConstraintRank::ValidateResourceCounts(counts_);
+            maximum_bit_length);
+        validate();
     }
 
 private:
+    void validate() const
+    {
+        ConservativeConstraintRank::ValidateResourceCounts(counts_);
+        if (counts_.rows > limits_.rows ||
+                counts_.distinct_columns > limits_.distinct_columns ||
+                counts_.total_nonzeros > limits_.total_nonzeros ||
+                counts_.maximum_nonzeros_per_row >
+                    limits_.maximum_nonzeros_per_row ||
+                counts_.maximum_intermediate_nonzeros >
+                    limits_.maximum_intermediate_nonzeros ||
+                counts_.intermediate_storage_bits >
+                    limits_.intermediate_storage_bits ||
+                counts_.bareiss_work_units > limits_.bareiss_work_units ||
+                counts_.maximum_intermediate_bit_length >
+                    limits_.maximum_intermediate_bit_length) {
+            throw ConstraintRankResourceLimitExceeded(
+                "constraint-rank Analyze resource budget exceeded");
+        }
+    }
+
     ResourceCounts counts_;
+    ResourceCounts limits_;
 };
 
-std::size_t exact_bareiss_rank(
-    const std::vector<ConservativeConstraintRankRow> &rows,
-    const std::vector<std::size_t> &row_indices,
-    const std::map<std::uint64_t, std::size_t> &column_index,
+ResourceCounts maximum_resource_counts()
+{
+    ResourceCounts limits;
+    limits.rows = ConservativeConstraintRank::kMaximumRows;
+    limits.distinct_columns =
+        ConservativeConstraintRank::kMaximumDistinctColumns;
+    limits.total_nonzeros = ConservativeConstraintRank::kMaximumNonzeros;
+    limits.maximum_nonzeros_per_row =
+        ConservativeConstraintRank::kMaximumColumnsPerRow;
+    limits.maximum_intermediate_nonzeros =
+        ConservativeConstraintRank::kMaximumIntermediateNonzeros;
+    limits.intermediate_storage_bits =
+        ConservativeConstraintRank::kMaximumIntermediateStorageBits;
+    limits.bareiss_work_units =
+        ConservativeConstraintRank::kMaximumBareissWorkUnits;
+    limits.maximum_intermediate_bit_length =
+        ConservativeConstraintRank::kMaximumIntermediateBitLength;
+    return limits;
+}
+
+#ifdef FULLMAG_CONSTRAINT_RANK_TESTING
+ResourceCounts analyze_resource_limits = maximum_resource_counts();
+#endif
+
+ResourceCounts current_analyze_resource_limits()
+{
+#ifdef FULLMAG_CONSTRAINT_RANK_TESTING
+    return analyze_resource_limits;
+#else
+    return maximum_resource_counts();
+#endif
+}
+
+struct ExactStateSize {
+    std::uint64_t nonzeros = 0;
+    std::uint64_t storage_bits = 0;
+    std::uint64_t maximum_bit_length = 0;
+};
+
+void append_integer_size(ExactStateSize *size, const BigInteger &value)
+{
+    const auto bits = integer_bit_length(value);
+    if (value != 0) {
+        size->nonzeros = checked_add(
+            size->nonzeros, 1, "exact-state nonzeros");
+    }
+    size->storage_bits = checked_add(
+        size->storage_bits, bits, "exact-state storage bits");
+    size->maximum_bit_length = std::max(size->maximum_bit_length, bits);
+}
+
+void append_rational_size(ExactStateSize *size, const ExactRational &value)
+{
+    if (value.numerator() != 0) {
+        size->nonzeros = checked_add(
+            size->nonzeros, 1, "exact-state rational nonzeros");
+    }
+    const auto numerator_bits = integer_bit_length(value.numerator());
+    const auto denominator_bits = integer_bit_length(value.denominator());
+    size->storage_bits = checked_add(
+        size->storage_bits, numerator_bits, "rational numerator storage");
+    size->storage_bits = checked_add(
+        size->storage_bits, denominator_bits, "rational denominator storage");
+    size->maximum_bit_length = std::max({
+        size->maximum_bit_length, numerator_bits, denominator_bits});
+}
+
+void replace_integer_size(
+    ExactStateSize *size,
+    const BigInteger &old_value,
+    const BigInteger &new_value)
+{
+    const auto old_bits = integer_bit_length(old_value);
+    const auto new_bits = integer_bit_length(new_value);
+    if (old_value != 0) {
+        size->nonzeros = checked_subtract(
+            size->nonzeros, 1, "integer nonzeros");
+    }
+    if (new_value != 0) {
+        size->nonzeros = checked_add(
+            size->nonzeros, 1, "integer nonzeros");
+    }
+    size->storage_bits = checked_subtract(
+        size->storage_bits, old_bits, "integer storage bits");
+    size->storage_bits = checked_add(
+        size->storage_bits, new_bits, "integer storage bits");
+    size->maximum_bit_length = std::max(
+        size->maximum_bit_length, new_bits);
+}
+
+void replace_rational_size(
+    ExactStateSize *size,
+    const ExactRational &old_value,
+    const ExactRational &new_value)
+{
+    const auto old_numerator_bits =
+        integer_bit_length(old_value.numerator());
+    const auto old_denominator_bits =
+        integer_bit_length(old_value.denominator());
+    const auto new_numerator_bits =
+        integer_bit_length(new_value.numerator());
+    const auto new_denominator_bits =
+        integer_bit_length(new_value.denominator());
+    if (old_value.numerator() != 0) {
+        size->nonzeros = checked_subtract(
+            size->nonzeros, 1, "rational nonzeros");
+    }
+    if (new_value.numerator() != 0) {
+        size->nonzeros = checked_add(
+            size->nonzeros, 1, "rational nonzeros");
+    }
+    size->storage_bits = checked_subtract(size->storage_bits,
+        checked_add(old_numerator_bits, old_denominator_bits,
+            "old rational storage bits"),
+        "rational storage bits");
+    size->storage_bits = checked_add(size->storage_bits,
+        checked_add(new_numerator_bits, new_denominator_bits,
+            "new rational storage bits"),
+        "rational storage bits");
+    size->maximum_bit_length = std::max({size->maximum_bit_length,
+        new_numerator_bits, new_denominator_bits});
+}
+
+ExactStateSize combine_sizes(
+    const ExactStateSize &left,
+    const ExactStateSize &right)
+{
+    ExactStateSize result;
+    result.nonzeros = checked_add(
+        left.nonzeros, right.nonzeros, "combined exact-state nonzeros");
+    result.storage_bits = checked_add(
+        left.storage_bits, right.storage_bits,
+        "combined exact-state storage bits");
+    result.maximum_bit_length = std::max(
+        left.maximum_bit_length, right.maximum_bit_length);
+    return result;
+}
+
+ExactStateSize measure_row(
+    const SparseIntegerRow &coefficients,
+    const ExactRational &rhs,
     ResourceBudget *budget)
 {
-    std::vector<SparseIntegerRow> matrix;
-    matrix.reserve(row_indices.size());
-    for (const auto row_index : row_indices) {
-        SparseIntegerRow row;
-        const auto &source = rows[row_index];
-        for (std::size_t entry = 0;
-                entry < source.canonical_column_ids.size(); ++entry) {
-            row.emplace(column_index.at(source.canonical_column_ids[entry]),
-                BigInteger(source.incidence_coefficients[entry]));
-        }
-        matrix.push_back(std::move(row));
+    ExactStateSize result;
+    for (const auto &[column, value] : coefficients) {
+        (void)column;
+        budget->add_work(1);
+        append_integer_size(&result, value);
     }
-    budget->observe_sparse_integer_matrix(matrix);
-    if (matrix.empty() || column_index.empty()) {
-        return 0;
-    }
+    budget->add_work(1);
+    append_rational_size(&result, rhs);
+    return result;
+}
 
-    std::size_t pivot_row = 0;
-    BigInteger previous_pivot = 1;
-    for (std::size_t column = 0;
-            column < column_index.size() && pivot_row < matrix.size();
-            ++column) {
-        std::size_t selected = pivot_row;
-        while (selected < matrix.size() &&
-                matrix[selected].find(column) == matrix[selected].end()) {
-            ++selected;
-        }
-        if (selected == matrix.size()) {
-            continue;
-        }
-        if (selected != pivot_row) {
-            std::swap(matrix[selected], matrix[pivot_row]);
-        }
-        const BigInteger pivot = matrix[pivot_row].at(column);
-        budget->observe_integer(pivot);
+void observe_state(
+    ResourceBudget *budget,
+    const ExactStateSize &persistent,
+    const ExactStateSize &transient)
+{
+    const auto combined = combine_sizes(persistent, transient);
+    budget->observe_exact_state(combined.nonzeros, combined.storage_bits,
+        combined.maximum_bit_length);
+}
 
-        for (std::size_t row_index = pivot_row + 1;
-                row_index < matrix.size(); ++row_index) {
-            const auto eliminated = matrix[row_index].find(column);
-            const BigInteger factor = eliminated == matrix[row_index].end()
-                ? BigInteger(0) : eliminated->second;
-            std::set<std::size_t> affected_columns;
-            for (auto iterator = matrix[row_index].upper_bound(column);
-                    iterator != matrix[row_index].end(); ++iterator) {
-                affected_columns.insert(iterator->first);
-            }
-            for (auto iterator = matrix[pivot_row].upper_bound(column);
-                    iterator != matrix[pivot_row].end(); ++iterator) {
-                affected_columns.insert(iterator->first);
-            }
-            for (const auto affected : affected_columns) {
-                const auto row_value_iterator = matrix[row_index].find(affected);
-                const BigInteger row_value =
-                    row_value_iterator == matrix[row_index].end()
-                    ? BigInteger(0) : row_value_iterator->second;
-                const auto pivot_value_iterator =
-                    matrix[pivot_row].find(affected);
-                const BigInteger pivot_value =
-                    pivot_value_iterator == matrix[pivot_row].end()
-                    ? BigInteger(0) : pivot_value_iterator->second;
-                const BigInteger numerator =
-                    row_value * pivot - factor * pivot_value;
-                budget->add_work(1);
-                budget->observe_integer(numerator);
-                if (numerator % previous_pivot != 0) {
-                    throw std::runtime_error(
-                        "fraction-free Bareiss lost exact divisibility");
-                }
-                const BigInteger value = numerator / previous_pivot;
-                budget->observe_integer(value);
-                if (value == 0) {
-                    matrix[row_index].erase(affected);
-                } else {
-                    matrix[row_index][affected] = value;
-                }
-            }
-            matrix[row_index].erase(column);
-        }
-        previous_pivot = pivot;
-        ++pivot_row;
-        budget->observe_sparse_integer_matrix(matrix);
+void observe_integer_temporary(
+    ResourceBudget *budget,
+    const ExactStateSize &base,
+    const BigInteger &value)
+{
+    auto combined = base;
+    append_integer_size(&combined, value);
+    budget->observe_exact_state(combined.nonzeros, combined.storage_bits,
+        combined.maximum_bit_length);
+}
+
+void observe_rational_temporary(
+    ResourceBudget *budget,
+    const ExactStateSize &base,
+    const ExactRational &value)
+{
+    auto combined = base;
+    append_rational_size(&combined, value);
+    budget->observe_exact_state(combined.nonzeros, combined.storage_bits,
+        combined.maximum_bit_length);
+}
+
+void observe_integer_temporaries(
+    ResourceBudget *budget,
+    const ExactStateSize &base,
+    std::initializer_list<const BigInteger *> values)
+{
+    auto combined = base;
+    for (const auto *value : values) {
+        append_integer_size(&combined, *value);
     }
-    return pivot_row;
+    budget->observe_exact_state(combined.nonzeros, combined.storage_bits,
+        combined.maximum_bit_length);
+}
+
+void observe_rational_temporaries(
+    ResourceBudget *budget,
+    const ExactStateSize &base,
+    std::initializer_list<const ExactRational *> values)
+{
+    auto combined = base;
+    for (const auto *value : values) {
+        append_rational_size(&combined, *value);
+    }
+    budget->observe_exact_state(combined.nonzeros, combined.storage_bits,
+        combined.maximum_bit_length);
 }
 
 ExactRational exact_binary64(double value)
@@ -274,107 +377,371 @@ ExactRational rational_abs(const ExactRational &value)
     return value < 0 ? -value : value;
 }
 
-double rational_to_double(const ExactRational &value)
+ExactRational multiply_rational_integer(
+    const ExactRational &value,
+    const BigInteger &factor,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
 {
-    using Decimal = boost::multiprecision::cpp_dec_float_100;
-    const Decimal numerator(value.numerator());
-    const Decimal denominator(value.denominator());
-    const double result = (numerator / denominator).convert_to<double>();
-    return result == 0.0 ? 0.0 : result;
+    const BigInteger numerator = value.numerator() * factor;
+    const BigInteger denominator = value.denominator();
+    budget->add_work(1);
+    observe_integer_temporaries(
+        budget, base, {&numerator, &denominator});
+    const ExactRational result(numerator, denominator);
+    observe_rational_temporary(budget, base, result);
+    return result;
 }
 
-struct RationalBasisRow {
-    std::map<std::size_t, ExactRational> coefficients;
+ExactRational subtract_rationals(
+    const ExactRational &left,
+    const ExactRational &right,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
+{
+    const BigInteger left_product =
+        left.numerator() * right.denominator();
+    const BigInteger right_product =
+        right.numerator() * left.denominator();
+    const BigInteger denominator =
+        left.denominator() * right.denominator();
+    budget->add_work(3);
+    observe_integer_temporaries(budget, base,
+        {&left_product, &right_product, &denominator});
+    const BigInteger numerator = left_product - right_product;
+    budget->add_work(1);
+    observe_integer_temporaries(budget, base,
+        {&left_product, &right_product, &numerator, &denominator});
+    const ExactRational result(numerator, denominator);
+    observe_rational_temporary(budget, base, result);
+    return result;
+}
+
+ExactRational divide_rational_integer(
+    const ExactRational &value,
+    const BigInteger &divisor,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
+{
+    if (divisor == 0) {
+        throw std::runtime_error("fraction-free Bareiss produced a zero pivot");
+    }
+    const BigInteger numerator = value.numerator();
+    const BigInteger denominator = value.denominator() * divisor;
+    budget->add_work(1);
+    observe_integer_temporaries(
+        budget, base, {&numerator, &denominator});
+    const ExactRational result(numerator, denominator);
+    observe_rational_temporary(budget, base, result);
+    return result;
+}
+
+ExactRational multiply_rationals(
+    const ExactRational &left,
+    const ExactRational &right,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
+{
+    const BigInteger numerator = left.numerator() * right.numerator();
+    const BigInteger denominator =
+        left.denominator() * right.denominator();
+    budget->add_work(2);
+    observe_integer_temporaries(
+        budget, base, {&numerator, &denominator});
+    const ExactRational result(numerator, denominator);
+    observe_rational_temporary(budget, base, result);
+    return result;
+}
+
+std::int64_t binary_exponent_floor(
+    const BigInteger &numerator,
+    const BigInteger &denominator,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
+{
+    const auto numerator_bits = integer_bit_length(numerator);
+    const auto denominator_bits = integer_bit_length(denominator);
+    std::int64_t exponent = static_cast<std::int64_t>(numerator_bits) -
+        static_cast<std::int64_t>(denominator_bits);
+    budget->add_work(1);
+    if (exponent >= 0) {
+        const BigInteger scaled_denominator = denominator << exponent;
+        observe_integer_temporary(
+            budget, base, scaled_denominator);
+        budget->add_work(1);
+        if (numerator < scaled_denominator) {
+            --exponent;
+        }
+    } else {
+        const BigInteger scaled_numerator = numerator << (-exponent);
+        observe_integer_temporary(budget, base, scaled_numerator);
+        budget->add_work(1);
+        if (scaled_numerator < denominator) {
+            --exponent;
+        }
+    }
+    return exponent;
+}
+
+BigInteger rounded_scaled_ratio(
+    const BigInteger &numerator,
+    const BigInteger &denominator,
+    std::int64_t binary_shift,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
+{
+    BigInteger scaled_numerator = numerator;
+    BigInteger scaled_denominator = denominator;
+    if (binary_shift >= 0) {
+        scaled_numerator <<= binary_shift;
+    } else {
+        scaled_denominator <<= -binary_shift;
+    }
+    budget->add_work(1);
+    observe_integer_temporaries(
+        budget, base, {&scaled_numerator, &scaled_denominator});
+
+    BigInteger quotient = scaled_numerator / scaled_denominator;
+    BigInteger remainder = scaled_numerator % scaled_denominator;
+    budget->add_work(2);
+    observe_integer_temporaries(
+        budget, base, {&scaled_numerator, &scaled_denominator,
+            &quotient, &remainder});
+    const BigInteger doubled_remainder = remainder << 1;
+    budget->add_work(1);
+    observe_integer_temporaries(
+        budget, base, {&quotient, &remainder, &doubled_remainder});
+    budget->add_work(2);
+    if (doubled_remainder > scaled_denominator ||
+            (doubled_remainder == scaled_denominator &&
+                static_cast<bool>(quotient & 1))) {
+        ++quotient;
+        observe_integer_temporary(budget, base, quotient);
+    }
+    return quotient;
+}
+
+double rational_to_binary64(
+    const ExactRational &value,
+    ResourceBudget *budget,
+    const ExactStateSize &base)
+{
+    if (value == 0) {
+        return 0.0;
+    }
+    const bool negative = value < 0;
+    const BigInteger numerator =
+        negative ? -value.numerator() : value.numerator();
+    const BigInteger denominator = value.denominator();
+    observe_integer_temporaries(budget, base, {&numerator, &denominator});
+    std::int64_t exponent = binary_exponent_floor(
+        numerator, denominator, budget, base);
+    if (exponent > 1023) {
+        throw std::overflow_error(
+            "exact constraint residual is not finite binary64");
+    }
+
+    BigInteger significand;
+    std::uint64_t exponent_bits = 0;
+    if (exponent >= -1022) {
+        significand = rounded_scaled_ratio(numerator, denominator,
+            52 - exponent, budget, base);
+        if (significand == (BigInteger(1) << 53)) {
+            significand >>= 1;
+            ++exponent;
+        }
+        if (exponent > 1023) {
+            throw std::overflow_error(
+                "exact constraint residual is not finite binary64");
+        }
+        exponent_bits = static_cast<std::uint64_t>(exponent + 1023);
+        significand -= BigInteger(1) << 52;
+    } else {
+        significand = rounded_scaled_ratio(
+            numerator, denominator, 1074, budget, base);
+        if (significand == (BigInteger(1) << 52)) {
+            exponent_bits = 1;
+            significand = 0;
+        }
+    }
+    observe_integer_temporary(budget, base, significand);
+    if (significand < 0 || significand >= (BigInteger(1) << 52)) {
+        throw std::runtime_error(
+            "exact constraint residual binary64 rounding failed");
+    }
+    const std::uint64_t fraction_bits =
+        significand.convert_to<std::uint64_t>();
+    const std::uint64_t bits = (negative ? (std::uint64_t{1} << 63) : 0) |
+        (exponent_bits << 52) | fraction_bits;
+    double result = 0.0;
+    static_assert(sizeof(bits) == sizeof(result));
+    std::memcpy(&result, &bits, sizeof(result));
+    if (!std::isfinite(result)) {
+        throw std::overflow_error(
+            "exact constraint residual is not finite binary64");
+    }
+    return result;
+}
+
+void assign_tracked_coefficient(
+    SparseIntegerRow *coefficients,
+    std::size_t column,
+    const BigInteger &value,
+    ExactStateSize *row_state,
+    const ExactStateSize &persistent_state,
+    ResourceBudget *budget)
+{
+    const auto iterator = coefficients->find(column);
+    const BigInteger old_value = iterator == coefficients->end()
+        ? BigInteger(0) : iterator->second;
+    auto projected_state = *row_state;
+    replace_integer_size(&projected_state, old_value, value);
+    observe_state(budget, persistent_state, projected_state);
+    if (value == 0) {
+        coefficients->erase(column);
+    } else {
+        (*coefficients)[column] = value;
+    }
+    *row_state = projected_state;
+}
+
+void assign_tracked_rhs(
+    ExactRational *rhs,
+    const ExactRational &value,
+    ExactStateSize *row_state,
+    const ExactStateSize &persistent_state,
+    ResourceBudget *budget)
+{
+    auto projected_state = *row_state;
+    replace_rational_size(&projected_state, *rhs, value);
+    observe_state(budget, persistent_state, projected_state);
+    *rhs = value;
+    *row_state = projected_state;
+}
+
+struct BareissBasisRow {
+    std::size_t pivot = 0;
+    SparseIntegerRow coefficients;
     ExactRational rhs;
 };
 
-using RationalBasis = std::map<std::size_t, RationalBasisRow>;
-
-RationalBasisRow make_rational_row(
+BareissBasisRow make_bareiss_row(
     const ConservativeConstraintRankRow &row,
-    const std::map<std::uint64_t, std::size_t> &column_index)
+    const std::map<std::uint64_t, std::size_t> &column_index,
+    ResourceBudget *budget)
 {
-    RationalBasisRow result;
+    BareissBasisRow result;
     for (std::size_t entry = 0;
             entry < row.canonical_column_ids.size(); ++entry) {
+        budget->add_work(1);
         result.coefficients.emplace(
             column_index.at(row.canonical_column_ids[entry]),
-            ExactRational(row.incidence_coefficients[entry]));
+            BigInteger(row.incidence_coefficients[entry]));
     }
     result.rhs = exact_binary64(row.rhs_a);
     return result;
 }
 
-void reduce_against_basis(
-    RationalBasisRow *row,
-    const RationalBasis &basis,
-    ResourceBudget *budget)
+BigInteger reduce_bareiss_row(
+    BareissBasisRow *row,
+    const std::vector<BareissBasisRow> &basis,
+    const ExactStateSize &persistent_state,
+    ResourceBudget *budget,
+    ExactStateSize *final_row_state)
 {
-    for (const auto &[pivot, basis_row] : basis) {
-        const auto entry = row->coefficients.find(pivot);
-        if (entry == row->coefficients.end()) {
-            continue;
+    BigInteger previous_pivot = 1;
+    auto row_state = measure_row(row->coefficients, row->rhs, budget);
+    observe_state(budget, persistent_state, row_state);
+
+    for (const auto &basis_row : basis) {
+        const auto pivot_iterator =
+            basis_row.coefficients.find(basis_row.pivot);
+        if (pivot_iterator == basis_row.coefficients.end()) {
+            throw std::runtime_error("Bareiss basis lost its pivot");
         }
-        const ExactRational factor = entry->second;
-        row->coefficients.erase(entry);
-        for (const auto &[column, coefficient] : basis_row.coefficients) {
-            if (column == pivot) {
-                continue;
-            }
-            const ExactRational updated = row->coefficients[column] -
-                factor * coefficient;
+        const BigInteger &pivot = pivot_iterator->second;
+        const auto factor_iterator = row->coefficients.find(basis_row.pivot);
+        const BigInteger factor = factor_iterator == row->coefficients.end()
+            ? BigInteger(0) : factor_iterator->second;
+        budget->add_work(2);
+
+        std::set<std::size_t> affected_columns;
+        for (auto iterator = row->coefficients.begin();
+                iterator != row->coefficients.end(); ++iterator) {
             budget->add_work(1);
-            budget->observe_rational(updated);
-            if (updated == 0) {
-                row->coefficients.erase(column);
-            } else {
-                row->coefficients[column] = updated;
+            if (iterator->first != basis_row.pivot) {
+                affected_columns.insert(iterator->first);
             }
         }
-        row->rhs -= factor * basis_row.rhs;
-        budget->add_work(1);
-        budget->observe_rational(row->rhs);
-    }
-}
+        for (auto iterator = basis_row.coefficients.begin();
+                iterator != basis_row.coefficients.end(); ++iterator) {
+            budget->add_work(1);
+            if (iterator->first != basis_row.pivot) {
+                affected_columns.insert(iterator->first);
+            }
+        }
+        budget->add_work(
+            static_cast<std::uint64_t>(affected_columns.size()));
 
-void add_independent_row_to_basis(
-    RationalBasisRow row,
-    RationalBasis *basis,
-    ResourceBudget *budget)
-{
-    reduce_against_basis(&row, *basis, budget);
-    if (row.coefficients.empty()) {
-        throw std::runtime_error(
-            "Bareiss/rational rank disagreement for independent row");
-    }
-    const std::size_t pivot = row.coefficients.begin()->first;
-    const ExactRational scale = row.coefficients.begin()->second;
-    for (auto &[column, coefficient] : row.coefficients) {
-        (void)column;
-        coefficient /= scale;
-        budget->add_work(1);
-        budget->observe_rational(coefficient);
-    }
-    row.rhs /= scale;
-    budget->add_work(1);
-    budget->observe_rational(row.rhs);
-    if (!basis->emplace(pivot, std::move(row)).second) {
-        throw std::runtime_error("rational basis pivot collision");
-    }
-    budget->observe_rational_basis(*basis);
-}
+        for (const auto column : affected_columns) {
+            const auto row_value_iterator = row->coefficients.find(column);
+            const BigInteger row_value =
+                row_value_iterator == row->coefficients.end()
+                ? BigInteger(0) : row_value_iterator->second;
+            const auto basis_value_iterator =
+                basis_row.coefficients.find(column);
+            const BigInteger basis_value =
+                basis_value_iterator == basis_row.coefficients.end()
+                ? BigInteger(0) : basis_value_iterator->second;
+            budget->add_work(2);
+            const auto base = combine_sizes(persistent_state, row_state);
+            observe_integer_temporaries(
+                budget, base, {&row_value, &basis_value, &factor});
 
-ExactRational dependent_residual(
-    RationalBasisRow row,
-    const RationalBasis &basis,
-    ResourceBudget *budget)
-{
-    reduce_against_basis(&row, basis, budget);
-    if (!row.coefficients.empty()) {
-        throw std::runtime_error(
-            "Bareiss/rational rank disagreement for dependent row");
+            const BigInteger left_product = row_value * pivot;
+            const BigInteger right_product = factor * basis_value;
+            budget->add_work(2);
+            observe_integer_temporaries(budget, base,
+                {&left_product, &right_product});
+            const BigInteger numerator = left_product - right_product;
+            budget->add_work(1);
+            observe_integer_temporaries(budget, base,
+                {&left_product, &right_product, &numerator});
+            budget->add_work(1);
+            if (numerator % previous_pivot != 0) {
+                throw std::runtime_error(
+                    "fraction-free Bareiss lost exact divisibility");
+            }
+            const BigInteger value = numerator / previous_pivot;
+            budget->add_work(1);
+            observe_integer_temporary(budget, base, value);
+            assign_tracked_coefficient(&row->coefficients, column, value,
+                &row_state, persistent_state, budget);
+        }
+
+        const auto base = combine_sizes(persistent_state, row_state);
+        const ExactRational left_rhs = multiply_rational_integer(
+            row->rhs, pivot, budget, base);
+        const ExactRational right_rhs = multiply_rational_integer(
+            basis_row.rhs, factor, budget, base);
+        observe_rational_temporaries(
+            budget, base, {&left_rhs, &right_rhs});
+        const ExactRational numerator_rhs = subtract_rationals(
+            left_rhs, right_rhs, budget, base);
+        observe_rational_temporaries(
+            budget, base, {&left_rhs, &right_rhs, &numerator_rhs});
+        const ExactRational updated_rhs = divide_rational_integer(
+            numerator_rhs, previous_pivot, budget, base);
+        observe_rational_temporary(budget, base, updated_rhs);
+        assign_tracked_rhs(&row->rhs, updated_rhs, &row_state,
+            persistent_state, budget);
+        assign_tracked_coefficient(&row->coefficients, basis_row.pivot,
+            BigInteger(0), &row_state, persistent_state, budget);
+        budget->add_work(1);
+        previous_pivot = pivot;
     }
-    return row.rhs;
+    *final_row_state = row_state;
+    return previous_pivot;
 }
 
 ResourceCounts validate_rows_and_count_resources(
@@ -383,6 +750,7 @@ ResourceCounts validate_rows_and_count_resources(
 {
     ResourceCounts counts;
     counts.rows = static_cast<std::uint64_t>(rows.size());
+    ConservativeConstraintRank::ValidateResourceCounts(counts);
     std::set<std::string> ids;
     std::map<std::array<std::uint64_t, 4>,
         std::set<std::array<std::uint64_t, 4>>> component_rows;
@@ -411,6 +779,7 @@ ResourceCounts validate_rows_and_count_resources(
         counts.total_nonzeros = checked_add(counts.total_nonzeros,
             static_cast<std::uint64_t>(row.canonical_column_ids.size()),
             "input nonzeros");
+        ConservativeConstraintRank::ValidateResourceCounts(counts);
         for (std::size_t entry = 0;
                 entry < row.canonical_column_ids.size(); ++entry) {
             if (row.canonical_column_ids[entry] == 0 ||
@@ -423,7 +792,14 @@ ResourceCounts validate_rows_and_count_resources(
                 throw std::invalid_argument(
                     "constraint coefficients must not store zero");
             }
-            distinct_columns->insert(row.canonical_column_ids[entry]);
+            const auto column = row.canonical_column_ids[entry];
+            if (distinct_columns->find(column) == distinct_columns->end() &&
+                    distinct_columns->size() ==
+                        ConservativeConstraintRank::kMaximumDistinctColumns) {
+                throw ConstraintRankResourceLimitExceeded(
+                    "constraint distinct-column cap exceeded");
+            }
+            distinct_columns->insert(column);
         }
         if (!std::isfinite(row.rhs_a)) {
             throw std::invalid_argument("constraint RHS must be finite");
@@ -473,6 +849,7 @@ ResourceCounts validate_rows_and_count_resources(
     }
     counts.distinct_columns =
         static_cast<std::uint64_t>(distinct_columns->size());
+    ConservativeConstraintRank::ValidateResourceCounts(counts);
     return counts;
 }
 
@@ -484,6 +861,24 @@ bool is_anchor_candidate(const ConservativeConstraintRankRow &row)
 }
 
 } // namespace
+
+#ifdef FULLMAG_CONSTRAINT_RANK_TESTING
+namespace testing {
+
+void SetConstraintRankAnalyzeResourceLimitsForTest(
+    const ResourceCounts &limits)
+{
+    ConservativeConstraintRank::ValidateResourceCounts(limits);
+    analyze_resource_limits = limits;
+}
+
+void ResetConstraintRankAnalyzeResourceLimitsForTest()
+{
+    analyze_resource_limits = maximum_resource_counts();
+}
+
+} // namespace testing
+#endif
 
 InconsistentDependentConstraint::InconsistentDependentConstraint(
     std::string constraint_id,
@@ -540,17 +935,31 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
     std::set<std::uint64_t> distinct_columns;
     const auto initial_counts =
         validate_rows_and_count_resources(rows, &distinct_columns);
-    ResourceBudget budget(initial_counts);
+    ResourceBudget budget(initial_counts, current_analyze_resource_limits());
     std::map<std::uint64_t, std::size_t> column_index;
     std::size_t next_column = 0;
     for (const auto column : distinct_columns) {
+        budget.add_work(1);
         column_index.emplace(column, next_column++);
     }
 
     std::vector<std::size_t> processing_order(rows.size());
     for (std::size_t index = 0; index < rows.size(); ++index) {
+        budget.add_work(1);
         processing_order[index] = index;
     }
+    std::uint64_t sort_levels = 0;
+    for (std::size_t width = 1; width < processing_order.size();) {
+        ++sort_levels;
+        if (width > processing_order.size() / 2) {
+            break;
+        }
+        width *= 2;
+    }
+    budget.add_work(checked_multiply(
+        static_cast<std::uint64_t>(processing_order.size()),
+        checked_add(sort_levels, 1, "processing-order sort levels"),
+        "processing-order sort work"));
     std::sort(processing_order.begin(), processing_order.end(),
         [&](std::size_t left, std::size_t right) {
             return std::make_tuple(is_anchor_candidate(rows[left]),
@@ -561,26 +970,25 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
 
     ConstraintRankCertificate certificate;
     certificate.rows_before = static_cast<std::uint64_t>(rows.size());
-    std::vector<std::size_t> retained_rows;
-    RationalBasis rational_basis;
+    std::vector<BareissBasisRow> basis;
+    ExactStateSize persistent_state;
     for (const auto row_index : processing_order) {
-        auto trial_rows = retained_rows;
-        trial_rows.push_back(row_index);
-        const auto trial_rank = exact_bareiss_rank(
-            rows, trial_rows, column_index, &budget);
-        if (trial_rank > retained_rows.size()) {
+        auto row = make_bareiss_row(rows[row_index], column_index, &budget);
+        ExactStateSize row_state;
+        const BigInteger final_pivot = reduce_bareiss_row(
+            &row, basis, persistent_state, &budget, &row_state);
+        if (!row.coefficients.empty()) {
             if (is_anchor_candidate(rows[row_index])) {
                 throw std::runtime_error(
                     "closed-component anchor candidate is independent");
             }
-            add_independent_row_to_basis(
-                make_rational_row(rows[row_index], column_index),
-                &rational_basis, &budget);
-            retained_rows.push_back(row_index);
+            row.pivot = row.coefficients.begin()->first;
+            persistent_state = combine_sizes(persistent_state, row_state);
+            budget.observe_exact_state(persistent_state.nonzeros,
+                persistent_state.storage_bits,
+                persistent_state.maximum_bit_length);
+            basis.push_back(std::move(row));
             continue;
-        }
-        if (trial_rank != retained_rows.size()) {
-            throw std::runtime_error("Bareiss rank changed non-monotonically");
         }
         if (rows[row_index].kind ==
                     ConservativeConstraintRankRowKind::ClosedComponentDivergence &&
@@ -589,9 +997,13 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
                 "closed-component non-candidate row is dependent");
         }
 
-        const ExactRational residual = dependent_residual(
-            make_rational_row(rows[row_index], column_index),
-            rational_basis, &budget);
+        ExactRational residual = row.rhs;
+        const auto exact_base = combine_sizes(persistent_state, row_state);
+        if (!basis.empty()) {
+            residual = divide_rational_integer(
+                residual, final_pivot, &budget, exact_base);
+        }
+        observe_rational_temporary(&budget, exact_base, residual);
         const ExactRational authored_rhs = exact_binary64(rows[row_index].rhs_a);
         const ExactRational absolute_gate =
             exact_binary64(physical_absolute_gate_a);
@@ -600,9 +1012,14 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
         const ExactRational rhs_floor = exact_binary64(1.0e-30);
         const ExactRational rhs_scale = std::max(
             rational_abs(authored_rhs), rhs_floor);
-        const ExactRational gate = std::max(
-            absolute_gate, relative_gate * rhs_scale);
-        const double residual_a = rational_to_double(residual);
+        const ExactRational relative_bound = multiply_rationals(
+            relative_gate, rhs_scale, &budget, exact_base);
+        observe_rational_temporaries(&budget, exact_base,
+            {&authored_rhs, &absolute_gate, &relative_gate,
+                &rhs_floor, &rhs_scale, &relative_bound});
+        const ExactRational gate = std::max(absolute_gate, relative_bound);
+        const double residual_a =
+            rational_to_binary64(residual, &budget, exact_base);
         if (rational_abs(residual) > gate) {
             throw InconsistentDependentConstraint(
                 rows[row_index].constraint_id,
@@ -626,7 +1043,7 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
         }
         certificate.omitted_rows.push_back(std::move(omitted));
     }
-    certificate.rank = static_cast<std::uint64_t>(retained_rows.size());
+    certificate.rank = static_cast<std::uint64_t>(basis.size());
     std::sort(certificate.omitted_rows.begin(),
         certificate.omitted_rows.end(),
         [](const auto &left, const auto &right) {
