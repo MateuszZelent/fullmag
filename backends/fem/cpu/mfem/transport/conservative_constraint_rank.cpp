@@ -343,6 +343,23 @@ void observe_rational_temporaries(
         combined.maximum_bit_length);
 }
 
+void observe_mixed_exact_temporaries(
+    ResourceBudget *budget,
+    const ExactStateSize &base,
+    std::initializer_list<const BigInteger *> integer_values,
+    std::initializer_list<const ExactRational *> rational_values)
+{
+    auto combined = base;
+    for (const auto *value : integer_values) {
+        append_integer_size(&combined, *value);
+    }
+    for (const auto *value : rational_values) {
+        append_rational_size(&combined, *value);
+    }
+    budget->observe_exact_state(combined.nonzeros, combined.storage_bits,
+        combined.maximum_bit_length);
+}
+
 ExactRational exact_binary64(double value)
 {
     std::uint64_t bits = 0;
@@ -389,7 +406,8 @@ ExactRational multiply_rational_integer(
     observe_integer_temporaries(
         budget, base, {&numerator, &denominator});
     const ExactRational result(numerator, denominator);
-    observe_rational_temporary(budget, base, result);
+    observe_mixed_exact_temporaries(
+        budget, base, {&numerator, &denominator}, {&result});
     return result;
 }
 
@@ -413,7 +431,9 @@ ExactRational subtract_rationals(
     observe_integer_temporaries(budget, base,
         {&left_product, &right_product, &numerator, &denominator});
     const ExactRational result(numerator, denominator);
-    observe_rational_temporary(budget, base, result);
+    observe_mixed_exact_temporaries(budget, base,
+        {&left_product, &right_product, &numerator, &denominator},
+        {&result});
     return result;
 }
 
@@ -432,7 +452,8 @@ ExactRational divide_rational_integer(
     observe_integer_temporaries(
         budget, base, {&numerator, &denominator});
     const ExactRational result(numerator, denominator);
-    observe_rational_temporary(budget, base, result);
+    observe_mixed_exact_temporaries(
+        budget, base, {&numerator, &denominator}, {&result});
     return result;
 }
 
@@ -449,7 +470,8 @@ ExactRational multiply_rationals(
     observe_integer_temporaries(
         budget, base, {&numerator, &denominator});
     const ExactRational result(numerator, denominator);
-    observe_rational_temporary(budget, base, result);
+    observe_mixed_exact_temporaries(
+        budget, base, {&numerator, &denominator}, {&result});
     return result;
 }
 
@@ -510,13 +532,16 @@ BigInteger rounded_scaled_ratio(
     const BigInteger doubled_remainder = remainder << 1;
     budget->add_work(1);
     observe_integer_temporaries(
-        budget, base, {&quotient, &remainder, &doubled_remainder});
+        budget, base, {&scaled_numerator, &scaled_denominator, &quotient,
+            &remainder, &doubled_remainder});
     budget->add_work(2);
     if (doubled_remainder > scaled_denominator ||
             (doubled_remainder == scaled_denominator &&
                 static_cast<bool>(quotient & 1))) {
         ++quotient;
-        observe_integer_temporary(budget, base, quotient);
+        observe_integer_temporaries(
+            budget, base, {&scaled_numerator, &scaled_denominator,
+                &quotient, &remainder, &doubled_remainder});
     }
     return quotient;
 }
@@ -564,7 +589,8 @@ double rational_to_binary64(
             significand = 0;
         }
     }
-    observe_integer_temporary(budget, base, significand);
+    observe_integer_temporaries(
+        budget, base, {&numerator, &denominator, &significand});
     if (significand < 0 || significand >= (BigInteger(1) << 52)) {
         throw std::runtime_error(
             "exact constraint residual binary64 rounding failed");
@@ -717,6 +743,11 @@ BigInteger reduce_bareiss_row(
             observe_integer_temporary(budget, base, value);
             assign_tracked_coefficient(&row->coefficients, column, value,
                 &row_state, persistent_state, budget);
+            observe_mixed_exact_temporaries(
+                budget, combine_sizes(persistent_state, row_state),
+                {&row_value, &basis_value, &factor, &left_product,
+                    &right_product, &numerator, &value, &previous_pivot},
+                {});
         }
 
         const auto base = combine_sizes(persistent_state, row_state);
@@ -735,6 +766,10 @@ BigInteger reduce_bareiss_row(
         observe_rational_temporary(budget, base, updated_rhs);
         assign_tracked_rhs(&row->rhs, updated_rhs, &row_state,
             persistent_state, budget);
+        observe_mixed_exact_temporaries(
+            budget, combine_sizes(persistent_state, row_state),
+            {&previous_pivot},
+            {&left_rhs, &right_rhs, &numerator_rhs, &updated_rhs});
         assign_tracked_coefficient(&row->coefficients, basis_row.pivot,
             BigInteger(0), &row_state, persistent_state, budget);
         budget->add_work(1);

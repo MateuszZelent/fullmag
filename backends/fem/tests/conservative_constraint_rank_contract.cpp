@@ -509,6 +509,18 @@ void analyze_accounts_for_transient_exact_state_and_work()
             });
         }, "Analyze did not count scans and row-reduction work");
     }
+
+    limits = default_analyze_resource_limits();
+    limits.maximum_intermediate_nonzeros = 10;
+    {
+        ScopedAnalyzeResourceLimits scoped(limits);
+        require_throws<ConstraintRankResourceLimitExceeded>([] {
+            (void)ConservativeConstraintRank::Analyze({
+                generic_row("overlap-basis", {1, 2}, {1, 1}, 0.0),
+                generic_row("overlap-row", {1, 2}, {1, -1}, 0.0),
+            });
+        }, "Analyze did not count overlapping coefficient temporaries");
+    }
 }
 
 void wide_exact_determinant_cannot_overflow_or_change_rank()
