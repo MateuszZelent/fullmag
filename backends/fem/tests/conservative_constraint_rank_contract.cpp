@@ -521,6 +521,29 @@ void analyze_accounts_for_transient_exact_state_and_work()
             });
         }, "Analyze did not count overlapping coefficient temporaries");
     }
+
+    limits = default_analyze_resource_limits();
+    limits.intermediate_storage_bits = 500;
+    {
+        ScopedAnalyzeResourceLimits scoped(limits);
+        require_throws<ConstraintRankResourceLimitExceeded>([] {
+            (void)ConservativeConstraintRank::Analyze({
+                generic_row("gate-overlap", {}, {}, 0.0),
+            });
+        }, "Analyze did not count overlapping gate temporaries");
+    }
+
+    limits = default_analyze_resource_limits();
+    limits.maximum_intermediate_nonzeros = 7;
+    {
+        ScopedAnalyzeResourceLimits scoped(limits);
+        require_throws<ConstraintRankResourceLimitExceeded>([] {
+            (void)ConservativeConstraintRank::Analyze({
+                generic_row("rhs-overlap-basis", {1}, {1}, 1.0),
+                generic_row("rhs-overlap-row", {1}, {1}, 2.0),
+            });
+        }, "Analyze did not count overlapping RHS temporaries");
+    }
 }
 
 void wide_exact_determinant_cannot_overflow_or_change_rank()

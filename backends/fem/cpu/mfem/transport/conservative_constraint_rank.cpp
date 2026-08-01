@@ -1069,28 +1069,59 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
 
         ExactRational residual = row.rhs;
         const auto exact_base = combine_sizes(persistent_state, row_state);
+        auto division_base = exact_base;
+        append_rational_size(&division_base, residual);
+        append_integer_size(&division_base, final_pivot);
+        budget.observe_exact_state(division_base.nonzeros,
+            division_base.storage_bits, division_base.maximum_bit_length);
         if (!basis.empty()) {
             residual = divide_rational_integer(
-                residual, final_pivot, &budget, exact_base);
+                residual, final_pivot, &budget, division_base);
         }
-        observe_rational_temporary(&budget, exact_base, residual);
+        auto residual_base = exact_base;
+        append_rational_size(&residual_base, residual);
+        append_integer_size(&residual_base, final_pivot);
+        budget.observe_exact_state(residual_base.nonzeros,
+            residual_base.storage_bits, residual_base.maximum_bit_length);
+        observe_rational_temporary(&budget, residual_base, residual);
         const ExactRational authored_rhs = exact_binary64(rows[row_index].rhs_a);
         const ExactRational absolute_gate =
             exact_binary64(physical_absolute_gate_a);
         const ExactRational relative_gate =
             exact_binary64(physical_relative_gate);
         const ExactRational rhs_floor = exact_binary64(1.0e-30);
+        const ExactRational authored_magnitude = rational_abs(authored_rhs);
         const ExactRational rhs_scale = std::max(
-            rational_abs(authored_rhs), rhs_floor);
+            authored_magnitude, rhs_floor);
+        auto gate_base = residual_base;
+        append_rational_size(&gate_base, authored_rhs);
+        append_rational_size(&gate_base, authored_magnitude);
+        append_rational_size(&gate_base, absolute_gate);
+        append_rational_size(&gate_base, relative_gate);
+        append_rational_size(&gate_base, rhs_floor);
+        append_rational_size(&gate_base, rhs_scale);
+        budget.observe_exact_state(gate_base.nonzeros,
+            gate_base.storage_bits, gate_base.maximum_bit_length);
         const ExactRational relative_bound = multiply_rationals(
-            relative_gate, rhs_scale, &budget, exact_base);
-        observe_rational_temporaries(&budget, exact_base,
-            {&authored_rhs, &absolute_gate, &relative_gate,
-                &rhs_floor, &rhs_scale, &relative_bound});
+            relative_gate, rhs_scale, &budget, gate_base);
+        auto relative_bound_base = gate_base;
+        append_rational_size(&relative_bound_base, relative_bound);
+        budget.observe_exact_state(relative_bound_base.nonzeros,
+            relative_bound_base.storage_bits,
+            relative_bound_base.maximum_bit_length);
         const ExactRational gate = std::max(absolute_gate, relative_bound);
+        auto converter_base = relative_bound_base;
+        append_rational_size(&converter_base, gate);
+        budget.observe_exact_state(converter_base.nonzeros,
+            converter_base.storage_bits, converter_base.maximum_bit_length);
         const double residual_a =
-            rational_to_binary64(residual, &budget, exact_base);
-        if (rational_abs(residual) > gate) {
+            rational_to_binary64(residual, &budget, converter_base);
+        const ExactRational residual_magnitude = rational_abs(residual);
+        auto comparison_base = converter_base;
+        append_rational_size(&comparison_base, residual_magnitude);
+        budget.observe_exact_state(comparison_base.nonzeros,
+            comparison_base.storage_bits, comparison_base.maximum_bit_length);
+        if (residual_magnitude > gate) {
             throw InconsistentDependentConstraint(
                 rows[row_index].constraint_id,
                 residual_a,
