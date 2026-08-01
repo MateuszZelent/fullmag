@@ -216,6 +216,22 @@ bool has_relax_stop_criteria(const Context &ctx)
         || ctx.stage_completion.relax_stop.has_max_physical_time_s != 0;
 }
 
+bool relaxation_torque_confirmation_pending(
+    const Context &ctx,
+    double max_torque_apm)
+{
+    const auto &stage = ctx.stage_completion;
+    const auto &relax_stop = stage.relax_stop;
+    return stage.snapshot.has_reason == 0 &&
+        relax_stop.has_torque_tolerance_apm != 0 &&
+        relax_stop.has_energy_tolerance_j == 0 &&
+        stage.relax_torque_confirmation_count > 0 &&
+        stage.relax_torque_confirmation_count < RELAX_TORQUE_CONFIRMATION_STEPS &&
+        std::isfinite(max_torque_apm) &&
+        std::isfinite(relax_stop.torque_tolerance_apm) &&
+        max_torque_apm <= relax_stop.torque_tolerance_apm;
+}
+
 void set_stage_completion(
     Context &ctx,
     fullmag_fem_stage_stop_reason reason,

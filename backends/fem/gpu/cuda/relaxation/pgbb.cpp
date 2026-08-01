@@ -535,9 +535,26 @@ int gpu_relax_projected_gradient_bb_step(
     const GpuDirectEnergySnapshot &current_snapshot =
         current_metrics.energy_snapshot;
     const double current_energy = current_snapshot.total_energy_j;
+    const double current_torque_apm =
+        current_snapshot.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)];
     const double gradient_norm_sq = current_metrics.gradient_norm_sq;
     const double energy_gradient_norm_sq =
         current_metrics.projected_gradient_norm_sq;
+    if (relaxation_torque_confirmation_pending(ctx, current_torque_apm)) {
+        mark_gpu_relax_pgbb_device_source_of_truth(ctx);
+        out_stats.step = ctx.state.step_count;
+        out_stats.time_seconds = 0.0;
+        out_stats.dt_seconds = 0.0;
+        if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
+            error = reason;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        out_stats.step = ctx.state.step_count;
+        out_stats.time_seconds = 0.0;
+        out_stats.dt_seconds = 0.0;
+        out_stats.max_rhs_amplitude = 0.0;
+        return FULLMAG_FEM_OK;
+    }
     if (!gpu_rk_copy_component_device(
             gpu.fields.h_demag, gpu.rk.error, gpu.lifecycle.node_count, stream,
             "cudaMemcpyAsync GPU projected-gradient BB backup current H_demag", reason)) {
