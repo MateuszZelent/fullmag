@@ -3775,6 +3775,7 @@ ensure-managed-fem-runtime:
       worktree_state="$(python3 -c '\''import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")'\'' "$identity_file")"; \
       source_snapshot="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])'\'' "$identity_file")"; \
       runtime_rebuilt=0; \
+      runtime_reused_for_non_runtime_changes=0; \
       validate_current() { \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
           --runtime-root .fullmag/runtimes/fem-gpu-host \
@@ -3790,8 +3791,18 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is invalid; restoring the persistent build first. Exact source mismatch will rebuild." >&2; \
         bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
         if ! validate_current >/dev/null 2>&1; then \
-          FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
-          runtime_rebuilt=1; \
+          if python3 scripts/runtime_source_change_policy.py \
+              --repo-root "{{repo_root}}" \
+              --runtime-root .fullmag/runtimes/fem-gpu-host \
+              --identity "$identity_file"; then \
+            echo "Managed FEM runtime source differs only in documentation, CI, tests, or packaging helpers; reusing the validated binary." >&2; \
+            python3 scripts/validate_managed_fem_runtime_bundle.py \
+              --runtime-root .fullmag/runtimes/fem-gpu-host; \
+            runtime_reused_for_non_runtime_changes=1; \
+          else \
+            FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+            runtime_rebuilt=1; \
+          fi; \
         fi; \
       fi; \
       if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
@@ -3802,7 +3813,7 @@ ensure-managed-fem-runtime:
       if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then \
         bash scripts/prune_managed_fem_runtimes.sh; \
       fi; \
-      if [ "$runtime_rebuilt" = "1" ]; then \
+      if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
           --runtime-root .fullmag/runtimes/fem-gpu-host; \
       else \

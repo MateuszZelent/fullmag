@@ -17,6 +17,14 @@ def make_variant(root: Path, name: str, mtime: int) -> Path:
     return variant
 
 
+def make_unqualified_schema2_variant(root: Path, name: str, mtime: int) -> Path:
+    variant = make_variant(root, name, mtime)
+    (variant / "manifest.json").write_text(
+        '{"schema": 2, "runtime": "fem-gpu-host"}\n', encoding="utf-8"
+    )
+    return variant
+
+
 def test_prune_preserves_active_in_use_and_latest_variants(tmp_path: Path) -> None:
     runtime = tmp_path / "runtimes"
     variants = runtime / "fem-gpu-variants"
@@ -62,3 +70,61 @@ def test_prune_preserves_active_in_use_and_latest_variants(tmp_path: Path) -> No
     assert not legacy.exists()
     assert not (runtime / "fem-gpu-host.staging.old").exists()
     assert not (runtime / "fem-gpu-host.directory-backup.old").exists()
+
+
+def test_prune_removes_unqualified_schema2_variants(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtimes"
+    variants = runtime / "fem-gpu-variants"
+    variants.mkdir(parents=True)
+    active = make_variant(variants.parent, f"hypre-baseline-{'a' * 64}", 20)
+    stale = make_unqualified_schema2_variant(
+        variants.parent, f"candidate-sm89-{'b' * 64}", 30
+    )
+    (runtime / "fem-gpu-host").symlink_to(
+        f"fem-gpu-variants/{active.name}"
+    )
+
+    result = subprocess.run(
+        ["bash", str(PRUNE)],
+        cwd=ROOT,
+        env={**os.environ, "FULLMAG_RUNTIME_PARENT": str(runtime)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert active.exists()
+    assert not stale.exists()
+
+
+def test_prune_ignores_deleted_process_worktree(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtimes"
+    variants = runtime / "fem-gpu-variants"
+    variants.mkdir(parents=True)
+    active = make_variant(variants.parent, f"hypre-baseline-{'a' * 64}", 20)
+    stale = make_unqualified_schema2_variant(
+        variants.parent, f"candidate-sm89-{'b' * 64}", 30
+    )
+    (runtime / "fem-gpu-host").symlink_to(f"fem-gpu-variants/{active.name}")
+
+    proc = tmp_path / "proc"
+    (proc / "100").mkdir(parents=True)
+    (proc / "100" / "cwd").symlink_to(f"{runtime / 'fem-gpu-variants'} (deleted)")
+
+    result = subprocess.run(
+        ["bash", str(PRUNE)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "FULLMAG_RUNTIME_PARENT": str(runtime),
+            "FULLMAG_RUNTIME_PROC_ROOT": str(proc),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert active.exists()
+    assert not stale.exists()

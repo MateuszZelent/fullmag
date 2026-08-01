@@ -65,6 +65,7 @@ mark_process_reference() {
       [ -d "${variant_root}" ] && [ ! -L "${variant_root}" ] && PROTECTED_ROOTS["${variant_root}"]=1
       ;;
   esac
+  return 0
 }
 
 for process_dir in "${PROC_ROOT}"/[0-9]*; do
@@ -87,6 +88,25 @@ family_for_variant() {
   else
     printf '%s\n' "${name}"
   fi
+}
+
+is_unqualified_legacy_variant() {
+  local variant_path="$1"
+  local manifest_path="${variant_path}/manifest.json"
+  [ -f "${manifest_path}" ] || return 1
+  python3 - "${manifest_path}" <<'PY'
+import json
+import sys
+
+try:
+    manifest = json.loads(open(sys.argv[1], encoding="utf-8").read())
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+schema = manifest.get("schema")
+native_abi = manifest.get("native_abi")
+raise SystemExit(0 if schema != 3 or not isinstance(native_abi, dict) else 1)
+PY
 }
 
 remove_path() {
@@ -115,7 +135,9 @@ while IFS=$'\t' read -r _mtime variant_path; do
   if [ -n "${PROTECTED_ROOTS[${variant_path}]+x}" ]; then
     continue
   fi
-  if [[ "${family}" == legacy-schema* ]] && [ "${KEEP_LEGACY}" = "0" ]; then
+  if [ "${KEEP_LEGACY}" = "0" ] && {
+    [[ "${family}" == legacy-schema* ]] || is_unqualified_legacy_variant "${variant_path}";
+  }; then
     size="$(du -sb -- "${variant_path}" | awk '{print $1}')"
     if remove_path "${variant_path}"; then
       removed_count=$((removed_count + 1))
@@ -164,4 +186,4 @@ if [ "${KEEP_LEGACY}" = "1" ]; then
 else
   legacy_policy="removed"
 fi
-echo "Managed FEM runtime prune: removed ${removed_count} entries (${removed_bytes} bytes), ${failed_count} could not be removed; kept active/in-use runtimes, legacy schema policy=${legacy_policy}, and ${KEEP_PER_FAMILY} newest variant(s) per family."
+echo "Managed FEM runtime prune: removed ${removed_count} entries (${removed_bytes} bytes), ${failed_count} could not be removed; kept active/in-use runtimes, legacy/unqualified schema policy=${legacy_policy}, and ${KEEP_PER_FAMILY} newest variant(s) per family."

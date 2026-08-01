@@ -127,6 +127,8 @@ readonly PERSISTENT_LATEST_ARCHIVE="${PERSISTENT_RUNTIME_PARENT}/fem-gpu-host-la
 readonly FULLMAG_WORKTREE_TARGET_SLUG="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
 readonly FULLMAG_WORKTREE_TARGET_DIGEST="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 readonly FULLMAG_WORKTREE_TARGET_ID="${FULLMAG_WORKTREE_TARGET_SLUG}-${FULLMAG_WORKTREE_TARGET_DIGEST}"
+FULLMAG_COMPOSE_PROJECT_NAME="fullmag-fem-${FULLMAG_WORKTREE_TARGET_DIGEST:0:16}"
+export COMPOSE_PROJECT_NAME="${FULLMAG_COMPOSE_PROJECT_NAME}"
 readonly FULLMAG_CONTAINER_TARGET_DIR="${FULLMAG_CONTAINER_TARGET_ROOT}/${FULLMAG_WORKTREE_TARGET_ID}"
 VARIANTS_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-variants"
 STAGING_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-export-staging.$$"
@@ -1105,6 +1107,11 @@ publish_runtime_bundle() {
   verify_source_snapshot_identity
   mv -f "${persistent_staging_archive}" "${PERSISTENT_LATEST_ARCHIVE}"
   persistent_staging_archive=""
+  if [ "${FULLMAG_RUNTIME_PRUNE}" = "1" ]; then
+    FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}" \
+      FULLMAG_RUNTIME_KEEP_PER_FAMILY="${FULLMAG_RUNTIME_KEEP_PER_FAMILY:-2}" \
+      bash "${SOURCE_SNAPSHOT_ROOT}/scripts/prune_managed_fem_runtimes.sh"
+  fi
   migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}" \
     "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
   verify_source_snapshot_identity

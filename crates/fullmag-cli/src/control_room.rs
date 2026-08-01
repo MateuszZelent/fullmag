@@ -1028,11 +1028,21 @@ pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {
     })
 }
 
+fn current_live_snapshot_api_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(180))
+            .build()
+            .expect("current live snapshot API client should build")
+    })
+}
+
 pub(crate) fn sync_current_live_snapshot(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
 ) -> Result<()> {
-    current_live_api_client()
+    current_live_snapshot_api_client()
         .post(internal_live_api_url("snapshot"))
         .json(&CurrentLiveSnapshotRequest {
             session_id,

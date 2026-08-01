@@ -17,7 +17,8 @@ build_managed_fem_image() {
   local build_image_ref="$1"
   local compatibility_image_ref="$2"
 
-  FULLMAG_FEM_GPU_IMAGE="${build_image_ref}" \
+  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fullmag-fem-runtime}" \
+    FULLMAG_FEM_GPU_IMAGE="${build_image_ref}" \
     docker compose --profile fem-gpu build fem-gpu
   MANAGED_FEM_BUILT_IMAGE_ID="$(capture_managed_fem_image_id "${build_image_ref}")"
   docker image tag "${MANAGED_FEM_BUILT_IMAGE_ID}" "${compatibility_image_ref}"

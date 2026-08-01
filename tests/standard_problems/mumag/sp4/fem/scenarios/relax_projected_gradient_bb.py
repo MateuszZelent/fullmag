@@ -68,8 +68,8 @@ study.mesh.save_or_load(
 
 study.stages.add_relax(
     stage_id="relax",
-    algorithm="nonlinear_cg",
-    max_steps=50_000,
+    algorithm="projected_gradient_bb",
+    max_steps=100_000,
     tolT=0.5e-8,
 ).autosave(
     fm.StageAutosave(

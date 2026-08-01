@@ -473,7 +473,7 @@ def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None
     assert 'FULLMAG_RUNTIME_PRUNE:-1' in ensure_recipe
     assert 'runtime_rebuilt=0' in ensure_recipe
     assert 'runtime_rebuilt=1' in ensure_recipe
-    assert 'if [ "$runtime_rebuilt" = "1" ]; then' in ensure_recipe
+    assert 'if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then' in ensure_recipe
 
 
 def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
@@ -554,6 +554,15 @@ def test_export_script_pins_built_image_id_across_export_and_validation() -> Non
     assert "docker image rm --force" not in identity_helper
     assert 'current_image_id="$(docker image inspect "${image_ref}"' in identity_helper
     assert '"drift_observed"' in manifest_builder
+
+
+def test_export_uses_a_stable_compose_project_name() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    image_helper = IMAGE_IDENTITY_HELPER.read_text(encoding="utf-8")
+
+    assert 'FULLMAG_COMPOSE_PROJECT_NAME="fullmag-fem-${FULLMAG_WORKTREE_TARGET_DIGEST:0:16}"' in exporter
+    assert 'export COMPOSE_PROJECT_NAME="${FULLMAG_COMPOSE_PROJECT_NAME}"' in exporter
+    assert 'COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fullmag-fem-runtime}" \\' in image_helper
 
 
 def test_managed_fem_build_capture_ignores_compatibility_retag(
@@ -1101,11 +1110,12 @@ def test_export_revalidates_source_immediately_before_alias_switch() -> None:
     publication = exporter[function_start:function_end]
 
     verify_index = publication.rindex("verify_source_snapshot_identity")
+    prune_index = publication.index('FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}"')
     migrate_index = publication.index("migrate_managed_fem_runtime_variants")
     link_index = publication.index('ln -sfn "${alias_target}"')
     switch_index = publication.index('mv -Tf "${repo_next_alias}"')
 
-    assert migrate_index < verify_index < link_index < switch_index
+    assert prune_index < migrate_index < verify_index < link_index < switch_index
     assert "source_identity_file" not in publication[verify_index:link_index]
 
 
