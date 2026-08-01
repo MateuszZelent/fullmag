@@ -558,9 +558,13 @@ double rational_to_binary64(
     const BigInteger numerator =
         negative ? -value.numerator() : value.numerator();
     const BigInteger denominator = value.denominator();
-    observe_integer_temporaries(budget, base, {&numerator, &denominator});
+    auto conversion_base = base;
+    append_integer_size(&conversion_base, numerator);
+    append_integer_size(&conversion_base, denominator);
+    budget->observe_exact_state(conversion_base.nonzeros,
+        conversion_base.storage_bits, conversion_base.maximum_bit_length);
     std::int64_t exponent = binary_exponent_floor(
-        numerator, denominator, budget, base);
+        numerator, denominator, budget, conversion_base);
     if (exponent > 1023) {
         throw std::overflow_error(
             "exact constraint residual is not finite binary64");
@@ -570,7 +574,7 @@ double rational_to_binary64(
     std::uint64_t exponent_bits = 0;
     if (exponent >= -1022) {
         significand = rounded_scaled_ratio(numerator, denominator,
-            52 - exponent, budget, base);
+            52 - exponent, budget, conversion_base);
         if (significand == (BigInteger(1) << 53)) {
             significand >>= 1;
             ++exponent;
@@ -583,14 +587,13 @@ double rational_to_binary64(
         significand -= BigInteger(1) << 52;
     } else {
         significand = rounded_scaled_ratio(
-            numerator, denominator, 1074, budget, base);
+            numerator, denominator, 1074, budget, conversion_base);
         if (significand == (BigInteger(1) << 52)) {
             exponent_bits = 1;
             significand = 0;
         }
     }
-    observe_integer_temporaries(
-        budget, base, {&numerator, &denominator, &significand});
+    observe_integer_temporary(budget, conversion_base, significand);
     if (significand < 0 || significand >= (BigInteger(1) << 52)) {
         throw std::runtime_error(
             "exact constraint residual binary64 rounding failed");
@@ -768,7 +771,7 @@ BigInteger reduce_bareiss_row(
             persistent_state, budget);
         observe_mixed_exact_temporaries(
             budget, combine_sizes(persistent_state, row_state),
-            {&previous_pivot},
+            {&factor, &previous_pivot},
             {&left_rhs, &right_rhs, &numerator_rhs, &updated_rhs});
         assign_tracked_coefficient(&row->coefficients, basis_row.pivot,
             BigInteger(0), &row_state, persistent_state, budget);
