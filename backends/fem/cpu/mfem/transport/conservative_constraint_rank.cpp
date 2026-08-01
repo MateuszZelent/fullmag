@@ -724,18 +724,31 @@ BigInteger reduce_bareiss_row(
                 ? BigInteger(0) : basis_value_iterator->second;
             budget->add_work(2);
             const auto base = combine_sizes(persistent_state, row_state);
-            observe_integer_temporaries(
-                budget, base, {&row_value, &basis_value, &factor});
+            auto coefficient_base = base;
+            append_integer_size(&coefficient_base, row_value);
+            append_integer_size(&coefficient_base, basis_value);
+            append_integer_size(&coefficient_base, factor);
+            append_integer_size(&coefficient_base, previous_pivot);
+            budget->observe_exact_state(coefficient_base.nonzeros,
+                coefficient_base.storage_bits,
+                coefficient_base.maximum_bit_length);
 
             const BigInteger left_product = row_value * pivot;
             const BigInteger right_product = factor * basis_value;
             budget->add_work(2);
-            observe_integer_temporaries(budget, base,
-                {&left_product, &right_product});
+            auto coefficient_with_products = coefficient_base;
+            append_integer_size(&coefficient_with_products, left_product);
+            append_integer_size(&coefficient_with_products, right_product);
+            budget->observe_exact_state(coefficient_with_products.nonzeros,
+                coefficient_with_products.storage_bits,
+                coefficient_with_products.maximum_bit_length);
             const BigInteger numerator = left_product - right_product;
             budget->add_work(1);
-            observe_integer_temporaries(budget, base,
-                {&left_product, &right_product, &numerator});
+            auto coefficient_with_numerator = coefficient_with_products;
+            append_integer_size(&coefficient_with_numerator, numerator);
+            budget->observe_exact_state(coefficient_with_numerator.nonzeros,
+                coefficient_with_numerator.storage_bits,
+                coefficient_with_numerator.maximum_bit_length);
             budget->add_work(1);
             if (numerator % previous_pivot != 0) {
                 throw std::runtime_error(
@@ -743,7 +756,11 @@ BigInteger reduce_bareiss_row(
             }
             const BigInteger value = numerator / previous_pivot;
             budget->add_work(1);
-            observe_integer_temporary(budget, base, value);
+            auto coefficient_with_value = coefficient_with_numerator;
+            append_integer_size(&coefficient_with_value, value);
+            budget->observe_exact_state(coefficient_with_value.nonzeros,
+                coefficient_with_value.storage_bits,
+                coefficient_with_value.maximum_bit_length);
             assign_tracked_coefficient(&row->coefficients, column, value,
                 &row_state, persistent_state, budget);
             observe_mixed_exact_temporaries(
@@ -754,19 +771,34 @@ BigInteger reduce_bareiss_row(
         }
 
         const auto base = combine_sizes(persistent_state, row_state);
+        auto rhs_base = base;
+        append_integer_size(&rhs_base, factor);
+        append_integer_size(&rhs_base, previous_pivot);
+        budget->observe_exact_state(rhs_base.nonzeros, rhs_base.storage_bits,
+            rhs_base.maximum_bit_length);
         const ExactRational left_rhs = multiply_rational_integer(
-            row->rhs, pivot, budget, base);
+            row->rhs, pivot, budget, rhs_base);
+        auto rhs_with_left = rhs_base;
+        append_rational_size(&rhs_with_left, left_rhs);
+        budget->observe_exact_state(rhs_with_left.nonzeros,
+            rhs_with_left.storage_bits, rhs_with_left.maximum_bit_length);
         const ExactRational right_rhs = multiply_rational_integer(
-            basis_row.rhs, factor, budget, base);
-        observe_rational_temporaries(
-            budget, base, {&left_rhs, &right_rhs});
+            basis_row.rhs, factor, budget, rhs_with_left);
+        auto rhs_with_products = rhs_with_left;
+        append_rational_size(&rhs_with_products, right_rhs);
+        budget->observe_exact_state(rhs_with_products.nonzeros,
+            rhs_with_products.storage_bits,
+            rhs_with_products.maximum_bit_length);
         const ExactRational numerator_rhs = subtract_rationals(
-            left_rhs, right_rhs, budget, base);
-        observe_rational_temporaries(
-            budget, base, {&left_rhs, &right_rhs, &numerator_rhs});
+            left_rhs, right_rhs, budget, rhs_with_products);
+        auto rhs_with_numerator = rhs_with_products;
+        append_rational_size(&rhs_with_numerator, numerator_rhs);
+        budget->observe_exact_state(rhs_with_numerator.nonzeros,
+            rhs_with_numerator.storage_bits,
+            rhs_with_numerator.maximum_bit_length);
         const ExactRational updated_rhs = divide_rational_integer(
-            numerator_rhs, previous_pivot, budget, base);
-        observe_rational_temporary(budget, base, updated_rhs);
+            numerator_rhs, previous_pivot, budget, rhs_with_numerator);
+        observe_rational_temporary(budget, rhs_with_numerator, updated_rhs);
         assign_tracked_rhs(&row->rhs, updated_rhs, &row_state,
             persistent_state, budget);
         observe_mixed_exact_temporaries(
