@@ -70,7 +70,7 @@ at least one existing evidence path and cannot be blocked by measurement.
 | T2 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T3 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T4 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
-| T5 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
+| T5 | blocked | 82945da99303a2e04f3d066e3736e98c9b66868f |  | scripts/hash_managed_fem_runtime_sources.py; scripts/test_hash_managed_fem_runtime_sources.py; scripts/validate_managed_fem_runtime_bundle.py; scripts/test_export_fem_gpu_runtime_copy_helpers.py; scripts/analysis/fem_gpu_benchmark.py; scripts/analysis/capture_fem_gpu_nsight.py; scripts/verify_fem_mixed_prism_airbox_runtime.py | blocked_by_measurement | 82945da99303a2e04f3d066e3736e98c9b66868f | Schema-v3 implementation and focused tests pass. Managed `just rebuild-fem-runtime` is blocked because the durable target is backed by `/dev/sdg` instead of `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4`; rerun the managed build after restoring the documented loop mount. |
 | T6 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T7 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T8 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
