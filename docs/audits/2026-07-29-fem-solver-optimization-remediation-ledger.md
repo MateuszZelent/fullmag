@@ -66,7 +66,7 @@ at least one existing evidence path and cannot be blocked by measurement.
 | Task | status | source_commit | runtime_manifest_sha256 | evidence | decision | commit | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | T0 | completed | eee245ac200bf138d880b793791848106b7386ba |  | scripts/test_validate_fem_solver_optimization_ledger.py; scripts/validate_fem_solver_optimization_ledger.py | promote | commit follows this ledger closure | Ledger, parser, RED/green tests, and recipe are present. |
-| T1 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
+| T1 | blocked | 0693557a7a9ce38ac5939f3c2cd42ab0a260f9db |  | scripts/test_validate_fem_relaxation_runtime_log.py; scripts/analysis/fem_gpu_benchmark.py; justfile | blocked_by_measurement | 0693557a7a9ce38ac5939f3c2cd42ab0a260f9db | Typed v2 validator, canonical execution-plan export path, generator, and strict-builder recipe are implemented; source tests pass (`7` focused, `370` module). Immutable v2 generation and managed strict-builder execution remain blocked by the incorrect `/zfn2` durable mount, so no static v2 artifact was copied or fabricated. |
 | T2 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T3 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T4 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |

@@ -2768,7 +2768,17 @@ verify-fem-performance-fixture-v2:
           cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON; \
           cmake --build "$build_dir" --target fem_mixed_p1_contract; \
           LD_LIBRARY_PATH="$build_dir/backends/fem:${LD_LIBRARY_PATH:-}" FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu "$build_dir/backends/fem/fem_mixed_p1_contract"; \
-          python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v2.json >/dev/null'
+          report_dir=.fullmag/reports/fem-performance-fixture-v2; mkdir -p "$report_dir"; \
+          while IFS=$'\t' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
+            FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax" \
+              python3 scripts/analysis/fem_gpu_benchmark.py \
+                --meshes coarse --scenarios box500_airbox_exchange_demag \
+                --integrators heun --relax-algorithms nonlinear_cg --backends cpu \
+                --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
+                --demag-amg-relax-types 6 --steps 1 --repeat 1 \
+                --expected-solver-mesh-signature "$solver_mesh_signature" \
+                --output "$report_dir/$resolution.csv" --quiet-json-summary; \
+          done < <(python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v2.json)'
 
 verify-fem-gpu-performance-regression:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
