@@ -126,10 +126,13 @@ def validate_build_identity(
 ) -> tuple[str, str, str]:
     identity = require_mapping(manifest.get("build_identity"), "build_identity")
     git_commit = identity.get("git_commit")
+    git_tree = identity.get("git_tree")
     worktree_state = identity.get("worktree_state")
     source_snapshot_sha256 = identity.get("source_snapshot_sha256")
     if not isinstance(git_commit, str) or re.fullmatch(r"[0-9a-f]{40}", git_commit) is None:
         raise ValueError("managed FEM build identity git commit is invalid")
+    if not isinstance(git_tree, str) or re.fullmatch(r"[0-9a-f]{40}", git_tree) is None:
+        raise ValueError("managed FEM build identity git tree is invalid")
     if worktree_state not in {"clean", "dirty"}:
         raise ValueError("managed FEM build identity worktree state is invalid")
     if required_git_commit is not None and git_commit != required_git_commit:
@@ -156,6 +159,84 @@ def validate_build_identity(
             f"expected {required_source_snapshot_sha256}, got {source_snapshot_sha256}"
         )
     return git_commit, worktree_state, source_snapshot_sha256
+
+
+def validate_source_provenance(manifest: Mapping[str, object]) -> Mapping[str, object]:
+    if "source_manifest_sha256" in manifest:
+        raise ValueError("managed FEM manifest rejects obsolete source_manifest_sha256")
+    provenance = require_mapping(
+        manifest.get("source_provenance"), "source provenance"
+    )
+    expected = {
+        "git_commit",
+        "git_tree",
+        "dirty",
+        "dirty_patch_sha256",
+        "source_inputs_sha256",
+        "source_input_manifest",
+    }
+    if set(provenance) != expected:
+        raise ValueError("managed FEM source provenance fields do not match schema 3")
+    for field in ("git_commit", "git_tree"):
+        value = provenance.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ValueError(f"managed FEM source provenance {field} is invalid")
+    value = provenance.get("source_inputs_sha256")
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError("managed FEM source provenance source_inputs_sha256 is invalid")
+    dirty = provenance.get("dirty")
+    dirty_patch_sha256 = provenance.get("dirty_patch_sha256")
+    if not isinstance(dirty, bool):
+        raise ValueError("managed FEM source provenance dirty is invalid")
+    if dirty:
+        if (
+            not isinstance(dirty_patch_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", dirty_patch_sha256) is None
+        ):
+            raise ValueError(
+                "dirty managed FEM source provenance requires dirty_patch_sha256"
+            )
+    elif dirty_patch_sha256 is not None:
+        raise ValueError(
+            "clean managed FEM source provenance must have null dirty_patch_sha256"
+        )
+    if (
+        provenance.get("source_input_manifest")
+        != "scripts/managed_fem_runtime_source_inputs.v1.txt"
+    ):
+        raise ValueError("managed FEM source provenance input manifest is invalid")
+    parent = manifest.get("parent_manifest_sha256")
+    if not isinstance(parent, str) or re.fullmatch(r"[0-9a-f]{64}", parent) is None:
+        raise ValueError("managed FEM parent manifest SHA-256 is invalid")
+    return provenance
+
+
+def validate_source_build_inputs(build: Mapping[str, object]) -> None:
+    source_inputs = require_mapping(build.get("source_inputs"), "source build inputs")
+    expected = {
+        "justfile_sha256",
+        "dockerfile_sha256",
+        "source_input_manifest_sha256",
+    }
+    if set(source_inputs) != expected or any(
+        not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+        for value in source_inputs.values()
+    ):
+        raise ValueError("managed FEM source build inputs are invalid")
+
+
+def validate_source_provenance_consistency(
+    manifest: Mapping[str, object], provenance: Mapping[str, object]
+) -> None:
+    identity = require_mapping(manifest.get("build_identity"), "build_identity")
+    if provenance.get("git_commit") != identity.get("git_commit"):
+        raise ValueError(
+            "managed FEM source provenance git_commit differs from build identity"
+        )
+    if provenance.get("git_tree") != identity.get("git_tree"):
+        raise ValueError(
+            "managed FEM source provenance git_tree differs from build identity"
+        )
 
 
 STARTUP_STAMP = re.compile(
@@ -473,22 +554,9 @@ def validate_bundle(
     runtime_root = runtime_root.resolve()
     manifest_path = runtime_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    schema = manifest.get("schema")
-    if schema not in {2, 3}:
-        raise ValueError("unsupported managed FEM manifest schema; expected schema 2 or 3")
-    legacy_schema = schema == 2
-    if legacy_schema and any(
-        value is not None
-        for value in (
-            required_git_commit,
-            required_worktree_state,
-            required_source_snapshot_sha256,
-        )
-    ):
-        raise ValueError(
-            "managed FEM manifest schema 2 cannot satisfy exact source identity; "
-            "rebuild as schema 3"
-        )
+    if manifest.get("schema") != 3:
+        raise ValueError("unsupported managed FEM manifest schema; expected schema 3")
+    source_provenance = validate_source_provenance(manifest)
     variant = manifest.get("variant")
     if not isinstance(variant, str) or not variant:
         raise ValueError("managed FEM manifest has no variant")
@@ -500,19 +568,13 @@ def validate_bundle(
                 f"expected {expected_directory}, got {runtime_root.name}"
             )
 
-    if legacy_schema:
-        git_commit, worktree_state, source_snapshot_sha256 = (
-            "unknown",
-            "unknown",
-            "unknown",
-        )
-    else:
-        git_commit, worktree_state, source_snapshot_sha256 = validate_build_identity(
-            manifest,
-            required_git_commit,
-            required_worktree_state,
-            required_source_snapshot_sha256,
-        )
+    git_commit, worktree_state, source_snapshot_sha256 = validate_build_identity(
+        manifest,
+        required_git_commit,
+        required_worktree_state,
+        required_source_snapshot_sha256,
+    )
+    validate_source_provenance_consistency(manifest, source_provenance)
 
     binaries = require_mapping(manifest.get("binaries"), "binaries")
     integrity = require_mapping(manifest.get("integrity"), "integrity")
@@ -531,26 +593,25 @@ def validate_bundle(
             )
         resolved_binaries[name] = path
 
-    if not legacy_schema:
-        expected_startup_identity = (
-            git_commit,
-            worktree_state,
-            source_snapshot_sha256,
-        )
-        validate_startup_identity(
-            resolved_binaries["worker"],
-            ("--help",),
-            "CLI",
-            expected_startup_identity,
-            runtime_root,
-        )
-        validate_startup_identity(
-            resolved_binaries["api"],
-            ("--print-openapi-v2",),
-            "API",
-            expected_startup_identity,
-            runtime_root,
-        )
+    expected_startup_identity = (
+        git_commit,
+        worktree_state,
+        source_snapshot_sha256,
+    )
+    validate_startup_identity(
+        resolved_binaries["worker"],
+        ("--help",),
+        "CLI",
+        expected_startup_identity,
+        runtime_root,
+    )
+    validate_startup_identity(
+        resolved_binaries["api"],
+        ("--print-openapi-v2",),
+        "API",
+        expected_startup_identity,
+        runtime_root,
+    )
 
     native_libraries = require_mapping(
         manifest.get("native_libraries"), "native_libraries"
@@ -666,6 +727,7 @@ def validate_bundle(
         if key not in build or build[key] in (None, "", []):
             raise ValueError(f"managed FEM build metadata is missing {key}")
     validate_hypre_memory_build_contract(build)
+    validate_source_build_inputs(build)
     diagnostics = require_mapping(
         manifest.get("runtime_diagnostics"), "runtime_diagnostics"
     )
@@ -691,9 +753,8 @@ def validate_bundle(
         "git_commit": git_commit,
         "worktree_state": worktree_state,
         "source_snapshot_sha256": source_snapshot_sha256,
-        "source_identity_compatibility": (
-            "exact-schema-3" if not legacy_schema else "legacy-schema-2-unbound"
-        ),
+        "source_provenance": source_provenance,
+        "source_identity_compatibility": "exact-schema-3",
     }
 
 

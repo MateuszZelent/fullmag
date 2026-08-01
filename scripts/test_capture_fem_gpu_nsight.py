@@ -866,8 +866,15 @@ def test_identity_and_status_artifacts_preserve_run_bundle_and_architectures(tmp
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     manifest = {
-        "schema": 2,
-        "source_manifest_sha256": "a" * 64,
+        "schema": 3,
+        "source_provenance": {
+            "git_commit": "a" * 40,
+            "git_tree": "b" * 40,
+            "dirty": False,
+            "dirty_patch_sha256": None,
+            "source_inputs_sha256": "c" * 64,
+            "source_input_manifest": "scripts/managed_fem_runtime_source_inputs.v1.txt",
+        },
         "build": {
             "requested_cuda_architectures": "80-real;89-real;90-virtual",
             "effective_cuda_architectures": ["sm_80", "sm_89", "compute_90"],
@@ -893,7 +900,9 @@ def test_identity_and_status_artifacts_preserve_run_bundle_and_architectures(tmp
 
     persisted = json.loads(json_path.read_text(encoding="utf-8"))
     assert persisted["run_id"] == capture.DEFAULT_RUN_ID
-    assert persisted["bundle"]["source_manifest_sha256"] == "a" * 64
+    assert persisted["bundle"]["runtime_git_commit"] == "a" * 40
+    assert persisted["bundle"]["runtime_source_inputs_sha256"] == "c" * 64
+    assert persisted["bundle"]["runtime_dirty"] is False
     assert persisted["bundle"]["libraries"]["fullmag_fem"] == "b" * 64
     assert persisted["bundle"]["requested_cuda_architectures"] == "80-real;89-real;90-virtual"
     assert "status: `unavailable`" in markdown_path.read_text(encoding="utf-8")

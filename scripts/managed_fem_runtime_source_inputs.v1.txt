@@ -1,0 +1,15 @@
+Cargo.lock
+Cargo.toml
+backends/fem
+compose.yaml
+crates/fullmag-api
+crates/fullmag-cli
+crates/fullmag-fem-sys
+crates/fullmag-ir
+crates/fullmag-plan
+crates/fullmag-runner
+docker/fem-gpu
+justfile
+native
+packages/fullmag-py
+scripts

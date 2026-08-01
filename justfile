@@ -3823,6 +3823,12 @@ ensure-managed-fem-runtime:
         validate_current; \
       fi'
 
+verify-managed-fem-runtime-source-provenance:
+    tmp_provenance="$(mktemp "${TMPDIR:-/tmp}/fullmag-fem-runtime-source-provenance.XXXXXXXXXX.json")"; trap 'rm -f -- "$tmp_provenance"' EXIT; \
+    python3 scripts/hash_managed_fem_runtime_sources.py --repo-root . --source-input-manifest scripts/managed_fem_runtime_source_inputs.v1.txt --output "$tmp_provenance"; \
+    python3 -c 'import json, sys; from pathlib import Path; expected=json.loads(Path(sys.argv[1]).read_text())["source_provenance"]; actual=json.loads(Path(".fullmag/runtimes/fem-gpu-host/manifest.json").read_text()).get("source_provenance"); assert actual == expected, "managed FEM runtime source provenance differs; run: just rebuild-fem-runtime"' "$tmp_provenance"; \
+    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+
 inspect-managed-fem-frequency-domain-deps:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm -T \

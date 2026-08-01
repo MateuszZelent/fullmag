@@ -573,10 +573,19 @@ def collect_bundle_identity(runtime_root: Path) -> dict[str, object]:
         if isinstance(manifest.get("instrumentation"), Mapping)
         else {}
     )
+    provenance = (
+        manifest.get("source_provenance")
+        if isinstance(manifest.get("source_provenance"), Mapping)
+        else {}
+    )
     return {
         "runtime_root": str(runtime_root),
         "manifest_sha256": _sha256(manifest_path),
-        "source_manifest_sha256": manifest.get("source_manifest_sha256"),
+        "runtime_git_commit": provenance.get("git_commit"),
+        "runtime_git_tree": provenance.get("git_tree"),
+        "runtime_source_inputs_sha256": provenance.get("source_inputs_sha256"),
+        "runtime_dirty": provenance.get("dirty"),
+        "runtime_dirty_patch_sha256": provenance.get("dirty_patch_sha256"),
         "docker_image": manifest.get("docker_image"),
         "docker_image_id": manifest.get("docker_image_id"),
         "requested_cuda_architectures": build.get("requested_cuda_architectures"),
@@ -606,7 +615,9 @@ def write_summary_artifacts(output_dir: Path, payload: Mapping[str, object]) -> 
         lines.extend(
             [
                 f"- runtime manifest SHA-256: `{bundle.get('manifest_sha256', '')}`",
-                f"- source manifest SHA-256: `{bundle.get('source_manifest_sha256', '')}`",
+                f"- runtime Git commit: `{bundle.get('runtime_git_commit', '')}`",
+                f"- runtime source-input SHA-256: `{bundle.get('runtime_source_inputs_sha256', '')}`",
+                f"- runtime dirty: `{bundle.get('runtime_dirty', '')}`",
                 f"- requested CUDA architectures: `{bundle.get('requested_cuda_architectures', '')}`",
                 f"- effective CUDA architectures: `{bundle.get('effective_cuda_architectures', [])}`",
             ]

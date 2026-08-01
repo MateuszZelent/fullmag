@@ -312,12 +312,22 @@ def manifest_identity(runtime_root: Path) -> dict[str, object]:
     manifest_path = runtime_root / "manifest.json"
     manifest_bytes = manifest_path.read_bytes()
     payload = json.loads(manifest_bytes)
-    if payload.get("schema") != 2:
-        raise ValueError(f"runtime variant is not manifest schema v2: {runtime_root}")
+    if payload.get("schema") != 3:
+        raise ValueError(f"runtime variant is not manifest schema v3: {runtime_root}")
+    provenance = payload.get("source_provenance")
+    if not isinstance(provenance, Mapping) or provenance.get("dirty") is not False:
+        raise ValueError(
+            f"runtime variant has no clean schema-v3 source provenance: {runtime_root}"
+        )
     return {
         "root": str(runtime_root.resolve()),
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "variant": payload.get("variant"),
+        "runtime_git_commit": provenance.get("git_commit"),
+        "runtime_git_tree": provenance.get("git_tree"),
+        "runtime_source_inputs_sha256": provenance.get("source_inputs_sha256"),
+        "runtime_dirty": provenance.get("dirty"),
+        "runtime_dirty_patch_sha256": provenance.get("dirty_patch_sha256"),
         "build": payload.get("build"),
         "runtime_diagnostics": payload.get("runtime_diagnostics"),
         "native_libraries": payload.get("native_libraries"),

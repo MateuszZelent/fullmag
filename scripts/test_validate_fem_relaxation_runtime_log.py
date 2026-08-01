@@ -129,7 +129,7 @@ def task11_expected_qualification_identity() -> dict[str, object]:
         "environment_sha256": "e" * 64,
         "runtime_identity": {
             "runtime_manifest_sha256": "runtime-identity",
-            "source_manifest_sha256": "source-identity",
+            "runtime_source_inputs_sha256": "source-identity",
             "libfullmag_fem_sha256": "library-identity",
         },
         "gpu_identity": {
@@ -255,7 +255,7 @@ def task11_preconditioner_qualification_rows(
                     "phase2_compute_assertion_enabled": True,
                     "phase2_compute_hot_loop_sync_clean": True,
                     "runtime_manifest_sha256": "runtime-identity",
-                    "source_manifest_sha256": "source-identity",
+                    "runtime_source_inputs_sha256": "source-identity",
                     "libfullmag_fem_sha256": "library-identity",
                     "device_uuid": "GPU-task11-test",
                     "device_name": "NVIDIA GeForce RTX 4080 SUPER",
@@ -384,7 +384,7 @@ def task11_preconditioner_cpu_gpu_parity_rows() -> list[dict[str, object]]:
                     "hot_loop_control_scalar_host_sync_count": 51,
                     "total_rhs_evals": 32,
                     "runtime_manifest_sha256": "runtime-identity",
-                    "source_manifest_sha256": "source-identity",
+                    "runtime_source_inputs_sha256": "source-identity",
                     "libfullmag_fem_sha256": "library-identity",
                     "device_uuid": (
                         "GPU-task11-test" if backend == "fem_gpu" else None
@@ -3108,12 +3108,34 @@ def test_benchmark_harness_can_pin_one_runner_to_a_selected_runtime_root(
 
     runtime_root.mkdir()
     manifest = runtime_root / "manifest.json"
-    manifest.write_text('{"schema":2}\n', encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 3,
+                "source_provenance": {
+                    "git_commit": "a" * 40,
+                    "git_tree": "b" * 40,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "c" * 64,
+                    "source_input_manifest": (
+                        "scripts/managed_fem_runtime_source_inputs.v1.txt"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     assert benchmark.runtime_bundle_identity(runtime_root) == {
         "runtime_bundle_root": str(runtime_root.resolve()),
         "runtime_manifest_sha256": benchmark.hashlib.sha256(
             manifest.read_bytes()
         ).hexdigest(),
+        "runtime_git_commit": "a" * 40,
+        "runtime_git_tree": "b" * 40,
+        "runtime_source_inputs_sha256": "c" * 64,
+        "runtime_dirty": "false",
+        "runtime_dirty_patch_sha256": "",
     }
 
 
@@ -3146,7 +3168,11 @@ def task8_expected_qualification_identity() -> tuple[
     dict[str, object], list[dict[str, object]]
 ]:
     runtime_identity = {
-        "source_manifest_sha256": "a" * 64,
+        "runtime_git_commit": "a" * 40,
+        "runtime_git_tree": "b" * 40,
+        "runtime_source_inputs_sha256": "c" * 64,
+        "runtime_dirty": "false",
+        "runtime_dirty_patch_sha256": "",
         "runtime_manifest_sha256": "b" * 64,
         "libfullmag_fem_sha256": "c" * 64,
         "device_name": "NVIDIA GeForce RTX 4080",
@@ -3203,7 +3229,15 @@ def task8_qualification_row(
         "scenario": case_identity["case_id"],
         "reported_relaxation_algorithm": case_identity["relaxation_algorithm"],
         "repeat_index": repeat_index,
-        "source_manifest_sha256": runtime_identity["source_manifest_sha256"],
+        "runtime_git_commit": runtime_identity["runtime_git_commit"],
+        "runtime_git_tree": runtime_identity["runtime_git_tree"],
+        "runtime_source_inputs_sha256": runtime_identity[
+            "runtime_source_inputs_sha256"
+        ],
+        "runtime_dirty": runtime_identity["runtime_dirty"],
+        "runtime_dirty_patch_sha256": runtime_identity[
+            "runtime_dirty_patch_sha256"
+        ],
         "runtime_manifest_sha256": runtime_identity["runtime_manifest_sha256"],
         "libfullmag_fem_sha256": runtime_identity["libfullmag_fem_sha256"],
         "fixture_sha256": case_identity["fixture_sha256"],
@@ -3290,7 +3324,12 @@ def test_task8_qualification_accepts_exact_identity_complete_pairs_and_monotonic
 @pytest.mark.parametrize(
     ("backend", "row_field", "tampered_value", "failure_label"),
     [
-        ("fem_gpu", "source_manifest_sha256", "2" * 64, "source_manifest_sha256"),
+        (
+            "fem_gpu",
+            "runtime_source_inputs_sha256",
+            "2" * 64,
+            "runtime_source_inputs_sha256",
+        ),
         ("fem_gpu", "runtime_manifest_sha256", "3" * 64, "runtime_manifest_sha256"),
         ("fem_gpu", "libfullmag_fem_sha256", "4" * 64, "libfullmag_fem_sha256"),
         ("fem_gpu", "fixture_sha256", "5" * 64, "fixture_sha256"),
@@ -3462,7 +3501,7 @@ def test_task8_qualification_rejects_old_98f832_native_library_identity() -> Non
     runtime_identity, case_identities = task8_expected_qualification_identity()
     runtime_identity.update(
         {
-            "source_manifest_sha256": "3bf69a81294a5d4ae8bcd0d19359ae610032e992098e2c04d65071cba9f3ca56",
+            "runtime_source_inputs_sha256": "3bf69a81294a5d4ae8bcd0d19359ae610032e992098e2c04d65071cba9f3ca56",
             "runtime_manifest_sha256": "7aec841222232a1bfcd87e9a0ba6fc2e9501ccb99b6ccacd21d521bc8f439b69",
             "libfullmag_fem_sha256": "c34db964a116df422463a7dc2e96983e0589dd0cc9a50a4d82a9defe412be855",
         }
@@ -3471,7 +3510,7 @@ def test_task8_qualification_rejects_old_98f832_native_library_identity() -> Non
     for row in rows:
         row.update(
             {
-                "source_manifest_sha256": "2587f0134abd89ec0a30cc7c576ff6d9166356d7ada9d00362519b149f4e3c8c",
+                "runtime_source_inputs_sha256": "2587f0134abd89ec0a30cc7c576ff6d9166356d7ada9d00362519b149f4e3c8c",
                 "runtime_manifest_sha256": "98f832772d0d9a5c7c46b4823c5f5c5bf2e4ed823e0f143e53ffa9aa9843fff8",
                 "libfullmag_fem_sha256": "63547f779f2c88611382532c6bdfe827f2969f5634733794494247d00817c03e",
             }
@@ -3516,7 +3555,7 @@ def test_task8_qualification_rejects_missing_expected_case_identity_before_rows(
 @pytest.mark.parametrize(
     "field",
     [
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "runtime_manifest_sha256",
         "libfullmag_fem_sha256",
     ],
@@ -4200,7 +4239,17 @@ def test_task8_identity_capture_manifest_expected_device_rejects_observed_drift(
     (runtime_root / "manifest.json").write_text(
         json.dumps(
             {
-                "source_manifest_sha256": "a" * 64,
+                "schema": 3,
+                "source_provenance": {
+                    "git_commit": "a" * 40,
+                    "git_tree": "b" * 40,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "c" * 64,
+                    "source_input_manifest": (
+                        "scripts/managed_fem_runtime_source_inputs.v1.txt"
+                    ),
+                },
                 "native_libraries": {
                     "fullmag_fem": {"path": "lib/libfullmag_fem.so"}
                 },
@@ -4377,8 +4426,15 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
     runtime_library.parent.mkdir(parents=True)
     runtime_library.write_bytes(b"actual-native-library")
     runtime_manifest = {
-        "schema": 2,
-        "source_manifest_sha256": "a" * 64,
+        "schema": 3,
+        "source_provenance": {
+            "git_commit": "a" * 40,
+            "git_tree": "b" * 40,
+            "dirty": False,
+            "dirty_patch_sha256": None,
+            "source_inputs_sha256": "c" * 64,
+            "source_input_manifest": "scripts/managed_fem_runtime_source_inputs.v1.txt",
+        },
         "native_libraries": {
             "fullmag_fem": {
                 "path": "lib/libfullmag_fem.so.0.1.0",
@@ -4508,7 +4564,11 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
         )
     ).hexdigest()
     expected_shared = {
-        "source_manifest_sha256": "a" * 64,
+        "runtime_git_commit": "a" * 40,
+        "runtime_git_tree": "b" * 40,
+        "runtime_source_inputs_sha256": "c" * 64,
+        "runtime_dirty": "false",
+        "runtime_dirty_patch_sha256": "",
         "runtime_manifest_sha256": benchmark.hashlib.sha256(
             runtime_manifest_path.read_bytes()
         ).hexdigest(),
@@ -5358,7 +5418,7 @@ def _gpu_host_thread_qualification_rows() -> list[dict[str, object]]:
                             "backend": "fem_gpu",
                             "status": "ok",
                             "runtime_manifest_sha256": "1" * 64,
-                            "source_manifest_sha256": "2" * 64,
+                            "runtime_source_inputs_sha256": "2" * 64,
                             "libfullmag_fem_sha256": "3" * 64,
                             "device_uuid": "GPU-task12",
                             "device_name": "NVIDIA Task 12",

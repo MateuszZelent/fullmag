@@ -297,7 +297,7 @@ GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS = (
 )
 GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS = (
     "runtime_manifest_sha256",
-    "source_manifest_sha256",
+    "runtime_source_inputs_sha256",
     "libfullmag_fem_sha256",
     "device_uuid",
     "device_name",
@@ -727,7 +727,7 @@ def gpu_host_thread_qualification_identity_failures(
 
     for field in (
         "runtime_manifest_sha256",
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "libfullmag_fem_sha256",
         "solver_mesh_signature",
         "executed_problem_ir_sha256",
@@ -1170,7 +1170,7 @@ def task11_qualification_identity_failures(
                 continue
             for field in (
                 "runtime_manifest_sha256",
-                "source_manifest_sha256",
+                "runtime_source_inputs_sha256",
                 "libfullmag_fem_sha256",
             ):
                 expected = str(runtime_identity.get(field) or "")
@@ -1404,7 +1404,7 @@ def task11_preconditioner_cpu_gpu_parity_summary(
 
     for field in (
         "runtime_manifest_sha256",
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "libfullmag_fem_sha256",
     ):
         identities = {str(row.get(field) or "") for row in rows}
@@ -1678,7 +1678,7 @@ def relaxation_preconditioner_qualification_summary(
 
     for field in (
         "runtime_manifest_sha256",
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "libfullmag_fem_sha256",
     ):
         identities = {str(row.get(field) or "") for row in rows}
@@ -1704,7 +1704,7 @@ def relaxation_preconditioner_qualification_summary(
         field: next(iter(sorted({str(row.get(field) or "") for row in rows})), "")
         for field in (
             "runtime_manifest_sha256",
-            "source_manifest_sha256",
+            "runtime_source_inputs_sha256",
             "libfullmag_fem_sha256",
         )
     }
@@ -3059,13 +3059,21 @@ def task8_qualification_failures(
         expected_cases_by_base.setdefault((case_id, algorithm), []).append(case)
 
     runtime_hash_fields = (
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "runtime_manifest_sha256",
         "libfullmag_fem_sha256",
     )
     for field in runtime_hash_fields:
         if not valid_sha256(expected_runtime_identity.get(field)):
             failures.append(f"Task 8 expected runtime identity has invalid {field}")
+    for field in ("runtime_git_commit", "runtime_git_tree"):
+        value = expected_runtime_identity.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            failures.append(f"Task 8 expected runtime identity has invalid {field}")
+    if expected_runtime_identity.get("runtime_dirty") != "false":
+        failures.append("Task 8 qualification rejects a dirty runtime")
+    if expected_runtime_identity.get("runtime_dirty_patch_sha256") != "":
+        failures.append("Task 8 clean runtime must have no dirty patch hash")
     for field in ("device_name", "compute_capability", "precision"):
         value = expected_runtime_identity.get(field)
         if not isinstance(value, str) or not value:
@@ -3204,6 +3212,18 @@ def task8_qualification_failures(
                     )
 
         for field in runtime_hash_fields:
+            compare(
+                row,
+                label=field,
+                actual=row.get(field),
+                expected=expected_runtime_identity.get(field),
+            )
+        for field in (
+            "runtime_git_commit",
+            "runtime_git_tree",
+            "runtime_dirty",
+            "runtime_dirty_patch_sha256",
+        ):
             compare(
                 row,
                 label=field,
@@ -3410,9 +3430,26 @@ def runtime_bundle_identity(runtime_root: Path) -> dict[str, str]:
         "runtime_bundle_root": str(resolved_root),
         "runtime_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
     }
-    source_manifest_sha256 = manifest.get("source_manifest_sha256")
-    if isinstance(source_manifest_sha256, str):
-        identity["source_manifest_sha256"] = source_manifest_sha256
+    source_provenance = manifest.get("source_provenance")
+    if not isinstance(source_provenance, Mapping):
+        raise ValueError("runtime manifest is missing source provenance")
+    for manifest_field, identity_field in (
+        ("git_commit", "runtime_git_commit"),
+        ("git_tree", "runtime_git_tree"),
+        ("source_inputs_sha256", "runtime_source_inputs_sha256"),
+    ):
+        value = source_provenance.get(manifest_field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"runtime manifest source provenance has no {manifest_field}"
+            )
+        identity[identity_field] = value
+    dirty = source_provenance.get("dirty")
+    dirty_patch = source_provenance.get("dirty_patch_sha256")
+    if not isinstance(dirty, bool) or (dirty and not isinstance(dirty_patch, str)):
+        raise ValueError("runtime manifest has invalid dirty source provenance")
+    identity["runtime_dirty"] = str(dirty).lower()
+    identity["runtime_dirty_patch_sha256"] = "" if dirty_patch is None else dirty_patch
     native_libraries = manifest.get("native_libraries")
     if isinstance(native_libraries, Mapping):
         fullmag_fem = native_libraries.get("fullmag_fem")
