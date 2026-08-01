@@ -99,6 +99,8 @@ struct ConservativeCurrentImportRequest {
     ConservativeCurrentPins pins;
     double physical_relative_gate = 1.0e-10;
     double physical_absolute_gate_a = 1.0e-18;
+    double scaled_kkt_residual = 0.0;
+    double correction_norm_mw = 0.0;
     bool require_independent_physical_certificate = false;
     bool reference_mpi_gather_broadcast = false;
 };
@@ -114,6 +116,8 @@ struct ConservativeCurrentBalanceCertificate {
     double net_outer_flux_a = 0.0;
     double electrode_balance_relative = 0.0;
     double max_closure_interface_mismatch_a = 0.0;
+    double scaled_kkt_residual = 0.0;
+    double correction_norm_mw = 0.0;
     bool closure_complete = false;
 };
 

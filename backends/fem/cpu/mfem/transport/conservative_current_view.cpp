@@ -766,8 +766,11 @@ PhysicalCertificate integrate_physical_certificate(
             std::abs(terminal_net_flux)) /
         std::max({pair_scale, terminal_scale, 1.0e-30});
     const auto gate = [&](double value, double scale) {
-        return std::abs(value) <= std::max(physical_absolute_gate_a,
-            physical_relative_gate * std::max(scale, 1.0e-30));
+        const double roundoff_floor = 128.0 *
+            std::numeric_limits<double>::epsilon() * std::max(1.0, scale);
+        return std::abs(value) <= std::max({physical_absolute_gate_a,
+            physical_relative_gate * std::max(scale, 1.0e-30),
+            roundoff_floor});
     };
     bool elements_ok = true;
     for (const auto &row : result.elements) {
@@ -776,8 +779,10 @@ PhysicalCertificate integrate_physical_certificate(
     bool faces_ok = true;
     for (const auto &row : result.faces) {
         if (row.side_count == 2) {
-            faces_ok = faces_ok && gate(row.canonical_jump_a,
-                std::abs(row.side1_flux_a) + std::abs(row.side2_flux_a));
+            const double scale = std::abs(row.side1_flux_a) +
+                std::abs(row.side2_flux_a);
+            const bool ok = gate(row.canonical_jump_a, scale);
+            faces_ok = faces_ok && ok;
         }
     }
     bool pairs_ok = true;
@@ -881,14 +886,36 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
         for (const int member : members) component_anchor[member] = anchor;
     }
 
+    // A component with an explicit terminal remains an open flux problem:
+    // its element-divergence equations are all independent because the
+    // terminal trace is an unknown boundary flux.  Only components closed by
+    // insulating boundaries and explicit pair constraints have the usual one
+    // global divergence dependency and therefore receive an exact-rank anchor
+    // row.  Marking open components as generic rows keeps the rank contract
+    // honest for the coupled external-lead path.
+    std::set<ElementKey> open_components;
+    const auto boundaries = boundary_face_map(mesh, ids);
+    for (const auto &terminal : terminal_faces) {
+        const auto boundary = boundaries.find(terminal);
+        require(boundary != boundaries.end(),
+            "rank terminal references an unknown boundary face");
+        const int element = boundary_adjacent_element(mesh, boundary->second);
+        open_components.insert(component_anchor.at(element));
+    }
+
     std::vector<ConservativeConstraintRankRow> rows;
     rows.reserve(static_cast<std::size_t>(mesh.GetNE()) + pairs.size());
     for (int element = 0; element < mesh.GetNE(); ++element) {
         ConservativeConstraintRankRow row;
         row.constraint_id = divergence_id(element_key(mesh, ids, element));
-        row.kind = ConservativeConstraintRankRowKind::ClosedComponentDivergence;
-        row.closed_component_anchor_element = component_anchor[element];
-        row.row_element_key = element_key(mesh, ids, element);
+        const auto anchor = component_anchor[element];
+        if (open_components.count(anchor) != 0) {
+            row.kind = ConservativeConstraintRankRowKind::Generic;
+        } else {
+            row.kind = ConservativeConstraintRankRowKind::ClosedComponentDivergence;
+            row.closed_component_anchor_element = anchor;
+            row.row_element_key = element_key(mesh, ids, element);
+        }
         for (int face = 0; face < mesh.GetNumFaces(); ++face) {
             int first = -1;
             int second = -1;
@@ -1019,6 +1046,8 @@ Bytes encode_balance_certificate(
     append_f64_le(bytes, physical.summary.max_internal_face_jump_a);
     append_f64_le(bytes, physical.summary.net_outer_flux_a);
     append_f64_le(bytes, physical.summary.electrode_balance_relative);
+    append_f64_le(bytes, physical.summary.scaled_kkt_residual);
+    append_f64_le(bytes, physical.summary.correction_norm_mw);
     append_u8(bytes, physical.summary.closure_complete ? 1u : 0u);
     return bytes;
 }
@@ -1118,7 +1147,9 @@ FinalizedViewData finalize_view_data(
     double algebraic_relative_tolerance,
     double physical_relative_gate,
     double physical_absolute_gate_a,
-    bool global_and_broadcast)
+    bool global_and_broadcast,
+    double scaled_kkt_residual = 0.0,
+    double correction_norm_mw = 0.0)
 {
     FinalizedViewData data;
     data.mesh = std::move(mesh);
@@ -1133,10 +1164,14 @@ FinalizedViewData finalize_view_data(
     data.rank_certificate = analyze_physical_constraint_rank(
         *data.mesh, data.stable_ids, pairs, terminal_faces,
         physical_absolute_gate_a, physical_relative_gate);
-    const auto physical = integrate_physical_certificate(
+    auto physical = integrate_physical_certificate(
         *data.field, data.stable_ids, pairs, terminal_faces, terminal_id,
         physical_relative_gate, physical_absolute_gate_a);
     data.balance = physical.summary;
+    data.balance.scaled_kkt_residual = scaled_kkt_residual;
+    data.balance.correction_norm_mw = correction_norm_mw;
+    physical.summary.scaled_kkt_residual = scaled_kkt_residual;
+    physical.summary.correction_norm_mw = correction_norm_mw;
     data.records = physical.records;
     data.balance_bytes = encode_balance_certificate(
         algebraic_relative_tolerance, physical_relative_gate,
@@ -1422,7 +1457,8 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Import(
         request.identity, topology.revision, topology.digest, topology.pairs,
         topology.terminal_faces, topology.terminal_id, 1.0e-12,
         request.physical_relative_gate, request.physical_absolute_gate_a,
-        request.reference_mpi_gather_broadcast);
+        request.reference_mpi_gather_broadcast,
+        request.scaled_kkt_residual, request.correction_norm_mw);
     auto impl = std::make_unique<Impl>();
     impl->mesh = std::move(data.mesh);
     impl->collection = std::move(data.collection);
@@ -1476,6 +1512,379 @@ private:
     const mfem::GridFunction &potential_;
     mfem::Coefficient &conductivity_;
 };
+
+struct WeightedRt0Constraint {
+    std::string id;
+    std::vector<std::pair<int, double>> coefficients;
+    double rhs = 0.0;
+};
+
+struct WeightedRt0Result {
+    std::unique_ptr<mfem::Mesh> mesh;
+    std::unique_ptr<mfem::RT_FECollection> collection;
+    std::unique_ptr<mfem::FiniteElementSpace> space;
+    std::unique_ptr<mfem::GridFunction> field;
+    double scaled_kkt_residual = 0.0;
+    double correction_norm_mw = 0.0;
+};
+
+int decode_rt0_dof(int encoded)
+{
+    return encoded < 0 ? -1 - encoded : encoded;
+}
+
+int rt0_dof_sign(int encoded)
+{
+    return encoded < 0 ? -1 : 1;
+}
+
+std::string pair_constraint_id(const PairConstraint &pair)
+{
+    std::ostringstream id;
+    id << (pair.kind == 2 ? "source-cut:" : "closure-interface:") << pair.id;
+    for (const auto value : pair.face_a) id << ':' << value;
+    for (const auto value : pair.face_b) id << ':' << value;
+    return id.str();
+}
+
+void solve_dense_kkt(std::vector<double> *matrix, std::vector<double> *rhs)
+{
+    const std::size_t size = rhs->size();
+    require(matrix->size() == size * size,
+        "OE-T0 KKT matrix dimensions are inconsistent");
+    for (std::size_t pivot = 0; pivot < size; ++pivot) {
+        std::size_t selected = pivot;
+        double largest = std::abs((*matrix)[pivot * size + pivot]);
+        for (std::size_t row = pivot + 1; row < size; ++row) {
+            const double candidate = std::abs((*matrix)[row * size + pivot]);
+            if (candidate > largest) {
+                selected = row;
+                largest = candidate;
+            }
+        }
+        require(std::isfinite(largest) && largest > 1.0e-14,
+            "OE-T0 KKT system is singular or ill-conditioned");
+        if (selected != pivot) {
+            for (std::size_t column = pivot; column < size; ++column) {
+                std::swap((*matrix)[pivot * size + column],
+                          (*matrix)[selected * size + column]);
+            }
+            std::swap((*rhs)[pivot], (*rhs)[selected]);
+        }
+        const double diagonal = (*matrix)[pivot * size + pivot];
+        for (std::size_t row = pivot + 1; row < size; ++row) {
+            const double factor = (*matrix)[row * size + pivot] / diagonal;
+            if (factor == 0.0) continue;
+            (*matrix)[row * size + pivot] = 0.0;
+            for (std::size_t column = pivot + 1; column < size; ++column) {
+                (*matrix)[row * size + column] -=
+                    factor * (*matrix)[pivot * size + column];
+            }
+            (*rhs)[row] -= factor * (*rhs)[pivot];
+        }
+    }
+    for (std::size_t row = size; row-- > 0;) {
+        double value = (*rhs)[row];
+        for (std::size_t column = row + 1; column < size; ++column) {
+            value -= (*matrix)[row * size + column] * (*rhs)[column];
+        }
+        const double diagonal = (*matrix)[row * size + row];
+        require(std::isfinite(diagonal) && std::abs(diagonal) > 1.0e-14,
+            "OE-T0 KKT back substitution encountered a singular pivot");
+        (*rhs)[row] = value / diagonal;
+        require(std::isfinite((*rhs)[row]),
+            "OE-T0 KKT solve produced a non-finite value");
+    }
+}
+
+WeightedRt0Result solve_weighted_rt0_projection(
+    std::unique_ptr<mfem::Mesh> mesh,
+    const StableMeshVertexIdentities &ids,
+    mfem::VectorCoefficient &raw_current,
+    mfem::Coefficient &conductivity,
+    const std::vector<PairConstraint> &pairs,
+    const std::vector<FaceKey> &terminal_faces,
+    const ConstraintRankCertificate &rank_certificate)
+{
+    require(mesh != nullptr, "OE-T0 projection requires an owned mesh");
+    require(mesh->GetNE() > 0, "OE-T0 projection requires elements");
+    auto collection = std::make_unique<mfem::RT_FECollection>(0, 3);
+    auto space = std::make_unique<mfem::FiniteElementSpace>(
+        mesh.get(), collection.get());
+    const int global_dof_count = space->GetVSize();
+    // This is the deterministic serial reference realization.  Production
+    // large-mesh execution must use the separately qualified sparse KKT lane;
+    // silently switching to an un-constrained projection is forbidden.
+    require(global_dof_count > 0 && global_dof_count <= 4096,
+        "OE-T0 serial weighted KKT reference size limit exceeded");
+
+    std::map<FaceKey, int> face_by_key;
+    std::vector<int> face_global_dof(mesh->GetNumFaces(), -1);
+    std::vector<std::vector<std::pair<int, int>>> element_data(mesh->GetNE());
+    std::vector<std::vector<std::pair<int, int>>> face_incidence(
+        mesh->GetNumFaces());
+    for (int face = 0; face < mesh->GetNumFaces(); ++face) {
+        const auto key = mesh_face_key(*mesh, ids, face);
+        require(face_by_key.emplace(key, face).second,
+            "OE-T0 projection encountered duplicate stable face keys");
+        mfem::Array<int> dofs;
+        space->GetFaceDofs(face, dofs);
+        require(dofs.Size() == 1, "OE-T0 RT0 face must have one scalar dof");
+        face_global_dof[static_cast<std::size_t>(face)] = decode_rt0_dof(dofs[0]);
+    }
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        mfem::Array<int> element_faces;
+        mfem::Array<int> orientations;
+        mesh->GetElementFaces(element, element_faces, orientations);
+        mfem::Array<int> dofs;
+        space->GetElementDofs(element, dofs);
+        require(element_faces.Size() == 4 && dofs.Size() == 4,
+            "OE-T0 RT0 tetrahedron does not expose four face dofs");
+        auto &local = element_data.at(static_cast<std::size_t>(element));
+        local.reserve(4);
+        for (int index = 0; index < 4; ++index) {
+            const int face = element_faces[index];
+            const int dof = decode_rt0_dof(dofs[index]);
+            const int sign = rt0_dof_sign(dofs[index]);
+            require(dof >= 0 && dof < global_dof_count,
+                "OE-T0 RT0 dof is out of range");
+            local.emplace_back(dof, sign);
+            face_incidence.at(static_cast<std::size_t>(face)).emplace_back(
+                element, sign);
+        }
+    }
+    std::set<FaceKey> free_boundary;
+    free_boundary.insert(terminal_faces.begin(), terminal_faces.end());
+    for (const auto &pair : pairs) {
+        free_boundary.insert(pair.face_a);
+        free_boundary.insert(pair.face_b);
+    }
+    std::vector<bool> fixed(static_cast<std::size_t>(global_dof_count), false);
+    for (int face = 0; face < mesh->GetNumFaces(); ++face) {
+        int element1 = -1;
+        int element2 = -1;
+        mesh->GetFaceElements(face, &element1, &element2);
+        require(element1 >= 0 && (element2 < 0 || element2 >= 0),
+            "OE-T0 face has no element incidence");
+        const auto key = mesh_face_key(*mesh, ids, face);
+        if (element2 < 0 && free_boundary.count(key) == 0) {
+            fixed.at(static_cast<std::size_t>(face_global_dof.at(
+                static_cast<std::size_t>(face)))) = true;
+        }
+    }
+
+    std::vector<int> free_dofs;
+    std::vector<int> free_index(static_cast<std::size_t>(global_dof_count), -1);
+    for (int dof = 0; dof < global_dof_count; ++dof) {
+        if (!fixed[static_cast<std::size_t>(dof)]) {
+            free_index[static_cast<std::size_t>(dof)] =
+                static_cast<int>(free_dofs.size());
+            free_dofs.push_back(dof);
+        }
+    }
+
+    std::vector<std::vector<double>> mass(
+        static_cast<std::size_t>(global_dof_count),
+        std::vector<double>(static_cast<std::size_t>(global_dof_count), 0.0));
+    std::vector<double> weighted_rhs(static_cast<std::size_t>(global_dof_count), 0.0);
+    double raw_energy = 0.0;
+    const mfem::IntegrationRule &rule = mfem::IntRules.Get(
+        mfem::Geometry::TETRAHEDRON, 4);
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        const auto *finite_element = space->GetFE(element);
+        auto *transformation = mesh->GetElementTransformation(element);
+        mfem::DenseMatrix vshape;
+        vshape.SetSize(finite_element->GetDof(), 3);
+        mfem::Vector raw(3);
+        const auto &local = element_data.at(static_cast<std::size_t>(element));
+        for (int point = 0; point < rule.GetNPoints(); ++point) {
+            transformation->SetIntPoint(&rule.IntPoint(point));
+            raw_current.Eval(raw, *transformation, rule.IntPoint(point));
+            const double sigma = conductivity.Eval(
+                *transformation, rule.IntPoint(point));
+            require(std::isfinite(sigma) && sigma > 0.0,
+                "OE-T0 conductivity must be finite and positive");
+            const double weight = transformation->Weight() *
+                rule.IntPoint(point).weight;
+            const double inverse_sigma = 1.0 / sigma;
+            raw_energy += inverse_sigma * (raw * raw) * weight;
+            finite_element->CalcVShape(*transformation, vshape);
+            for (int i = 0; i < vshape.Height(); ++i) {
+                const auto [dof_i, sign_i] = local.at(static_cast<std::size_t>(i));
+                mfem::Vector shape_i(3);
+                for (int component = 0; component < 3; ++component) {
+                    shape_i[component] = vshape(i, component) * sign_i;
+                }
+                weighted_rhs.at(static_cast<std::size_t>(dof_i)) +=
+                    inverse_sigma * (shape_i * raw) * weight;
+                for (int j = 0; j < vshape.Height(); ++j) {
+                    const auto [dof_j, sign_j] = local.at(static_cast<std::size_t>(j));
+                    mfem::Vector shape_j(3);
+                    for (int component = 0; component < 3; ++component) {
+                        shape_j[component] = vshape(j, component) * sign_j;
+                    }
+                    mass.at(static_cast<std::size_t>(dof_i)).at(
+                        static_cast<std::size_t>(dof_j)) +=
+                        inverse_sigma * (shape_i * shape_j) * weight;
+                }
+            }
+        }
+    }
+    std::vector<WeightedRt0Constraint> constraints;
+    constraints.reserve(static_cast<std::size_t>(mesh->GetNE()) + pairs.size());
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        WeightedRt0Constraint constraint;
+        constraint.id = divergence_id(element_key(*mesh, ids, element));
+        for (const auto &[dof, sign] : element_data.at(
+                 static_cast<std::size_t>(element))) {
+            constraint.coefficients.emplace_back(dof, static_cast<double>(sign));
+        }
+        constraints.push_back(std::move(constraint));
+    }
+    for (const auto &pair : pairs) {
+        const auto first = face_by_key.find(pair.face_a);
+        const auto second = face_by_key.find(pair.face_b);
+        require(first != face_by_key.end() && second != face_by_key.end(),
+            "OE-T0 pair constraint references an unknown mesh face");
+        require(face_incidence.at(static_cast<std::size_t>(first->second)).size() == 1 &&
+                face_incidence.at(static_cast<std::size_t>(second->second)).size() == 1,
+            "OE-T0 pair constraint must reference boundary faces");
+        const auto [first_element, first_sign] = face_incidence.at(
+            static_cast<std::size_t>(first->second)).front();
+        const auto [second_element, second_sign] = face_incidence.at(
+            static_cast<std::size_t>(second->second)).front();
+        (void)first_element;
+        (void)second_element;
+        WeightedRt0Constraint constraint;
+        constraint.id = pair_constraint_id(pair);
+        constraint.coefficients = {
+            {face_global_dof.at(static_cast<std::size_t>(first->second)),
+                static_cast<double>(first_sign)},
+            {face_global_dof.at(static_cast<std::size_t>(second->second)),
+                static_cast<double>(second_sign)}};
+        constraints.push_back(std::move(constraint));
+    }
+
+    std::set<std::string> omitted;
+    for (const auto &row : rank_certificate.omitted_rows) {
+        omitted.insert(row.constraint_id);
+    }
+    std::vector<WeightedRt0Constraint> active;
+    for (const auto &constraint : constraints) {
+        if (omitted.count(constraint.id) != 0) continue;
+        WeightedRt0Constraint reduced = constraint;
+        reduced.coefficients.clear();
+        for (const auto [dof, coefficient] : constraint.coefficients) {
+            if (!fixed.at(static_cast<std::size_t>(dof))) {
+                reduced.coefficients.emplace_back(dof, coefficient);
+            }
+        }
+        if (reduced.coefficients.empty()) {
+            require(std::abs(reduced.rhs) <= 1.0e-18,
+                "OE-T0 fixed RT trace makes a constraint inconsistent");
+            continue;
+        }
+        active.push_back(std::move(reduced));
+    }
+
+    const std::size_t free_count = free_dofs.size();
+    const std::size_t constraint_count = active.size();
+    const std::size_t system_size = free_count + constraint_count;
+    require(system_size > 0 && system_size <= 8192,
+        "OE-T0 serial KKT system size limit exceeded");
+    std::vector<double> matrix(system_size * system_size, 0.0);
+    std::vector<double> rhs(system_size, 0.0);
+    for (std::size_t row = 0; row < free_count; ++row) {
+        const int global_row = free_dofs[row];
+        rhs[row] = weighted_rhs.at(static_cast<std::size_t>(global_row));
+        for (std::size_t column = 0; column < free_count; ++column) {
+            matrix[row * system_size + column] =
+                mass.at(static_cast<std::size_t>(global_row)).at(
+                    static_cast<std::size_t>(free_dofs[column]));
+        }
+    }
+    for (std::size_t row = 0; row < constraint_count; ++row) {
+        const std::size_t system_row = free_count + row;
+        rhs[system_row] = active[row].rhs;
+        for (const auto [dof, coefficient] : active[row].coefficients) {
+            const int index = free_index.at(static_cast<std::size_t>(dof));
+            require(index >= 0, "OE-T0 active constraint references fixed dof");
+            matrix[static_cast<std::size_t>(index) * system_size + system_row] +=
+                coefficient;
+            matrix[system_row * system_size + static_cast<std::size_t>(index)] +=
+                coefficient;
+        }
+    }
+    solve_dense_kkt(&matrix, &rhs);
+
+    std::vector<double> solution(static_cast<std::size_t>(global_dof_count), 0.0);
+    for (std::size_t index = 0; index < free_count; ++index) {
+        solution.at(static_cast<std::size_t>(free_dofs[index])) = rhs[index];
+    }
+    double residual_squared = 0.0;
+    double residual_scale = 1.0;
+    for (std::size_t row = 0; row < free_count; ++row) {
+        const int global_row = free_dofs[row];
+        double residual = -weighted_rhs.at(static_cast<std::size_t>(global_row));
+        for (const int global_column : free_dofs) {
+            residual += mass.at(static_cast<std::size_t>(global_row)).at(
+                static_cast<std::size_t>(global_column)) *
+                solution.at(static_cast<std::size_t>(global_column));
+        }
+        for (std::size_t constraint = 0; constraint < constraint_count; ++constraint) {
+            for (const auto [dof, coefficient] : active[constraint].coefficients) {
+                if (dof == global_row) {
+                    residual += coefficient * rhs[free_count + constraint];
+                }
+            }
+        }
+        residual_squared += residual * residual;
+        residual_scale = std::max(residual_scale,
+            std::abs(weighted_rhs.at(static_cast<std::size_t>(global_row))));
+    }
+    for (std::size_t constraint = 0; constraint < constraint_count; ++constraint) {
+        double residual = -active[constraint].rhs;
+        for (const auto [dof, coefficient] : active[constraint].coefficients) {
+            residual += coefficient * solution.at(static_cast<std::size_t>(dof));
+        }
+        residual_squared += residual * residual;
+        residual_scale = std::max(residual_scale,
+            std::abs(active[constraint].rhs));
+    }
+    const double scaled_residual = std::sqrt(residual_squared) /
+        std::max(residual_scale, 1.0e-30);
+    require(std::isfinite(scaled_residual) && scaled_residual <= 1.0e-10,
+        "OE-T0 weighted KKT residual exceeds the physical gate");
+
+    double correction_energy = raw_energy;
+    for (int row = 0; row < global_dof_count; ++row) {
+        correction_energy -= 2.0 * solution.at(static_cast<std::size_t>(row)) *
+            weighted_rhs.at(static_cast<std::size_t>(row));
+        for (int column = 0; column < global_dof_count; ++column) {
+            correction_energy += solution.at(static_cast<std::size_t>(row)) *
+                mass.at(static_cast<std::size_t>(row)).at(
+                    static_cast<std::size_t>(column)) *
+                solution.at(static_cast<std::size_t>(column));
+        }
+    }
+    const double correction_roundoff = 1.0e-12 * std::max(1.0, raw_energy);
+    require(std::isfinite(correction_energy) &&
+            correction_energy >= -correction_roundoff,
+        "OE-T0 weighted correction energy is invalid");
+
+    auto field = std::make_unique<mfem::GridFunction>(space.get());
+    for (int dof = 0; dof < global_dof_count; ++dof) {
+        (*field)[dof] = solution.at(static_cast<std::size_t>(dof));
+    }
+    WeightedRt0Result result;
+    result.mesh = std::move(mesh);
+    result.collection = std::move(collection);
+    result.space = std::move(space);
+    result.field = std::move(field);
+    result.scaled_kkt_residual = scaled_residual;
+    result.correction_norm_mw = std::sqrt(std::max(0.0, correction_energy));
+    return result;
+}
 
 class CombinedConductivity final : public mfem::Coefficient {
 public:
@@ -1690,6 +2099,202 @@ std::unique_ptr<mfem::GridFunction> solve_external_lead_potential(
     return potential;
 }
 
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+
+void broadcast_reference_bytes(
+    MPI_Comm communicator,
+    std::vector<std::uint8_t> &bytes,
+    int root)
+{
+    int rank = -1;
+    MPI_Comm_rank(communicator, &rank);
+    std::uint64_t size = rank == root
+        ? static_cast<std::uint64_t>(bytes.size()) : 0;
+    MPI_Bcast(&size, 1, MPI_UINT64_T, root, communicator);
+    require(size <= static_cast<std::uint64_t>(std::numeric_limits<int>::max()),
+        "MPI OE-T0 reference payload exceeds INT_MAX");
+    if (rank != root) bytes.resize(static_cast<std::size_t>(size));
+    MPI_Bcast(bytes.empty() ? nullptr : bytes.data(), static_cast<int>(size),
+        MPI_BYTE, root, communicator);
+}
+
+std::vector<ConservativeCurrentBoundaryFace> global_closed_boundary_roles(
+    const mfem::Mesh &mesh,
+    const StableMeshVertexIdentities &ids,
+    const ClosedGeometryCurrentClosure &closure)
+{
+    const auto boundaries = boundary_face_map(mesh, ids);
+    std::map<FaceKey, std::string> source_faces;
+    for (const auto &cut : closure.source_cuts) {
+        for (const auto &pair : cut.face_pairs) {
+            source_faces.emplace(pair.minus_face_vertex_ids, cut.id);
+            source_faces.emplace(pair.plus_face_vertex_ids, cut.id);
+        }
+    }
+    std::vector<ConservativeCurrentBoundaryFace> result;
+    result.reserve(mesh.GetNBE());
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        const auto key = boundary_face_key(mesh, ids, boundary);
+        ConservativeCurrentBoundaryFace role;
+        role.boundary_element = boundary;
+        const auto source = source_faces.find(key);
+        if (source != source_faces.end()) {
+            role.role = ConservativeCurrentBoundaryRole::SourceCut;
+            role.circuit_id = source->second;
+        } else {
+            role.role = ConservativeCurrentBoundaryRole::InsulatingOuter;
+        }
+        require(boundaries.count(key) == 1,
+            "MPI OE-T0 global boundary role has an unknown face");
+        result.push_back(std::move(role));
+    }
+    require(source_faces.size() ==
+            [&] {
+                std::size_t count = 0;
+                for (const auto &role : result) {
+                    if (role.role == ConservativeCurrentBoundaryRole::SourceCut) {
+                        ++count;
+                    }
+                }
+                return count;
+            }(),
+        "MPI OE-T0 global source-cut role map contains duplicate faces");
+    return result;
+}
+
+ConservativeCurrentView::Ptr build_mpi_global_current_view(
+    const ConservativeCurrentBuildRequest &request,
+    mfem::ParMesh &parallel_mesh)
+{
+    require(request.periodic_charge_potential != nullptr,
+        "MPI OE-T0 reference requires a broadcast periodic potential snapshot");
+    require(std::holds_alternative<ClosedGeometryCurrentClosure>(request.closure),
+        "MPI OE-T0 reference currently supports closed geometry only");
+    const auto &snapshot = *request.periodic_charge_potential;
+    const auto &snapshot_mesh = *snapshot.potential_space().GetMesh();
+    const auto &snapshot_ids = snapshot.stable_vertex_identities();
+    const MPI_Comm communicator = parallel_mesh.GetComm();
+    const int root = 0;
+    int rank = -1;
+    MPI_Comm_rank(communicator, &rank);
+
+    // This collective call is the authoritative ParMesh -> rank-0 global
+    // reconstruction.  The periodic potential solver has already gathered
+    // and broadcast the same serial mesh/ID snapshot; the dimension check
+    // prevents the current reconstruction from silently using a partition.
+    const auto gathered_serial = parallel_mesh.GetSerialMesh(root);
+    if (rank == root) {
+        require(gathered_serial.GetNE() == snapshot_mesh.GetNE() &&
+                gathered_serial.GetNV() == snapshot_mesh.GetNV(),
+            "MPI OE-T0 gathered mesh disagrees with the charge snapshot");
+    }
+
+    std::vector<std::uint8_t> error_bytes;
+    std::vector<std::uint8_t> mesh_bytes;
+    std::vector<std::uint8_t> stable_bytes;
+    std::vector<std::uint8_t> field_bytes;
+    std::vector<std::uint8_t> record_bytes;
+    std::vector<std::uint8_t> certificate_bytes;
+    std::vector<std::uint8_t> identity_digest_bytes;
+    double scaled_kkt_residual = 0.0;
+    double correction_norm_mw = 0.0;
+    ConservativeCurrentView::Ptr root_view;
+    std::unique_ptr<mfem::Mesh> root_snapshot_mesh;
+    if (rank == root) {
+        try {
+            root_snapshot_mesh = std::make_unique<mfem::Mesh>(snapshot_mesh);
+            auto serial_request = request;
+            serial_request.mesh = root_snapshot_mesh.get();
+            serial_request.stable_vertex_identities = snapshot_ids;
+            serial_request.boundary_faces = global_closed_boundary_roles(
+                *root_snapshot_mesh, snapshot_ids,
+                std::get<ClosedGeometryCurrentClosure>(request.closure));
+            serial_request.reference_mpi_gather_broadcast = true;
+            root_view = ConservativeCurrentView::Build(serial_request);
+
+            std::ostringstream mesh_stream;
+            root_view->space().GetMesh()->Print(mesh_stream);
+            const auto serialized_mesh = mesh_stream.str();
+            mesh_bytes.assign(serialized_mesh.begin(), serialized_mesh.end());
+            stable_bytes.resize(snapshot_ids.local_to_stable.size() *
+                sizeof(std::uint64_t));
+            std::memcpy(stable_bytes.data(), snapshot_ids.local_to_stable.data(),
+                stable_bytes.size());
+            const auto &field = root_view->field();
+            field_bytes.resize(static_cast<std::size_t>(field.Size()) *
+                sizeof(double));
+            std::memcpy(field_bytes.data(), field.GetData(), field_bytes.size());
+            record_bytes = encode_records(root_view->canonical_face_flux_records());
+            certificate_bytes = root_view->canonical_balance_certificate_bytes();
+            identity_digest_bytes.assign(
+                root_view->identity().view_identity_digest.begin(),
+                root_view->identity().view_identity_digest.end());
+            scaled_kkt_residual = root_view->balance().scaled_kkt_residual;
+            correction_norm_mw = root_view->balance().correction_norm_mw;
+        } catch (const std::exception &error) {
+            error_bytes.assign(error.what(), error.what() +
+                std::strlen(error.what()));
+        }
+    }
+    broadcast_reference_bytes(communicator, error_bytes, root);
+    if (!error_bytes.empty()) {
+        throw std::runtime_error(std::string(error_bytes.begin(), error_bytes.end()));
+    }
+    broadcast_reference_bytes(communicator, mesh_bytes, root);
+    broadcast_reference_bytes(communicator, stable_bytes, root);
+    broadcast_reference_bytes(communicator, field_bytes, root);
+    broadcast_reference_bytes(communicator, record_bytes, root);
+    broadcast_reference_bytes(communicator, certificate_bytes, root);
+    broadcast_reference_bytes(communicator, identity_digest_bytes, root);
+    MPI_Bcast(&scaled_kkt_residual, 1, MPI_DOUBLE, root, communicator);
+    MPI_Bcast(&correction_norm_mw, 1, MPI_DOUBLE, root, communicator);
+    if (rank == root) return root_view;
+
+    const std::string serialized_mesh(mesh_bytes.begin(), mesh_bytes.end());
+    std::istringstream mesh_stream(serialized_mesh);
+    auto owned_mesh = std::make_unique<mfem::Mesh>(mesh_stream, 1, 1, true);
+    StableMeshVertexIdentities ids;
+    ids.version = snapshot_ids.version;
+    require(stable_bytes.size() == static_cast<std::size_t>(owned_mesh->GetNV()) *
+            sizeof(std::uint64_t),
+        "MPI OE-T0 stable-ID payload does not match the global mesh");
+    ids.local_to_stable.resize(static_cast<std::size_t>(owned_mesh->GetNV()));
+    std::memcpy(ids.local_to_stable.data(), stable_bytes.data(), stable_bytes.size());
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(owned_mesh.get(), &collection);
+    require(field_bytes.size() == static_cast<std::size_t>(space.GetVSize()) *
+            sizeof(double),
+        "MPI OE-T0 field payload does not match the global RT0 space");
+    mfem::GridFunction field(&space);
+    std::memcpy(field.GetData(), field_bytes.data(), field_bytes.size());
+    ConservativeCurrentImportRequest imported;
+    imported.mesh = owned_mesh.get();
+    imported.rt0_field = &field;
+    imported.stable_vertex_identities = ids;
+    imported.boundary_faces = global_closed_boundary_roles(
+        *owned_mesh, ids, std::get<ClosedGeometryCurrentClosure>(request.closure));
+    imported.closure = request.closure;
+    imported.identity = request.identity;
+    imported.pins = request.pins;
+    imported.physical_relative_gate = request.physical_relative_gate;
+    imported.physical_absolute_gate_a = request.physical_absolute_gate_a;
+    imported.scaled_kkt_residual = scaled_kkt_residual;
+    imported.correction_norm_mw = correction_norm_mw;
+    imported.require_independent_physical_certificate = true;
+    imported.reference_mpi_gather_broadcast = true;
+    auto view = ConservativeCurrentView::Import(imported);
+    require(encode_records(view->canonical_face_flux_records()) == record_bytes,
+        "MPI OE-T0 broadcast canonical records differ from rank 0");
+    require(view->canonical_balance_certificate_bytes() == certificate_bytes,
+        "MPI OE-T0 broadcast balance certificate differs from rank 0");
+    require(view->identity().view_identity_digest ==
+            std::string(identity_digest_bytes.begin(), identity_digest_bytes.end()),
+        "MPI OE-T0 broadcast view identity differs from rank 0");
+    return view;
+}
+
+#endif
+
 } // namespace
 
 ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
@@ -1704,6 +2309,13 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
         request.physical_relative_gate, request.physical_absolute_gate_a);
     validate_affine_tetrahedral_mesh(*request.mesh);
     validate_stable_ids(*request.mesh, request.stable_vertex_identities);
+#if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
+    if (auto *parallel_mesh = dynamic_cast<mfem::ParMesh *>(request.mesh)) {
+        require(request.reference_mpi_gather_broadcast,
+            "ParMesh OE-T0 requires explicit rank-0 gather/solve/broadcast");
+        return build_mpi_global_current_view(request, *parallel_mesh);
+    }
+#endif
     const auto device_boundaries = validate_boundary_roles(*request.mesh,
         request.stable_vertex_identities, request.boundary_faces);
 
@@ -1746,21 +2358,25 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             "periodic potential failed its paired weak-flux certificate");
 
         auto mesh = std::make_unique<mfem::Mesh>(*request.mesh);
-        auto collection = std::make_unique<mfem::RT_FECollection>(0, 3);
-        auto space = std::make_unique<mfem::FiniteElementSpace>(
-            mesh.get(), collection.get());
-        auto field = std::make_unique<mfem::GridFunction>(space.get());
         PotentialCurrentCoefficient current(
             snapshot.potential_field(), *request.conductivity);
-        field->ProjectCoefficient(current);
-        data = finalize_view_data(std::move(mesh),
-            request.stable_vertex_identities, std::move(collection),
-            std::move(space), std::move(field), request.identity,
+        const auto rank = analyze_physical_constraint_rank(
+            *mesh, request.stable_vertex_identities, topology.pairs,
+            topology.terminal_faces, request.physical_absolute_gate_a,
+            request.physical_relative_gate);
+        auto weighted = solve_weighted_rt0_projection(
+            std::move(mesh), request.stable_vertex_identities, current,
+            *request.conductivity, topology.pairs, topology.terminal_faces, rank);
+        data = finalize_view_data(std::move(weighted.mesh),
+            request.stable_vertex_identities, std::move(weighted.collection),
+            std::move(weighted.space),
+            std::move(weighted.field), request.identity,
             topology.revision, topology.digest, topology.pairs,
             topology.terminal_faces, topology.terminal_id,
             request.algebraic_relative_tolerance,
             request.physical_relative_gate, request.physical_absolute_gate_a,
-            request.reference_mpi_gather_broadcast);
+            request.reference_mpi_gather_broadcast,
+            weighted.scaled_kkt_residual, weighted.correction_norm_mw);
     } else {
         const auto &external =
             std::get<ExternalLeadExtensionCurrentClosure>(request.closure);
@@ -1789,19 +2405,22 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             request.mesh->GetNV(), request.mesh->GetNE(),
             request.stable_vertex_identities, external, conductivity,
             request.algebraic_relative_tolerance);
-        auto collection = std::make_unique<mfem::RT_FECollection>(0, 3);
-        auto space = std::make_unique<mfem::FiniteElementSpace>(
-            mesh.get(), collection.get());
-        auto field = std::make_unique<mfem::GridFunction>(space.get());
         PotentialCurrentCoefficient current(*potential, conductivity);
-        field->ProjectCoefficient(current);
-        data = finalize_view_data(std::move(mesh), std::move(ids),
-            std::move(collection), std::move(space), std::move(field),
+        const auto rank = analyze_physical_constraint_rank(
+            *mesh, ids, topology.pairs, topology.terminal_faces,
+            request.physical_absolute_gate_a, request.physical_relative_gate);
+        auto weighted = solve_weighted_rt0_projection(
+            std::move(mesh), ids, current, conductivity,
+            topology.pairs, topology.terminal_faces, rank);
+        data = finalize_view_data(std::move(weighted.mesh), std::move(ids),
+            std::move(weighted.collection), std::move(weighted.space),
+            std::move(weighted.field),
             request.identity, topology.revision, topology.digest,
             topology.pairs, topology.terminal_faces, topology.terminal_id,
             request.algebraic_relative_tolerance,
             request.physical_relative_gate, request.physical_absolute_gate_a,
-            request.reference_mpi_gather_broadcast);
+            request.reference_mpi_gather_broadcast,
+            weighted.scaled_kkt_residual, weighted.correction_norm_mw);
     }
     auto impl = std::make_unique<Impl>();
     impl->mesh = std::move(data.mesh);

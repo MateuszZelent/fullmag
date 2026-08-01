@@ -1430,12 +1430,20 @@ void independently_decode_and_match_balance_artifact(
     const double summary_face = reader.f64();
     const double summary_outer = reader.f64();
     const double summary_electrode = reader.f64();
+    const double summary_kkt = reader.f64();
+    const double summary_correction = reader.f64();
     const uint8_t closure_complete = reader.u8();
     require(reader.finished(), "balance artifact has trailing/partial bytes");
     require(std::abs(summary_element - oracle.max_element_divergence_a) <=
                 1.0e-13 &&
             std::abs(summary_face - oracle.max_internal_jump_a) <= 1.0e-13,
         "balance summary maxima disagree with independently decoded rows");
+    require(std::abs(summary_kkt - view->balance().scaled_kkt_residual) <=
+                1.0e-13 &&
+            std::abs(summary_correction - view->balance().correction_norm_mw) <=
+                1.0e-13 && closure_complete ==
+                (view->balance().closure_complete ? 1u : 0u),
+        "balance KKT diagnostics disagree with the accepted view");
 
     double outer_flux = 0.0;
     double max_circuit_mismatch = 0.0;
@@ -3186,7 +3194,12 @@ void emit_mpi_qualified_records(const std::string &path)
         2, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
     const auto global_ids = coordinate_stable_vertex_ids(serial);
     const auto global_closure = periodic_source_cut(serial, global_ids);
-    mfem::ParMesh parallel(MPI_COMM_WORLD, serial);
+    std::vector<int> partition(static_cast<std::size_t>(serial.GetNE()));
+    for (int element = 0; element < serial.GetNE(); ++element) {
+        partition.at(static_cast<std::size_t>(element)) =
+            element < serial.GetNE() / size ? 0 : 1;
+    }
+    mfem::ParMesh parallel(MPI_COMM_WORLD, serial, partition.data());
     const auto local_ids = coordinate_stable_vertex_ids(parallel);
     mfem::ConstantCoefficient conductivity(4.0);
     const auto identity = identity_input();

@@ -199,6 +199,8 @@ if(FULLMAG_USE_MFEM_STACK)
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
         cpu/mfem/transport/steady_transport.cpp
+        cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
+        cpu/mfem/interactions/oersted/vector_potential.cpp
     )
 
     # S11: CUDA fused kernels (LLG RHS, normalize, accumulate)
@@ -354,6 +356,57 @@ enable_testing()
 
 if(FULLMAG_USE_MFEM_STACK)
     add_executable(
+        fem_oersted_direct_tetra_contract
+        tests/oersted_direct_tetra_contract.cpp
+    )
+    target_link_libraries(fem_oersted_direct_tetra_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_oersted_direct_tetra_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_oersted_direct_tetra_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_oersted_direct_tetra_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_oersted_direct_tetra_contract
+        COMMAND fem_oersted_direct_tetra_contract)
+
+    add_executable(
+        fem_oersted_vector_potential_contract
+        tests/oersted_vector_potential_contract.cpp
+    )
+    target_link_libraries(fem_oersted_vector_potential_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_oersted_vector_potential_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_oersted_vector_potential_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_oersted_vector_potential_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_oersted_vector_potential_contract
+        COMMAND fem_oersted_vector_potential_contract)
+
+    add_executable(
+        fem_conservative_constraint_rank_contract
+        tests/conservative_constraint_rank_contract.cpp
+        cpu/mfem/transport/conservative_constraint_rank.cpp
+    )
+    target_include_directories(fem_conservative_constraint_rank_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_compile_definitions(
+        fem_conservative_constraint_rank_contract PRIVATE
+        FULLMAG_CONSTRAINT_RANK_TESTING=1)
+    add_test(
+        NAME fem_conservative_constraint_rank_contract
+        COMMAND fem_conservative_constraint_rank_contract)
+
+    add_executable(
         fem_steady_transport_contract
         tests/steady_transport_contract.cpp
         cpu/mfem/transport/steady_transport.cpp
@@ -423,9 +476,9 @@ if(FULLMAG_USE_MFEM_STACK)
         target_compile_definitions(fem_conservative_current_view_contract PRIVATE
             FULLMAG_OET0_DISABLE_MPI=1)
         target_compile_options(fem_conservative_current_view_contract PRIVATE
-            -fsanitize=thread -fno-omit-frame-pointer)
+            -fsanitize=thread -fno-omit-frame-pointer -fno-pie)
         target_link_options(fem_conservative_current_view_contract PRIVATE
-            -fsanitize=thread)
+            -fsanitize=thread -no-pie)
     endif()
     add_test(
         NAME fem_conservative_current_view_contract
