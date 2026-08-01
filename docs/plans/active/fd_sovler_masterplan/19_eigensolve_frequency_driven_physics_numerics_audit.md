@@ -1,6 +1,6 @@
 ---
 title: Frequency-domain physics and numerics audit register
-date: 2026-07-10
+date: 2026-08-01
 status: implementation_status
 runtime_revalidated_in_this_update: false
 source_revision_basis: static code and existing repository evidence
@@ -9,8 +9,9 @@ source_revision_basis: static code and existing repository evidence
 # Physics and numerics audit register
 
 This file replaces the previous narrative audit with a current finding
-register. It does not claim new runtime proof. No tests, builds, examples,
-managed runtimes or solvers were run for this update.
+register. The source-level findings remain current after the master update.
+The dated revalidation below records the limited build/runtime evidence from
+this update; it does not promote any readiness cell.
 
 Required state fields:
 
@@ -113,3 +114,26 @@ The current production boundary is intentionally narrow:
 Any future status change must update the JSON readiness matrix first, then
 project the new truth into this register and the capability matrix under the
 parallel owner.
+
+## Revalidation boundary after master update (2026-08-01)
+
+The branch update was completed before the audit: merge commit
+`d5f63b35a4f4a57798089915b312c4695caea917` contains
+`origin/master=eee245ac200bf138d880b793791848106b7386ba`, with
+`HEAD...origin/master = 25 0`. Focused Python, IR/planner, runner, and UI
+tests passed before the managed native run; these tests cover authoring and
+contracts, not physical K0 demag qualification.
+
+The managed FEM runtime was rebuilt and its exact commit/source identity was
+validated. The container had no NVIDIA driver, so this update has no executed
+GPU-device evidence. The aggregate native-contract recipe failed before
+compilation because `native/build` was absent in the fresh worktree. The
+explicit K0 CPU SLEPc recipe configured PETSc/SLEPc and built the target
+binary, but its small SLEPc fixture produced no result after approximately 19
+minutes and was terminated with exit code 130.
+
+Accordingly all finding rows whose `verification_state` is `not_run` remain
+`not_run`, and the readiness matrix remains the authority. Build identity is
+not runtime solver proof; source-visible artifacts are not production
+qualification; and GPU compilation without an executed device is not GPU
+validation.

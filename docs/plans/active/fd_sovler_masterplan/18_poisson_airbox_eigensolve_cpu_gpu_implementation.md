@@ -847,3 +847,68 @@ GPU scope:
    `DOD-01` through `DOD-14` for the exact CPU or GPU scope. A partial,
    stale, hidden-fallback, or scope-mismatched record cannot promote a
    capability.
+
+## 13. Revalidation after the master branch update (2026-08-01)
+
+This chapter was rechecked only after the eigensolve branch was merged with
+the current master. The branch is now based on `origin/master` (`25 0` ahead/
+behind), with merge commit
+`d5f63b35a4f4a57798089915b312c4695caea917` and master
+`eee245ac200bf138d880b793791848106b7386ba`. No implementation claim below is
+changed by that merge.
+
+### 13.1 Current CPU implementation evidence
+
+`crates/fullmag-runner/src/fem_eigen.rs::build_pa_e4b_k0_kittel_poisson_airbox_payload`
+still derives `expected_reference_frequency_hz` from the Kittel expression,
+assigns it to `target_frequency_hz`, constructs dense matrices and labels the
+payload `synthetic_algebraic_oracle`. This is the exact contamination that
+K0-P3/K0-P4 must remove. The payload also hard-codes the v6 schema string
+without transporting a certificate identity or digest.
+
+`backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp::validate_problem`
+still rejects every assembly kind except `synthetic_algebraic_oracle` and
+rejects Robin/Dirichlet modal solves. Its SLEPc setup
+(`solve_poisson_airbox_modal_eigen_cpu_slepc`) still applies a real
+`EPSSetTarget(target_omega)` to the original lambda pencil, selects one mode,
+and uses `expected_reference_frequency_hz` in solver acceptance. The current
+native result ABI
+(`backends/fem/include/frequency_domain/modal_eigen_result.hpp::FrequencyDomainContractResult`)
+does not carry a multi-mode q/phi result collection. These are open production
+gates, not documentation-only gaps.
+
+### 13.2 Current GPU implementation evidence
+
+The CUDA source contains bounded dense/action probes and explicit diagnostics,
+but not a persistent selected-spectrum modal engine. In particular,
+`fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action` reports
+zero per-action transfers while also reporting
+`gpu_device_resident_modal_eigensolver=false`; that is compatible with a
+one-shot action and does not establish a device-resident Arnoldi/Krylov loop.
+`gpu_device_krylov.hpp::validate_fgmres_device_engine` continues to report
+`production_loop_available=false`.
+
+### 13.3 Product-chain boundary
+
+The Python/IR authoring and negative-validation paths, the v2 spectrum/branch
+resources, and the mode-field metadata/preview UI are present as reference or
+artifact-backed surfaces. They do not make a physical K0 result available:
+the current capability snapshot still marks production CPU/GPU modal solving
+unsupported, and the inspector explicitly reports 3D plotting as waiting for
+mode-field artifacts. Production mode fields must be native q and reconstructed
+phi vectors from the accepted solve; the runner test
+`native_poisson_airbox_result_without_modes_maps_to_uniform_k0_mode` documents
+the fallback that K0-P5 must remove.
+
+### 13.4 Verification boundary
+
+The managed runtime bundle was rebuilt and identity-validated for the merge
+commit. The aggregate native-contract recipe was attempted but failed before
+build because a fresh worktree had no `native/build` directory. The explicit
+K0 CPU SLEPc recipe configured PETSc/SLEPc and built the contract binary, but
+the small SLEPc fixture produced no result after approximately 19 minutes and
+was terminated with exit code 130. This is a timeout/non-convergence boundary,
+not a passing contract.
+Neither event changes the readiness matrix or qualifies a CPU/GPU production
+cell. The authoritative completion gates remain K0-P1 through K0-P6,
+K0-G1 through K0-G4, and DOD-01 through DOD-14.

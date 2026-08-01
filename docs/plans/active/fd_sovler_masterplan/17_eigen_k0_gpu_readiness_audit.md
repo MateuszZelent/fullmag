@@ -1,9 +1,10 @@
 # Eigen K0 GPU readiness audit
 
-- Date: 2026-07-10
+- Date: 2026-08-01
 - Status: implementation_status
 - Source of truth: `25_frequency_domain_readiness_matrix.json`
-- Runtime revalidated in this update: `false`
+- Managed runtime bundle identity revalidated in this update: `true`
+- Executed GPU-device solver revalidated in this update: `false`
 - Historical audit: `old/17_eigen_k0_gpu_readiness_audit_legacy_2026-07-10.md`
 
 This file is a strict GPU-focused projection of
@@ -139,3 +140,38 @@ cell being promoted:
 
 Until those gates pass, only the narrow K0 no-demag macrospin GPU modal cell is
 `physics_validated`, and only for precision=`double`.
+
+## Revalidation after the master branch update (2026-08-01)
+
+The working branch was first brought up to the current `origin/master` before
+this audit. The merge commit is `d5f63b35a4f4a57798089915b312c4695caea917`;
+`origin/master` is `eee245ac200bf138d880b793791848106b7386ba`, and
+`git rev-list --left-right --count HEAD...origin/master` reports `25 0`.
+This is branch-integration evidence, not solver qualification.
+
+The managed FEM bundle was rebuilt and validated against the exact source
+snapshot. Its manifest reports commit `d5f63b35a4f4a57798089915b312c4695caea917`,
+`source_identity_compatibility=exact-schema-3`, `worktree_state=clean`, and
+`compute_capability=8.9`. The container reported that no NVIDIA driver was
+available, so no executed-device GPU result was produced.
+
+The aggregate native-contract recipe was attempted after the rebuild but
+stopped before compilation because the fresh worktree did not contain
+`native/build`; this is a recipe/bootstrap failure, not evidence that the
+frequency-domain contracts passed or failed. The explicit K0 CPU recipe then
+configured its own managed CMake build and produced the contract binary, but
+the small SLEPc fixture did not emit a result after approximately 19 minutes.
+The recipe was terminated with exit code 130; this is a timeout/non-convergence
+boundary, not a pass.
+
+The source-level boundary is unchanged and is anchored by:
+
+| Source anchor | Revalidated conclusion |
+|---|---|
+| `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu::fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action` | A device dense shifted action exists, but its diagnostics explicitly set `gpu_device_resident_modal_eigensolver=false`; it is not a modal Krylov loop. |
+| `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu::fullmag_fem_frequency_domain_solve_modal_poisson_airbox_gpu_dense_eigensolver` | The bounded dense Poisson-airbox lane remains `validation_only=true`, `production_modal_claim=false`, and `persistent_solver_context=false`. |
+| `backends/fem/include/frequency_domain/gpu_device_krylov.hpp::validate_fgmres_device_engine` | Device workspace validation is present, but `production_loop_available=false`; no promotion follows from the contract structure alone. |
+
+Therefore `modal_gpu_k0_periodic_airbox_scalable` remains `absent/unvalidated`
+and the only physics-validated GPU modal cell remains the double-precision,
+no-demag macrospin/Larmor slice.

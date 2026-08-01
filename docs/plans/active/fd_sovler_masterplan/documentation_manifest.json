@@ -1,7 +1,7 @@
 {
   "schema_version": "frequency_domain_documentation_manifest.v3",
   "package_version": "COMSOL-aligned v5.1 deterministic static contract",
-  "updated_at": "2026-07-12",
+  "updated_at": "2026-08-01",
   "entrypoint": "00_README_CANONICAL_FULL_READ.md",
   "full_pack": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md",
   "full_pack_generated": true,

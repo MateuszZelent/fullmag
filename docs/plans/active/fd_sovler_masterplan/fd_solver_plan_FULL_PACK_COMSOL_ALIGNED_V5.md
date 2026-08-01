@@ -3858,10 +3858,11 @@ Until every applicable gate is evidenced, the missing link remains
 <!-- BEGIN 17_eigen_k0_gpu_readiness_audit.md -->
 # Eigen K0 GPU readiness audit
 
-- Date: 2026-07-10
+- Date: 2026-08-01
 - Status: implementation_status
 - Source of truth: `25_frequency_domain_readiness_matrix.json`
-- Runtime revalidated in this update: `false`
+- Managed runtime bundle identity revalidated in this update: `true`
+- Executed GPU-device solver revalidated in this update: `false`
 - Historical audit: `old/17_eigen_k0_gpu_readiness_audit_legacy_2026-07-10.md`
 
 This file is a strict GPU-focused projection of
@@ -3997,6 +3998,41 @@ cell being promoted:
 
 Until those gates pass, only the narrow K0 no-demag macrospin GPU modal cell is
 `physics_validated`, and only for precision=`double`.
+
+## Revalidation after the master branch update (2026-08-01)
+
+The working branch was first brought up to the current `origin/master` before
+this audit. The merge commit is `d5f63b35a4f4a57798089915b312c4695caea917`;
+`origin/master` is `eee245ac200bf138d880b793791848106b7386ba`, and
+`git rev-list --left-right --count HEAD...origin/master` reports `25 0`.
+This is branch-integration evidence, not solver qualification.
+
+The managed FEM bundle was rebuilt and validated against the exact source
+snapshot. Its manifest reports commit `d5f63b35a4f4a57798089915b312c4695caea917`,
+`source_identity_compatibility=exact-schema-3`, `worktree_state=clean`, and
+`compute_capability=8.9`. The container reported that no NVIDIA driver was
+available, so no executed-device GPU result was produced.
+
+The aggregate native-contract recipe was attempted after the rebuild but
+stopped before compilation because the fresh worktree did not contain
+`native/build`; this is a recipe/bootstrap failure, not evidence that the
+frequency-domain contracts passed or failed. The explicit K0 CPU recipe then
+configured its own managed CMake build and produced the contract binary, but
+the small SLEPc fixture did not emit a result after approximately 19 minutes.
+The recipe was terminated with exit code 130; this is a timeout/non-convergence
+boundary, not a pass.
+
+The source-level boundary is unchanged and is anchored by:
+
+| Source anchor | Revalidated conclusion |
+|---|---|
+| `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu::fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action` | A device dense shifted action exists, but its diagnostics explicitly set `gpu_device_resident_modal_eigensolver=false`; it is not a modal Krylov loop. |
+| `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu::fullmag_fem_frequency_domain_solve_modal_poisson_airbox_gpu_dense_eigensolver` | The bounded dense Poisson-airbox lane remains `validation_only=true`, `production_modal_claim=false`, and `persistent_solver_context=false`. |
+| `backends/fem/include/frequency_domain/gpu_device_krylov.hpp::validate_fgmres_device_engine` | Device workspace validation is present, but `production_loop_available=false`; no promotion follows from the contract structure alone. |
+
+Therefore `modal_gpu_k0_periodic_airbox_scalable` remains `absent/unvalidated`
+and the only physics-validated GPU modal cell remains the double-precision,
+no-demag macrospin/Larmor slice.
 <!-- END 17_eigen_k0_gpu_readiness_audit.md -->
 
 <!-- BEGIN 18_poisson_airbox_eigensolve_cpu_gpu_implementation.md -->
@@ -4849,12 +4885,77 @@ GPU scope:
    `DOD-01` through `DOD-14` for the exact CPU or GPU scope. A partial,
    stale, hidden-fallback, or scope-mismatched record cannot promote a
    capability.
+
+## 13. Revalidation after the master branch update (2026-08-01)
+
+This chapter was rechecked only after the eigensolve branch was merged with
+the current master. The branch is now based on `origin/master` (`25 0` ahead/
+behind), with merge commit
+`d5f63b35a4f4a57798089915b312c4695caea917` and master
+`eee245ac200bf138d880b793791848106b7386ba`. No implementation claim below is
+changed by that merge.
+
+### 13.1 Current CPU implementation evidence
+
+`crates/fullmag-runner/src/fem_eigen.rs::build_pa_e4b_k0_kittel_poisson_airbox_payload`
+still derives `expected_reference_frequency_hz` from the Kittel expression,
+assigns it to `target_frequency_hz`, constructs dense matrices and labels the
+payload `synthetic_algebraic_oracle`. This is the exact contamination that
+K0-P3/K0-P4 must remove. The payload also hard-codes the v6 schema string
+without transporting a certificate identity or digest.
+
+`backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp::validate_problem`
+still rejects every assembly kind except `synthetic_algebraic_oracle` and
+rejects Robin/Dirichlet modal solves. Its SLEPc setup
+(`solve_poisson_airbox_modal_eigen_cpu_slepc`) still applies a real
+`EPSSetTarget(target_omega)` to the original lambda pencil, selects one mode,
+and uses `expected_reference_frequency_hz` in solver acceptance. The current
+native result ABI
+(`backends/fem/include/frequency_domain/modal_eigen_result.hpp::FrequencyDomainContractResult`)
+does not carry a multi-mode q/phi result collection. These are open production
+gates, not documentation-only gaps.
+
+### 13.2 Current GPU implementation evidence
+
+The CUDA source contains bounded dense/action probes and explicit diagnostics,
+but not a persistent selected-spectrum modal engine. In particular,
+`fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action` reports
+zero per-action transfers while also reporting
+`gpu_device_resident_modal_eigensolver=false`; that is compatible with a
+one-shot action and does not establish a device-resident Arnoldi/Krylov loop.
+`gpu_device_krylov.hpp::validate_fgmres_device_engine` continues to report
+`production_loop_available=false`.
+
+### 13.3 Product-chain boundary
+
+The Python/IR authoring and negative-validation paths, the v2 spectrum/branch
+resources, and the mode-field metadata/preview UI are present as reference or
+artifact-backed surfaces. They do not make a physical K0 result available:
+the current capability snapshot still marks production CPU/GPU modal solving
+unsupported, and the inspector explicitly reports 3D plotting as waiting for
+mode-field artifacts. Production mode fields must be native q and reconstructed
+phi vectors from the accepted solve; the runner test
+`native_poisson_airbox_result_without_modes_maps_to_uniform_k0_mode` documents
+the fallback that K0-P5 must remove.
+
+### 13.4 Verification boundary
+
+The managed runtime bundle was rebuilt and identity-validated for the merge
+commit. The aggregate native-contract recipe was attempted but failed before
+build because a fresh worktree had no `native/build` directory. The explicit
+K0 CPU SLEPc recipe configured PETSc/SLEPc and built the contract binary, but
+the small SLEPc fixture produced no result after approximately 19 minutes and
+was terminated with exit code 130. This is a timeout/non-convergence boundary,
+not a passing contract.
+Neither event changes the readiness matrix or qualifies a CPU/GPU production
+cell. The authoritative completion gates remain K0-P1 through K0-P6,
+K0-G1 through K0-G4, and DOD-01 through DOD-14.
 <!-- END 18_poisson_airbox_eigensolve_cpu_gpu_implementation.md -->
 
 <!-- BEGIN 19_eigensolve_frequency_driven_physics_numerics_audit.md -->
 ---
 title: Frequency-domain physics and numerics audit register
-date: 2026-07-10
+date: 2026-08-01
 status: implementation_status
 runtime_revalidated_in_this_update: false
 source_revision_basis: static code and existing repository evidence
@@ -4863,8 +4964,9 @@ source_revision_basis: static code and existing repository evidence
 # Physics and numerics audit register
 
 This file replaces the previous narrative audit with a current finding
-register. It does not claim new runtime proof. No tests, builds, examples,
-managed runtimes or solvers were run for this update.
+register. The source-level findings remain current after the master update.
+The dated revalidation below records the limited build/runtime evidence from
+this update; it does not promote any readiness cell.
 
 Required state fields:
 
@@ -4967,6 +5069,29 @@ The current production boundary is intentionally narrow:
 Any future status change must update the JSON readiness matrix first, then
 project the new truth into this register and the capability matrix under the
 parallel owner.
+
+## Revalidation boundary after master update (2026-08-01)
+
+The branch update was completed before the audit: merge commit
+`d5f63b35a4f4a57798089915b312c4695caea917` contains
+`origin/master=eee245ac200bf138d880b793791848106b7386ba`, with
+`HEAD...origin/master = 25 0`. Focused Python, IR/planner, runner, and UI
+tests passed before the managed native run; these tests cover authoring and
+contracts, not physical K0 demag qualification.
+
+The managed FEM runtime was rebuilt and its exact commit/source identity was
+validated. The container had no NVIDIA driver, so this update has no executed
+GPU-device evidence. The aggregate native-contract recipe failed before
+compilation because `native/build` was absent in the fresh worktree. The
+explicit K0 CPU SLEPc recipe configured PETSc/SLEPc and built the target
+binary, but its small SLEPc fixture produced no result after approximately 19
+minutes and was terminated with exit code 130.
+
+Accordingly all finding rows whose `verification_state` is `not_run` remain
+`not_run`, and the readiness matrix remains the authority. Build identity is
+not runtime solver proof; source-visible artifacts are not production
+qualification; and GPU compilation without an executed device is not GPU
+validation.
 <!-- END 19_eigensolve_frequency_driven_physics_numerics_audit.md -->
 
 <!-- BEGIN 20_dynamic_solver_audit_revalidation_and_remediation.md -->
