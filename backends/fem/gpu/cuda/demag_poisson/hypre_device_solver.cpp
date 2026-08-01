@@ -190,8 +190,8 @@ bool initialize_demag_poisson_hypre_device_solver(
         ctx.gpu_state.device.demag_poisson.poisson_solution,
         workspace.row_starts,
         true);
-    workspace.residual = std::make_unique<mfem::Vector>(static_cast<int>(glob_size));
-    workspace.residual->UseDevice(true);
+    workspace.residual = std::make_unique<mfem::HypreParVector>(
+        fullmag_serial_comm(), glob_size, workspace.row_starts);
     if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error) ||
         !configure_demag_poisson_hypre_solver(ctx, workspace, error)) {
         return false;
@@ -351,6 +351,10 @@ bool validate_demag_poisson_hypre_device_solve(
         workspace.b_par != nullptr &&
         workspace.residual != nullptr) {
         workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
+        if (!mfem_default_stream_wait_for_hypre_validation(
+                workspace.stream_interop, error)) {
+            return false;
+        }
         workspace.residual->Add(-1.0, *workspace.b_par);
         absolute_residual = workspace.residual->Norml2();
         residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;

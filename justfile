@@ -235,6 +235,9 @@ verify-fem-relaxation-source-contract:
 verify-fem-solver-optimization-ledger:
     python3 scripts/validate_fem_solver_optimization_ledger.py docs/audits/2026-07-29-fem-solver-optimization-remediation-ledger.md
 
+verify-fem-solver-optimization-ledger:
+    python3 scripts/validate_fem_solver_optimization_ledger.py docs/audits/2026-07-29-fem-solver-optimization-remediation-ledger.md
+
 verify-fem-demag-amg-policy-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_demag_amg_policy_has_one_owner_and_effective_abi_provenance -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu artifacts::tests::demag_profile_metadata_includes_timing_breakdown -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-fem-sys --features build-native tests::regional_field_drive_ffi_layout_matches_native_runtime -- --exact --nocapture'

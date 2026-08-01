@@ -20,6 +20,7 @@ struct HypreStreamInterop {
     cudaStream_t hypre_stream = nullptr;
     cudaEvent_t fullmag_ready = nullptr;
     cudaEvent_t hypre_done = nullptr;
+    cudaEvent_t hypre_validation_done = nullptr;
     uint64_t event_wait_count = 0;
     uint64_t global_sync_count = 0;
     bool ready = false;
@@ -37,6 +38,10 @@ bool hypre_wait_for_fullmag(
 bool fullmag_wait_for_hypre(
     HypreStreamInterop &interop,
     cudaStream_t fullmag_stream,
+    std::string &error);
+
+bool mfem_default_stream_wait_for_hypre_validation(
+    HypreStreamInterop &interop,
     std::string &error);
 
 void destroy_hypre_stream_interop(HypreStreamInterop &interop) noexcept;
