@@ -220,7 +220,9 @@ def test_typed_fixture_v2_manifest_preserves_topology_identity(tmp_path: Path) -
         "schema": "fullmag.fem_gpu.performance_fixture.v2",
         "solver_mesh_path": mesh_path.name,
         "solver_mesh_sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
-        "solver_mesh_signature": "fixture-mesh",
+        "solver_mesh_signature": benchmark.solver_mesh_signature(
+            _typed_v2_test_mesh()
+        ),
         "problem_ir_sha256": "a" * 64,
         **counts,
         "scenario": "box500_airbox_exchange_demag",
@@ -233,6 +235,154 @@ def test_typed_fixture_v2_manifest_preserves_topology_identity(tmp_path: Path) -
     fixture = benchmark.load_fixture_manifest(manifest_path)
     assert fixture.node_count == counts["node_count"]
     assert fixture.element_count == counts["cell_count"]
+
+
+def test_mesh_topology_stats_is_single_parser_and_legacy_requires_explicit_opt_in(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    typed_path = tmp_path / "typed.mesh.json"
+    typed_path.write_text(json.dumps(_typed_v2_test_mesh()), encoding="utf-8")
+
+    stats = benchmark.read_mesh_topology_stats(typed_path)
+    assert stats == benchmark.MeshTopologyStats(
+        node_count=5,
+        cell_count=2,
+        facet_count=2,
+        exterior_facet_count=1,
+        interface_facet_count=1,
+        schema_kind="typed_v2",
+    )
+
+    legacy_path = tmp_path / "legacy.mesh.json"
+    legacy_path.write_text(
+        json.dumps({"nodes": [[0.0, 0.0, 0.0]], "elements": [[0, 0, 0, 0]]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="legacy mesh requires explicit opt-in"):
+        benchmark.read_mesh_topology_stats(legacy_path)
+    legacy_stats = benchmark.read_mesh_topology_stats(
+        legacy_path, allow_legacy=True
+    )
+    assert legacy_stats.schema_kind == "legacy_v1"
+
+
+def test_mesh_topology_stats_rejects_conflicting_dual_schema(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    mesh["elements"] = [[0, 1, 2, 3]]
+    mesh["boundary_faces"] = [[0, 1, 2]]
+    path = tmp_path / "dual.mesh.json"
+    path.write_text(json.dumps(mesh), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="conflicting dual-schema"):
+        benchmark.read_mesh_topology_stats(path)
+
+
+def test_solver_mesh_signature_v2_covers_roles_markers_and_owner_connectivity() -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    baseline = benchmark.solver_mesh_signature(mesh)
+    assert baseline == benchmark.mesh_signature(mesh)
+
+    for mutate in (
+        lambda value: value["facets"]["roles"].__setitem__(0, "periodic_seam"),
+        lambda value: value["element_markers"].__setitem__(0, 7),
+        lambda value: value["boundary_markers"].__setitem__(0, 91),
+        lambda value: value["facets"]["global_ordinals"].__setitem__(0, 9),
+    ):
+        changed = json.loads(json.dumps(mesh))
+        mutate(changed)
+        assert benchmark.solver_mesh_signature(changed) != baseline
+
+
+def test_solver_mesh_signature_derives_current_ir_owners_and_rejects_partial_owner_arrays() -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    derived = benchmark.solver_mesh_signature(mesh)
+    without_optional_owner_arrays = json.loads(json.dumps(mesh))
+    assert benchmark.solver_mesh_signature(without_optional_owner_arrays) == derived
+
+    partial = json.loads(json.dumps(mesh))
+    partial["facets"]["owner_offsets"] = [0, 2, 3]
+    with pytest.raises(ValueError, match="owner_offsets and owners"):
+        benchmark.solver_mesh_signature(partial)
+
+
+def test_execution_plan_mesh_stats_separates_input_and_solver_identity_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    input_path = tmp_path / "input.mesh.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "nodes": [[0.0, 0.0, 0.0]],
+                "elements": [[0, 0, 0, 0]],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    solver_mesh = _typed_v2_test_mesh()
+    solver_path = tmp_path / "solver.mesh.json"
+    solver_path.write_text(json.dumps(solver_mesh), encoding="utf-8")
+    metadata = {
+        "execution_plan": {
+            "backend_plan": {
+                "kind": "fem",
+                "mesh_name": "solver",
+                "mesh": solver_mesh,
+            }
+        }
+    }
+
+    stats = benchmark.execution_plan_mesh_stats(
+        metadata, input_mesh_path=input_path, solver_mesh_path=solver_path
+    )
+    assert stats["input_mesh_node_count"] == 1
+    assert stats["input_mesh_cell_count"] == 1
+    assert stats["solver_mesh_node_count"] == 5
+    assert stats["solver_mesh_cell_count"] == 2
+    assert stats["solver_mesh_facet_count"] == 2
+    assert stats["solver_mesh_exterior_facet_count"] == 1
+    assert stats["solver_mesh_interface_facet_count"] == 1
+    assert stats["solver_mesh_signature"] == benchmark.solver_mesh_signature(solver_mesh)
+
+    mismatched = json.loads(json.dumps(metadata))
+    mismatched["execution_plan"]["backend_plan"]["mesh"]["boundary_markers"][0] = 99
+    with pytest.raises(ValueError, match="solver mesh topology mismatch"):
+        benchmark.execution_plan_mesh_stats(
+            mismatched, input_mesh_path=input_path, solver_mesh_path=solver_path
+        )
+
+
+def test_typed_fixture_manifest_rejects_declared_solver_count_mismatch(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    mesh_path = tmp_path / "typed.mesh.json"
+    mesh_path.write_text(json.dumps(_typed_v2_test_mesh()), encoding="utf-8")
+    counts = benchmark.typed_mesh_topology_counts(
+        json.loads(mesh_path.read_text(encoding="utf-8"))
+    )
+    manifest = {
+        "schema": "fullmag.fem_gpu.performance_fixture.v2",
+        "solver_mesh_path": mesh_path.name,
+        "solver_mesh_sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
+        "solver_mesh_signature": benchmark.solver_mesh_signature(
+            _typed_v2_test_mesh()
+        ),
+        "problem_ir_sha256": "a" * 64,
+        **counts,
+        "cell_count": counts["cell_count"] + 1,
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "nonlinear_cg",
+        "demag_policy": {"solver": "CG", "preconditioner": "AMG", "rtol": 1e-12},
+        "stop_condition": {"kind": "torque_or_max_steps", "max_steps": 1},
+    }
+    manifest_path = tmp_path / "typed.fixture.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="cell_count differs"):
+        benchmark.load_fixture_manifest(manifest_path)
 
 
 def test_benchmark_summary_reports_distribution() -> None:
@@ -1170,7 +1320,9 @@ def test_fixture_identity_rejects_full_contract_tamper(
         write_performance_fixture(tmp_path, benchmark)
     )
     row = {
-        "solver_mesh_signature": "fixture-mesh",
+        "solver_mesh_signature": benchmark.solver_mesh_signature(
+            _typed_v2_test_mesh()
+        ),
         "executed_problem_ir_sha256": "a" * 64,
         "reported_scenario": "box500_airbox_exchange_demag",
         "reported_relaxation_algorithm": "nonlinear_cg",

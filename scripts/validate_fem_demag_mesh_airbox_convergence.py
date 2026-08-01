@@ -16,6 +16,8 @@ from typing import Iterable, Mapping
 BACKENDS = ("fem_cpu", "fem_gpu")
 ALGORITHMS = ("projected_gradient_bb", "nonlinear_cg")
 RESOLUTIONS = ("coarse", "medium", "fine")
+LEGACY_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
+TYPED_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v2"
 AIRBOX_EXTENT_SCALES = (1.0, 1.5, 2.0)
 # The Task 0 meshes are performance fixtures with widely spaced resolutions and
 # no analytical reference. These ceilings are deliberately only a fail-closed
@@ -36,6 +38,27 @@ BASE_AIRBOX_SIZE_M = 1.0e-6
 REQUIRED_OBSERVABLES = tuple(MESH_TREND_RELATIVE_DELTA_CEILINGS)
 
 
+def _count_alias(
+    mapping: Mapping[str, object],
+    *,
+    aliases: tuple[str, ...],
+    label: str,
+    require_explicit: bool,
+) -> int:
+    if require_explicit and aliases[0] not in mapping:
+        raise ValueError(f"{label}: missing explicit {aliases[0]}")
+    present = [mapping[name] for name in aliases if name in mapping]
+    if not present:
+        raise ValueError(f"{label}: missing topology count {aliases[0]}")
+    try:
+        values = [int(value) for value in present]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label}: topology count {aliases[0]} must be an integer") from exc
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError(f"{label}: conflicting topology count aliases for {aliases[0]}")
+    return values[0]
+
+
 def _load_fixture_suite(path: Path) -> dict[str, dict[str, object]]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -43,6 +66,9 @@ def _load_fixture_suite(path: Path) -> dict[str, dict[str, object]]:
         raise ValueError(f"{path}: invalid fixture suite JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: fixture suite JSON must be an object")
+    schema = payload.get("schema")
+    if schema not in {LEGACY_SUITE_SCHEMA, TYPED_SUITE_SCHEMA}:
+        raise ValueError(f"{path}: unsupported fixture suite schema {schema!r}")
     fixtures = payload.get("fixtures")
     if not isinstance(fixtures, list):
         raise ValueError(f"{path}: fixture suite JSON is missing fixtures")
@@ -53,14 +79,47 @@ def _load_fixture_suite(path: Path) -> dict[str, dict[str, object]]:
         resolution = fixture.get("resolution")
         if not isinstance(resolution, str) or resolution in by_resolution:
             raise ValueError(f"{path}: duplicate or invalid fixture resolution {resolution!r}")
-        for key in (
-            "solver_mesh_signature",
-            "problem_ir_sha256",
-            "node_count",
-            "element_count",
-        ):
+        for key in ("solver_mesh_signature", "problem_ir_sha256"):
             if key not in fixture:
                 raise ValueError(f"{path}: {resolution} fixture is missing {key}")
+        fixture = dict(fixture)
+        fixture["_suite_schema"] = schema
+        require_explicit = schema == TYPED_SUITE_SCHEMA
+        fixture["_solver_mesh_node_count"] = _count_alias(
+            fixture,
+            aliases=("solver_mesh_node_count", "node_count"),
+            label=f"{path}: {resolution}",
+            require_explicit=require_explicit,
+        )
+        fixture["_solver_mesh_cell_count"] = _count_alias(
+            fixture,
+            aliases=("solver_mesh_cell_count", "cell_count", "element_count"),
+            label=f"{path}: {resolution}",
+            require_explicit=require_explicit,
+        )
+        for field, aliases in (
+            (
+                "_solver_mesh_facet_count",
+                ("solver_mesh_facet_count", "facet_count", "boundary_face_count"),
+            ),
+            (
+                "_solver_mesh_exterior_facet_count",
+                ("solver_mesh_exterior_facet_count", "exterior_facet_count"),
+            ),
+            (
+                "_solver_mesh_interface_facet_count",
+                ("solver_mesh_interface_facet_count", "interface_facet_count"),
+            ),
+        ):
+            if not require_explicit and not any(name in fixture for name in aliases):
+                fixture[field] = 0
+            else:
+                fixture[field] = _count_alias(
+                    fixture,
+                    aliases=aliases,
+                    label=f"{path}: {resolution}",
+                    require_explicit=require_explicit,
+                )
         by_resolution[resolution] = fixture
     if set(by_resolution) != set(RESOLUTIONS):
         raise ValueError(
@@ -144,8 +203,6 @@ def _validate_mesh_rows(
         "status",
         "solver_mesh_signature",
         "qualification_fixture_problem_ir_sha256",
-        "node_count",
-        "element_count",
         "backend",
         "relaxation_algorithm",
         "repeat_index",
@@ -160,19 +217,32 @@ def _validate_mesh_rows(
         measured = _read_csv(measured_path, required_fields=required)
         signature = str(fixture["solver_mesh_signature"])
         problem_ir_sha256 = str(fixture["problem_ir_sha256"])
-        node_count = int(fixture["node_count"])
-        element_count = int(fixture["element_count"])
+        node_count = int(fixture["_solver_mesh_node_count"])
+        element_count = int(fixture["_solver_mesh_cell_count"])
+        require_explicit = fixture.get("_suite_schema") == TYPED_SUITE_SCHEMA
         for phase, rows in (("warmup", warmup), ("measured", measured)):
             for index, row in enumerate(rows):
                 label = f"{resolution}/{phase}/row[{index}]"
                 if row["status"] != "ok":
                     raise ValueError(f"{label}: status must be ok")
+                row_node_count = _count_alias(
+                    row,
+                    aliases=("solver_mesh_node_count", "node_count"),
+                    label=label,
+                    require_explicit=require_explicit,
+                )
+                row_cell_count = _count_alias(
+                    row,
+                    aliases=("solver_mesh_cell_count", "cell_count", "element_count"),
+                    label=label,
+                    require_explicit=require_explicit,
+                )
                 if (
                     row["solver_mesh_signature"] != signature
                     or row["qualification_fixture_problem_ir_sha256"]
                     != problem_ir_sha256
-                    or _integer(row, "node_count", label=label) != node_count
-                    or _integer(row, "element_count", label=label) != element_count
+                    or row_node_count != node_count
+                    or row_cell_count != element_count
                 ):
                     raise ValueError(f"{label}: fixture identity mismatch")
                 for observable in REQUIRED_OBSERVABLES:
@@ -211,8 +281,15 @@ def _validate_mesh_rows(
             {
                 "resolution": resolution,
                 "solver_mesh_signature": signature,
-                "node_count": node_count,
-                "element_count": element_count,
+                "solver_mesh_node_count": node_count,
+                "solver_mesh_cell_count": element_count,
+                "solver_mesh_facet_count": fixture["_solver_mesh_facet_count"],
+                "solver_mesh_exterior_facet_count": fixture[
+                    "_solver_mesh_exterior_facet_count"
+                ],
+                "solver_mesh_interface_facet_count": fixture[
+                    "_solver_mesh_interface_facet_count"
+                ],
                 "warmup_row_count": len(warmup),
                 "measured_row_count": len(measured),
                 "status": "pass",

@@ -136,6 +136,36 @@ def _name_field(row: Mapping[str, object]) -> str:
     return str(_field(row, "Name", "Range", "Kernel Name") or "")
 
 
+def _fixture_mesh_counts(fixture: Mapping[str, object]) -> dict[str, int]:
+    aliases = {
+        "solver_mesh_node_count": ("solver_mesh_node_count", "node_count"),
+        "solver_mesh_cell_count": (
+            "solver_mesh_cell_count",
+            "cell_count",
+            "element_count",
+        ),
+        "solver_mesh_facet_count": ("solver_mesh_facet_count", "facet_count"),
+        "solver_mesh_exterior_facet_count": (
+            "solver_mesh_exterior_facet_count",
+            "exterior_facet_count",
+        ),
+        "solver_mesh_interface_facet_count": (
+            "solver_mesh_interface_facet_count",
+            "interface_facet_count",
+        ),
+    }
+    counts: dict[str, int] = {}
+    for output, candidates in aliases.items():
+        values = [fixture[name] for name in candidates if name in fixture]
+        if not values:
+            continue
+        parsed = [int(value) for value in values]
+        if any(value != parsed[0] for value in parsed[1:]):
+            raise ValueError(f"fixture has conflicting {output} aliases")
+        counts[output] = parsed[0]
+    return counts
+
+
 def _percentile(values: Sequence[int], percentile: float) -> int:
     if not values:
         return 0
@@ -1003,20 +1033,22 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
     output_dir = args.output_dir / args.run_id
     bundle = collect_bundle_identity(args.runtime_root)
     fixture_identity = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    fixture_block: dict[str, object] = {
+        "manifest": str(FIXTURE_MANIFEST.relative_to(REPO_ROOT)),
+        "manifest_sha256": _sha256(FIXTURE_MANIFEST),
+        "environment": str(FIXTURE_ENVIRONMENT.relative_to(REPO_ROOT)),
+        "environment_sha256": _sha256(FIXTURE_ENVIRONMENT),
+        "problem_ir_sha256": fixture_identity["problem_ir_sha256"],
+        "solver_mesh_sha256": fixture_identity["solver_mesh_sha256"],
+        "solver_mesh_signature": fixture_identity["solver_mesh_signature"],
+    }
+    fixture_block.update(_fixture_mesh_counts(fixture_identity))
     base: dict[str, object] = {
         "schema": "fullmag.fem_gpu.nsight_capture.v1",
         "run_id": args.run_id,
         "preflight": preflight,
         "bundle": bundle,
-        "fixture": {
-            "manifest": str(FIXTURE_MANIFEST.relative_to(REPO_ROOT)),
-            "manifest_sha256": _sha256(FIXTURE_MANIFEST),
-            "environment": str(FIXTURE_ENVIRONMENT.relative_to(REPO_ROOT)),
-            "environment_sha256": _sha256(FIXTURE_ENVIRONMENT),
-            "problem_ir_sha256": fixture_identity["problem_ir_sha256"],
-            "solver_mesh_sha256": fixture_identity["solver_mesh_sha256"],
-            "solver_mesh_signature": fixture_identity["solver_mesh_signature"],
-        },
+        "fixture": fixture_block,
     }
     if preflight.get("status") != "available":
         base.update(status="unavailable", blockers=preflight.get("blockers", []))

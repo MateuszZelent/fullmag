@@ -363,8 +363,21 @@ class PerformanceFixture:
     facet_count: int
     exterior_facet_count: int
     interface_facet_count: int
+    schema_kind: str
     demag_policy: dict[str, object]
     stop_condition: dict[str, object]
+
+
+@dataclass(frozen=True)
+class MeshTopologyStats:
+    """Counts for one magnetic input or final typed solver mesh."""
+
+    node_count: int
+    cell_count: int
+    facet_count: int
+    exterior_facet_count: int
+    interface_facet_count: int
+    schema_kind: str
 
 
 _PERFORMANCE_FIXTURE_CELL_FACES = {
@@ -489,6 +502,11 @@ def typed_mesh_topology_counts(mesh: Mapping[str, object]) -> dict[str, int]:
                     f"typed performance fixture interface facet {index} has {owner_count} owners"
                 )
             interface_count += 1
+        elif role == "periodic_seam":
+            if owner_count not in (1, 2):
+                raise ValueError(
+                    f"typed performance fixture periodic seam {index} has {owner_count} owners"
+                )
         else:
             raise ValueError(
                 f"typed performance fixture mesh has unknown facet role {role!r}"
@@ -501,6 +519,56 @@ def typed_mesh_topology_counts(mesh: Mapping[str, object]) -> dict[str, int]:
         "exterior_facet_count": exterior_count,
         "interface_facet_count": interface_count,
     }
+
+
+def _mesh_payload_topology_stats(
+    mesh: Mapping[str, object], *, allow_legacy: bool
+) -> MeshTopologyStats:
+    """Parse exactly one mesh representation into the shared count contract."""
+    has_typed = "cells" in mesh or "facets" in mesh
+    has_legacy = "elements" in mesh or "boundary_faces" in mesh
+    if has_typed and has_legacy:
+        raise ValueError(
+            "conflicting dual-schema mesh payload: typed cells/facets and "
+            "legacy elements/boundary_faces cannot coexist"
+        )
+    if has_typed:
+        counts = typed_mesh_topology_counts(mesh)
+        return MeshTopologyStats(schema_kind="typed_v2", **counts)
+    if not has_legacy:
+        raise ValueError(
+            "mesh payload is missing typed cells/facets and legacy elements/boundary_faces"
+        )
+    if not allow_legacy:
+        raise ValueError("legacy mesh requires explicit opt-in")
+    nodes = mesh.get("nodes")
+    elements = mesh.get("elements")
+    boundary_faces = mesh.get("boundary_faces", [])
+    if not isinstance(nodes, list) or not isinstance(elements, list):
+        raise ValueError("legacy mesh is missing nodes or elements")
+    if not isinstance(boundary_faces, list):
+        raise ValueError("legacy mesh boundary_faces must be a list")
+    return MeshTopologyStats(
+        node_count=len(nodes),
+        cell_count=len(elements),
+        facet_count=len(boundary_faces),
+        exterior_facet_count=len(boundary_faces),
+        interface_facet_count=0,
+        schema_kind="legacy_v1",
+    )
+
+
+def read_mesh_topology_stats(
+    path: Path, *, allow_legacy: bool = False
+) -> MeshTopologyStats:
+    """Read one mesh file through the authoritative typed/legacy parser."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{path}: invalid mesh JSON: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{path}: mesh JSON must be an object")
+    return _mesh_payload_topology_stats(payload, allow_legacy=allow_legacy)
 
 
 def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
@@ -1324,8 +1392,6 @@ def task11_qualification_identity_failures(
                 "solver_mesh_sha256",
                 "solver_mesh_signature",
                 "executed_problem_ir_sha256",
-                "node_count",
-                "element_count",
             ):
                 expected = fixture.get(field)
                 actual = (
@@ -1334,6 +1400,26 @@ def task11_qualification_identity_failures(
                     else row.get(field)
                 )
                 if actual != expected:
+                    failures.append(
+                        f"{label}: {field} differs from the pinned {mesh_size} fixture"
+                    )
+            for field, aliases in (
+                (
+                    "solver_mesh_node_count",
+                    ("solver_mesh_node_count", "node_count"),
+                ),
+                (
+                    "solver_mesh_cell_count",
+                    ("solver_mesh_cell_count", "cell_count", "element_count"),
+                ),
+            ):
+                expected = next(
+                    (fixture[name] for name in aliases if name in fixture), None
+                )
+                actual = as_int(
+                    next((row.get(name) for name in aliases if name in row), None)
+                )
+                if actual != as_int(expected):
                     failures.append(
                         f"{label}: {field} differs from the pinned {mesh_size} fixture"
                     )
@@ -1620,8 +1706,11 @@ def task11_preconditioner_cpu_gpu_parity_summary(
                 f"gpu=({gpu_row.get('converged')!r},{gpu_row.get('stop_reason')!r},{gpu_steps!r})"
             )
 
+        expected_fixture = expected_fixtures.get(mesh_size, {})
         expected_node_count = as_int(
-            expected_fixtures.get(mesh_size, {}).get("node_count")
+            expected_fixture.get(
+                "solver_mesh_node_count", expected_fixture.get("node_count")
+            )
         )
         for backend, row, executed_steps in (
             ("cpu", cpu_row, cpu_steps),
@@ -1684,7 +1773,9 @@ def task11_preconditioner_cpu_gpu_parity_summary(
                     f"mesh={mesh_size}: {backend} final magnetization content "
                     "SHA-256 mismatch"
                 )
-            row_node_count = as_int(row.get("node_count"))
+            row_node_count = as_int(
+                row.get("solver_mesh_node_count", row.get("node_count"))
+            )
             final_node_count = as_int(row.get("final_magnetization_node_count"))
             if (
                 expected_node_count is None
@@ -2700,22 +2791,73 @@ def load_fixture_manifest(
         raise ValueError(
             f"solver mesh sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
         )
+    topology = read_mesh_topology_stats(
+        mesh_path, allow_legacy=schema == LEGACY_PERFORMANCE_FIXTURE_SCHEMA
+    )
     if schema == PERFORMANCE_FIXTURE_SCHEMA:
-        mesh_payload = json.loads(mesh_path.read_bytes())
-        topology_counts = typed_mesh_topology_counts(mesh_payload)
-        for key, value in topology_counts.items():
-            if payload.get(key) != value:
-                raise ValueError(
-                    "solver mesh typed topology counts differ from fixture manifest"
-                )
-    else:
-        topology_counts = {
-            "node_count": int(payload["node_count"]),
-            "cell_count": int(payload["element_count"]),
-            "facet_count": int(payload.get("boundary_face_count", 0)),
-            "exterior_facet_count": int(payload.get("boundary_face_count", 0)),
-            "interface_facet_count": 0,
-        }
+        mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        declared_signature = payload.get("solver_mesh_signature")
+        if (
+            not isinstance(declared_signature, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", declared_signature)
+        ):
+            raise ValueError(
+                "fullmag.fem_gpu.performance_fixture.v2 requires a 64-character "
+                "lowercase solver_mesh_signature"
+            )
+        actual_signature = solver_mesh_signature(mesh_payload)
+        if declared_signature != actual_signature:
+            raise ValueError(
+                "solver mesh signature differs from canonical typed mesh"
+            )
+    topology_counts = {
+        "node_count": topology.node_count,
+        "cell_count": topology.cell_count,
+        "facet_count": topology.facet_count,
+        "exterior_facet_count": topology.exterior_facet_count,
+        "interface_facet_count": topology.interface_facet_count,
+    }
+    declared_aliases = {
+        "node_count": (
+            "node_count",
+            "solver_mesh_node_count",
+        ),
+        "cell_count": (
+            "cell_count",
+            "solver_mesh_cell_count",
+            "element_count",
+        ),
+        "facet_count": (
+            "facet_count",
+            "solver_mesh_facet_count",
+            "boundary_face_count",
+        ),
+        "exterior_facet_count": (
+            "exterior_facet_count",
+            "solver_mesh_exterior_facet_count",
+        ),
+        "interface_facet_count": (
+            "interface_facet_count",
+            "solver_mesh_interface_facet_count",
+        ),
+    }
+    for key, aliases in declared_aliases.items():
+        declared = [payload[name] for name in aliases if name in payload]
+        if declared and any(int(value) != topology_counts[key] for value in declared):
+            raise ValueError(
+                f"solver mesh typed topology {key} differs from fixture manifest"
+            )
+    if schema == PERFORMANCE_FIXTURE_SCHEMA:
+        missing = [
+            key
+            for key, aliases in declared_aliases.items()
+            if not any(name in payload for name in aliases)
+        ]
+        if missing:
+            raise ValueError(
+                "fullmag.fem_gpu.performance_fixture.v2 is missing typed topology counts: "
+                + ", ".join(missing)
+            )
     return PerformanceFixture(
         manifest_path=manifest_path,
         manifest_sha256=manifest_sha256,
@@ -2731,6 +2873,7 @@ def load_fixture_manifest(
         facet_count=topology_counts["facet_count"],
         exterior_facet_count=topology_counts["exterior_facet_count"],
         interface_facet_count=topology_counts["interface_facet_count"],
+        schema_kind=topology.schema_kind,
         demag_policy=dict(payload["demag_policy"]),
         stop_condition=dict(payload["stop_condition"]),
     )
@@ -2774,14 +2917,45 @@ def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
         mesh = json.loads(mesh_bytes)
         if schema == PERFORMANCE_FIXTURE_SUITE_SCHEMA:
             counts = typed_mesh_topology_counts(mesh)
-            if any(counts[key] != fixture.get(key) for key in counts):
+            actual_signature = solver_mesh_signature(mesh)
+            if fixture.get("solver_mesh_signature") != actual_signature:
+                raise ValueError(
+                    f"FEM AMG qualification mesh solver signature mismatch: {mesh_path}"
+                )
+            fixture_aliases = {
+                "node_count": ("solver_mesh_node_count", "node_count"),
+                "cell_count": ("solver_mesh_cell_count", "cell_count", "element_count"),
+                "facet_count": ("solver_mesh_facet_count", "facet_count"),
+                "exterior_facet_count": (
+                    "solver_mesh_exterior_facet_count",
+                    "exterior_facet_count",
+                ),
+                "interface_facet_count": (
+                    "solver_mesh_interface_facet_count",
+                    "interface_facet_count",
+                ),
+            }
+            mismatch = any(
+                not any(name in fixture for name in aliases)
+                or counts[key]
+                != next(fixture[name] for name in aliases if name in fixture)
+                for key, aliases in fixture_aliases.items()
+            )
+            if mismatch:
                 raise ValueError(
                     f"FEM AMG qualification mesh typed topology mismatch: {mesh_path}"
                 )
-        elif len(mesh.get("nodes", [])) != fixture.get("node_count") or len(
-            mesh.get("elements", [])
-        ) != fixture.get("element_count"):
-            raise ValueError(f"FEM AMG qualification mesh size mismatch: {mesh_path}")
+        else:
+            fixture_node_count = fixture.get(
+                "solver_mesh_node_count", fixture.get("node_count")
+            )
+            fixture_cell_count = fixture.get(
+                "solver_mesh_cell_count", fixture.get("element_count")
+            )
+            if len(mesh.get("nodes", [])) != fixture_node_count or len(
+                mesh.get("elements", [])
+            ) != fixture_cell_count:
+                raise ValueError(f"FEM AMG qualification mesh size mismatch: {mesh_path}")
         resolved.append({**fixture, "solver_mesh_path": str(mesh_path)})
     return resolved
 
@@ -2914,9 +3088,20 @@ def verify_fixture_row(
             expected = as_int(expected)
         if actual != expected:
             failures.append(message)
-    if as_int(row.get("node_count")) != fixture.node_count:
+    solver_node_count = row.get("solver_mesh_node_count")
+    solver_cell_count = row.get("solver_mesh_cell_count")
+    if fixture.schema_kind == "legacy_v1":
+        solver_node_count = (
+            row.get("node_count") if solver_node_count is None else solver_node_count
+        )
+        solver_cell_count = (
+            row.get("element_count")
+            if solver_cell_count is None
+            else solver_cell_count
+        )
+    if as_int(solver_node_count) != fixture.node_count:
         failures.append("node_count differs from fixture")
-    if as_int(row.get("element_count")) != fixture.element_count:
+    if as_int(solver_cell_count) != fixture.element_count:
         failures.append("element_count differs from fixture")
     return failures
 
@@ -5339,47 +5524,26 @@ def qualification_mesh_size(mesh_path: Path) -> str | None:
     return None
 
 
-def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
+def load_mesh_stats(mesh_path: Path, *, allow_legacy: bool = False) -> dict[str, object]:
     payload = json.loads(mesh_path.read_text(encoding="utf-8"))
-    cells = payload.get("cells")
-    typed_cell_types = cells.get("types") if isinstance(cells, Mapping) else None
-    elements = payload.get("elements")
-    element_count = (
-        len(elements)
-        if isinstance(elements, list)
-        else len(typed_cell_types)
-        if isinstance(typed_cell_types, list)
-        else 0
-    )
-    facets = payload.get("facets")
-    typed_facets = facets.get("types") if isinstance(facets, Mapping) else None
-    roles = facets.get("roles") if isinstance(facets, Mapping) else None
-    typed_facet_count = len(typed_facets) if isinstance(typed_facets, list) else None
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{mesh_path}: mesh JSON must be an object")
+    topology = _mesh_payload_topology_stats(payload, allow_legacy=allow_legacy)
     return {
         "mesh_name": payload.get("mesh_name", mesh_path.stem),
         "mesh_path": str(mesh_path),
         "mesh_size": qualification_mesh_size(mesh_path),
-        "node_count": len(payload.get("nodes", [])),
-        "element_count": element_count,
-        "boundary_face_count": len(payload.get("boundary_faces", [])),
-        **(
-            {
-                "cell_count": element_count,
-                "facet_count": typed_facet_count,
-                "exterior_facet_count": sum(
-                    role == "exterior" for role in roles
-                )
-                if isinstance(roles, list)
-                else None,
-                "interface_facet_count": sum(
-                    role == "material_interface" for role in roles
-                )
-                if isinstance(roles, list)
-                else None,
-            }
-            if isinstance(typed_cell_types, list) and isinstance(typed_facets, list)
-            else {}
-        ),
+        "input_mesh_node_count": topology.node_count,
+        "input_mesh_cell_count": topology.cell_count,
+        "input_mesh_facet_count": topology.facet_count,
+        "input_mesh_exterior_facet_count": topology.exterior_facet_count,
+        "input_mesh_interface_facet_count": topology.interface_facet_count,
+        "mesh_schema_kind": topology.schema_kind,
+        # Deprecated aliases are retained for readers of historical benchmark
+        # CSVs. New writers and reports use the explicit input/solver names.
+        "node_count": topology.node_count,
+        "element_count": topology.cell_count,
+        "boundary_face_count": topology.facet_count,
         "periodic_boundary_pair_count": len(payload.get("periodic_boundary_pairs", [])),
         "periodic_node_pair_count": len(payload.get("periodic_node_pairs", [])),
     }
@@ -5388,8 +5552,8 @@ def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
 def input_mesh_summary(mesh_stats: Mapping[str, object]) -> str:
     return (
         f"input_mesh={mesh_stats['mesh_name']} "
-        f"input_nodes={mesh_stats['node_count']} "
-        f"input_elements={mesh_stats['element_count']} "
+        f"input_nodes={mesh_stats['input_mesh_node_count']} "
+        f"input_cells={mesh_stats['input_mesh_cell_count']} "
         "(solver mesh is reported per completed row)"
     )
 
@@ -5399,7 +5563,154 @@ def benchmark_scenario_requires_shared_domain(scenario: str) -> bool:
     return scenario in BOX500_AIRBOX_SCENARIO_ALIASES or "demag" in canonical
 
 
+SOLVER_MESH_SIGNATURE_DOMAIN = b"fullmag.fem.solver_mesh_signature.v2\0"
+
+
+def _canonical_ieee754_coordinates(nodes: Sequence[object]) -> list[list[str]]:
+    coordinates: list[list[str]] = []
+    for node_index, node in enumerate(nodes):
+        if not isinstance(node, list) or len(node) != 3:
+            raise ValueError(f"typed solver mesh node {node_index} must have 3 coordinates")
+        encoded_node: list[str] = []
+        for coordinate in node:
+            if isinstance(coordinate, bool):
+                raise ValueError("typed solver mesh coordinates must be numeric")
+            try:
+                value = float(coordinate)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("typed solver mesh coordinates must be numeric") from exc
+            if not math.isfinite(value):
+                raise ValueError("typed solver mesh coordinates must be finite")
+            encoded_node.append(struct.pack("<d", value).hex())
+        coordinates.append(encoded_node)
+    return coordinates
+
+
+def _typed_parallel_values(
+    values: object,
+    *,
+    field: str,
+    expected_length: int,
+) -> list[object]:
+    if not isinstance(values, list) or len(values) != expected_length:
+        raise ValueError(
+            f"typed solver mesh {field} must contain exactly {expected_length} values"
+        )
+    return list(values)
+
+
+def _typed_facet_owner_connectivity(
+    mesh: Mapping[str, object],
+    cell_items: Sequence[tuple[str, tuple[int, ...]]],
+    facet_items: Sequence[tuple[str, tuple[int, ...]]],
+) -> tuple[list[int], list[int]]:
+    facets = mesh["facets"]
+    assert isinstance(facets, Mapping)
+    explicit_offsets = facets.get("owner_offsets")
+    explicit_owners = facets.get("owners")
+    if (explicit_offsets is None) != (explicit_owners is None):
+        raise ValueError(
+            "typed solver mesh facet owner_offsets and owners must be provided together"
+        )
+    if explicit_offsets is not None:
+        if not isinstance(explicit_offsets, list) or not isinstance(explicit_owners, list):
+            raise ValueError("typed solver mesh facet owner connectivity must be lists")
+        offsets = list(explicit_offsets)
+        owners = list(explicit_owners)
+        if (
+            len(offsets) != len(facet_items) + 1
+            or offsets[:1] != [0]
+            or offsets[-1:] != [len(owners)]
+            or any(not isinstance(value, int) or value < 0 for value in offsets + owners)
+            or any(left > right for left, right in zip(offsets, offsets[1:]))
+            or any(owner >= len(cell_items) for owner in owners)
+        ):
+            raise ValueError("typed solver mesh facet owner connectivity is invalid")
+        return offsets, owners
+
+    cell_faces: dict[tuple[int, ...], list[int]] = {}
+    for cell_index, (cell_type, cell_nodes) in enumerate(cell_items):
+        for face in _PERFORMANCE_FIXTURE_CELL_FACES[cell_type]:
+            key = tuple(sorted(cell_nodes[index] for index in face))
+            cell_faces.setdefault(key, []).append(cell_index)
+    offsets = [0]
+    owners: list[int] = []
+    for _, facet_nodes in facet_items:
+        owners.extend(cell_faces.get(tuple(sorted(facet_nodes)), []))
+        offsets.append(len(owners))
+    return offsets, owners
+
+
+def solver_mesh_signature(mesh: Mapping[str, object]) -> str:
+    """Hash canonical typed solver topology, roles, markers, and owners."""
+    if not isinstance(mesh.get("cells"), Mapping) or not isinstance(
+        mesh.get("facets"), Mapping
+    ):
+        raise ValueError("solver mesh signature requires typed cells and facets")
+    nodes = mesh.get("nodes")
+    if not isinstance(nodes, list):
+        raise ValueError("solver mesh signature requires typed nodes")
+    cells = mesh["cells"]
+    facets = mesh["facets"]
+    assert isinstance(cells, Mapping) and isinstance(facets, Mapping)
+    cell_items = _typed_connectivity_items(
+        cells, kind="cells", arities=_PERFORMANCE_FIXTURE_CELL_ARITIES
+    )
+    facet_items = _typed_connectivity_items(
+        facets, kind="facets", arities=_PERFORMANCE_FIXTURE_FACET_ARITIES
+    )
+    counts = typed_mesh_topology_counts(mesh)
+    element_markers = _typed_parallel_values(
+        mesh.get("element_markers"),
+        field="element_markers",
+        expected_length=counts["cell_count"],
+    )
+    boundary_markers = _typed_parallel_values(
+        mesh.get("boundary_markers"),
+        field="boundary_markers",
+        expected_length=counts["facet_count"],
+    )
+    roles = _typed_parallel_values(
+        facets.get("roles"),
+        field="facets.roles",
+        expected_length=counts["facet_count"],
+    )
+    owner_offsets, owners = _typed_facet_owner_connectivity(
+        mesh, cell_items, facet_items
+    )
+    canonical = {
+        "schema": "fullmag.fem.solver_mesh_signature.v2",
+        "nodes_ieee754_le_f64": _canonical_ieee754_coordinates(nodes),
+        "cells": {
+            "types": [item_type for item_type, _ in cell_items],
+            "offsets": list(cells.get("offsets", [])),
+            "nodes": [node for _, item_nodes in cell_items for node in item_nodes],
+            "global_ordinals": list(cells.get("global_ordinals", [])),
+            "mesh_parts": list(cells.get("mesh_parts", [])),
+        },
+        "element_markers": element_markers,
+        "facets": {
+            "types": [item_type for item_type, _ in facet_items],
+            "roles": roles,
+            "offsets": list(facets.get("offsets", [])),
+            "nodes": [node for _, item_nodes in facet_items for node in item_nodes],
+            "global_ordinals": list(facets.get("global_ordinals", [])),
+            "owner_offsets": owner_offsets,
+            "owners": owners,
+        },
+        "boundary_markers": boundary_markers,
+        "periodic_boundary_pairs": mesh.get("periodic_boundary_pairs", []),
+        "periodic_node_pairs": mesh.get("periodic_node_pairs", []),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(SOLVER_MESH_SIGNATURE_DOMAIN + encoded).hexdigest()
+
+
 def mesh_signature(mesh: Mapping[str, object]) -> str:
+    if isinstance(mesh.get("cells"), Mapping) or isinstance(mesh.get("facets"), Mapping):
+        return solver_mesh_signature(mesh)
     payload = {
         key: mesh.get(key)
         for key in (
@@ -5433,12 +5744,22 @@ def task8_qualification_row_identity(
     solver_mesh = json.loads(solver_mesh_path.read_text(encoding="utf-8"))
     if not isinstance(solver_mesh, Mapping):
         raise ValueError("Task 8 solver mesh must be an object")
-    elements = solver_mesh.get("elements")
+    if isinstance(solver_mesh.get("cells"), Mapping) and isinstance(
+        solver_mesh.get("facets"), Mapping
+    ):
+        cells = solver_mesh["cells"]
+        assert isinstance(cells, Mapping)
+        typed_cells = _typed_connectivity_items(
+            cells, kind="cells", arities=_PERFORMANCE_FIXTURE_CELL_ARITIES
+        )
+        elements = [list(item_nodes) for _, item_nodes in typed_cells]
+    else:
+        elements = solver_mesh.get("elements")
     element_markers = solver_mesh.get("element_markers")
     if not isinstance(elements, list) or not isinstance(element_markers, list):
-        raise ValueError("Task 8 solver mesh is missing elements or element_markers")
+        raise ValueError("Task 8 solver mesh is missing typed cells or element_markers")
     if len(elements) != len(element_markers):
-        raise ValueError("Task 8 solver mesh element marker count differs from elements")
+        raise ValueError("Task 8 solver mesh element marker count differs from cells")
     magnetic_node_indices = sorted(
         {
             int(node_index)
@@ -5721,7 +6042,12 @@ def write_task8_qualification_identity(
     return payload
 
 
-def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str, object]:
+def execution_plan_mesh_stats(
+    metadata: Mapping[str, object] | None,
+    *,
+    input_mesh_path: Path | None = None,
+    solver_mesh_path: Path | None = None,
+) -> dict[str, object]:
     if metadata is None:
         return {}
     execution_plan = metadata.get("execution_plan")
@@ -5736,7 +6062,37 @@ def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str
     if not isinstance(mesh, Mapping):
         return {}
 
+    solver_topology = _mesh_payload_topology_stats(mesh, allow_legacy=False)
+    solver_signature = solver_mesh_signature(mesh)
+    if solver_mesh_path is not None:
+        try:
+            file_payload = json.loads(solver_mesh_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"solver mesh file could not be read for identity comparison: {solver_mesh_path}"
+            ) from exc
+        if not isinstance(file_payload, Mapping):
+            raise ValueError("solver mesh file identity payload must be an object")
+        file_topology = _mesh_payload_topology_stats(file_payload, allow_legacy=False)
+        file_signature = solver_mesh_signature(file_payload)
+        if file_topology != solver_topology or file_signature != solver_signature:
+            raise ValueError(
+                "solver mesh topology mismatch between execution plan payload and mesh file"
+            )
+
     stats: dict[str, object] = {}
+    if input_mesh_path is not None:
+        input_topology = read_mesh_topology_stats(input_mesh_path, allow_legacy=True)
+        stats.update(
+            {
+                "input_mesh_node_count": input_topology.node_count,
+                "input_mesh_cell_count": input_topology.cell_count,
+                "input_mesh_facet_count": input_topology.facet_count,
+                "input_mesh_exterior_facet_count": input_topology.exterior_facet_count,
+                "input_mesh_interface_facet_count": input_topology.interface_facet_count,
+                "input_mesh_schema_kind": input_topology.schema_kind,
+            }
+        )
     mesh_name = backend_plan.get("mesh_name") or mesh.get("mesh_name")
     if isinstance(mesh_name, str) and mesh_name:
         stats["mesh_name"] = mesh_name
@@ -5748,21 +6104,23 @@ def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str
         has_air = any(marker == 0 for marker in element_markers)
         has_magnetic = any(marker != 0 for marker in element_markers)
         stats["solver_mesh_has_air"] = has_air and has_magnetic
-    stats["solver_mesh_signature"] = mesh_signature(mesh)
-    if isinstance(mesh.get("cells"), Mapping) and isinstance(
-        mesh.get("facets"), Mapping
-    ):
-        stats.update(typed_mesh_topology_counts(mesh))
-    for source_key, output_key in (
-        ("nodes", "node_count"),
-        ("elements", "element_count"),
-        ("boundary_faces", "boundary_face_count"),
-        ("periodic_boundary_pairs", "periodic_boundary_pair_count"),
-        ("periodic_node_pairs", "periodic_node_pair_count"),
-    ):
-        value = mesh.get(source_key)
-        if isinstance(value, list):
-            stats[output_key] = len(value)
+    stats.update(
+        {
+            "solver_mesh_node_count": solver_topology.node_count,
+            "solver_mesh_cell_count": solver_topology.cell_count,
+            "solver_mesh_facet_count": solver_topology.facet_count,
+            "solver_mesh_exterior_facet_count": solver_topology.exterior_facet_count,
+            "solver_mesh_interface_facet_count": solver_topology.interface_facet_count,
+            "solver_mesh_schema_kind": solver_topology.schema_kind,
+            "solver_mesh_signature": solver_signature,
+        }
+    )
+    periodic_boundary_pairs = mesh.get("periodic_boundary_pairs")
+    periodic_node_pairs = mesh.get("periodic_node_pairs")
+    if isinstance(periodic_boundary_pairs, list):
+        stats["periodic_boundary_pair_count"] = len(periodic_boundary_pairs)
+    if isinstance(periodic_node_pairs, list):
+        stats["periodic_node_pair_count"] = len(periodic_node_pairs)
     return stats
 
 
@@ -6501,9 +6859,12 @@ def load_task11_qualification_identity(
                 "executed_problem_ir_sha256": hashlib.sha256(
                     canonical_problem_ir_bytes(problem_ir)
                 ).hexdigest(),
-                "node_count": fixture["node_count"],
-                "element_count": fixture.get(
-                    "cell_count", fixture.get("element_count")
+                "solver_mesh_node_count": fixture.get(
+                    "solver_mesh_node_count", fixture.get("node_count")
+                ),
+                "solver_mesh_cell_count": fixture.get(
+                    "solver_mesh_cell_count",
+                    fixture.get("cell_count", fixture.get("element_count")),
                 ),
             }
         )
@@ -6717,7 +7078,15 @@ def write_performance_fixture_files(
             "solver_mesh_sha256": mesh_sha256,
             "solver_mesh_signature": fixture_solver_mesh_signature(realization_row),
             "problem_ir_sha256": problem_ir_sha256,
-            **topology_counts,
+            "solver_mesh_node_count": topology_counts["node_count"],
+            "solver_mesh_cell_count": topology_counts["cell_count"],
+            "solver_mesh_facet_count": topology_counts["facet_count"],
+            "solver_mesh_exterior_facet_count": topology_counts[
+                "exterior_facet_count"
+            ],
+            "solver_mesh_interface_facet_count": topology_counts[
+                "interface_facet_count"
+            ],
             "domain_hmax_m": domain_hmax,
             "airbox_hmax_m": airbox_hmax,
         }
@@ -6804,7 +7173,10 @@ def run_backend(
         "case_timeout_s": timeout_s,
         "ui_surface": ui_surface,
         **runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT),
-        **load_mesh_stats(mesh_path),
+        # The benchmark input presets are historical v1 mesh assets. Their
+        # legacy read is explicit; the final solver mesh is always validated as
+        # typed by execution_plan_mesh_stats below.
+        **load_mesh_stats(mesh_path, allow_legacy=True),
     }
     if backend_label == "fem_gpu" and observed_gpu_identity is not None:
         attach_observed_gpu_identity(row, observed_gpu_identity)
@@ -7027,7 +7399,15 @@ def run_backend(
             wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
-            row.update(execution_plan_mesh_stats(load_run_metadata(execution_dir)))
+            row.update(
+                execution_plan_mesh_stats(
+                    load_run_metadata(execution_dir),
+                    input_mesh_path=mesh_path,
+                    solver_mesh_path=Path(solver_mesh_path)
+                    if solver_mesh_path
+                    else None,
+                )
+            )
             row.update(
                 {
                     "status": "timeout",
@@ -7126,7 +7506,13 @@ def run_backend(
     artifact_pipeline = metadata.get("artifact_pipeline", {}) if metadata else {}
     if not isinstance(artifact_pipeline, Mapping):
         artifact_pipeline = {}
-    row.update(execution_plan_mesh_stats(metadata))
+    row.update(
+        execution_plan_mesh_stats(
+            metadata,
+            input_mesh_path=mesh_path,
+            solver_mesh_path=Path(solver_mesh_path) if solver_mesh_path else None,
+        )
+    )
     row.update(energy_monotonicity_evidence)
     row.update(final_magnetization_evidence)
 
@@ -8338,7 +8724,9 @@ def min_solver_node_failures(
         if row.get("status") != "ok":
             continue
         case = repeated_case_key(row)
-        node_count = as_int(row.get("node_count"))
+        node_count = as_int(
+            row.get("solver_mesh_node_count", row.get("node_count"))
+        )
         if node_count is None:
             failures.append(f"case={case} completed row is missing solver node_count")
         elif node_count < min_nodes:
@@ -10961,7 +11349,9 @@ def main() -> None:
                     )
                     raise SystemExit(2)
     for mesh_path in meshes:
-        mesh_stats = load_mesh_stats(mesh_path)
+        # Input presets remain legacy assets until Task 1 can publish v2 from a
+        # managed runtime; do not let this opt-in affect solver-mesh identity.
+        mesh_stats = load_mesh_stats(mesh_path, allow_legacy=True)
         case_mesh_env = task11_mesh_env(mesh_path)
         print(f"  {input_mesh_summary(mesh_stats)}")
         for scenario in scenarios:
