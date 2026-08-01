@@ -2927,12 +2927,17 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "native/build/backends/fem/fem_relaxation_source_contract" in justfile
     assert "verify-fem-relaxation-convergence:" in justfile
     assert "verify-fem-relaxation-cpu-gpu-consistency-smoke:" in justfile
+    assert "verify-fem-relaxation-consistency-semantics:" in justfile
     assert "verify-fem-relaxation-production-benchmark:" in justfile
     assert "verify-fem-gpu-demag-performance-benchmark:" in justfile
     assert "bench-fem-gpu-demag-amg-profile-sweep:" in justfile
     consistency_recipe = just_recipe_source(
         justfile,
         "verify-fem-relaxation-cpu-gpu-consistency-smoke",
+    )
+    semantics_recipe = just_recipe_source(
+        justfile,
+        "verify-fem-relaxation-consistency-semantics",
     )
     production_recipe = just_recipe_source(
         justfile,
@@ -2952,6 +2957,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
         assert "python3 scripts/analysis/fem_gpu_benchmark.py" in recipe
         assert "PYTHONPATH=/workspace/packages/fullmag-py/src" in recipe
         assert ".fullmag/reports/" in recipe
+    assert "python3 scripts/verify_fem_relaxation_consistency_semantics.py" in semantics_recipe
     for env_name in [
         "FULLMAG_BENCH_INTEGRATORS",
         "FULLMAG_BENCH_RELAX_ALGORITHMS",
@@ -6519,7 +6525,7 @@ def test_stt_oersted_consistency_cases_exclude_all_relaxation_algorithms() -> No
     assert manifests == []
 
 
-def test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory() -> None:
+def test_direct_minimizer_consistency_is_coverage_only_not_a_pass() -> None:
     benchmark = load_benchmark_module()
     manifests = benchmark.cpu_gpu_case_manifests(
         scenarios=["box500_airbox_exchange_demag"],
@@ -6579,6 +6585,89 @@ def test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory
     )
 
     assert failures == []
+    summary = benchmark.cpu_gpu_consistency_summary(
+        [cpu_row, gpu_row],
+        case_manifests=manifests,
+        require_gpu_strict_residency=False,
+    )
+    assert summary["status"] == "coverage_only"
+    assert summary["consistency_status"] == "coverage_only"
+    assert summary["consistency_scope"] == "direct_minimizer_coverage"
+    assert summary["consistency_failure_count"] == 0
+    assert summary["equilibrium_parity_status"] == "not_requested"
+    report = benchmark.render_cpu_gpu_benchmark_report(
+        summary,
+        {"status": "pass", "gate_failure_count": 0, "group_failure_count": 0, "failures": []},
+    )
+    assert "- status: coverage_only" in report
+    assert "CPU/GPU consistency: pass" not in report
+    assert "execution coverage: coverage_only" in report
+    assert "equilibrium parity: not_requested" in report
+    assert "| box500_airbox_exchange_demag:nonlinear_cg | coverage_only |" in report
+
+
+def test_direct_minimizer_equilibrium_parity_gate_fails_closed() -> None:
+    benchmark = load_benchmark_module()
+    common = {
+        "scenario": "box500_airbox_exchange_demag",
+        "reported_relaxation_algorithm": "nonlinear_cg",
+        "relaxation_algorithm": "nonlinear_cg",
+        "integrator": "heun",
+        "timestep_policy": "fixed",
+        "dt_s": 1.0e-13,
+        "steps": 32,
+        "status": "ok",
+        "solver_mesh_signature": "mesh-a",
+        "executed_steps": 32,
+        "final_e_total_j": -1.0e-17,
+        "final_e_ex_j": 1.0e-22,
+        "final_e_demag_j": 2.0e-19,
+        "final_e_ext_j": -1.02e-17,
+        "final_torque_apm": 2.0e4,
+        "final_torque_t": 2.5e-2,
+    }
+    cpu = {
+        **common,
+        "backend": "fem_cpu",
+        "execution_engine": "fem_cpu_native",
+        "fem_execution_mode": "cpu_native",
+        "mfem_device": "cpu",
+        "uses_cuda_kernels": False,
+    }
+    gpu = {
+        **common,
+        "backend": "fem_gpu",
+        "execution_engine": "fem_native_gpu",
+        "fem_execution_mode": "all_in_gpu_legacy_sparse",
+        "mfem_device": "cuda",
+        "uses_cuda_kernels": True,
+    }
+    manifests = benchmark.cpu_gpu_case_manifests(
+        scenarios=["box500_airbox_exchange_demag"],
+        relaxation_algorithms=["nonlinear_cg"],
+        steps=32,
+        dt=1.0e-13,
+        energy_rtol=1.0e-6,
+        energy_atol=1.0e-30,
+        torque_rtol=1.0e-6,
+        torque_atol_apm=1.0e-9,
+        torque_atol_t=1.0e-15,
+        max_step_delta=0,
+    )
+    summary = benchmark.cpu_gpu_consistency_summary(
+        [cpu, gpu],
+        case_manifests=manifests,
+        require_equilibrium_parity=True,
+    )
+    assert summary["status"] == "failed"
+    assert summary["equilibrium_parity_status"] == "not_requested"
+    assert any(
+        failure == "direct minimizer equilibrium parity was not checked"
+        for failure in summary["failures"]
+    )
+
+    args = benchmark.parse_args(["--require-equilibrium-parity"])
+    assert args.require_equilibrium_parity is True
 
 
 def test_llg_consistency_still_rejects_numeric_mismatch() -> None:
@@ -7023,7 +7112,8 @@ def main() -> int:
         test_cpu_gpu_consistency_smoke_covers_active_relaxation_algorithms,
         test_cpu_gpu_consistency_coverage_is_per_relaxation_algorithm,
         test_stt_oersted_consistency_cases_exclude_all_relaxation_algorithms,
-        test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory,
+        test_direct_minimizer_consistency_is_coverage_only_not_a_pass,
+        test_direct_minimizer_equilibrium_parity_gate_fails_closed,
         test_llg_consistency_still_rejects_numeric_mismatch,
         test_stt_oersted_has_no_relaxation_consistency_manifest,
         test_run_json_summary_publishes_cumulative_rhs_telemetry,

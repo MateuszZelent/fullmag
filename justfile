@@ -2515,6 +2515,11 @@ verify-fem-relaxation-cpu-gpu-consistency-smoke:
         --quiet-json-summary \
         --require-cpu-gpu-consistency'
 
+verify-fem-relaxation-consistency-semantics:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; python3 scripts/verify_fem_relaxation_consistency_semantics.py'
+
 capture-fem-task8-qualification-identity:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/task8-qualification

@@ -346,6 +346,20 @@ PERFORMANCE_FIXTURE_RESOLUTIONS = (
     ("fine", 50e-9, 100e-9),
 )
 
+# These values are deliberately strings rather than a Python Enum because the
+# consistency summary is a public JSON/CSV-facing contract.  Keep the values
+# stable so downstream reports can distinguish execution coverage from an
+# actual numerical comparison.
+CONSISTENCY_STATUSES = frozenset(
+    {"not_requested", "coverage_only", "checked", "failed"}
+)
+CONSISTENCY_SCOPE_NONE = "none"
+CONSISTENCY_SCOPE_LLG_TRAJECTORY = "llg_trajectory"
+CONSISTENCY_SCOPE_DIRECT_MINIMIZER_COVERAGE = "direct_minimizer_coverage"
+CONSISTENCY_SCOPE_MIXED = (
+    "llg_trajectory+direct_minimizer_coverage"
+)
+
 
 @dataclass(frozen=True)
 class PerformanceFixture:
@@ -378,6 +392,25 @@ class MeshTopologyStats:
     exterior_facet_count: int
     interface_facet_count: int
     schema_kind: str
+
+
+@dataclass(frozen=True)
+class ConsistencyAssessment:
+    """Truthful CPU/GPU consistency classification.
+
+    ``coverage_only`` is intentionally not a pass: direct minimizers can run
+    on both devices while ending at different states when the run is bounded
+    by a fixed step budget.  A separate equilibrium-parity qualification is
+    required before such a run can be promoted.
+    """
+
+    status: str
+    scope: str
+    failures: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.status not in CONSISTENCY_STATUSES:
+            raise ValueError(f"unsupported consistency status: {self.status!r}")
 
 
 _PERFORMANCE_FIXTURE_CELL_FACES = {
@@ -4406,6 +4439,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--require-cpu-gpu-consistency",
         action="store_true",
         help="Fail unless matching FEM CPU/GPU rows agree on final energy, max torque, and relaxation step count",
+    )
+    parser.add_argument(
+        "--require-equilibrium-parity",
+        action="store_true",
+        help=(
+            "Fail unless CPU/GPU final equilibrium parity was explicitly checked; "
+            "fixed-budget direct-minimizer coverage is not sufficient"
+        ),
     )
     parser.add_argument(
         "--require-gpu-strict-residency",
@@ -9136,7 +9177,15 @@ def case_coverage_with_consistency_failures(
                 case_failures.append(failure)
         updated = dict(case)
         updated["failures"] = case_failures
-        updated["status"] = "pass" if not case_failures else "fail"
+        if case_failures:
+            updated["status"] = "fail"
+        elif is_direct_minimizer_relaxation_algorithm(relaxation_algorithm):
+            # A fixed-budget direct-minimizer pair proves execution coverage,
+            # not equality of the final equilibrium state.  Keep that truth
+            # visible in the case matrix as well as in the summary.
+            updated["status"] = "coverage_only"
+        else:
+            updated["status"] = "pass"
         coverage.append(updated)
     return coverage
 
@@ -9152,9 +9201,11 @@ def cpu_gpu_consistency_summary(
     torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
     torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+    require_equilibrium_parity: bool = False,
 ) -> dict[str, object]:
     pairs = cpu_gpu_consistency_pair_summaries(results)
-    failures = cpu_gpu_consistency_failures(
+    assessment = assess_cpu_gpu_consistency(
         results,
         case_manifests=case_manifests,
         require_gpu_strict_residency=require_gpu_strict_residency,
@@ -9164,7 +9215,9 @@ def cpu_gpu_consistency_summary(
         torque_atol_apm=torque_atol_apm,
         torque_atol_t=torque_atol_t,
         max_step_delta=max_step_delta,
+        allow_coverage_only=allow_coverage_only and not require_equilibrium_parity,
     )
+    failures = list(assessment.failures)
     case_coverage = case_coverage_with_consistency_failures(
         cpu_gpu_required_case_coverage(
             results,
@@ -9172,10 +9225,36 @@ def cpu_gpu_consistency_summary(
         ),
         failures,
     )
+    direct_minimizer_present = any(
+        is_direct_minimizer_relaxation_algorithm(
+            pair.get("relaxation_algorithm")
+        )
+        for pair in pairs
+    )
+    llg_present = any(
+        pair.get("relaxation_algorithm") == "llg_overdamped"
+        for pair in pairs
+    )
+    # LLG's existing final-observable comparison is a checked parity result.
+    # Direct minimizers intentionally remain unqualified until T4 compares
+    # converged final states at one tolerance.
+    equilibrium_parity_status = (
+        "not_requested"
+        if direct_minimizer_present or not llg_present
+        else "checked"
+    )
+    if require_equilibrium_parity and equilibrium_parity_status != "checked":
+        message = "direct minimizer equilibrium parity was not checked"
+        if message not in failures:
+            failures.append(message)
+        assessment = ConsistencyAssessment(
+            "failed", assessment.scope, tuple(failures)
+        )
     return {
         "case_manifests": case_manifests or [],
         "failed_count": sum(1 for row in results if row.get("status") != "ok"),
         "failure_count": len(failures),
+        "consistency_failure_count": len(failures),
         "failures": failures,
         "require_gpu_strict_residency": require_gpu_strict_residency,
         "ok_count": sum(1 for row in results if row.get("status") == "ok"),
@@ -9188,7 +9267,13 @@ def cpu_gpu_consistency_summary(
         ),
         "case_coverage": case_coverage,
         "row_count": len(results),
-        "status": "pass" if not failures else "fail",
+        # Keep ``status`` as the canonical machine-facing value.  In
+        # particular, direct-minimizer coverage is never serialized as
+        # ``pass`` because no final equilibrium state was compared.
+        "status": assessment.status,
+        "consistency_status": assessment.status,
+        "consistency_scope": assessment.scope,
+        "equilibrium_parity_status": equilibrium_parity_status,
     }
 
 
@@ -9203,6 +9288,8 @@ def emit_cpu_gpu_consistency_summary(
     torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
     torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+    require_equilibrium_parity: bool = False,
 ) -> None:
     print(
         "FEM_CPU_GPU_CONSISTENCY_SUMMARY="
@@ -9217,6 +9304,8 @@ def emit_cpu_gpu_consistency_summary(
                 torque_atol_apm=torque_atol_apm,
                 torque_atol_t=torque_atol_t,
                 max_step_delta=max_step_delta,
+                allow_coverage_only=allow_coverage_only,
+                require_equilibrium_parity=require_equilibrium_parity,
             ),
             sort_keys=True,
         )
@@ -9235,6 +9324,8 @@ def write_cpu_gpu_consistency_summary(
     torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
     torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+    require_equilibrium_parity: bool = False,
 ) -> dict[str, object]:
     summary = cpu_gpu_consistency_summary(
         results,
@@ -9246,6 +9337,8 @@ def write_cpu_gpu_consistency_summary(
         torque_atol_apm=torque_atol_apm,
         torque_atol_t=torque_atol_t,
         max_step_delta=max_step_delta,
+        allow_coverage_only=allow_coverage_only,
+        require_equilibrium_parity=require_equilibrium_parity,
     )
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -9544,6 +9637,7 @@ def cpu_gpu_not_requested_summary(results: list[dict[str, object]]) -> dict[str,
         "covered_case_count": sum(1 for case in case_coverage if int(case["row_count"]) > 0),
         "failed_count": sum(1 for row in results if row.get("status") != "ok"),
         "failure_count": 0,
+        "consistency_failure_count": 0,
         "failures": [],
         "ok_count": sum(1 for row in results if row.get("status") == "ok"),
         "pair_count": 0,
@@ -9552,6 +9646,9 @@ def cpu_gpu_not_requested_summary(results: list[dict[str, object]]) -> dict[str,
         "require_gpu_strict_residency": False,
         "row_count": len(results),
         "status": "not_requested",
+        "consistency_status": "not_requested",
+        "consistency_scope": CONSISTENCY_SCOPE_NONE,
+        "equilibrium_parity_status": "not_requested",
     }
 
 
@@ -9559,10 +9656,20 @@ def benchmark_report_status(
     cpu_gpu_summary: Mapping[str, object],
     pass_fail_summary: Mapping[str, object],
 ) -> str:
+    consistency_status = str(
+        cpu_gpu_summary.get(
+            "consistency_status",
+            cpu_gpu_summary.get("status", "-"),
+        )
+    )
     pass_fail_status = str(pass_fail_summary.get("status", "-"))
-    if pass_fail_status in {"pass", "fail"}:
+    if pass_fail_status == "fail":
         return pass_fail_status
-    return str(cpu_gpu_summary.get("status", "-"))
+    if consistency_status in {"coverage_only", "not_requested"}:
+        return consistency_status
+    if pass_fail_status == "pass":
+        return pass_fail_status
+    return consistency_status
 
 
 def benchmark_report_coverage_line(cpu_gpu_summary: Mapping[str, object]) -> str:
@@ -9592,10 +9699,12 @@ def render_cpu_gpu_benchmark_report(
         "# Fullmag FEM CPU/GPU Benchmark Report",
         "",
         f"- status: {benchmark_report_status(cpu_gpu_summary, pass_fail_summary)}",
-        f"- cpu/gpu consistency: {cpu_gpu_summary.get('status', '-')}",
+        f"- execution coverage: {cpu_gpu_summary.get('consistency_status', cpu_gpu_summary.get('status', '-'))}",
+        f"- consistency scope: {cpu_gpu_summary.get('consistency_scope', '-')}",
+        f"- equilibrium parity: {cpu_gpu_summary.get('equilibrium_parity_status', 'not_requested')}",
         f"- rows: {cpu_gpu_summary.get('row_count', 0)} total, {cpu_gpu_summary.get('ok_count', 0)} ok, {cpu_gpu_summary.get('failed_count', 0)} failed",
         benchmark_report_coverage_line(cpu_gpu_summary),
-        f"- failures: {cpu_gpu_summary.get('failure_count', 0)} consistency, {pass_fail_summary.get('gate_failure_count', 0)} gate, {pass_fail_summary.get('group_failure_count', 0)} group",
+        f"- failures: {cpu_gpu_summary.get('consistency_failure_count', cpu_gpu_summary.get('failure_count', 0))} consistency, {pass_fail_summary.get('gate_failure_count', 0)} gate, {pass_fail_summary.get('group_failure_count', 0)} group",
         f"- CPU compute total ms: {report_ms(cpu_total_ms)}",
         f"- GPU compute total ms: {report_ms(gpu_total_ms)}",
     ]
@@ -9754,7 +9863,12 @@ def print_cpu_gpu_benchmark_rich_report(
         f"{pass_fail_summary.get('gate_failure_count', 0)} gate, "
         f"{pass_fail_summary.get('group_failure_count', 0)} group"
     )
-    rich_console.print(f"cpu/gpu consistency: {cpu_gpu_summary.get('status', '-')}")
+    rich_console.print(
+        "execution coverage: "
+        f"{cpu_gpu_summary.get('consistency_status', cpu_gpu_summary.get('status', '-'))} | "
+        "equilibrium parity: "
+        f"{cpu_gpu_summary.get('equilibrium_parity_status', 'not_requested')}"
+    )
 
     cpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "cpu_average_timing_ms")
     gpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "gpu_average_timing_ms")
@@ -10049,6 +10163,77 @@ def cpu_gpu_consistency_failures(
                     case=key,
                 )
     return failures
+
+
+def assess_cpu_gpu_consistency(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None = None,
+    require_gpu_strict_residency: bool = False,
+    energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
+    energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+    torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
+    torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+    torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+    max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+) -> ConsistencyAssessment:
+    """Classify CPU/GPU evidence without turning skipped comparisons into pass.
+
+    LLG rows are compared using the existing final-observable/step-count
+    contract.  Direct minimizers deliberately remain execution coverage until
+    T4's same-tolerance equilibrium comparator has run.  Qualification callers
+    set ``allow_coverage_only=False`` so a fixed-budget minimizer sweep fails
+    closed rather than being promoted as numerical parity.
+    """
+
+    failures = cpu_gpu_consistency_failures(
+        results,
+        case_manifests=case_manifests,
+        require_gpu_strict_residency=require_gpu_strict_residency,
+        energy_rtol=energy_rtol,
+        energy_atol=energy_atol,
+        torque_rtol=torque_rtol,
+        torque_atol_apm=torque_atol_apm,
+        torque_atol_t=torque_atol_t,
+        max_step_delta=max_step_delta,
+    )
+    pairs = cpu_gpu_consistency_pair_summaries(results)
+    algorithms = {
+        str(pair.get("relaxation_algorithm") or "")
+        for pair in pairs
+    }
+    has_direct_minimizer = any(
+        is_direct_minimizer_relaxation_algorithm(algorithm)
+        for algorithm in algorithms
+    )
+    has_llg_trajectory = "llg_overdamped" in algorithms
+    if has_direct_minimizer and has_llg_trajectory:
+        scope = CONSISTENCY_SCOPE_MIXED
+    elif has_direct_minimizer:
+        scope = CONSISTENCY_SCOPE_DIRECT_MINIMIZER_COVERAGE
+    elif has_llg_trajectory:
+        scope = CONSISTENCY_SCOPE_LLG_TRAJECTORY
+    else:
+        scope = CONSISTENCY_SCOPE_NONE
+
+    if has_direct_minimizer:
+        if not allow_coverage_only:
+            failures.append(
+                "direct minimizer equilibrium parity was not checked"
+            )
+        status = (
+            "coverage_only"
+            if allow_coverage_only and not failures
+            else "failed"
+        )
+    elif not pairs and not failures:
+        status = "not_requested"
+    elif failures:
+        status = "failed"
+    else:
+        status = "checked"
+    return ConsistencyAssessment(status, scope, tuple(failures))
 
 
 def solver_mesh_pass_fail_summary_rows(
@@ -11634,6 +11819,7 @@ def main() -> None:
             torque_atol_apm=args.cpu_gpu_torque_atol_apm,
             torque_atol_t=args.cpu_gpu_torque_atol_t,
             max_step_delta=args.cpu_gpu_max_step_delta,
+            require_equilibrium_parity=args.require_equilibrium_parity,
         )
         cpu_gpu_summary_for_report["performance_distributions"] = (
             performance_distribution_summary(results)
@@ -11746,7 +11932,7 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 5
-    if args.require_cpu_gpu_consistency:
+    if args.require_cpu_gpu_consistency or args.require_equilibrium_parity:
         if cpu_gpu_summary_for_report is None:
             cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
                 results,
@@ -11758,6 +11944,7 @@ def main() -> None:
                 torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                 torque_atol_t=args.cpu_gpu_torque_atol_t,
                 max_step_delta=args.cpu_gpu_max_step_delta,
+                require_equilibrium_parity=args.require_equilibrium_parity,
             )
         if not args.quiet_json_summary:
             print(
@@ -11821,6 +12008,7 @@ def main() -> None:
                 torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                 torque_atol_t=args.cpu_gpu_torque_atol_t,
                 max_step_delta=args.cpu_gpu_max_step_delta,
+                require_equilibrium_parity=args.require_equilibrium_parity,
             )
         failures = gpu_demag_total_speedup_failures(
             cpu_gpu_summary_for_report,
@@ -11896,6 +12084,7 @@ def main() -> None:
                     torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                     torque_atol_t=args.cpu_gpu_torque_atol_t,
                     max_step_delta=args.cpu_gpu_max_step_delta,
+                    require_equilibrium_parity=args.require_equilibrium_parity,
                 )
             else:
                 cpu_gpu_summary_for_report = cpu_gpu_not_requested_summary(results)
