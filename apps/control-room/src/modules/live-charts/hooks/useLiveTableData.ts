@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import {
   useTableColumnsResource,
@@ -64,6 +64,13 @@ export function useLiveTableData({
     enabled: shouldLoadLiveTableRows({ active, hasSchema, paused }),
     pauseLoad: shouldPauseLiveTableRows({ active, hasRows: Boolean(state.table?.rowCount), paused }),
   });
+  const wasPaused = useRef(paused);
+  useEffect(() => {
+    if (active && wasPaused.current && !paused && state.table?.revision === rows.revision) {
+      rows.refetch();
+    }
+    wasPaused.current = paused;
+  }, [active, paused, rows, state.table?.revision]);
   useEffect(() => {
     const decoded = rows.data;
     if (!decoded || decoded.status !== "ready" || !columns.data) return;

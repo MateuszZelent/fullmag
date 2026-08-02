@@ -1,6 +1,7 @@
 export type LiveChartsCommandAction =
   | { kind: "fit" }
-  | { format: "csv" | "tsv" | "png"; kind: "export" };
+  | { format: "csv" | "tsv" | "png"; kind: "export" }
+  | { kind: "set-live-mode"; liveMode: "following" | "paused" };
 
 interface PendingRequest {
   action: LiveChartsCommandAction;
@@ -13,7 +14,10 @@ class LiveChartsCommandRequests {
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+      if (this.listeners.size === 0) this.failPending();
+    };
   };
 
   getSnapshot = () => this.pending?.action ?? null;
@@ -32,6 +36,13 @@ class LiveChartsCommandRequests {
     this.pending = null;
     pending.resolve("completed");
     this.listeners.forEach((listener) => listener());
+  }
+
+  private failPending(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    this.pending = null;
+    pending.resolve("failed");
   }
 }
 

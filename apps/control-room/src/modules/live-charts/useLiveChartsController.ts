@@ -37,8 +37,13 @@ export function useLiveChartsController() {
       liveChartsCommandRequests.complete();
       return;
     }
+    if (commandAction.kind === "set-live-mode") {
+      preferences.setDescriptorLiveMode(descriptorId, commandAction.liveMode);
+      liveChartsCommandRequests.complete();
+      return;
+    }
     setRequestedExportFormat(commandAction.format);
-  }, [commandAction]);
+  }, [commandAction, descriptorId, preferences]);
   const tableSeries = useMemo(() => tableData.table ? buildScalarChartSeries({ ...tableData.table, valueAt: (rowIndex, columnIndex) => tableData.table!.values[rowIndex * tableData.table!.columnCount + columnIndex] }, {
     dataRevision: tableData.table.revision,
     status: tableData.rows.status === "error" ? "error" : "ready",
@@ -47,7 +52,11 @@ export function useLiveChartsController() {
     yAxisIds: tableData.table.columns.filter((column) => column.column_id !== descriptor.xAxisId).map((column) => column.column_id),
   }) : [], [descriptor.xAxisId, tableData.rows.status, tableData.table]);
   const allSeries = descriptorId === "energy" ? energyData.series : tableSeries;
-  const selectedSeriesIds = descriptor.selectedSeriesIds;
+  const selectedSeriesIds = allSeries.flatMap((series) =>
+    descriptor.selectedSeriesIds.includes(series.id) || descriptor.selectedSeriesIds.includes(series.quantity)
+      ? [series.id]
+      : [],
+  );
   const series = selectedSeriesIds.length === 0 ? allSeries : allSeries;
   const resource = descriptorId === "energy" ? energyData.resource : tableData.rows;
   const presentation = deriveChartPresentationState({
