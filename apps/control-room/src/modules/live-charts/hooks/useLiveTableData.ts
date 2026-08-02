@@ -26,10 +26,12 @@ export function liveTableUnsupportedReason(columns: readonly { column_id: string
   return status === "ready" && columns?.length === 0 ? "The active runtime does not publish scalar table samples." : null;
 }
 
-type TableState = { cursor: number | undefined; table: ChartTableWindow | null };
-function tableReducer(state: TableState, next: ChartTableWindow): TableState {
-  const table = next.resyncRequired ? next : mergeChartTableWindows(state.table, next);
-  return { cursor: table.cursorEnd, table };
+export type LiveTableState = { cursor: number | undefined; queryKey: string | null; table: ChartTableWindow | null };
+export function liveTableReducer(state: LiveTableState, next: { queryKey: string; table: ChartTableWindow }): LiveTableState {
+  const table = state.queryKey !== next.queryKey || next.table.resyncRequired
+    ? next.table
+    : mergeChartTableWindows(state.table, next.table);
+  return { cursor: table.cursorEnd, queryKey: next.queryKey, table };
 }
 
 export function useLiveTableData({
@@ -45,15 +47,17 @@ export function useLiveTableData({
   targetPoints: number;
   xAxisId: string;
 }) {
-  const tableList = useTableListResource({ enabled: active });
-  const table = useTableResource("default", { enabled: active });
-  const columns = useTableColumnsResource("default", { enabled: active });
-  const [state, append] = useReducer(tableReducer, { cursor: undefined, table: null });
+  const resourceEnabled = active && !paused;
+  const tableList = useTableListResource({ enabled: resourceEnabled });
+  const table = useTableResource("default", { enabled: resourceEnabled });
+  const columns = useTableColumnsResource("default", { enabled: resourceEnabled });
+  const [state, append] = useReducer(liveTableReducer, { cursor: undefined, queryKey: null, table: null });
   const queryColumns = useMemo(() => columns.data?.map((column) => column.column_id) ?? [], [columns.data]);
   const latestX = state.table && state.table.rowCount > 0
     ? chartTableWindowValue(state.table, state.table.rowCount - 1, state.table.columns.findIndex((column) => column.column_id === xAxisId)) ?? null
     : null;
-  const query = useMemo(() => buildLiveChartsTableQuery({ columns: queryColumns, cursor: state.cursor, latestX, range, targetPoints, xAxisId }), [latestX, queryColumns, range, state.cursor, targetPoints, xAxisId]);
+  const queryKey = useMemo(() => JSON.stringify({ queryColumns, range, targetPoints, xAxisId }), [queryColumns, range, targetPoints, xAxisId]);
+  const query = useMemo(() => buildLiveChartsTableQuery({ columns: queryColumns, cursor: state.queryKey === queryKey ? state.cursor : undefined, latestX: state.queryKey === queryKey ? latestX : null, range, targetPoints, xAxisId }), [latestX, queryColumns, queryKey, range, state.cursor, state.queryKey, targetPoints, xAxisId]);
   const hasSchema = queryColumns.length > 0;
   const rows = useTableRowsBinaryResource("default", {
     ...query,
@@ -65,7 +69,7 @@ export function useLiveTableData({
     if (!decoded || decoded.status !== "ready" || !columns.data) return;
     const selected = analysisColumnDescriptorsForQuery(columns.data, queryColumns);
     if (selected.length !== decoded.data.columnCount) return;
-    append(chartTableWindowFromBinary({ columns: selected, decoded: decoded.data, tableId: "default" }));
-  }, [columns.data, queryColumns, rows.data]);
+    append({ queryKey, table: chartTableWindowFromBinary({ columns: selected, decoded: decoded.data, tableId: "default" }) });
+  }, [columns.data, queryColumns, queryKey, rows.data]);
   return { columns, rows, table: state.table, tableList, tableResource: table, unsupportedReason: liveTableUnsupportedReason(columns.data, columns.status) };
 }

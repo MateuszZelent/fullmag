@@ -17,6 +17,11 @@
 
 .fm-live-charts__surface { min-height: 0; }
 
+.fm-live-charts__panes {
+  display: grid;
+  gap: var(--fm-space-3);
+}
+
 .fm-live-charts__empty {
   align-items: center;
   color: var(--fm-secondary);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLiveChartsTableQuery,
   compatibleLiveChartPanes,
+  liveChartDescriptorDefaults,
   liveChartPreset,
 } from "./liveChartsModel";
 
@@ -19,6 +20,24 @@ describe("liveChartsModel", () => {
       { label: "Dimensionless", seriesIds: ["mx"], unit: "1" },
       { label: "J", seriesIds: ["e_total"], unit: "J" },
     ]);
+  });
+
+  it("seeds each absent preset with its own canonical axes and series", () => {
+    expect(liveChartDescriptorDefaults("energy")).toMatchObject({
+      xAxisId: "t",
+      selectedSeriesIds: [
+        "simulation.solver.energies:exchange",
+        "simulation.solver.energies:demag",
+        "simulation.solver.energies:zeeman",
+        "simulation.solver.energies:anisotropy",
+        "simulation.solver.energies:dmi",
+        "simulation.solver.energies:total",
+      ],
+    });
+    expect(liveChartDescriptorDefaults("convergence")).toMatchObject({
+      xAxisId: "step",
+      selectedSeriesIds: ["max_torque_Apm"],
+    });
   });
 
   it("maps Tail rows, Tail time, Fixed range, and Full decimated to bounded queries", () => {

@@ -1,4 +1,5 @@
 import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferences";
+import type { LiveChartDescriptorPreferences } from "@/kernel/workspace/liveChartPreferences";
 
 export interface LiveTableRowsQuery {
   columns: readonly string[];
@@ -24,13 +25,25 @@ export interface LiveChartPreset {
 
 const PRESETS: Record<LiveChartPresetId, LiveChartPreset> = {
   magnetization: { id: "magnetization", title: "Magnetization", defaultSeriesIds: ["mx", "my", "mz"], xAxisId: "step" },
-  energy: { id: "energy", title: "Energy", defaultSeriesIds: ["simulation.solver.energies:total"], xAxisId: "t" },
+  energy: { id: "energy", title: "Energy", defaultSeriesIds: ["simulation.solver.energies:exchange", "simulation.solver.energies:demag", "simulation.solver.energies:zeeman", "simulation.solver.energies:anisotropy", "simulation.solver.energies:dmi", "simulation.solver.energies:total"], xAxisId: "t" },
   convergence: { id: "convergence", title: "Convergence", defaultSeriesIds: ["max_torque_Apm"], xAxisId: "step" },
   custom: { id: "custom", title: "Custom", defaultSeriesIds: [], xAxisId: "step" },
 };
 
 export function liveChartPreset(id: LiveChartPresetId): LiveChartPreset {
   return PRESETS[id];
+}
+
+export function liveChartDescriptorDefaults(id: LiveChartPresetId): LiveChartDescriptorPreferences {
+  const preset = liveChartPreset(id);
+  return {
+    displayUnits: {},
+    liveMode: "following",
+    range: { mode: "follow" },
+    selectedSeriesIds: [...preset.defaultSeriesIds],
+    targetPoints: 800,
+    xAxisId: preset.xAxisId,
+  };
 }
 
 export function buildLiveChartsTableQuery({

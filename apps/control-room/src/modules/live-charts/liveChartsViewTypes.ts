@@ -10,9 +10,11 @@ export interface LiveChartsViewProps {
   onExport: (format: "csv" | "tsv" | "png") => void;
   onFit: () => void;
   onRangeSelected: (fromSI: number, toSI: number) => void;
+  onRequestedExportHandled: () => void;
   onSeriesChange: (ids: string[]) => void;
   onToggleFollow: () => void;
   presentation: ChartDataPresentationState;
+  requestedExportFormat: "csv" | "tsv" | "png" | null;
   series: readonly ChartSeries[];
   selectedSeriesIds: readonly string[];
   title: string;
