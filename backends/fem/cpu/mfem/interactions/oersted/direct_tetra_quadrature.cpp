@@ -282,6 +282,53 @@ struct PairAccumulator {
     }
 };
 
+class DirectScalarCoefficient final : public mfem::Coefficient {
+public:
+    DirectScalarCoefficient(
+        const mfem::GridFunction &source,
+        const DirectTetraQuadratureOptions &options,
+        int component)
+        : source_(source), options_(options), component_(component)
+    {
+        if (component_ < 0 || component_ >= 3) {
+            throw std::invalid_argument(
+                "direct tetrahedral Oersted scalar projection component is invalid");
+        }
+    }
+
+    double Eval(
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point) override
+    {
+        mfem::Vector physical(3);
+        transformation.Transform(point, physical);
+        const std::vector<std::array<double, 3>> targets{
+            {physical[0], physical[1], physical[2]}};
+        const auto result = DirectTetraQuadrature::EvaluateField(
+            *source_.FESpace()->GetMesh(), source_, targets, options_);
+        diagnostics_.source_target_pairs +=
+            result.diagnostics.source_target_pairs;
+        diagnostics_.refined_pairs += result.diagnostics.refined_pairs;
+        diagnostics_.unconverged_pair_count +=
+            result.diagnostics.unconverged_pair_count;
+        diagnostics_.maximum_pair_error_apm = std::max(
+            diagnostics_.maximum_pair_error_apm,
+            result.diagnostics.maximum_pair_error_apm);
+        return result.h_xyz_apm[static_cast<std::size_t>(component_)];
+    }
+
+    const DirectTetraQuadratureDiagnostics &diagnostics() const
+    {
+        return diagnostics_;
+    }
+
+private:
+    const mfem::GridFunction &source_;
+    const DirectTetraQuadratureOptions &options_;
+    int component_;
+    DirectTetraQuadratureDiagnostics diagnostics_;
+};
+
 Point integrate_adaptive(
     const mfem::GridFunction &field,
     int parent_element,
@@ -473,6 +520,111 @@ DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateField(
         }
     }
     return result;
+}
+
+DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
+    const mfem::GridFunction &rt0_field,
+    mfem::GridFunction &target_field,
+    const DirectTetraQuadratureOptions &options)
+{
+    if (rt0_field.FESpace() == nullptr ||
+            rt0_field.FESpace()->GetMesh() == nullptr) {
+        throw std::invalid_argument(
+            "direct tetrahedral Oersted projection requires a source space");
+    }
+    if (target_field.FESpace() == nullptr ||
+            target_field.FESpace()->GetMesh() == nullptr ||
+            target_field.FESpace()->GetVDim() != 3 ||
+            target_field.FESpace()->GetOrdering() != mfem::Ordering::byVDIM ||
+            target_field.FESpace()->FEColl() == nullptr ||
+            std::string(target_field.FESpace()->FEColl()->Name()).rfind(
+                "H1_3D_", 0) != 0) {
+        throw std::invalid_argument(
+            "direct tetrahedral Oersted projection requires a vector H1 target space");
+    }
+    const mfem::Mesh &source_mesh = *rt0_field.FESpace()->GetMesh();
+    mfem::Mesh &target_mesh = *target_field.FESpace()->GetMesh();
+    if (source_mesh.Dimension() != 3 || target_mesh.Dimension() != 3) {
+        throw std::invalid_argument(
+            "direct tetrahedral Oersted projection requires 3D meshes");
+    }
+    for (int element = 0; element < target_mesh.GetNE(); ++element) {
+        if (target_mesh.GetElementBaseGeometry(element) !=
+                mfem::Geometry::TETRAHEDRON) {
+            throw std::invalid_argument(
+                "direct tetrahedral Oersted projection requires tetrahedral targets");
+        }
+    }
+    // Reuse the field-path validation without evaluating any source-target pair.
+    (void)EvaluateField(source_mesh, rt0_field, {}, options);
+
+    const int target_order = std::max(2, options.base_quadrature_order + 2);
+    const auto &target_rule = mfem::IntRules.Get(
+        mfem::Geometry::TETRAHEDRON, target_order);
+
+    // MFEM's VectorFEMassIntegrator is for vector finite elements (ND/RT),
+    // not a scalar H1 space with vdim=3.  Assemble one scalar H1 mass system
+    // per Cartesian component and lift the three solutions into byVDIM data.
+    mfem::FiniteElementSpace scalar_space(
+        &target_mesh, target_field.FESpace()->FEColl(), 1,
+        mfem::Ordering::byNODES);
+    const int scalar_dofs = scalar_space.GetVSize();
+    if (target_field.Size() != 3 * scalar_dofs) {
+        throw std::invalid_argument(
+            "direct tetrahedral Oersted H1 projection target vector layout is invalid");
+    }
+    mfem::BilinearForm mass(&scalar_space);
+    auto *mass_integrator = new mfem::MassIntegrator();
+    mass_integrator->SetIntRule(&target_rule);
+    mass.AddDomainIntegrator(mass_integrator);
+    mass.Assemble();
+    mass.Finalize();
+
+    target_field = 0.0;
+    mfem::GSSmoother smoother(mass.SpMat());
+    DirectTetraQuadratureDiagnostics diagnostics;
+    mfem::Vector solution(scalar_dofs);
+    mfem::Vector residual(scalar_dofs);
+    for (int component = 0; component < 3; ++component) {
+        DirectScalarCoefficient direct_component(
+            rt0_field, options, component);
+        mfem::LinearForm rhs(&scalar_space);
+        auto *rhs_integrator = new mfem::DomainLFIntegrator(direct_component);
+        rhs_integrator->SetIntRule(&target_rule);
+        rhs.AddDomainIntegrator(rhs_integrator);
+        rhs.Assemble();
+
+        solution = 0.0;
+        mfem::PCG(mass, smoother, rhs, solution,
+            0, 1000, 1.0e-12, 1.0e-24);
+        mass.Mult(solution, residual);
+        residual -= rhs;
+        const double residual_norm = residual.Norml2();
+        const double residual_scale = std::max(1.0, rhs.Norml2());
+        if (!(std::isfinite(residual_norm) &&
+                residual_norm <= 1.0e-10 * residual_scale)) {
+            throw std::runtime_error(
+                "direct tetrahedral Oersted H1 projection mass residual exceeds tolerance");
+        }
+        diagnostics.source_target_pairs +=
+            direct_component.diagnostics().source_target_pairs;
+        diagnostics.refined_pairs += direct_component.diagnostics().refined_pairs;
+        diagnostics.unconverged_pair_count +=
+            direct_component.diagnostics().unconverged_pair_count;
+        diagnostics.maximum_pair_error_apm = std::max(
+            diagnostics.maximum_pair_error_apm,
+            direct_component.diagnostics().maximum_pair_error_apm);
+        for (int dof = 0; dof < scalar_dofs; ++dof) {
+            target_field[component * scalar_dofs + dof] = solution[dof];
+        }
+    }
+    for (int dof = 0; dof < target_field.Size(); ++dof) {
+        if (!std::isfinite(target_field[dof])) {
+            throw std::runtime_error(
+                "direct tetrahedral Oersted H1 projection is non-finite");
+        }
+    }
+    return diagnostics;
 }
 
 } // namespace fullmag::fem::oersted

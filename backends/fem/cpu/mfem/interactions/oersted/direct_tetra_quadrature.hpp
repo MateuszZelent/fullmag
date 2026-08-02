@@ -55,6 +55,16 @@ public:
         const mfem::GridFunction &rt0_field,
         const std::vector<std::array<double, 3>> &target_points,
         const DirectTetraQuadratureOptions &options = {});
+
+    /**
+     * Consistent CPU-double L2 projection of the direct field into a vector
+     * H1 target GridFunction. The target space is not owned and must have
+     * vdim=3; this bounded reference path does not publish a runtime field.
+     */
+    static DirectTetraQuadratureDiagnostics ProjectField(
+        const mfem::GridFunction &rt0_field,
+        mfem::GridFunction &target_field,
+        const DirectTetraQuadratureOptions &options = {});
 };
 
 } // namespace fullmag::fem::oersted

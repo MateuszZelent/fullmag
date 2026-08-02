@@ -145,11 +145,59 @@ void direct_tetra_singular_target_contract()
     require(rejected,
         "singular-target Oersted silently accepted an exhausted depth budget");
 
+    auto convergence_options = options;
+    convergence_options.maximum_subdivision_depth = 4;
+    const auto coarse = DirectTetraQuadrature::EvaluateField(
+        mesh, current, targets, convergence_options);
+    for (std::size_t index = 0; index < result.h_xyz_apm.size(); ++index) {
+        require(std::abs(coarse.h_xyz_apm[index] - result.h_xyz_apm[index]) <=
+                5.0e-5 * std::max(1.0, std::abs(result.h_xyz_apm[index])),
+            "singular-target Oersted failed independent depth convergence");
+    }
+
     DirectTetraQuadratureOptions defaults;
     const auto default_result = DirectTetraQuadrature::EvaluateField(
         mesh, current, targets, defaults);
     require(default_result.diagnostics.unconverged_pair_count == 0,
         "default singular-target Oersted options did not converge");
+}
+
+void direct_tetra_consistent_h1_projection_contract()
+{
+    auto source_mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    auto target_mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    for (int vertex = 0; vertex < target_mesh.GetNV(); ++vertex) {
+        target_mesh.GetVertex(vertex)[0] += 2.0;
+    }
+    mfem::RT_FECollection source_collection(0, 3);
+    mfem::FiniteElementSpace source_space(&source_mesh, &source_collection);
+    mfem::GridFunction current(&source_space);
+    mfem::Vector vector(3);
+    vector = 0.0;
+    vector[0] = 4.0;
+    mfem::VectorConstantCoefficient coefficient(vector);
+    current.ProjectCoefficient(coefficient);
+
+    mfem::H1_FECollection target_collection(1, 3);
+    mfem::FiniteElementSpace target_space(
+        &target_mesh, &target_collection, 3, mfem::Ordering::byVDIM);
+    mfem::GridFunction projected(&target_space);
+    projected = 0.0;
+    DirectTetraQuadratureOptions options;
+    options.base_quadrature_order = 4;
+    options.maximum_subdivision_depth = 4;
+    options.relative_tolerance = 1.0e-5;
+    const auto diagnostics = DirectTetraQuadrature::ProjectField(
+        current, projected, options);
+    require(diagnostics.unconverged_pair_count == 0,
+        "consistent H1 projection left unconverged source pairs");
+    require(diagnostics.source_target_pairs > 0,
+        "consistent H1 projection did not evaluate direct source pairs");
+    require(std::all_of(projected.begin(), projected.end(),
+            [](double value) { return std::isfinite(value); }),
+        "consistent H1 projection produced a non-finite field");
 }
 
 } // namespace
@@ -159,6 +207,7 @@ int main()
     try {
         direct_tetra_signed_current_and_budget_contract();
         direct_tetra_singular_target_contract();
+        direct_tetra_consistent_h1_projection_contract();
         std::cout << "fem direct tetrahedral Oersted contract: PASS\n";
         return 0;
     } catch (const std::exception &error) {

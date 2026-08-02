@@ -818,6 +818,19 @@ not unprojected samples. OE-F1 requires global circuit closure but no
 volumetric airbox. It is the small-problem oracle and validation reference, not
 the production asymptotic algorithm.
 
+The bounded CPU reference now exposes the projection operation as
+`DirectTetraQuadrature::ProjectField`. It accepts an RT0 source and a distinct
+three-component `H1_3D_*` target space with `Ordering::byVDIM`, evaluates the
+direct field at the target tetrahedral quadrature points, and assembles one
+scalar consistent mass system per Cartesian component. Each system is solved
+with the deterministic FP64 MFEM PCG/Gauss--Seidel path and checked by a mass
+equation residual of at most $10^{-10}\max(1,\|l\|_2)$. Source--target pair,
+refinement, and unconverged-pair diagnostics are accumulated across all three
+components. This is a reference-only projection contract: it does not publish
+an API/runtime field, does not claim a target-quadrature error bound, and does
+not qualify overlapping source/target meshes at production scale; an exhausted
+near-pair depth remains a fail-closed error.
+
 ### 3.4 FEM mixed vector-potential contract (OE-F2)
 
 The OE-F2 FEM target formulation solves on conductor plus airbox with vacuum
