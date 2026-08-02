@@ -1879,6 +1879,9 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("armijo_rhs_j=") != std::string::npos &&
             pgbb_source.find("last_trial_step=") != std::string::npos &&
             pgbb_source.find("gradient_norm_sq=") != std::string::npos &&
+            pgbb_source.find("current_torque_apm=") != std::string::npos &&
+            pgbb_source.find("torque_tolerance_apm=") != std::string::npos &&
+            pgbb_source.find("torque_confirmation_count=") != std::string::npos &&
             pgbb_source.find("format_gpu_relax_pgbb_scalar(") != std::string::npos,
         "native FEM GPU projected-gradient BB exhausted Armijo failures must include actionable scientific line-search diagnostics");
     check(
