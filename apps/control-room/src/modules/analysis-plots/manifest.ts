@@ -30,7 +30,7 @@ export const analysisPlotsManifest: ModuleManifest = {
         scope: "workspace",
         isEnabled: (context: CommandContext) =>
           context.layout?.get().activeViewportMainModuleId === "viewport-3d" &&
-          analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds.length > 0,
+          analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds.some(isTableChartSeriesId),
         run: (context: CommandContext) => {
           const chart = analysisPlotsWorkspaceStore.getSnapshot();
           const chartId = "default";

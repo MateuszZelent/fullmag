@@ -32,13 +32,13 @@ describe("chart legend local selection", () => {
     const root = createRoot(container as unknown as Element);
 
     function Harness() {
-      useTableRowsBinaryResource("default", { columns: ["step", "mx", "my"] });
+      useTableRowsBinaryResource("default", { columns: ["step", "mx", "my"], targetPoints: 321 });
       const [selected, setSelected] = useState(["data.table:default:step:mx", "data.table:default:step:my"]);
       return <AnalysisTableSurface chartSeries={series} kernel={kernel} onPointSelect={() => undefined} onRangeChange={() => undefined} onSelectedSeriesIdsChange={setSelected} range={null} selectedPoint={null} selectedSeriesIds={selected} status="ready" table={null} xAxisId="step" xAxisLabel="step" />;
     }
 
     await act(async () => root.render(<KernelContext.Provider value={kernel}><Harness /></KernelContext.Provider>));
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
     const initialCalls = rowsBinary.mock.calls.length;
     expect(initialCalls).toBeGreaterThan(0);
     expect(container.textContent).toContain("mx");
@@ -46,6 +46,7 @@ describe("chart legend local selection", () => {
     const mx = findElement(container, (element) => element.getAttribute("aria-label")?.startsWith("mx,") ?? false, "mx legend") as TestElement;
     await act(async () => mx.click());
     expect(rowsBinary).toHaveBeenCalledTimes(initialCalls);
+    expect(mx.getAttribute("aria-pressed")).toBe("false");
     expect(container.textContent).toContain("my");
     await act(async () => root.unmount());
     dom.restore();

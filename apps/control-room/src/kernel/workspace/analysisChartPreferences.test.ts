@@ -107,6 +107,13 @@ describe("validateDescriptorPreferences", () => {
     const result = validateDescriptorPreferences({ selectedSeriesIds: many });
     expect(result.selectedSeriesIds.length).toBe(30);
   });
+
+  it("migrates legacy V1 yAxisIds per descriptor and preserves explicit empty selections", () => {
+    expect(validateDescriptorPreferences({ xAxisId: "t", yAxisIds: ["mx"] }, "analysis:data-table:default").selectedSeriesIds).toEqual(["data.table:default:t:mx"]);
+    expect(validateDescriptorPreferences({ yAxisIds: ["total"] }, "analysis:solver-energy-history").selectedSeriesIds).toEqual(["simulation.solver.energies:total"]);
+    expect(validateDescriptorPreferences({ yAxisIds: ["response:mx"] }, "analysis:frequency-domain").selectedSeriesIds).toEqual(["analysis.frequency-domain:response:mx"]);
+    expect(validateDescriptorPreferences({ selectedSeriesIds: [] }, "analysis:solver-energy-history").selectedSeriesIds).toEqual([]);
+  });
 });
 
 describe("validateAnalysisChartPreferences", () => {

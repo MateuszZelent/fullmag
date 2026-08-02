@@ -152,8 +152,9 @@ export function clampRangePreference(value: unknown): ChartRangePreference {
 
 export function validateDescriptorPreferences(
   raw: unknown,
+  descriptorId?: string,
 ): DescriptorPreferences {
-  const defaults = defaultDescriptorPreferences();
+  const defaults = defaultDescriptorPreferences(descriptorId);
   if (!raw || typeof raw !== "object") return defaults;
   const v = raw as Record<string, unknown>;
   return {
@@ -164,7 +165,7 @@ export function validateDescriptorPreferences(
           .map((id) => id.slice(0, MAX_DESCRIPTOR_ID_LENGTH))
           .filter((id, index, ids) => ids.indexOf(id) === index)
           .slice(0, 100)
-      : defaults.selectedSeriesIds,
+      : legacySelectedSeriesIds(v, descriptorId, defaults),
     liveMode:
       v["liveMode"] === "following" || v["liveMode"] === "paused"
         ? v["liveMode"]
@@ -189,7 +190,7 @@ export function validateAnalysisChartPreferences(
   if (rawDescriptors && typeof rawDescriptors === "object" && !Array.isArray(rawDescriptors)) {
     for (const [key, value] of Object.entries(rawDescriptors as Record<string, unknown>)) {
       if (key.length === 0 || key.length > MAX_DESCRIPTOR_ID_LENGTH) continue;
-      descriptorPreferences[key] = validateDescriptorPreferences(value);
+      descriptorPreferences[key] = validateDescriptorPreferences(value, key);
       const access = (rawLru as Record<string, unknown>)?.[key];
       lruAccessAt[key] =
         typeof access === "number" && Number.isFinite(access) && access >= 0
@@ -213,6 +214,25 @@ export function validateAnalysisChartPreferences(
     descriptorPreferences: trimmedDescriptors,
     _lruAccessAt: trimmedLru,
   };
+}
+
+function legacySelectedSeriesIds(
+  raw: Record<string, unknown>,
+  descriptorId: string | undefined,
+  defaults: DescriptorPreferences,
+): string[] {
+  if (!Array.isArray(raw["yAxisIds"])) return defaults.selectedSeriesIds;
+  const xAxisId = typeof raw["xAxisId"] === "string" ? raw["xAxisId"] : "step";
+  return (raw["yAxisIds"] as unknown[]).flatMap((id) => {
+    if (typeof id !== "string") return [];
+    if (descriptorId === "analysis:solver-energy-history") {
+      return [`simulation.solver.energies:${id}`];
+    }
+    if (descriptorId === "analysis:frequency-domain") {
+      return [id.startsWith("analysis.frequency-domain:") ? id : `analysis.frequency-domain:${id}`];
+    }
+    return [`data.table:default:${xAxisId}:${id}`];
+  });
 }
 
 // ===== LRU helpers =====
