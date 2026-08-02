@@ -99,6 +99,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let mut step_count = 0u64;
     let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let provenance = ExecutionProvenance {
+        transport_modules: Vec::new(),
         execution_engine: "cpu_reference_multilayer".to_string(),
         precision: "double".to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -241,6 +242,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
 
         if let Some((grid, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh_generation_id: None,
@@ -324,7 +326,12 @@ pub(crate) fn execute_reference_fdm_multilayer(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (final_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(values),
         })?;
     }
 

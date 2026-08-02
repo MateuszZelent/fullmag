@@ -14,3 +14,7 @@ fullmag-ir = { path = "../fullmag-ir" }
 fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
 rustfft = "6.4"
 rayon = { version = "1.10", optional = true }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

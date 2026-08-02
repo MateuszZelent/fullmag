@@ -169,6 +169,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     curl \
     git \
+    libboost-dev \
     libgl1 \
     libglu1-mesa \
     libopenmpi-dev \

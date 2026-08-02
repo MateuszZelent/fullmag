@@ -98,6 +98,34 @@ fn validate_single_grid_budget_with_policy(
     .map_err(|error| RunError {
         message: format!("FDM grid budget rejected before allocation: {error}"),
     })?;
+    let cells = usize::try_from(cost.cells).map_err(|_| RunError {
+        message: format!(
+            "FDM grid cell count {} is not addressable on this runtime",
+            cost.cells
+        ),
+    })?;
+    if plan
+        .active_mask
+        .as_ref()
+        .is_some_and(|mask| mask.len() != cells)
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM grid payload mismatch: active_mask_len does not equal resolved_cells={cells}"
+            ),
+        });
+    }
+    if plan
+        .sot_active_mask
+        .as_ref()
+        .is_some_and(|mask| mask.len() != cells)
+    {
+        return Err(RunError {
+            message: format!(
+                "prescribed SOT runtime contract target-mask length does not equal resolved_cells={cells}"
+            ),
+        });
+    }
     validate_resolved_periodic_workspace(
         plan.periodicity.as_ref(),
         plan.resolved_periodic_images.as_ref(),
@@ -156,12 +184,6 @@ fn validate_single_grid_budget_with_policy(
             ),
         });
     }
-    let cells = usize::try_from(cost.cells).map_err(|_| RunError {
-        message: format!(
-            "FDM grid cell count {} is not addressable on this runtime",
-            cost.cells
-        ),
-    })?;
     if plan.initial_magnetization.len() != cells {
         return Err(RunError {
             message: format!(
@@ -170,16 +192,104 @@ fn validate_single_grid_budget_with_policy(
             ),
         });
     }
-    if plan
-        .active_mask
-        .as_ref()
-        .is_some_and(|mask| mask.len() != cells)
-    {
-        return Err(RunError {
-            message: format!(
-                "FDM grid payload mismatch: active_mask_len does not equal resolved_cells={cells}"
-            ),
-        });
+    let has_any_prescribed_sot = plan.sot_current_density.is_some()
+        || plan.sot_xi_dl.is_some()
+        || plan.sot_xi_fl.is_some()
+        || plan.sot_sigma.is_some()
+        || plan.sot_thickness.is_some()
+        || plan.sot_formula_version.is_some()
+        || plan.sot_target.is_some()
+        || plan.sot_active_mask.is_some()
+        || plan.sot_envelope.is_some()
+        || plan.sot_drive.is_some();
+    if has_any_prescribed_sot {
+        let base_complete = plan.sot_current_density.is_some()
+            && plan.sot_xi_dl.is_some()
+            && plan.sot_xi_fl.is_some()
+            && plan.sot_sigma.is_some()
+            && plan.sot_thickness.is_some();
+        if !base_complete {
+            return Err(RunError {
+                message: "prescribed SOT runtime contract requires a complete current, efficiency, polarization, and thickness payload"
+                    .to_string(),
+            });
+        }
+        let current_density = plan.sot_current_density.expect("complete contract checked above");
+        let xi_dl = plan.sot_xi_dl.expect("complete contract checked above");
+        let xi_fl = plan.sot_xi_fl.expect("complete contract checked above");
+        let sigma = plan.sot_sigma.expect("complete contract checked above");
+        let thickness = plan.sot_thickness.expect("complete contract checked above");
+        let sigma_norm_sq = sigma.iter().map(|component| component * component).sum::<f64>();
+        if !current_density.is_finite()
+            || !xi_dl.is_finite()
+            || !xi_fl.is_finite()
+            || !thickness.is_finite()
+            || thickness <= 0.0
+            || sigma.iter().any(|component| !component.is_finite())
+            || !sigma_norm_sq.is_finite()
+        {
+            return Err(RunError {
+                message: "prescribed SOT runtime contract contains invalid physical parameters"
+                    .to_string(),
+            });
+        }
+        match plan.sot_formula_version.as_deref() {
+            Some("prescribed_sot.fullmag.v1") => {
+                if plan.sot_envelope.as_ref().is_some_and(|envelope| {
+                    !matches!(envelope, fullmag_ir::TimeEnvelopeIR::Constant { .. })
+                }) {
+                    return Err(RunError {
+                        message: "prescribed SOT non-constant envelope requires_stage_time_execution"
+                            .to_string(),
+                    });
+                }
+                if sigma_norm_sq <= 0.0
+                    || plan.sot_target.is_none()
+                    || plan.sot_active_mask.is_none()
+                    || plan.sot_drive.is_none()
+                {
+                    return Err(RunError {
+                        message: "prescribed SOT runtime contract v1 requires nonzero sigma, target, and target mask"
+                            .to_string(),
+                    });
+                }
+                let target_mask = plan.sot_active_mask.as_ref().expect("checked above");
+                if !target_mask.iter().any(|selected| *selected) {
+                    return Err(RunError {
+                        message: "prescribed SOT runtime contract target mask selects no active FDM cells"
+                            .to_string(),
+                    });
+                }
+                if target_mask.iter().enumerate().any(|(index, selected)| {
+                    *selected
+                        && plan.active_mask.as_ref().is_some_and(|active| {
+                            !active.get(index).copied().unwrap_or(false)
+                        })
+                }) {
+                    return Err(RunError {
+                        message: "prescribed SOT runtime contract target mask selects an inactive FDM cell"
+                            .to_string(),
+                    });
+                }
+            }
+            None | Some("prescribed_sot.legacy_fullmag.v0") => {
+                if plan.sot_target.is_some()
+                    || plan.sot_active_mask.is_some()
+                    || plan.sot_envelope.is_some()
+                    || plan.sot_drive.is_some()
+                {
+                    return Err(RunError {
+                        message: "legacy prescribed SOT runtime contract requires historical global target semantics without a target mask"
+                            .to_string(),
+                    });
+                }
+            }
+            Some(other) => {
+                return Err(RunError {
+                    message: format!("unsupported prescribed SOT formula_version '{other}'"),
+                });
+            }
+        }
     }
     if !plan.region_mask.is_empty() && plan.region_mask.len() != cells {
         return Err(RunError {
@@ -447,6 +557,31 @@ mod tests {
     use super::validate_single_grid_budget;
     use fullmag_ir::FdmPlanIR;
 
+    fn valid_prescribed_sot_plan() -> FdmPlanIR {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [2, 1, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; 2];
+        plan.active_mask = Some(vec![true, false]);
+        plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        plan.sot_target = Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        });
+        plan.sot_active_mask = Some(vec![true, false]);
+        plan.sot_current_density = Some(-1.0e11);
+        plan.sot_xi_dl = Some(0.1);
+        plan.sot_xi_fl = Some(0.0);
+        plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        plan.sot_thickness = Some(1.0e-9);
+        plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+            current_density_apm2: -1.0e11,
+            sigma_hat: [0.0, 1.0, 0.0],
+            envelope: None,
+        });
+        plan
+    }
+
     #[test]
     fn forged_single_grid_payload_is_rejected_before_allocation() {
         let mut plan = FdmPlanIR::default();
@@ -517,6 +652,77 @@ mod tests {
         let error = super::validate_single_grid_budget_with_policy(&plan, false)
             .expect_err("production policy must reject missing certificates");
         assert!(error.message.contains("certificate is required"));
+    }
+
+    #[test]
+    fn unversioned_legacy_sot_payload_retains_global_compatibility_execution() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [1, 1, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        plan.sot_current_density = Some(1.0e11);
+        plan.sot_xi_dl = Some(0.1);
+        plan.sot_xi_fl = Some(0.0);
+        plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        plan.sot_thickness = Some(1.0e-9);
+
+        assert_eq!(validate_single_grid_budget(&plan).unwrap(), 1);
+    }
+
+    #[test]
+    fn prescribed_sot_forged_plan_cases_fail_closed_without_panicking() {
+        let mut cases = Vec::new();
+
+        let mut wrong_formula = valid_prescribed_sot_plan();
+        wrong_formula.sot_formula_version = Some("prescribed_sot.unknown".to_string());
+        cases.push((wrong_formula, "unsupported prescribed SOT formula_version"));
+
+        let mut short_mask = valid_prescribed_sot_plan();
+        short_mask.sot_active_mask = Some(vec![true]);
+        cases.push((short_mask, "target-mask length"));
+
+        let mut empty_mask = valid_prescribed_sot_plan();
+        empty_mask.sot_active_mask = Some(vec![false, false]);
+        cases.push((empty_mask, "selects no active"));
+
+        let mut inactive_mask = valid_prescribed_sot_plan();
+        inactive_mask.sot_active_mask = Some(vec![false, true]);
+        cases.push((inactive_mask, "selects an inactive"));
+
+        let mut nonfinite = valid_prescribed_sot_plan();
+        nonfinite.sot_current_density = Some(f64::NAN);
+        cases.push((nonfinite, "invalid physical parameters"));
+
+        let mut zero_sigma = valid_prescribed_sot_plan();
+        zero_sigma.sot_sigma = Some([0.0; 3]);
+        cases.push((zero_sigma, "requires nonzero sigma"));
+
+        let mut bad_thickness = valid_prescribed_sot_plan();
+        bad_thickness.sot_thickness = Some(0.0);
+        cases.push((bad_thickness, "invalid physical parameters"));
+
+        for (plan, expected) in cases {
+            let result = std::panic::catch_unwind(|| validate_single_grid_budget(&plan));
+            let error = result
+                .expect("forged SOT plan validation must not panic")
+                .expect_err("forged SOT plan must fail closed");
+            assert!(
+                error.message.contains(expected),
+                "expected {expected:?} in {:?}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn short_global_active_mask_fails_before_certificate_or_sot_indexing() {
+        let mut plan = valid_prescribed_sot_plan();
+        plan.active_mask = Some(vec![true]);
+        let result = std::panic::catch_unwind(|| validate_single_grid_budget(&plan));
+        let error = result
+            .expect("short global active mask must not panic")
+            .expect_err("short global active mask must fail closed");
+        assert!(error.message.contains("active_mask_len"));
     }
 
     #[test]

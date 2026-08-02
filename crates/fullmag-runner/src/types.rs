@@ -1377,6 +1377,10 @@ impl StepStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepUpdate {
     pub stats: StepStats,
+    /// Internal restart envelope published to the session persistence resource.
+    /// This is control-plane state, not a field/preview payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupled_checkpoint: Option<serde_json::Value>,
     /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
     pub grid: [u32; 3],
     /// Stage-scoped FEM mesh generation resolved through the separate mesh resource.
@@ -2659,6 +2663,8 @@ pub struct ExecutionProvenance {
     pub execution_engine: String,
     /// Numeric precision used: "double" or "single".
     pub precision: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_modules: Vec<TransportExecutionProvenance>,
     /// Demag operator kind: e.g. "tensor_fft_newell".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_operator_kind: Option<String>,
@@ -2854,6 +2860,60 @@ pub struct ExecutionProvenance {
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TransportExecutionProvenance {
+    pub module_id: String,
+    pub current_source_id: String,
+    pub requested_discretization: String,
+    pub requested_device: String,
+    pub requested_precision: String,
+    pub requested_execution_mode: String,
+    pub resolved_discretization: String,
+    pub resolved_device: String,
+    pub resolved_precision: String,
+    pub resolved_execution_mode: String,
+    pub runtime_family: String,
+    pub runtime_id: String,
+    pub engine_id: String,
+    pub charge_solver_engine: String,
+    pub spin_solver_engine: String,
+    pub constitutive_version: String,
+    pub operator_version: String,
+    pub physical_residual_version: String,
+    pub interface_realization: String,
+    pub stage_coupling: String,
+    pub capability_status: String,
+    pub implementation_state: String,
+    pub validation_state: String,
+    pub validation_scope: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inserted_default_boundaries: Vec<String>,
+    pub charge_domain: fullmag_ir::ResolvedFemTransportDomainIR,
+    pub spin_domain: fullmag_ir::ResolvedFemTransportDomainIR,
+    pub charge_insulating_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,
+    pub spin_insulating_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,
+    pub interfaces: Vec<fullmag_ir::ResolvedFemTransportInterfaceIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub torque_target: Option<fullmag_ir::ResolvedFemTorqueTargetIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<TransportFallbackProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degradation: Option<TransportDegradationProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransportFallbackProvenance {
+    pub requested_lane: String,
+    pub resolved_lane: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransportDegradationProvenance {
+    pub kind: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeEngineInfo {
     /// Canonical backend family such as "fdm", "fem", or "fem_eigen".
@@ -2883,7 +2943,145 @@ pub(crate) struct FieldSnapshot {
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
-    pub values: Vec<[f64; 3]>,
+    pub component_count: u8,
+    pub component_order: String,
+    pub location: String,
+    pub scope: String,
+    pub revision: u64,
+    pub values: Vec<f64>,
+}
+
+impl FieldSnapshot {
+    pub(crate) fn flatten_vec3(values: Vec<[f64; 3]>) -> Vec<f64> {
+        values.into_iter().flatten().collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+    pub(crate) fn new(
+        name: impl Into<String>,
+        step: u64,
+        time: f64,
+        solver_dt: f64,
+        component_count: u8,
+        component_order: impl Into<String>,
+        location: impl Into<String>,
+        scope: impl Into<String>,
+        revision: u64,
+        values: Vec<f64>,
+    ) -> Result<Self, String> {
+        if component_count == 0 {
+            return Err("field snapshot component_count must be greater than zero".into());
+        }
+        if values.len() % usize::from(component_count) != 0 {
+            return Err(format!(
+                "field snapshot value count {} is not divisible by component_count {component_count}",
+                values.len()
+            ));
+        }
+        if revision == 0 {
+            return Err("field snapshot revision must be greater than zero".into());
+        }
+        Ok(Self {
+            name: name.into(),
+            step,
+            time,
+            solver_dt,
+            component_count,
+            component_order: component_order.into(),
+            location: location.into(),
+            scope: scope.into(),
+            revision,
+            values,
+        })
+    }
+
+    pub(crate) fn sample_count(&self) -> usize {
+        self.values.len() / usize::from(self.component_count)
+    }
+
+    pub(crate) fn vec3_values(&self) -> Result<Vec<[f64; 3]>, String> {
+        if self.component_count != 3 {
+            return Err(format!(
+                "field snapshot '{}' has {} components, expected 3",
+                self.name, self.component_count
+            ));
+        }
+        Ok(self
+            .values
+            .chunks_exact(3)
+            .map(|value| [value[0], value[1], value[2]])
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod field_snapshot_tests {
+    use super::FieldSnapshot;
+
+    #[test]
+    fn canonical_snapshot_supports_scalar_vector_and_tensor_shapes() {
+        let scalar = FieldSnapshot::new(
+            "V_electric",
+            0,
+            0.0,
+            0.0,
+            1,
+            "scalar",
+            "node",
+            "module:transport",
+            1,
+            vec![1.0, 2.0],
+        )
+        .unwrap();
+        assert_eq!(scalar.sample_count(), 2);
+
+        let vector = FieldSnapshot::new(
+            "J_charge",
+            0,
+            0.0,
+            0.0,
+            3,
+            "xyz",
+            "node",
+            "module:transport",
+            2,
+            FieldSnapshot::flatten_vec3(vec![[1.0, 2.0, 3.0]; 2]),
+        )
+        .unwrap();
+        assert_eq!(vector.values, vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+
+        let tensor = FieldSnapshot::new(
+            "spin_current_tensor",
+            0,
+            0.0,
+            0.0,
+            9,
+            "row_major_Q_ia",
+            "node",
+            "module:transport",
+            3,
+            vec![0.0; 18],
+        )
+        .unwrap();
+        assert_eq!(tensor.sample_count(), 2);
+    }
+
+    #[test]
+    fn canonical_snapshot_rejects_invalid_component_shape_and_revision() {
+        assert!(FieldSnapshot::new(
+            "bad", 0, 0.0, 0.0, 0, "none", "node", "full", 1, vec![]
+        )
+        .is_err());
+        assert!(FieldSnapshot::new(
+            "bad", 0, 0.0, 0.0, 3, "xyz", "node", "full", 1, vec![1.0, 2.0]
+        )
+        .is_err());
+        assert!(FieldSnapshot::new(
+            "bad", 0, 0.0, 0.0, 1, "scalar", "node", "full", 0, vec![1.0]
+        )
+        .is_err());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3043,6 +3241,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -3067,6 +3266,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -3191,6 +3391,7 @@ mod tests {
                     step,
                     ..StepStats::default()
                 },
+                coupled_checkpoint: None,
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: context.generation_id(),
                 magnetization: None,
@@ -3322,6 +3523,7 @@ mod tests {
     #[test]
     fn to_v2_uses_registry_metadata_for_magnetization() {
         let update = StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats::default(),
             grid: [4, 1, 1],
             fem_mesh_generation_id: None,
@@ -3353,6 +3555,7 @@ mod tests {
     #[test]
     fn to_v2_uses_registry_metadata_for_preview_fields() {
         let update = StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats::default(),
             grid: [4, 1, 1],
             fem_mesh_generation_id: None,

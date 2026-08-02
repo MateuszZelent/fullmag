@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-31",
+  "updated_at": "2026-07-16",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -248,16 +248,132 @@
       "notes": "Deferred until current transport and spin accumulation are modeled explicitly."
     },
     {
-      "id": "spin_orbit_torque",
-      "label": "SpinOrbitTorque",
+      "id": "spin_torque.prescribed_sot.legacy_fullmag.v0.fdm_cpu_fp64",
+      "capability_id": "spin_torque.prescribed_sot",
+      "formula_version": "prescribed_sot.legacy_fullmag.v0",
+      "label": "PrescribedSpinOrbitTorque legacy compatibility FDM CPU FP64",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "precision_scope": ["double"],
+      "execution_mode_scope": ["strict"],
+      "workload_scope": "Existing single-grid local prescribed-SOT payload on the FDM CPU reference lane only.",
+      "validated_workloads": [],
+      "notes": "Compatibility execution reproduces magnitude-only current, missing gamma0/rate conversion, and missing Gilbert-source transform. It is not canonical v1, not validated, and never proves direct or inverse SHE."
+    },
+    {
+      "id": "spin_torque.prescribed_sot.legacy_fullmag.v0.fdm_gpu_fp64_fp32",
+      "capability_id": "spin_torque.prescribed_sot",
+      "formula_version": "prescribed_sot.legacy_fullmag.v0",
+      "label": "PrescribedSpinOrbitTorque legacy compatibility FDM GPU FP64/FP32",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "precision_scope": ["double", "single"],
+      "execution_mode_scope": ["strict"],
+      "workload_scope": "Existing single-grid native CUDA prescribed-SOT integrators only.",
+      "validated_workloads": [],
+      "notes": "Compatibility execution reproduces magnitude-only current, missing gamma0/rate conversion, and missing Gilbert-source transform. CPU inference from this row is forbidden; it is not canonical v1, not validated, and never proves direct or inverse SHE."
+    },
+    {
+      "id": "spin_torque.prescribed_sot.fullmag.v1",
+      "capability_id": "spin_torque.prescribed_sot",
+      "formula_version": "prescribed_sot.fullmag.v1",
+      "label": "PrescribedSpinOrbitTorque canonical v1",
       "lanes": {
         "fdm_cpu_reference": "semantic_only",
         "fdm_gpu_production": "semantic_only",
         "fem_cpu_public": "semantic_only",
         "fem_gpu_public": "semantic_only"
       },
+      "precision_scope": ["double", "single only after explicit qualification"],
+      "execution_mode_scope": ["strict", "extended"],
+      "workload_scope": "Canonical signed-current macrospin with SI/Gilbert/mask/stage-time requirements.",
       "validated_workloads": [],
-      "notes": "Canonical placeholder for damping-like and field-like SOT."
+      "notes": "PR-00 contract only. Existing legacy executors are not v1 evidence and this capability never proves direct or inverse SHE."
+    },
+    {
+      "id": "spin_torque.zhang_li.fullmag.v1", "capability_id": "spin_torque.zhang_li", "formula_version": "zhang_li.fullmag.v1",
+      "lanes": {"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"},
+      "precision_scope":["double","single only after qualification"], "execution_mode_scope":["strict","extended"], "workload_scope":"Canonical signed-current domain-wall and axis-specific PBC workloads.", "validated_workloads":[],
+      "notes":"Existing legacy executable slices are not formula-v1 evidence."
+    },
+    {
+      "id": "spin_torque.slonczewski.fullmag.v2", "capability_id": "spin_torque.slonczewski", "formula_version": "slonczewski.fullmag.v2",
+      "realization_versions":["slonczewski_thin_layer_homogenized.v1","slonczewski_interface_flux.v1"],
+      "lanes": {"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"},
+      "precision_scope":["double","single only after qualification"], "execution_mode_scope":["strict","extended"], "workload_scope":"Canonical oriented-current macrospin and current-scaling workloads.", "validated_workloads":[],
+      "notes":"Existing legacy executable slices are not formula-v1 evidence."
+    },
+    {
+      "id":"transport.charge.ohmic.fullmag.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_face_flux.v1","fem_charge_spin_broken_h1_mortar.v1"],
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 uniform/layered conductor with explicit BC and gauge.", "validated_workloads":[], "notes":"PR-00 contract only."
+    },
+    {
+      "id":"transport.charge.magnetoresistive.fullmag.v1", "capability_id":"transport.charge.magnetoresistive", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M2 AMR/PHE/AHE and reciprocal nonlinear workloads with complete material schema.", "validated_workloads":[], "notes":"PR-00 contract only."
+    },
+    {
+      "id":"transport.spin.steady_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.steady_drift_diffusion", "formula_version":"transport_constitutive.one_way.fullmag.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 spin_1d_diffusion_v1 with explicitly scoped BC/interface.", "validated_workloads":[], "notes":"PR-00 contract only."
+    },
+    {
+      "id":"transport.spin.direct_she.fullmag.v1", "capability_id":"transport.spin.direct_she", "formula_version":"transport_constitutive.one_way.fullmag.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 she_1d_film_v1 with declared spin BC.", "validated_workloads":[], "notes":"Prescribed SOT never satisfies this capability."
+    },
+    {
+      "id":"transport.spin.inverse_she.fullmag.v1", "capability_id":"transport.spin.inverse_she", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M2 Onsager and nonlinear reciprocal benchmark.", "validated_workloads":[], "notes":"PR-00 contract only."
+    },
+    {
+      "id":"transport.spin.mixing_conductance.fullmag.v2", "capability_id":"transport.spin.mixing_conductance", "formula_version":"magnetoelectronic.fullmag.v2",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"mixing_flux_balance_v2 on an oriented two-trace interface.", "validated_workloads":[], "notes":"Old magnetoelectronic.fullmag.v1 is read-only provenance; PR-00 contract only."
+    },
+    {
+      "id":"transport.spin.memory_loss.fullmag.v2", "capability_id":"transport.spin.memory_loss", "formula_version":"sml_reservoir.fullmag.v2",
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"unsupported","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"sml_reservoir_balance_v2 and sml_reservoir_entropy_v2.", "validated_workloads":[], "notes":"Bounded FDM M2 reference lane executes the statically eliminated local reservoir and publishes balance/power traces; native production, FEM and GPU remain unsupported."
+    },
+    {
+      "id":"transport.spin.transient_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.transient_drift_diffusion", "operator_version":"coupled_imex_ark2.v1",
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Single-grid one-way M3 decay, temporal-order, rollback and exact-restart workloads.", "validated_workloads":["just verify-fdm-transient-spin-m3-reference"], "notes":"FDM CPU double strict is reference-executable with public ProblemIR planning, session backend-state persistence, and explicit CLI exact resume. API restore does not automatically relaunch the separately owned CLI process."
+    },
+    {
+      "id":"field.oersted.dynamic.legacy_fdm_cpu_fp64", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.prescribed_density.legacy_fullmag.v0", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"unsupported","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Documented prescribed-current single-grid cylinder/midpoint slices only.", "validated_workloads":[], "notes":"Bounded legacy execution; no canonical v1 closure, cadence, FFT, or H(curl) inference."
+    },
+    {
+      "id":"field.oersted.dynamic.legacy_fdm_gpu_fp64_fp32", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.prescribed_density.legacy_fullmag.v0", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"production_executable","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double","single"], "execution_mode_scope":["strict"], "workload_scope":"Documented prescribed-current single-grid cylinder/midpoint native CUDA slices only.", "validated_workloads":[], "notes":"Bounded legacy execution; not validated and not the M1 FFT realization."
+    },
+    {
+      "id":"field.oersted.dynamic.legacy_fem_cpu_gpu_fp64", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.prescribed_density.legacy_fullmag.v0", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"unsupported","fem_cpu_public":"production_executable","fem_gpu_public":"production_executable"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Documented prescribed-current native FEM cylinder/midpoint slices only.", "validated_workloads":[], "notes":"Bounded legacy execution; not canonical v1 or general H(curl)/airbox validation."
+    },
+    {
+      "id":"field.oersted.fdm_fft.fullmag.v1", "capability_id":"field.oersted.fdm_fft", "operator_version":"fdm_oersted_cell_integrated_open.v1", "realization_version":"oersted_fdm_fft_open.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 globally closed open-boundary circuit with direct cell-integrated oracle.", "validated_workloads":[], "notes":"Existing cylinder/midpoint paths are not this realization."
+    },
+    {
+      "id":"field.oersted.fem_direct_quadrature.fullmag.v1", "capability_id":"field.oersted.fem_direct_quadrature", "operator_versions":["fem_conservative_current_rt0_view.v1","fem_oersted_direct_tetra_quadrature.v1"], "closure_operator_versions":["fem_closed_current_extension.v1"], "realization_version":"oersted_direct_biot_savart.v1", "optional_additive_realization_versions":["oersted_analytic_return_additive.v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"unsupported","fem_cpu_public":"semantic_only","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Small M1 volumetrically closed tetrahedral circuit or meshed lead extension; an analytic return is a separately reported OE-F1-only additive field.", "validated_workloads":[], "notes":"OE-T0/OE-F1 publication and contract only. Existing nodal midpoint Biot-Savart is not this realization and cannot promote it."
+    },
+    {
+      "id":"field.oersted.fem_vector_potential.fullmag.v1", "capability_id":"field.oersted.fem_vector_potential", "operator_version":"fem_oersted_hcurl_h1_gauge.v1", "realization_version":"oersted_fem_vector_potential.v1",
+      "prerequisite_operator_version":"fem_conservative_current_rt0_view.v1", "closure_operator_versions":["fem_closed_current_extension.v1"], "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"unsupported","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 volumetrically closed conductor/return or meshed lead extension contained in an airbox; analytic_return_path is unsupported; baseline tangential_A_h1_0.v1 gauge plus separately selected zero-mean natural-boundary variant.", "validated_workloads":[], "notes":"OE-T0/OE-F2 publication and contract only. Baseline is H_0(curl) x H^1_0, not zero mean; v2 discrete block/weak-Ampere/compatible-divergence residual, topology, direct-oracle and airbox gates are unimplemented."
+    },
+    {
+      "id":"coupling.transport_llg.one_way.fullmag.v1", "capability_id":"coupling.transport_llg.one_way", "formula_version":"transport_constitutive.one_way.fullmag.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 stage-consistent transport/LLG with accepted-state observable equality.", "validated_workloads":[], "notes":"PR-00 contract only."
+    },
+    {
+      "id":"coupling.transport_llg.bidirectional.fullmag.v1", "capability_id":"coupling.transport_llg.bidirectional", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M2 nonlinear stage solve with residual/LTE and rollback evidence.", "validated_workloads":[], "notes":"PR-00 contract only."
     },
     {
       "id": "oersted_cylinder_constant",

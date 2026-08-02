@@ -91,6 +91,35 @@ impl ExchangeLlgProblem {
                 )));
             }
         }
+        if let Some(sot) = terms.sot.as_ref() {
+            if let Some(mask) = sot.active_mask.as_ref() {
+                if mask.len() != grid.cell_count() {
+                    return Err(EngineError::new(format!(
+                        "prescribed SOT active_mask length {} does not match grid cell count {}",
+                        mask.len(),
+                        grid.cell_count()
+                    )));
+                }
+            }
+            if sot.envelope.as_ref().is_some_and(|envelope| {
+                !matches!(envelope, fullmag_ir::TimeEnvelopeIR::Constant { .. })
+            }) {
+                return Err(EngineError::new(
+                    "prescribed SOT non-constant envelope requires_stage_time_execution",
+                ));
+            }
+        }
+        if let Some(slonczewski) = terms.slonczewski_stt.as_ref() {
+            if let Some(mask) = slonczewski.active_mask.as_ref() {
+                if mask.len() != grid.cell_count() {
+                    return Err(EngineError::new(format!(
+                        "Slonczewski active_mask length {} does not match grid cell count {}",
+                        mask.len(),
+                        grid.cell_count()
+                    )));
+                }
+            }
+        }
         Ok(Self {
             grid,
             cell_size,
@@ -230,13 +259,21 @@ impl ExchangeLlgProblem {
     pub fn effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
-        Ok(self.effective_field_from_vectors_ws(state.magnetization(), &mut ws))
+        Ok(self.effective_field_from_vectors_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            state.time_seconds,
+        ))
     }
 
     pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
-        Ok(self.observable_effective_field_from_vectors_ws(state.magnetization(), &mut ws))
+        Ok(self.observable_effective_field_from_vectors_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            state.time_seconds,
+        ))
     }
 
     pub fn dmi_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
@@ -321,7 +358,12 @@ impl ExchangeLlgProblem {
 
     pub fn observe(&self, state: &ExchangeLlgState) -> Result<EffectiveFieldObservables> {
         self.ensure_state_matches_grid(state)?;
-        Ok(self.observe_vectors(state.magnetization()))
+        let mut ws = self.create_workspace();
+        Ok(self.observe_vectors_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            state.time_seconds,
+        ))
     }
 
     /// Single step using a disposable FFT workspace.
@@ -470,6 +512,12 @@ impl ExchangeLlgProblem {
     /// Read the current thermal step counter.
     pub fn thermal_step(&self) -> u64 {
         self.thermal_step_counter.load(Ordering::Relaxed)
+    }
+
+    /// Restore the accepted counter-based thermal RNG position from an exact
+    /// compatible checkpoint before resuming execution.
+    pub fn restore_thermal_step(&self, step: u64) {
+        self.thermal_step_counter.store(step, Ordering::Relaxed);
     }
 
     /// Advance the thermal step counter by one (call after each accepted step).

@@ -6,6 +6,9 @@
   - `docs/adr/0014-native-fem-backend-modularization.md`
 - Related physics:
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
+  - `docs/physics/0960-spin-torque-sign-units-and-prescribed-sot.md`
+  - `docs/physics/0970-spin-hall-drift-diffusion-transport.md`
+  - `docs/physics/0980-dynamic-current-and-oersted-coupling.md`
   - `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
   - `docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md`
   - `docs/physics/0817-native-fem-cpu-demag-hot-path-profile.md`
@@ -181,6 +184,23 @@ The target state split is:
 New cross-cutting fields should not be added directly to `Context`. If a
 temporary compatibility field is unavoidable, it must have a documented target
 owner and removal condition.
+
+The M0–M3 spin-transport program extends this split with planned owners, not
+new `Context` fields:
+
+| Planned owner | Responsibility |
+|---|---|
+| `ChargeTransportSubsystem` | `V`, conservative `J_charge`, electrodes, gauge, charge residuals |
+| `SpinTransportSubsystem` | `mu_s`, rank-2 `Q_ia`, reactions, interface laws, spin balance |
+| `SpinTorqueRegistry` | prescribed and transport-derived Gilbert-source torques; no embedded PDE solve |
+| `OerstedSubsystem` | consumes the published signed `J_charge`; FEM H(curl)+gauge realization and field projection |
+| `CoupledStepperSubsystem` | M1/M2 stage-consistent refresh and M3 IMEX state/rollback coordination |
+
+These are target owners only at PR-00. They do not claim that MFEM/hypre/
+libCEED solvers, GPU residency, or public runtime descriptors already exist.
+Production FEM files belong under current `backends/fem`; historical
+`native/backends/fem` paths elsewhere in this document describe migration
+provenance, not the accepted source-layout target.
 
 Current migration note: explicit RK storage and tableau metadata have started
 moving toward the `StepperSubsystem` target. `ExplicitTableau` is owned by

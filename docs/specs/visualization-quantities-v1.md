@@ -314,22 +314,56 @@ The UI may display `mu0 * H_ant` or `mu0 * H_ant_basis` in T/mT or T/A as a
 declared unit transform. This is not a new `B_ext` quantity and does not change
 the stored canonical field.
 
-### When regional time-domain field drives become executable
+### Charge, spin, torque, and Oersted quantities
 
-Publish together from one runtime field revision:
+The following identifiers and semantics are stable. `cell|node` means the
+location is the resolved backend field topology and MUST be stated in each
+registry entry; it never means that a payload may be attached to either
+topology opportunistically.
 
-- `H_drive`: instantaneous summed regional field in `A/m` on the magnetic
-  execution domain;
-- `B_drive`: declared display transform `mu0 H_drive` in `T`, not an
-  independently stored solver state;
-- `E_drive`: global imposed-Zeeman energy in `J`;
-- `eden_drive`: imposed-Zeeman energy density in `J/m^3`.
+| ID | Kind / components | SI unit | Canonical location and topology | Relationship |
+|---|---|---|---|---|
+| `V_electric` | scalar field | V | cell or node on conductor topology | gauge-dependent charge solution |
+| `J_charge` | vector field `[x,y,z]` | A/m^2 | cell or conservative face-derived cell projection on conductor topology | sole current source consumed by torque/spin/Oersted |
+| `spin_potential` | vector field `[x,y,z]` | V | cell or node on spin-conductor topology | full splitting `mu_s`, not half splitting |
+| `spin_current_tensor` | tensor field, rank 2, shape `[3,3]`, nine components | A/m^2 | cell/node tensor on spin-conductor topology | full `Q_ia`, never a vector surrogate |
+| `spin_flux_normal` | vector field `[spin_x,spin_y,spin_z]` | A/m^2 | selected oriented interface topology | derived contraction `n_i Q_ia` |
+| `torque_stt` | vector field `[x,y,z]` | 1/s | magnetic target topology | preserved aggregate for STT-family compatibility |
+| `torque_sot` | vector field `[x,y,z]` | 1/s | magnetic target topology | preserved aggregate for prescribed-SOT compatibility |
+| `torque_zhang_li` | vector field `[x,y,z]` | 1/s | magnetic target topology | component of `torque_stt` and `torque_spin_total` |
+| `torque_slonczewski` | vector field `[x,y,z]` | 1/s | magnetic target or oriented interface projection | component of `torque_stt` and `torque_spin_total` |
+| `torque_transport` | vector field `[x,y,z]` | 1/s | magnetic target or oriented interface projection | solved-transport component of `torque_spin_total`; not prescribed SOT |
+| `torque_spin_total` | vector field `[x,y,z]` | 1/s | magnetic target topology | exact sum of active canonical spin-torque components after common projection |
+| `H_oe` | vector field `[x,y,z]` | A/m | magnetic RHS topology | exact Oersted field consumed by the associated RHS |
+| `oersted_zeeman_energy` | global scalar | J | global, magnetic-domain integral | external-Zeeman case only; may contribute to `E_total` |
+| `oersted_zeeman_work_snapshot` | global scalar | J | global, magnetic-domain diagnostic integral | M2 nonvariational snapshot; excluded from `E_total` |
+| `joule_power_density` | scalar field | W/m^3 | cell or element on conductor topology | local `J_c dot E` diagnostic |
 
-`H_drive` must be the exact buffer used by the accepted RHS evaluation or
-snapshot refresh at the published time. Preview-only analytic evaluation may
-use a distinct preview revision and must never be presented as runtime proof.
-`H_drive` does not alias `H_ant` or `H_ext`; availability, source kind,
-stage id, evaluation time, basis signature, and field revision are explicit.
+`spin_current_tensor.components` is exactly row-major
+`[Q_xx,Q_xy,Q_xz,Q_yx,Q_yy,Q_yz,Q_zx,Q_zy,Q_zz]`, with
+`component_order="row_major_Q_ia"`, `flow_axes=[x,y,z]`, and
+`spin_axes=[x,y,z]`. The binary field payload uses `n_comp=9`; component
+selection or Frobenius norm is a declared derivation and does not change the
+rank-two source semantics.
+
+Every entry/sample above MUST carry `domain_ref`, topology identity,
+`location`, `evaluated_time_s`, precision, formula/operator/realization IDs,
+and freshness. Freshness is `accepted`, `stage_provisional`, or `stale`; an
+accepted payload records `accepted_state_revision` and all applicable source
+revisions: `scene_revision`, `mesh_revision`, `current_state_revision`,
+`spin_state_revision`, `transport_coupling_revision`, `oersted_state_revision`,
+and `magnetization_state_revision`. A provisional stage additionally records
+`attempt_id` and `stage_index` and is not selectable as accepted state. A
+consumer/source revision mismatch makes the quantity stale; equal array length
+or time alone cannot establish freshness.
+
+Aggregate/component relations are revision-exact. `torque_stt` is the sum of
+active Zhang-Li, Slonczewski, and solved-transport STT components represented
+by the run; `torque_sot` is the prescribed-SOT aggregate;
+`torque_spin_total` is the sum of all active canonical component torques after
+projection to one magnetic topology. Metadata lists `component_quantity_ids`
+and their field revisions. The browser may not recompute an aggregate across
+different revisions or silently substitute a missing component with zero.
 
 ## 9. API contract
 

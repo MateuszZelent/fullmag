@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { ChevronsDownUp, ChevronsUpDown, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  ChevronsDownUp,
+  ChevronsUpDown,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -35,6 +41,13 @@ import {
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+import {
+  useCurrentTransportsResource,
+  useOerstedFieldsResource,
+  useSpinInterfacesResource,
+  useSpinTorquesResource,
+  useSpinTransportsResource,
+} from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
@@ -85,6 +98,7 @@ import {
   revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
+  shouldAutoRevealModelTab,
   useExplorerStoreSelector,
 } from "./explorerStore";
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
@@ -185,6 +199,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
   const pinnedQuickChart = useQuickChartWorkspaceSelector((state) => state.pinned);
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+  const previousSelectedNodeId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
     { isEqual: explorerCrossSectionsEqual },
@@ -234,6 +249,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: modelTabActive,
   });
   const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
+  const spinTransports = useSpinTransportsResource({ enabled: modelTabActive });
+  const currentTransports = useCurrentTransportsResource({ enabled: modelTabActive });
+  const spinInterfaces = useSpinInterfacesResource({ enabled: modelTabActive });
+  const spinTorques = useSpinTorquesResource({ enabled: modelTabActive });
+  const oerstedFields = useOerstedFieldsResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
@@ -307,6 +327,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
+          currentTransports: currentTransports.data,
+          spinInterfaces: spinInterfaces.data,
+          spinTorques: spinTorques.data,
+          oerstedFields: oerstedFields.data,
+          spinTransports: spinTransports.data,
           meshManifest: manifest.data,
         }),
         stageExecution.data,
@@ -410,8 +435,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
-    planarMonitorDraft,
-    planarMonitors.data,
+    currentTransports.data,
+    spinInterfaces.data,
+    spinTorques.data,
+    oerstedFields.data,
+    spinTransports.data,
     regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,
@@ -431,17 +459,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   ]);
 
   useEffect(() => {
-    if (activeTab !== "model") return;
-    ensureExplorerModelObjectDefaults(
-      nodes
-        .filter((node) => node.kind === "object.root")
-        .map((node) => node.id),
-    );
-  }, [activeTab, nodes]);
-
-  useEffect(() => {
-    if (!selectedNodeId?.startsWith("model:") || activeTab === "model") return;
-    setExplorerActiveTab("model");
+    const previous = previousSelectedNodeId.current;
+    previousSelectedNodeId.current = selectedNodeId;
+    if (shouldAutoRevealModelTab(previous, selectedNodeId, activeTab)) {
+      setExplorerActiveTab("model");
+    }
   }, [activeTab, selectedNodeId]);
 
   useEffect(() => {

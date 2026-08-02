@@ -668,7 +668,7 @@ __global__ void add_scaled_field_fp64_kernel(
     dst_z[i] += scale * src_z[i];
 }
 
-void launch_effective_field_fp64(Context &ctx) {
+void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -740,7 +740,7 @@ void launch_effective_field_fp64(Context &ctx) {
 
     // ── Add Oersted field contribution: H_eff += I(t) * H_oe_static ──
     if (ctx.has_oersted_field) {
-        const double I_scale = oersted_field_scale(ctx);
+        const double I_scale = oersted_field_scale(ctx, evaluation_time);
         // Simple axpy: work += I_scale * h_oe_static
         add_scaled_field_fp64_kernel<<<grid, BLOCK_SIZE>>>(
             static_cast<double*>(ctx.work.x),

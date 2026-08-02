@@ -7,16 +7,19 @@ use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
-    FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
+    ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, RegionalFieldDriveTerm,
-    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, StepReport, TimeIntegrator,
-    UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
+    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
+    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
     RelaxationControlIR, StageCompletionIR,
 };
 
+use super::spin_transport::{
+    FdmCoupledCheckpoint, FdmSpinTransportEvaluation, FdmSpinTransportWorkflow,
+};
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
@@ -157,11 +160,17 @@ fn build_sot(plan: &FdmPlanIR) -> Option<SotConfig> {
         return None;
     }
     Some(SotConfig {
+        formula: match plan.sot_formula_version.as_deref() {
+            Some("prescribed_sot.fullmag.v1") => SotFormula::FullmagV1,
+            _ => SotFormula::LegacyFullmagV0,
+        },
         current_density: je,
         xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
         xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
         sigma,
         thickness,
+        active_mask: plan.sot_active_mask.clone(),
+        envelope: plan.sot_envelope.clone(),
     })
 }
 
@@ -211,19 +220,48 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
     }
     // Use explicit thickness if provided, otherwise fall back to cell_dz (like amumax)
     let thickness = plan.stt_thickness.unwrap_or(cell_dz);
-    // Fixed layer position controls current sign: "top" → +1, "bottom" → -1
-    let current_sign = match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
-        "bottom" => -1.0,
-        _ => 1.0, // "top" or unset
+    let (current_density_magnitude, current_sign, active_mask) = match plan
+        .slonczewski_formula_version
+        .as_deref()
+        .unwrap_or("slonczewski.legacy_fullmag.v0")
+    {
+        "slonczewski.fullmag.v2" => {
+            let n = plan.slonczewski_stack_normal?;
+            let active_mask = plan.slonczewski_active_mask.clone()?;
+            let n_norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let signed_normal_current = (j[0] * n[0] + j[1] * n[1] + j[2] * n[2]) / n_norm;
+            if !signed_normal_current.is_finite() || signed_normal_current == 0.0 {
+                return None;
+            }
+            (
+                signed_normal_current.abs(),
+                signed_normal_current.signum(),
+                Some(active_mask),
+            )
+        }
+        "slonczewski.legacy_fullmag.v0" => (
+            j_mag,
+            match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
+                "bottom" => -1.0,
+                _ => 1.0,
+            },
+            None,
+        ),
+        _ => return None,
     };
     Some(SlonczewskiSttConfig {
-        current_density_magnitude: j_mag,
+        formula: match plan.slonczewski_formula_version.as_deref() {
+            Some("slonczewski.fullmag.v2") => fullmag_engine::SlonczewskiFormula::FullmagV2,
+            _ => fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
+        },
+        current_density_magnitude,
         spin_polarization_axis: p_axis,
         lambda: lam,
         epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
         degree: plan.stt_degree.unwrap_or(1.0),
         thickness,
         current_sign,
+        active_mask,
     })
 }
 
@@ -631,12 +669,80 @@ pub(crate) fn build_snapshot_problem_and_state(
 ///
 /// Pass `live: Some(LiveStepConsumer { .. })` for per-step callbacks /
 /// live preview, and `artifact_writer: Some(sender)` for streaming artifacts.
+pub(crate) fn execute_coupled_ars_trial(
+    problem: &ExchangeLlgProblem,
+    state: &mut ExchangeLlgState,
+    workflow: &mut FdmSpinTransportWorkflow,
+    dt: f64,
+    fft_workspace: &mut FftWorkspace,
+    integrator_bufs: &mut IntegratorBuffers,
+) -> Result<StepReport, RunError> {
+    let mut trial_state = state.clone();
+    let mut trial_workflow = workflow.clone();
+    let mut candidate: Option<FdmSpinTransportEvaluation> = None;
+    trial_workflow.begin_attempt()?;
+    let result = problem.coupled_imex_ark2_fixed_step_with_external_stage_terms(
+        &mut trial_state,
+        dt,
+        fft_workspace,
+        integrator_bufs,
+        EvaluationRequest::Full,
+        |magnetization, time_s, stage| {
+            let previous_stage = candidate.as_ref();
+            let evaluation = trial_workflow
+                .evaluate_coupled_ars_stage(magnetization, time_s, dt, stage, previous_stage)
+                .map_err(|error| EngineError::new(error.message))?;
+            let terms = ExternalStageTerms {
+                additional_field_apm: evaluation
+                    .combined_oersted_field_apm
+                    .clone()
+                    .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
+                direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
+            };
+            candidate = Some(evaluation);
+            Ok(terms)
+        },
+    );
+    match result {
+        Ok(report) => {
+            let accepted = candidate.ok_or_else(|| RunError {
+                message: "coupled ARS step produced no final spin-transport evaluation".into(),
+            })?;
+            trial_workflow.commit(accepted)?;
+            *state = trial_state;
+            *workflow = trial_workflow;
+            Ok(report)
+        }
+        Err(error) => Err(RunError {
+            message: error.to_string(),
+        }),
+    }
+}
+
 pub(crate) fn execute_reference_fdm(
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'_>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fdm_with_coupled_checkpoint(
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        None,
+    )
+}
+
+pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    coupled_checkpoint: Option<serde_json::Value>,
 ) -> Result<ExecutedRun, RunError> {
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -654,20 +760,43 @@ pub(crate) fn execute_reference_fdm(
             ),
         });
     }
+    let mut spin_transport = FdmSpinTransportWorkflow::from_plan(plan)?;
+    if spin_transport.is_some() {
+        let transient = spin_transport
+            .as_ref()
+            .is_some_and(FdmSpinTransportWorkflow::has_transient);
+        if !transient && plan.integrator.unwrap_or(IntegratorChoice::Heun) != IntegratorChoice::Heun
+        {
+            return Err(RunError {
+                message: "FDM CPU-double spin transport currently requires the fixed-step Heun integrator; integrator fallback is forbidden".to_string(),
+            });
+        }
+        if !transient && plan.adaptive_timestep.is_some() {
+            return Err(RunError {
+                message: "FDM CPU-double spin transport does not yet support adaptive-step rejection; use a fixed timestep".to_string(),
+            });
+        }
+        if plan.relaxation.as_ref().is_some_and(|control| {
+            matches!(
+                control.algorithm,
+                RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
+            )
+        }) {
+            return Err(RunError {
+                message: "direct energy minimization cannot execute a dynamic spin-transport coupling; use LLG/Heun".to_string(),
+            });
+        }
+    }
 
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
-
-    let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
     let stage_end_time_s = plan.time_stage.start_time_s + until_seconds;
-    let initial_magnetization = state.magnetization().to_vec();
-
     let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
         matches!(
             control.algorithm,
             RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
         )
     });
-    let timestep_policy = if is_direct_minimization {
+    let timestep_policy = if is_direct_minimization || spin_transport.is_some() {
         None
     } else {
         Some(crate::resolve_timestep_policy(
@@ -678,9 +807,63 @@ pub(crate) fn execute_reference_fdm(
         )?)
     };
     let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
-    let mut last_solver_dt = 0.0;
+
+    let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
+    let mut restored_checkpoint = coupled_checkpoint
+        .map(|value| {
+            super::spin_transport::validate_coupled_m3_checkpoint_value(
+                &value,
+                plan.grid
+                    .cells
+                    .iter()
+                    .map(|cells| *cells as usize)
+                    .product(),
+            )?;
+            serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| RunError {
+                message: format!("invalid coupled M3 checkpoint payload: {error}"),
+            })
+        })
+        .transpose()?;
+    let mut resume_timestep = None;
+    let mut resume_previous_timestep = None;
+    let mut resume_step_count = None;
+    if let Some(checkpoint) = restored_checkpoint.take() {
+        let workflow = spin_transport.as_mut().ok_or_else(|| RunError {
+            message: "coupled M3 checkpoint requires a transient spin-transport plan".into(),
+        })?;
+        if checkpoint.thermal_seed != problem.thermal_seed {
+            return Err(RunError {
+                message: "coupled checkpoint thermal RNG seed does not match the planned problem"
+                    .into(),
+            });
+        }
+        let checkpoint = workflow.restore_coupled_checkpoint(checkpoint)?;
+        resume_timestep = Some(checkpoint.error_controller.next_dt_s);
+        resume_previous_timestep = Some(checkpoint.previous_dt_s);
+        resume_step_count = Some(checkpoint.accepted_steps);
+        state
+            .restore_exact_checkpoint(checkpoint.magnetization, checkpoint.time_s)
+            .map_err(|error| RunError {
+                message: format!("restoring coupled checkpoint magnetization: {error}"),
+            })?;
+        problem.restore_thermal_step(checkpoint.thermal_counter);
+    }
+    let initial_magnetization = state.magnetization().to_vec();
+
+    let mut dt = resume_timestep.unwrap_or_else(|| {
+        initial_dt
+            .or(plan.fixed_timestep)
+            .or_else(|| {
+                plan.adaptive_timestep
+                    .as_ref()
+                    .map(|adaptive| adaptive.dt_initial.unwrap_or(adaptive.dt_min))
+            })
+            .unwrap_or(crate::NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER)
+    });
+    let mut last_solver_dt = resume_previous_timestep.unwrap_or(0.0);
     let mut steps: Vec<StepStats> = Vec::new();
-    let mut step_count: u64 = 0;
+    let mut step_count: u64 = resume_step_count.unwrap_or(0);
+    let mut final_coupled_checkpoint = None;
     let fft_backend = resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let mut provenance = ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -750,7 +933,7 @@ pub(crate) fn execute_reference_fdm(
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
     let mut integrator_bufs = problem.create_integrator_buffers();
-    let mut state_soa = if problem.soa_fast_path_supported() {
+    let mut state_soa = if spin_transport.is_none() && problem.soa_fast_path_supported() {
         Some(state.to_soa())
     } else {
         None
@@ -839,7 +1022,6 @@ pub(crate) fn execute_reference_fdm(
         ));
     } else {
         // LLG overdamped (or no relaxation): existing time-stepping loop
-        let mut dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         let needs_initial_live_snapshot = live
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot);
@@ -912,6 +1094,7 @@ pub(crate) fn execute_reference_fdm(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
+                        coupled_checkpoint: None,
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
@@ -948,13 +1131,32 @@ pub(crate) fn execute_reference_fdm(
                 }
             }
 
-            let proposed_dt = dt.min(stage_end_time_s - state.time_seconds);
-            let dt_step = crate::time_events::cap_timestep_to_next_event(
-                state.time_seconds,
-                proposed_dt,
-                &time_events.times_s,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
-            );
+            let remaining = stage_end_time_s - state.time_seconds;
+            let transient_coupling = spin_transport
+                .as_ref()
+                .is_some_and(FdmSpinTransportWorkflow::has_transient);
+            let canonical_fixed_target = transient_coupling
+                .then_some(())
+                .and(plan.fixed_timestep)
+                .and_then(|fixed_dt| {
+                    spin_transport.as_ref().map(|workflow| {
+                        plan.time_stage.start_time_s
+                            + (workflow.accepted_steps().saturating_add(1) as f64) * fixed_dt
+                    })
+                });
+            let endpoint_roundoff =
+                32.0 * f64::EPSILON * stage_end_time_s.abs().max(dt.abs()).max(f64::MIN_POSITIVE);
+            let dt_step = canonical_fixed_target
+                .filter(|target| *target <= stage_end_time_s + endpoint_roundoff)
+                .and(plan.fixed_timestep)
+                .unwrap_or_else(|| {
+                    crate::time_events::cap_timestep_to_next_event(
+                        state.time_seconds,
+                        dt.min(remaining),
+                        &time_events.times_s,
+                        crate::schedules::OUTPUT_TIME_TOLERANCE,
+                    )
+                });
             if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
                 &plan.antenna_zeeman_masks,
             ) {
@@ -962,17 +1164,174 @@ pub(crate) fn execute_reference_fdm(
                     resolved_per_node_external_field(plan, state.time_seconds);
             }
             let wall_start = Instant::now();
-            let report = step_reference_fdm_problem(
-                &problem,
-                &mut state,
-                &mut state_soa,
-                dt_step,
-                &mut fft_workspace,
-                &mut integrator_bufs,
-            )
-            .map_err(|e| RunError {
-                message: format!("Step {}: {}", step_count, e),
-            })?;
+            let previous_magnetization = state.magnetization().to_vec();
+            let mut report = if let Some(workflow) = spin_transport.as_mut() {
+                let transient = workflow.has_transient();
+                if transient {
+                    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+                        let committed_state = state.clone();
+                        let committed_workflow = workflow.clone();
+                        let accepted_before = committed_workflow.accepted_steps();
+                        let rejected_before = committed_workflow.rejected_steps();
+                        let mut rejected_trials = 0u64;
+                        let mut attempted_dt = dt_step;
+                        loop {
+                            let mut full_state = committed_state.clone();
+                            let mut full_workflow = committed_workflow.clone();
+                            let _full_report = execute_coupled_ars_trial(
+                                &problem,
+                                &mut full_state,
+                                &mut full_workflow,
+                                attempted_dt,
+                                &mut fft_workspace,
+                                &mut integrator_bufs,
+                            )?;
+                            let mut half_state = committed_state.clone();
+                            let mut half_workflow = committed_workflow.clone();
+                            execute_coupled_ars_trial(
+                                &problem,
+                                &mut half_state,
+                                &mut half_workflow,
+                                0.5 * attempted_dt,
+                                &mut fft_workspace,
+                                &mut integrator_bufs,
+                            )?;
+                            let mut half_report = execute_coupled_ars_trial(
+                                &problem,
+                                &mut half_state,
+                                &mut half_workflow,
+                                0.5 * attempted_dt,
+                                &mut fft_workspace,
+                                &mut integrator_bufs,
+                            )?;
+                            let error = full_workflow.normalized_coupled_difference(
+                                &half_workflow,
+                                full_state.magnetization(),
+                                half_state.magnetization(),
+                                adaptive.atol,
+                                adaptive.rtol,
+                            )?;
+                            let factor = if error == 0.0 {
+                                adaptive.growth_limit
+                            } else {
+                                (adaptive.safety * error.powf(-1.0 / 3.0))
+                                    .clamp(adaptive.shrink_limit, adaptive.growth_limit)
+                            };
+                            let next_dt = (attempted_dt * factor)
+                                .max(adaptive.dt_min)
+                                .min(adaptive.dt_max.unwrap_or(f64::INFINITY));
+                            if error <= 1.0 {
+                                *workflow = half_workflow;
+                                workflow.set_step_counters(
+                                    accepted_before.saturating_add(1),
+                                    rejected_before.saturating_add(rejected_trials),
+                                );
+                                workflow.set_error_controller(next_dt, error);
+                                state = half_state;
+                                half_report.dt_used = attempted_dt;
+                                half_report.suggested_next_dt = Some(next_dt);
+                                problem.commit_coupled_imex_ark2_step();
+                                break half_report;
+                            }
+                            rejected_trials = rejected_trials.saturating_add(1);
+                            if attempted_dt <= adaptive.dt_min {
+                                return Err(RunError {
+                                    message: format!(
+                                        "Step {step_count}: coupled ARS LTE {error:.6e} exceeds 1 at dt_min"
+                                    ),
+                                });
+                            }
+                            attempted_dt = next_dt;
+                        }
+                    } else {
+                        let report = execute_coupled_ars_trial(
+                            &problem,
+                            &mut state,
+                            workflow,
+                            dt_step,
+                            &mut fft_workspace,
+                            &mut integrator_bufs,
+                        )
+                        .map_err(|error| RunError {
+                            message: format!("Step {step_count}: {}", error.message),
+                        })?;
+                        problem.commit_coupled_imex_ark2_step();
+                        report
+                    }
+                } else {
+                    let mut candidate: Option<FdmSpinTransportEvaluation> = None;
+                    workflow.begin_attempt()?;
+                    let result = problem.heun_step_with_external_stage_terms_and_lte(
+                        &mut state,
+                        dt_step,
+                        &mut fft_workspace,
+                        &mut integrator_bufs,
+                        EvaluationRequest::Full,
+                        |magnetization, time_s, stage_error_budget| {
+                            let previous_stage = candidate.as_ref();
+                            let evaluation = workflow
+                                .evaluate_stage_with_lte(
+                                    magnetization,
+                                    time_s,
+                                    stage_error_budget,
+                                    previous_stage,
+                                )
+                                .map_err(|error| EngineError::new(error.message))?;
+                            let terms = ExternalStageTerms {
+                                additional_field_apm: evaluation
+                                    .combined_oersted_field_apm
+                                    .clone()
+                                    .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
+                                direct_torque_per_s: evaluation
+                                    .combined_transport_torque_per_s
+                                    .clone(),
+                            };
+                            candidate = Some(evaluation);
+                            Ok(terms)
+                        },
+                    );
+                    match result {
+                        Ok(report) => {
+                            let accepted = candidate.take().ok_or_else(|| RunError {
+                                message:
+                                    "coupled Heun step produced no final spin-transport evaluation"
+                                        .to_string(),
+                            })?;
+                            workflow.commit(accepted)?;
+                            report
+                        }
+                        Err(error) => {
+                            workflow.rollback();
+                            return Err(RunError {
+                                message: format!("Step {}: {}", step_count, error),
+                            });
+                        }
+                    }
+                }
+            } else {
+                step_reference_fdm_problem(
+                    &problem,
+                    &mut state,
+                    &mut state_soa,
+                    dt_step,
+                    &mut fft_workspace,
+                    &mut integrator_bufs,
+                )
+                .map_err(|e| RunError {
+                    message: format!("Step {}: {}", step_count, e),
+                })?
+            };
+            if let (Some(target), Some(workflow)) =
+                (canonical_fixed_target, spin_transport.as_mut())
+            {
+                let canonical_dt = plan.fixed_timestep.ok_or_else(|| RunError {
+                    message: "canonical coupled fixed-step target requires fixed_timestep".into(),
+                })?;
+                state.time_seconds = target;
+                workflow.canonicalize_fixed_step_time(target, canonical_dt)?;
+                report.time_seconds = target;
+                report.dt_used = canonical_dt;
+            }
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             step_count += 1;
             last_solver_dt = report.dt_used;
@@ -999,6 +1358,26 @@ pub(crate) fn execute_reference_fdm(
                 ..StepStats::default()
             };
             current_stats = latest_stats.clone();
+
+            final_coupled_checkpoint = spin_transport
+                .as_ref()
+                .filter(|workflow| workflow.has_transient())
+                .map(|workflow| {
+                    workflow
+                        .coupled_checkpoint(
+                            state.magnetization(),
+                            &previous_magnetization,
+                            report.dt_used,
+                            problem.thermal_seed,
+                            problem.thermal_step(),
+                        )
+                        .and_then(|checkpoint| {
+                            serde_json::to_value(checkpoint).map_err(|error| RunError {
+                                message: format!("serializing coupled M3 checkpoint: {error}"),
+                            })
+                        })
+                })
+                .transpose()?;
 
             if !default_scalar_trace || !field_schedules.is_empty() {
                 record_due_outputs(
@@ -1091,6 +1470,7 @@ pub(crate) fn execute_reference_fdm(
                     apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
                 }
                 let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: final_coupled_checkpoint.clone(),
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,
@@ -1188,6 +1568,47 @@ pub(crate) fn execute_reference_fdm(
     if completion.status == "failed" {
         status = RunStatus::Failed;
     }
+    let mut auxiliary_artifacts: Vec<_> = spin_transport
+        .as_ref()
+        .and_then(FdmSpinTransportWorkflow::accepted)
+        .map(|evaluation| {
+            let transient = spin_transport
+                .as_ref()
+                .is_some_and(FdmSpinTransportWorkflow::has_transient);
+            let accepted_steps = spin_transport
+                .as_ref()
+                .map_or(0, FdmSpinTransportWorkflow::accepted_steps);
+            let rejected_steps = spin_transport
+                .as_ref()
+                .map_or(0, FdmSpinTransportWorkflow::rejected_steps);
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema": "fullmag.fdm.spin_transport.accepted.v1",
+                "integrator_version": transient.then_some("coupled_imex_ark2.v1"),
+                "integrator_implementation_revision": transient.then_some("imex_ars_232_step_doubling.fullmag.v1"),
+                "timestep_mode": transient.then_some(if plan.adaptive_timestep.is_some() { "adaptive" } else { "fixed" }),
+                "accepted_steps": accepted_steps,
+                "rejected_steps": rejected_steps,
+                "evaluation": evaluation,
+            }))
+            .map(|bytes| crate::types::AuxiliaryArtifact {
+                relative_path: "transport/spin_transport_accepted.json".to_string(),
+                bytes,
+            })
+            .map_err(|error| RunError {
+                message: format!("serializing accepted spin-transport artifact: {error}"),
+            })
+        })
+        .transpose()?
+        .into_iter()
+        .collect();
+    if let Some(checkpoint) = final_coupled_checkpoint {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "transport/coupled_checkpoint.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&checkpoint).map_err(|error| RunError {
+                message: format!("serializing final coupled M3 checkpoint artifact: {error}"),
+            })?,
+        });
+    }
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1199,7 +1620,7 @@ pub(crate) fn execute_reference_fdm(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
+        auxiliary_artifacts,
         provenance,
     })
 }
@@ -1316,7 +1737,12 @@ fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         if has_due_fields {
@@ -1347,7 +1773,16 @@ fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: select_state_observable_field(&observables, &name, true)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                    &observables,
+                    &name,
+                    true,
+                )?),
             })?;
         }
         advance_due_schedules(field_schedules, state.time_seconds);
@@ -1440,7 +1875,12 @@ fn record_final_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         return Ok(());
@@ -1465,7 +1905,12 @@ fn record_final_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         return Ok(());
@@ -1485,7 +1930,16 @@ fn record_final_outputs(
             step,
             time: state.time_seconds,
             solver_dt,
-            values: select_state_observable_field(&observables, &name, true)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                &observables,
+                &name,
+                true,
+            )?),
         })?;
     }
 
@@ -1530,11 +1984,7 @@ fn observe_state_with_antenna_field(
     } else {
         vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
     };
-    let oersted_field = problem
-        .terms
-        .per_node_field
-        .clone()
-        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let oersted_field = problem.oersted_field_at_time(state.time_seconds);
     let antenna_field = antenna_field_override
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let drive_field = problem.regional_drive_field_at_time(state.time_seconds);
@@ -1892,15 +2342,8 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_OE" => {
                 if self.oersted_field.is_none() {
-                    self.oersted_field = Some(
-                        self.problem
-                            .terms
-                            .per_node_field
-                            .clone()
-                            .unwrap_or_else(|| {
-                                vec![[0.0, 0.0, 0.0]; self.state.magnetization().len()]
-                            }),
-                    );
+                    self.oersted_field =
+                        Some(self.problem.oersted_field_at_time(self.state.time_seconds));
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))
             }
@@ -2198,7 +2641,11 @@ mod tests {
             .iter()
             .find(|snapshot| snapshot.name == "H_drive")
             .expect("H_drive snapshot");
-        assert!(field.values.iter().all(|value| *value == [0.0, h, 0.0]));
+        assert_eq!(field.component_count, 3);
+        assert!(field
+            .values
+            .chunks_exact(3)
+            .all(|value| { value[0] == 0.0 && value[1] == h && value[2] == 0.0 }));
         assert!(executed.result.steps.iter().any(|step| step.e_drive != 0.0));
         assert!(executed.result.steps.iter().all(|step| step.e_ext == 0.0));
     }
@@ -2286,7 +2733,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_minimizer_completion_reports_energy_convergence() {
+    fn direct_minimizer_energy_plateau_does_not_replace_torque_convergence() {
         let control = RelaxationControlIR {
             stop: RelaxStopIR {
                 torque_tolerance_apm: None,
@@ -2299,13 +2746,12 @@ mod tests {
         let completion =
             infer_direct_minimizer_completion(&control, true, 8, false, false, Some(5.0e-19), 2.0);
 
-        assert_eq!(completion.reason, Some(StageStopReason::Energy));
-        assert_eq!(
-            completion.metric_name.as_deref(),
-            Some("total_energy_plateau_range_J")
-        );
-        assert_eq!(completion.metric_value, Some(5.0e-19));
-        assert_eq!(completion.threshold, Some(1.0e-18));
+        assert_eq!(completion.status, "completed");
+        assert!(!completion.converged);
+        assert_eq!(completion.reason, None);
+        assert_eq!(completion.metric_name, None);
+        assert_eq!(completion.metric_value, None);
+        assert_eq!(completion.threshold, None);
     }
 
     #[test]
@@ -3313,9 +3759,12 @@ mod tests {
             .map(|snapshot| snapshot.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(field_names, vec!["m", "m.z"]);
-        assert_eq!(field_snapshots[0].values, state.magnetization());
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[0].vec3_values().unwrap(),
+            state.magnetization()
+        );
+        assert_eq!(
+            field_snapshots[1].vec3_values().unwrap(),
             vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
         );
     }
@@ -3391,12 +3840,12 @@ mod tests {
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_ext");
         assert_eq!(
-            field_snapshots[0].values,
+            field_snapshots[0].vec3_values().unwrap(),
             vec![[2.5, 3.25, 4.125], [0.0, 0.0, 0.0]]
         );
         assert_eq!(field_snapshots[1].name, "H_ext.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             vec![[3.25, 0.0, 0.0], [0.0, 0.0, 0.0]]
         );
     }
@@ -3469,14 +3918,55 @@ mod tests {
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_OE");
         assert_eq!(
-            field_snapshots[0].values,
+            field_snapshots[0].vec3_values().unwrap(),
             vec![[0.0, 0.0, 2.0], [1.0, 0.5, 0.25]]
         );
         assert_eq!(field_snapshots[1].name, "H_OE.z");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             vec![[2.0, 0.0, 0.0], [0.25, 0.0, 0.0]]
         );
+    }
+
+    #[test]
+    fn dynamic_oersted_cylinder_is_materialized_at_the_committed_state_time() {
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid dynamics"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                oersted_cylinder: Some(OerstedCylinderConfig {
+                    current: 2.0,
+                    radius: 0.25,
+                    center: [0.0, 0.5, 0.5],
+                    axis: [0.0, 0.0, 1.0],
+                    time_dep_kind: 2,
+                    time_dep_freq: 0.0,
+                    time_dep_phase: 0.0,
+                    time_dep_offset: 0.0,
+                    time_dep_t_on: 1.0e-12,
+                    time_dep_t_off: 3.0e-12,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("state should build");
+        state.time_seconds = 2.0e-12;
+
+        let observables = observe_state(&problem, &state).expect("observables should build");
+        let expected = 2.0 / std::f64::consts::PI;
+        assert!((observables.oersted_field[0][1] - expected).abs() <= 1.0e-12);
+        assert!((observables.effective_field[0][1] - expected).abs() <= 1.0e-12);
+
+        state.time_seconds = 0.0;
+        let inactive = observe_state(&problem, &state).expect("inactive observables should build");
+        assert_eq!(inactive.oersted_field[0], [0.0, 0.0, 0.0]);
+        assert_eq!(inactive.effective_field[0], [0.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -3548,10 +4038,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_ex");
-        assert_eq!(field_snapshots[0].values, expected_exchange);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_exchange);
         assert_eq!(field_snapshots[1].name, "H_ex.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_exchange
                 .iter()
                 .map(|value| [value[1], 0.0, 0.0])
@@ -3628,10 +4118,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_demag");
-        assert_eq!(field_snapshots[0].values, expected_demag);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_demag);
         assert_eq!(field_snapshots[1].name, "H_demag.x");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_demag
                 .iter()
                 .map(|value| [value[0], 0.0, 0.0])
@@ -3724,10 +4214,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_dmi");
-        assert_eq!(field_snapshots[0].values, expected_dmi);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_dmi);
         assert_eq!(field_snapshots[1].name, "H_dmi.x");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_dmi
                 .iter()
                 .map(|value| [value[0], 0.0, 0.0])
@@ -3809,10 +4299,13 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_ani");
-        assert_eq!(field_snapshots[0].values, expected_anisotropy);
+        assert_eq!(
+            field_snapshots[0].vec3_values().unwrap(),
+            expected_anisotropy
+        );
         assert_eq!(field_snapshots[1].name, "H_ani.z");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_anisotropy
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
@@ -3861,7 +4354,7 @@ mod tests {
             problem
                 .effective_field(&state)
                 .expect("public effective field should assemble"),
-            "observable H_eff must match the field used by the CPU stepping helper"
+            "public H_eff and observable H_eff must use the same committed-time Oersted field"
         );
         reset_observe_state_calls();
 
@@ -3910,10 +4403,13 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_eff");
-        assert_eq!(field_snapshots[0].values, expected_effective);
+        assert_eq!(
+            field_snapshots[0].vec3_values().unwrap(),
+            expected_effective
+        );
         assert_eq!(field_snapshots[1].name, "H_eff.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_effective
                 .iter()
                 .map(|value| [value[1], 0.0, 0.0])
@@ -4009,10 +4505,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "torque");
-        assert_eq!(field_snapshots[0].values, expected_torque);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_torque);
         assert_eq!(field_snapshots[1].name, "torque.z");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_torque
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
@@ -4126,10 +4622,13 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 4);
         assert_eq!(field_snapshots[0].name, "H_eff");
-        assert_eq!(field_snapshots[0].values, observables.effective_field);
+        assert_eq!(
+            field_snapshots[0].vec3_values().unwrap(),
+            observables.effective_field
+        );
         assert_eq!(field_snapshots[1].name, "H_eff.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             observables
                 .effective_field
                 .iter()
@@ -4137,10 +4636,10 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(field_snapshots[2].name, "torque");
-        assert_eq!(field_snapshots[2].values, expected_torque);
+        assert_eq!(field_snapshots[2].vec3_values().unwrap(), expected_torque);
         assert_eq!(field_snapshots[3].name, "torque.z");
         assert_eq!(
-            field_snapshots[3].values,
+            field_snapshots[3].vec3_values().unwrap(),
             expected_torque
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
@@ -4210,7 +4709,7 @@ mod tests {
         assert_eq!(field_snapshot_count, 1);
         assert_eq!(field_snapshots[0].name, "m.y");
         assert_eq!(
-            field_snapshots[0].values,
+            field_snapshots[0].vec3_values().unwrap(),
             vec![[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
         );
     }
@@ -4431,6 +4930,67 @@ mod tests {
 
         assert_eq!(top.current_sign, 1.0);
         assert_eq!(bottom.current_sign, -1.0);
+        assert_eq!(
+            top.formula,
+            fullmag_engine::SlonczewskiFormula::LegacyFullmagV0
+        );
+        assert_eq!(
+            bottom.formula,
+            fullmag_engine::SlonczewskiFormula::LegacyFullmagV0
+        );
+    }
+
+    #[test]
+    fn canonical_slonczewski_uses_signed_stack_normal_projection_and_target_mask() {
+        let mut plan = make_test_plan();
+        plan.current_density = Some([3.0e10, 4.0e10, 0.0]);
+        plan.stt_degree = Some(0.55);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.4);
+        plan.stt_epsilon_prime = Some(0.0);
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+        plan.slonczewski_stack_normal = Some([0.0, 2.0, 0.0]);
+        plan.slonczewski_active_mask = Some(vec![true; plan.initial_magnetization.len()]);
+
+        let forward = build_slon_stt(&plan, plan.cell_size[2])
+            .expect("canonical Slonczewski config should build");
+        let mut reversed_plan = plan.clone();
+        reversed_plan.current_density = Some([-3.0e10, -4.0e10, 0.0]);
+        let reversed = build_slon_stt(&reversed_plan, reversed_plan.cell_size[2])
+            .expect("reversed canonical Slonczewski config should build");
+
+        assert_eq!(forward.current_density_magnitude, 4.0e10);
+        assert_eq!(reversed.current_density_magnitude, 4.0e10);
+        assert_eq!(forward.current_sign, 1.0);
+        assert_eq!(reversed.current_sign, -1.0);
+        assert_eq!(
+            forward.formula,
+            fullmag_engine::SlonczewskiFormula::FullmagV2
+        );
+        assert_eq!(
+            reversed.formula,
+            fullmag_engine::SlonczewskiFormula::FullmagV2
+        );
+        assert_eq!(forward.active_mask, plan.slonczewski_active_mask);
+    }
+
+    #[test]
+    fn prescribed_sot_builder_preserves_formula_mask_and_constant_envelope() {
+        let mut plan = make_test_plan();
+        plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        plan.sot_current_density = Some(-4.0e11);
+        plan.sot_xi_dl = Some(0.12);
+        plan.sot_xi_fl = Some(-0.03);
+        plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        plan.sot_thickness = Some(1.5e-9);
+        plan.sot_active_mask = Some(vec![true; plan.initial_magnetization.len()]);
+        plan.sot_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 });
+
+        let config = build_sot(&plan).expect("complete SOT plan must build");
+        assert_eq!(config.formula, SotFormula::FullmagV1);
+        assert_eq!(config.current_density, -4.0e11);
+        assert_eq!(config.active_mask, plan.sot_active_mask);
+        assert_eq!(config.envelope, plan.sot_envelope);
     }
 
     #[test]
@@ -4503,7 +5063,7 @@ mod tests {
                 for (index, is_active) in active_mask.iter().enumerate() {
                     if !is_active {
                         assert!(
-                            is_zero(snapshot.values[index]),
+                            is_zero(snapshot.vec3_values().unwrap()[index]),
                             "inactive cell {index} should stay zero in snapshot '{}'",
                             snapshot.name
                         );

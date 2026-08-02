@@ -357,10 +357,11 @@ pub(crate) fn planned_study_controls(
                 "rk23" => Some(fullmag_ir::RequestedIntegratorIR::Rk23),
                 "rk45" => Some(fullmag_ir::RequestedIntegratorIR::Rk45),
                 "abm3" => Some(fullmag_ir::RequestedIntegratorIR::Abm3),
+                "coupled_imex_ark2" => None,
                 "auto" => Some(fullmag_ir::RequestedIntegratorIR::Auto),
                 other => {
                     errors.push(format!(
-                        "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
+                        "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/coupled_imex_ark2/auto",
                         other
                     ));
                     None
@@ -388,7 +389,10 @@ pub(crate) fn planned_study_controls(
     // Resolve "auto" to the physics-optimal default per study kind.
     // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
     // Relaxation    → algorithm.default_integrator() (e.g. LlgOverdamped→RK23).
-    let integrator = if uses_time_integrator {
+    let uses_coupled_imex_ark2 = dynamics.is_some_and(|dynamics| match dynamics {
+        fullmag_ir::DynamicsIR::Llg { integrator, .. } => integrator == "coupled_imex_ark2",
+    });
+    let integrator = if uses_time_integrator && !uses_coupled_imex_ark2 {
         user_integrator.or_else(|| match &problem.study {
             fullmag_ir::StudyIR::TimeEvolution { .. } => Some(IntegratorChoice::Rk45),
             fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
@@ -475,6 +479,7 @@ pub(crate) fn planned_study_controls(
     }
     if uses_time_integrator
         && adaptive_timestep.is_some()
+        && !uses_coupled_imex_ark2
         && !matches!(
             integrator,
             Some(IntegratorChoice::Rk23 | IntegratorChoice::Rk45)
@@ -537,8 +542,12 @@ fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String
             fullmag_ir::SpinTorqueModuleIR::ZhangLi { .. } => "zhang_li",
             fullmag_ir::SpinTorqueModuleIR::Slonczewski { .. } => "slonczewski",
             fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque { .. } => "spin_orbit_torque",
+            fullmag_ir::SpinTorqueModuleIR::PrescribedSot { .. } => "prescribed_sot",
             fullmag_ir::SpinTorqueModuleIR::InterfaceCpp { .. } => "interface_cpp",
             fullmag_ir::SpinTorqueModuleIR::DriftDiffusion { .. } => "drift_diffusion",
+            fullmag_ir::SpinTorqueModuleIR::DriftDiffusionSpinTorque { .. } => {
+                "drift_diffusion_spin_torque"
+            }
         };
         errors.push(format!(
             "relaxation is a conservative equilibrium workflow and rejects nonconservative {name} torque"
@@ -621,6 +630,7 @@ pub(crate) fn validate_executable_outputs(
     enable_thermal: bool,
     enable_antenna_field: bool,
     enable_regional_field_drive: bool,
+    enable_spin_transport: bool,
     errors: &mut Vec<String>,
 ) {
     let allowed_fields = [
@@ -653,6 +663,13 @@ pub(crate) fn validate_executable_outputs(
         "E_mel",
     ];
     let mechanical_fields = ["u", "u_dot", "eps", "sigma"];
+    let transport_fields = [
+        "V_electric",
+        "J_charge",
+        "spin_potential",
+        "spin_current_tensor",
+        "torque_stt",
+    ];
     let mechanical_scalars = [
         "E_el",
         "E_kin_el",
@@ -673,6 +690,7 @@ pub(crate) fn validate_executable_outputs(
                     && !(enable_antenna_field && name == "H_ant")
                     && !(enable_regional_field_drive && name == "H_drive")
                     && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
+                    && !(enable_spin_transport && transport_fields.contains(&name.as_str()))
                 {
                     errors.push(format!(
                         "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_oe, H_dmi, H_dmi_bulk, H_mel, and H_eff",

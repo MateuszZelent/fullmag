@@ -216,10 +216,22 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     if !availability.native_fem_cpu_available {
         return Err(RunError {
             message:
-                "time-domain FEM execution requires the MFEM/libCEED runtime stack, but this launcher \
-                 does not report native FEM CPU availability. Use the managed FEM runtime or rebuild \
-                 the launcher with MFEM/libCEED/hypre CPU support."
+                "time-domain FEM execution requires the MFEM/libCEED runtime stack, but this launcher                  does not report native FEM CPU availability. Use the managed FEM runtime or rebuild                  the launcher with MFEM/libCEED/hypre CPU support."
                     .to_string(),
+        });
+    }
+    if !plan.spin_transport_plans.is_empty() {
+        let policy = std::env::var("FULLMAG_FEM_EXECUTION")
+            .unwrap_or_else(|_| runtime_fem_policy(problem).to_string());
+        if fem_policy_requires_gpu(&policy) {
+            return Err(RunError {
+                message: "FEM steady spin transport is qualified only for CPU-double; an explicit GPU execution request cannot fall back before provenance".to_string(),
+            });
+        }
+        return Ok(FemEngineResolution {
+            engine: FemEngine::CpuNative,
+            fallback: None,
+            fem_crossover_decision: None,
         });
     }
     let mut resolution = resolve_fem_engine_with_effective_request_and_availability(
@@ -254,7 +266,6 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     }
     Ok(resolution)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

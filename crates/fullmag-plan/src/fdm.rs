@@ -1,7 +1,7 @@
 use fullmag_ir::{
-    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR,
-    EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR,
-    ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
+    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
+    ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
+    FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
     FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
     RelaxationAlgorithmIR, SeedPolicy, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
@@ -235,6 +235,66 @@ fn materialize_object_region_mask(
     }
 
     (mask, region_ids)
+}
+
+fn materialize_prescribed_sot_target_mask(
+    problem: &ProblemIR,
+    target: &fullmag_ir::RegionRefIR,
+    owner_names: &[&str],
+    region_mask: &[u32],
+    region_index_by_id: &BTreeMap<String, u32>,
+    active_mask: Option<&[bool]>,
+) -> Result<Vec<bool>, PlanError> {
+    if !owner_names.contains(&target.object_id.as_str()) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "prescribed_sot target object_id '{}' is not the resolved single-grid FDM magnetic object",
+                target.object_id
+            )],
+        });
+    }
+
+    let selected_region = if let Some(region_id) = target.region_id.as_deref() {
+        let region = problem
+            .object_regions
+            .iter()
+            .find(|region| region.enabled && region.region_id == region_id)
+            .ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "prescribed_sot target region_id '{region_id}' is not an enabled object region"
+                )],
+            })?;
+        if region.owner_object != target.object_id {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "prescribed_sot target region_id '{region_id}' belongs to object '{}' rather than '{}'",
+                    region.owner_object, target.object_id
+                )],
+            });
+        }
+        Some(*region_index_by_id.get(region_id).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "prescribed_sot target region_id '{region_id}' was not materialized in the FDM region mask"
+            )],
+        })?)
+    } else {
+        None
+    };
+
+    let mask = region_mask
+        .iter()
+        .enumerate()
+        .map(|(index, region)| {
+            active_mask.is_none_or(|active| active[index])
+                && selected_region.is_none_or(|selected| *region == selected)
+        })
+        .collect::<Vec<_>>();
+    if !mask.iter().any(|selected| *selected) {
+        return Err(PlanError {
+            reasons: vec!["prescribed_sot target does not select any active FDM cells".to_string()],
+        });
+    }
+    Ok(mask)
 }
 
 fn build_fdm_region_legend(
@@ -602,6 +662,12 @@ pub(crate) fn plan_fdm(
                     .to_string(),
             );
         }
+        let boundary_correction = problem
+            .backend_policy
+            .discretization_hints
+            .as_ref()
+            .and_then(|hints| hints.fdm.as_ref())
+            .and_then(|fdm| fdm.boundary_correction.as_deref());
         if pbc.has_any_periodic() && boundary_correction.is_some_and(|value| value != "none") {
             errors.push(format!(
                 "FDM boundary_correction='{correction}' with periodic axes is capability-gated until seam-aware T0/T1 exchange parity is qualified; use boundary_correction='none'",
@@ -696,9 +762,13 @@ pub(crate) fn plan_fdm(
         false,
         false,
         false,
-        has_thermal_noise || thermal_temperature.unwrap_or(0.0) > 0.0,
+        problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
         !problem.field_drives.is_empty(),
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.study.sampling().outputs.iter().any(|output| {
@@ -957,6 +1027,34 @@ pub(crate) fn plan_fdm(
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
+    let sot_active_mask = sot
+        .target
+        .as_ref()
+        .map(|target| {
+            materialize_prescribed_sot_target_mask(
+                problem,
+                target,
+                &owner_names,
+                &region_mask,
+                &region_index_by_id,
+                active_mask.as_deref(),
+            )
+        })
+        .transpose()?;
+    let slonczewski_active_mask = spin_torque
+        .slonczewski_target
+        .as_ref()
+        .map(|target| {
+            materialize_prescribed_sot_target_mask(
+                problem,
+                target,
+                &owner_names,
+                &region_mask,
+                &region_index_by_id,
+                active_mask.as_deref(),
+            )
+        })
+        .transpose()?;
     apply_region_texture_overrides(
         problem,
         &region_index_by_id,
@@ -1155,6 +1253,25 @@ pub(crate) fn plan_fdm(
             &problem.geometry.entries,
         )?;
 
+    let resolved_ms_for_transport = ms_field_opt
+        .clone()
+        .unwrap_or_else(|| vec![material.saturation_magnetisation; n_cells]);
+    let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
+        owner_names: &owner_names,
+        grid_cells,
+        active_mask: active_mask.as_deref(),
+        region_mask: &region_mask,
+        region_index_by_id: &region_index_by_id,
+        initial_magnetization: &initial_magnetization,
+        saturation_magnetization_apm: &resolved_ms_for_transport,
+        gamma0_m_per_a_s: gyromagnetic_ratio,
+    };
+    let spin_transport_plans = crate::spin_transport::resolve_spin_transport(
+        problem,
+        resolved_backend,
+        &spin_transport_context,
+    )?;
+
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
         grid: GridDimensions { cells: grid_cells },
@@ -1162,6 +1279,7 @@ pub(crate) fn plan_fdm(
         grid_certificate: Some(grid_certificate),
         region_mask,
         active_mask: active_mask.clone(),
+        spin_transport_plans,
         initial_magnetization,
         material: FdmMaterialIR {
             name: material.name.clone(),
@@ -1225,6 +1343,10 @@ pub(crate) fn plan_fdm(
         stt_epsilon_prime: spin_torque.stt_epsilon_prime,
         stt_thickness: spin_torque.stt_thickness,
         stt_fixed_layer_position: spin_torque.stt_fixed_layer_position.clone(),
+        slonczewski_formula_version: spin_torque.slonczewski_formula_version.clone(),
+        slonczewski_stack_normal: spin_torque.slonczewski_stack_normal,
+        slonczewski_target: spin_torque.slonczewski_target.clone(),
+        slonczewski_active_mask,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,
@@ -1252,6 +1374,11 @@ pub(crate) fn plan_fdm(
         sot_xi_fl: sot.xi_fl,
         sot_sigma: sot.sigma,
         sot_thickness: sot.thickness,
+        sot_formula_version: sot.formula_version.map(str::to_string),
+        sot_target: sot.target,
+        sot_active_mask,
+        sot_envelope: sot.envelope,
+        sot_drive: sot.drive,
     };
 
     for (term_index, term) in problem.energy_terms.iter().enumerate() {
@@ -1551,54 +1678,28 @@ mod tests {
     }
 
     #[test]
-    fn fdm_thermal_noise_lowers_temperature_and_fixed_seed() {
+    fn prescribed_sot_region_target_materializes_cell_mask() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem
-            .energy_terms
-            .push(fullmag_ir::EnergyTermIR::ThermalNoise {
-                temperature: 300.0,
-                seed: Some(123),
-            });
-
-        let execution = plan_fdm(&problem, fullmag_ir::BackendTarget::Fdm)
-            .expect("fixed-seed FDM thermal noise must lower into the executable plan");
-        let fullmag_ir::BackendPlanIR::Fdm(plan) = execution.backend_plan else {
-            panic!("expected an FDM execution plan");
+        problem.object_regions = vec![region(0)];
+        let target = fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: Some("strip:r0".to_string()),
         };
+        let active_mask = vec![true, true, false];
+        let region_mask = vec![1, 0, 0];
+        let region_ids = BTreeMap::from([("strip:r0".to_string(), 1)]);
 
-        assert_eq!(plan.temperature, Some(300.0));
-        assert_eq!(
-            plan.thermal_seed_config,
-            Some(fullmag_ir::ThermalSeedConfig {
-                policy: fullmag_ir::SeedPolicy::Fixed,
-                seed: Some(123),
-            })
-        );
-    }
+        let mask = materialize_prescribed_sot_target_mask(
+            &problem,
+            &target,
+            &["strip"],
+            &region_mask,
+            &region_ids,
+            Some(&active_mask),
+        )
+        .expect("valid region target must materialize");
 
-    #[test]
-    fn fdm_rejects_h_therm_until_the_field_is_materialized() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem
-            .energy_terms
-            .push(fullmag_ir::EnergyTermIR::ThermalNoise {
-                temperature: 300.0,
-                seed: Some(123),
-            });
-        let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut problem.study else {
-            panic!("bootstrap example must be time evolution");
-        };
-        sampling.outputs.push(fullmag_ir::OutputIR::Field {
-            name: "H_therm".to_string(),
-            every_seconds: 1.0e-12,
-        });
-
-        let error = plan_fdm(&problem, fullmag_ir::BackendTarget::Fdm)
-            .expect_err("unmaterialized H_therm must fail closed");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("H_therm") && reason.contains("not materialized")));
+        assert_eq!(mask, vec![true, false, false]);
     }
 }
 
@@ -1941,6 +2042,7 @@ pub(crate) fn plan_fdm_multilayer(
         false,
         false,
         !problem.field_drives.is_empty(),
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double

@@ -129,9 +129,9 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     storage: "study",
   },
   {
-    availability: "deferred",
+    availability: "study",
     description:
-      "Electric current transport source used by STT and Oersted workflows. The backend ProblemIR supports prescribed current density and Ohmic Poisson modules, but the current control-room SceneDocument cannot round-trip these modules safely yet.",
+      "Typed electric-current transport source used by STT and Oersted authoring workflows. Prescribed density is executable where supported; Ohmic Poisson remains a semantic authoring contract until its runtime lane is qualified.",
     fields: [
       {
         defaultValue: "drive",
@@ -183,14 +183,12 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     id: "current_transport",
     label: "Electric current",
     scope: "global_or_region",
-    storage: "planner_deferred",
-    writableReason:
-      "Electric current transport needs a first-class current_modules authoring resource before control-room edits are safe.",
+    storage: "study",
   },
   {
-    availability: "deferred",
+    availability: "study",
     description:
-      "Spin-transfer and spin-orbit torque modules. Backend IR/planners expose Slonczewski, Zhang-Li, interface CPP, drift-diffusion, and SOT variants, but UI authoring needs source-bound spin_torque module resources before edits are safe.",
+      "Typed source-bound Slonczewski, Zhang-Li, and prescribed spin-orbit torque authoring. Unsupported future variants are rejected without mutating the scene.",
     fields: [
       {
         defaultValue: "slonczewski",
@@ -252,9 +250,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     id: "spin_torque",
     label: "Spin torque",
     scope: "object_or_region",
-    storage: "planner_deferred",
-    writableReason:
-      "Spin torque needs a first-class spin_torque_modules authoring resource before control-room edits are safe.",
+    storage: "study",
   },
   {
     availability: "object",
@@ -277,7 +273,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     storage: "object_interaction",
   },
   {
-    availability: "deferred",
+    availability: "study",
     description:
       "Bulk DMI is implemented in execution backends and ProblemIR, but the current scene authoring stack does not yet have a safe Python/UI round-trip path.",
     fields: [
@@ -388,9 +384,9 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
       "Cubic anisotropy is backend-supported but not yet writable from the control room.",
   },
   {
-    availability: "deferred",
+    availability: "study",
     description:
-      "Source-driven external field. Fullmag can represent Oersted fields from current-transport regions and antenna field sources; point-source authoring still needs a dedicated source resource.",
+      "Typed Oersted field authoring from a named current-transport source or an analytic cylindrical conductor.",
     fields: [
       {
         defaultValue: "current_transport",
@@ -461,9 +457,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     id: "oersted_field",
     label: "Regional field source",
     scope: "global_or_region",
-    storage: "planner_deferred",
-    writableReason:
-      "Regional field sources need a dedicated source/current-module authoring resource before control-room edits are safe.",
+    storage: "study",
   },
   {
     availability: "deferred",

@@ -191,6 +191,34 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
             );
         }
+        Command::ResumeJson {
+            path,
+            checkpoint,
+            until,
+        } => {
+            let ir = read_ir(&path)?;
+            validate_ir(&ir)?;
+            let execution_plan =
+                fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
+            let BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
+                bail!("coupled M3 checkpoint resume requires a single-grid FDM plan");
+            };
+            let raw = std::fs::read(&checkpoint)
+                .with_context(|| format!("reading checkpoint {}", checkpoint.display()))?;
+            let checkpoint_value: Value = serde_json::from_slice(&raw)
+                .with_context(|| format!("parsing checkpoint {}", checkpoint.display()))?;
+            let coupled_state = coupled_checkpoint_state(checkpoint_value)?;
+            let evidence = fullmag_runner::resume_reference_fdm_from_coupled_checkpoint_evidence(
+                fdm,
+                coupled_state,
+                until,
+                &execution_plan.output_plan.outputs,
+            )
+            .map_err(|error| anyhow!(error.message))?;
+            let evidence = serde_json::to_string_pretty(&evidence)?;
+            let resumed_from = serde_json::to_string(&checkpoint.display().to_string())?;
+            println!("{{\n  \"evidence\": {evidence},\n  \"resumed_from\": {resumed_from}\n}}");
+        }
         Command::ResolveRuntimeInvocation { shell, raw_args } => {
             let resolution = resolve_runtime_invocation(raw_args)?;
             if shell {
@@ -256,6 +284,22 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn coupled_checkpoint_state(value: Value) -> Result<Value> {
+    if value.get("format").is_none() {
+        return Ok(value);
+    }
+    if value["format"] != "fullmag.backend_state.v1"
+        || value["backend_family"] != "fdm_cpu_reference"
+        || value["integrator_kind"] != "coupled_imex_ark2"
+    {
+        bail!("unsupported coupled M3 backend checkpoint envelope");
+    }
+    value
+        .get("integrator_state")
+        .cloned()
+        .ok_or_else(|| anyhow!("coupled M3 backend checkpoint has no integrator_state"))
 }
 
 // ── Session persistence CLI ────────────────────────────────────────────
@@ -486,6 +530,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "validate-json",
         "plan-json",
         "run-json",
+        "resume-json",
         "resolve-runtime-invocation",
     ];
     const FLAG_ONLY: &[&str] = &["-i", "--interactive", "--headless", "--dev", "--json"];
@@ -1114,6 +1159,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -1133,6 +1179,7 @@ mod tests {
             current_density: None,
             stt_degree: None,
             stt_beta: None,
+            spin_torque_contract: None,
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
@@ -1412,6 +1459,44 @@ mod tests {
     fn cli_parses_ui_subcommand() {
         let cli = Cli::try_parse_from(["fullmag", "ui"]).expect("cli parse");
         assert!(matches!(cli.command, Command::Ui(_)));
+    }
+
+    #[test]
+    fn cli_parses_exact_coupled_checkpoint_resume_entrypoint() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "resume-json",
+            "problem.json",
+            "--checkpoint",
+            "backend-state.json",
+            "--until",
+            "2e-9",
+        ])
+        .expect("cli resume parse");
+        assert!(matches!(cli.command, Command::ResumeJson { .. }));
+        assert!(!is_script_mode(&[
+            OsString::from("fullmag"),
+            OsString::from("resume-json"),
+        ]));
+    }
+
+    #[test]
+    fn cli_resume_unwraps_only_the_exact_backend_state_envelope() {
+        let state = serde_json::json!({"schema": "fullmag.fdm.coupled_m3_checkpoint.v1"});
+        let envelope = serde_json::json!({
+            "format": "fullmag.backend_state.v1",
+            "backend_family": "fdm_cpu_reference",
+            "integrator_kind": "coupled_imex_ark2",
+            "integrator_state": state,
+        });
+        assert_eq!(coupled_checkpoint_state(envelope).unwrap(), state);
+        assert!(coupled_checkpoint_state(serde_json::json!({
+            "format": "fullmag.backend_state.v1",
+            "backend_family": "fdm_cuda",
+            "integrator_kind": "coupled_imex_ark2",
+            "integrator_state": state,
+        }))
+        .is_err());
     }
 
     #[test]

@@ -6,6 +6,13 @@
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
+> **Normative reconciliation (2026-07-15).** This implemented-slice note
+> documents legacy FEM realizations; it does not define canonical v1 signs or
+> numerical production targets. Torque conventions are superseded by 0960 and
+> current/Oersted coupling by 0980. The midpoint Biot–Savart realization is a
+> bounded historical approximation, not the M1 production FEM target
+> (`H(curl)` Nedelec vector potential plus `H1` gauge and airbox convergence).
+
 ## 1. Problem statement
 
 Fullmag already has canonical public semantics for:
@@ -51,44 +58,45 @@ $$
 + \boldsymbol{\tau}_\mathrm{STT}.
 $$
 
-For the Slonczewski torque used by the current public executable slice,
+For canonical Slonczewski v1, the Gilbert-source torque is
 
 $$
-\boldsymbol{\tau}_\mathrm{Slonc}
-= \beta_\mathrm{stt}(J, P, \Lambda, M_s, d)
-\left[
-\frac{(1+\alpha\varepsilon')\mathbf{m} \times (\mathbf{m} \times \hat{\mathbf{p}})
-+(\varepsilon'-\alpha)\mathbf{m} \times \hat{\mathbf{p}}}{1+\alpha^2}
+\mathbf T_{\mathrm{Slonc},G}
+= \Omega_J\left[
+\epsilon(\mathbf m\cdot\hat{\mathbf p})\,\mathbf m\times(\mathbf m\times\hat{\mathbf p})
++\epsilon'\,\mathbf m\times\hat{\mathbf p}
 \right],
 $$
 
 with
 
 $$
-\beta_\mathrm{stt}
-= \frac{\hbar |J| \gamma_{\mu0}}{2 e \mu_0 M_s d}
-\frac{P \Lambda^2}{(\Lambda^2 + 1) + (\Lambda^2 - 1)(\mathbf{m}\cdot\hat{\mathbf{p}})}.
-$$
-
-For the Zhang-Li torque,
-
-$$
-\boldsymbol{\tau}_\mathrm{ZL}
-= \frac{(1+\alpha\beta)\mathbf{v}_\perp
--(\beta-\alpha)\mathbf{m}\times\mathbf{v}}{1+\alpha^2},
-$$
-
-with drift velocity
-
-$$
-\mathbf{v} = (\mathbf{u}\cdot\nabla)\mathbf{m},
+\Omega_J
+= \frac{\gamma_e\hbar J_n}{2 e M_s d},
 \qquad
-\mathbf{v}_\perp = -\mathbf{m}\times(\mathbf{m}\times\mathbf{v}),
-\qquad
-\mathbf{u} = b\,\mathbf{J},
-\qquad
-b = \frac{P\mu_B}{e M_s (1+\beta^2)}.
+\epsilon(c)=\frac{P \Lambda^2}{(\Lambda^2 + 1) + (\Lambda^2 - 1)c}.
 $$
+
+Here $J_n=\mathbf J_c\cdot\hat n_\mathrm{stack}$ is signed. The displayed
+torque bases are interpreted as a Gilbert source and receive the single
+canonical conversion from 0960; no `abs(J)` or extra `mu0` is permitted.
+
+For canonical Zhang-Li v1, the Gilbert-source torque is
+
+$$
+\mathbf T_{\mathrm{ZL},G}
+= -(\mathbf u\cdot\nabla)\mathbf m
++\beta\,\mathbf m\times[(\mathbf u\cdot\nabla)\mathbf m],
+\qquad
+\mathbf{u} = \frac{g\mu_B P}{2eM_s}\,\mathbf{J}_c.
+$$
+
+Both sources receive the explicit conversion
+$[\mathbf T_G+\alpha\mathbf m\times\mathbf T_G]/(1+\alpha^2)$ exactly once.
+
+The historical `1/(1+beta^2)` behavior, where encountered, is
+`formula_version=zhang_li.legacy_fullmag.v0`; it must not be silently presented
+as canonical v1.
 
 For general prescribed current transport, the Oersted field is
 
@@ -155,10 +163,14 @@ remains preferred.
 
 ### 3.1 FDM
 
-- FDM semantics remain unchanged.
+- FDM semantics remain unchanged by this historical FEM slice.
 - `SlonczewskiSTT` and `ZhangLiSTT` remain executable on CPU reference and GPU production lanes.
-- `OerstedField(model="from_current_solution")` remains executable only for the cylindrical exact reduction.
-- General prescribed-current Biot-Savart is still not lowered for FDM.
+- As subsequently documented by 0860, FDM also has a bounded, single-body,
+  source-count-capped midpoint Biot-Savart bootstrap for non-cylindrical
+  `prescribed_density`; it is distinct from the exact-cylinder reduction.
+- Neither historical FDM realization is the future M1 production
+  `field.oersted.fdm_fft` solver, which requires conservative face-to-cell
+  `J_charge` reconstruction and a cell-integrated open-boundary FFT kernel.
 
 ### 3.2 FEM
 
@@ -294,7 +306,7 @@ Provenance must preserve:
 2. `InterfaceCppSTT`, `DriftDiffusionSpinTorque`, and `SpinOrbitTorque` remain `semantic_only`.
 3. Multi-module torque superposition remains disallowed on the current public executable path.
 4. The generalized Oersted path is a midpoint Biot-Savart approximation, not a contact-aware transport solve.
-5. FDM still lacks a general `J(x) -> H_oe(x)` realization outside the cylindrical exact reduction.
+5. FDM has the bounded midpoint bootstrap from 0860, but still lacks the M1 production cell-integrated FFT realization for general conservative `J_charge(x,t)`.
 6. Rust FEM reference execution still rejects STT and therefore is not the STT reference lane.
 
 ## 9. References

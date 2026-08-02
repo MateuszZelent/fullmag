@@ -241,6 +241,29 @@ impl ExchangeLlgState {
         Ok(())
     }
 
+    /// Restore an already validated checkpoint state without renormalizing its
+    /// serialized floating-point values. This preserves bitwise continuation.
+    pub fn restore_exact_checkpoint(
+        &mut self,
+        magnetization: Vec<Vector3>,
+        time_seconds: f64,
+    ) -> Result<()> {
+        if magnetization.len() != self.grid.cell_count()
+            || magnetization.iter().flatten().any(|value| !value.is_finite())
+            || !time_seconds.is_finite()
+            || time_seconds < 0.0
+        {
+            return Err(EngineError::new(
+                "exact checkpoint magnetization/time is invalid",
+            ));
+        }
+        self.magnetization = magnetization;
+        self.time_seconds = time_seconds;
+        self.invalidate_fsal();
+        self.reset_abm_history();
+        Ok(())
+    }
+
     /// Convert to SoA layout (allocating).
     pub fn to_soa(&self) -> ExchangeLlgStateSoA {
         ExchangeLlgStateSoA::from_aos(self)
@@ -496,7 +519,10 @@ impl SolverSession {
 
     /// Compute full observables at the current state.
     pub fn observe(&mut self) -> EffectiveFieldObservables {
-        self.problem
-            .observe_vectors_ws(self.state.magnetization(), &mut self.fft_ws)
+        self.problem.observe_vectors_ws_at_time(
+            self.state.magnetization(),
+            &mut self.fft_ws,
+            self.state.time_seconds,
+        )
     }
 }

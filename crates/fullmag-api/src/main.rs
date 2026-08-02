@@ -2196,6 +2196,7 @@ where
                 simulation_preparation: None,
                 run: None,
                 live_state: None,
+                coupled_checkpoint: None,
                 latest_scalar_row: None,
                 latest_fields: None,
                 preview_fields: None,
@@ -3738,7 +3739,9 @@ fn build_preview_state(
         fullmag_runner::DisplayKind::GlobalScalar => {
             build_global_scalar_preview_state(current, display_selection)
         }
-        fullmag_runner::DisplayKind::VectorField | fullmag_runner::DisplayKind::SpatialScalar => {
+        fullmag_runner::DisplayKind::VectorField
+        | fullmag_runner::DisplayKind::TensorField
+        | fullmag_runner::DisplayKind::SpatialScalar => {
             build_spatial_preview_state(current, display_selection, config)
         }
     }

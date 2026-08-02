@@ -425,13 +425,18 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     // ── Spin-Orbit Torque (SOT) ──
     ctx->has_sot       = plan->has_sot != 0;
+    ctx->sot_formula   = plan->sot_formula;
     ctx->sot_je        = plan->sot_je;
     ctx->sot_xi_dl     = plan->sot_xi_dl;
     ctx->sot_xi_fl     = plan->sot_xi_fl;
     ctx->sot_sigma[0]  = plan->sot_sigma[0];
     ctx->sot_sigma[1]  = plan->sot_sigma[1];
     ctx->sot_sigma[2]  = plan->sot_sigma[2];
-    ctx->sot_thickness = plan->sot_thickness > 0.0 ? plan->sot_thickness : 1.0e-9;
+    ctx->sot_thickness =
+        plan->sot_formula == FULLMAG_FDM_PRESCRIBED_SOT_V1
+            ? plan->sot_thickness
+            : (plan->sot_thickness > 0.0 ? plan->sot_thickness : 1.0e-9);
+    ctx->has_sot_active_mask = plan->sot_active_mask != nullptr;
 
     // ── Oersted field (cylindrical conductor) ──
     ctx->has_oersted_cylinder = plan->has_oersted_cylinder != 0;
@@ -482,6 +487,35 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         ctx->last_error = "active_mask_len mismatch: expected "
             + std::to_string(ctx->cell_count)
             + ", got " + std::to_string(plan->active_mask_len);
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_sot && ctx->sot_formula != FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
+        ctx->sot_formula != FULLMAG_FDM_PRESCRIBED_SOT_V1)
+    {
+        ctx->last_error = "unsupported prescribed SOT formula discriminator";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_sot && ctx->sot_formula == FULLMAG_FDM_PRESCRIBED_SOT_V1 &&
+        (!ctx->has_sot_active_mask || plan->sot_active_mask_len != ctx->cell_count))
+    {
+        ctx->last_error = "prescribed SOT requires sot_active_mask_len equal to cell_count";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_sot && ctx->sot_formula == FULLMAG_FDM_PRESCRIBED_SOT_V1 &&
+        (!std::isfinite(ctx->sot_je) || !std::isfinite(ctx->sot_xi_dl) ||
+         !std::isfinite(ctx->sot_xi_fl) || !std::isfinite(ctx->sot_thickness) ||
+         ctx->sot_thickness <= 0.0 || !std::isfinite(ctx->sot_sigma[0]) ||
+         !std::isfinite(ctx->sot_sigma[1]) || !std::isfinite(ctx->sot_sigma[2]) ||
+         (ctx->sot_sigma[0] == 0.0 && ctx->sot_sigma[1] == 0.0 &&
+          ctx->sot_sigma[2] == 0.0)))
+    {
+        ctx->last_error = "prescribed_sot.fullmag.v1 parameters are invalid";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if ((ctx->sot_formula != FULLMAG_FDM_PRESCRIBED_SOT_V1 || !ctx->has_sot) &&
+        (ctx->has_sot_active_mask || plan->sot_active_mask_len != 0))
+    {
+        ctx->last_error = "sot_active_mask requires prescribed_sot.fullmag.v1";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (ctx->has_oersted_cylinder && has_oersted_field) {
@@ -602,6 +636,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     if (ctx->has_active_mask &&
         !context_upload_active_mask(*ctx, plan->active_mask, plan->active_mask_len))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_sot_active_mask &&
+        !context_upload_sot_active_mask(
+            *ctx, plan->sot_active_mask, plan->sot_active_mask_len))
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }

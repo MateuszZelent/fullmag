@@ -37,6 +37,7 @@ from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPoli
 from fullmag.model.spin_torque import (
     DriftDiffusionSpinTorque,
     InterfaceCppSTT,
+    PrescribedSpinOrbitTorque,
     SlonczewskiSTT,
     SpinOrbitTorque,
     ZhangLiSTT,
@@ -328,6 +329,11 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "spin_torques": [
             _export_spin_torque_entry(module) for module in base_problem.spin_torques
         ],
+        "oersted_terms": [
+            term.to_ir()
+            for term in base_problem.energy
+            if isinstance(term, (OerstedCylinder, OerstedField))
+        ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
     solver_draft = draft["solver"]
@@ -449,7 +455,16 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(field_drive_lines)
 
-    spin_torque_lines = _render_spin_torques(base_problem, surface=surface)
+    oersted_lines = _render_oersted_terms(
+        base_problem, overrides=overrides, surface=surface
+    )
+    if oersted_lines:
+        lines.append("")
+        lines.extend(oersted_lines)
+
+    spin_torque_lines = _render_spin_torques(
+        base_problem, surface=surface, overrides=overrides
+    )
     if spin_torque_lines:
         lines.append("")
         lines.extend(spin_torque_lines)
@@ -2374,14 +2389,41 @@ def _render_spin_torques(
     problem: Problem,
     *,
     surface: str,
+    overrides: dict[str, object] | None = None,
 ) -> list[str]:
     """Render the spin_torques list as canonical script lines."""
-    if not problem.spin_torques:
+    resolved_overrides = overrides or {}
+    if "spin_torques" in resolved_overrides:
+        override_modules = resolved_overrides["spin_torques"]
+        if not isinstance(override_modules, list):
+            raise ValueError("spin_torques override must be a list")
+        modules: Sequence[object] = override_modules
+    else:
+        modules = problem.spin_torques
+    if not modules:
         return []
     lines = ["# Spin torques"]
-    for module in problem.spin_torques:
+    for module in modules:
+        if isinstance(module, dict):
+            lines.append(_render_spin_torque_override(module))
+            continue
+        if isinstance(module, PrescribedSpinOrbitTorque):
+            lines.append(_render_prescribed_sot_entry(module.to_ir_module()))
+            continue
         if isinstance(module, SlonczewskiSTT):
             kwargs = []
+            if module.formula_version == "slonczewski.fullmag.v2":
+                assert module.id is not None and module.target is not None
+                assert module.stack_normal is not None
+                kwargs.append(f"id={_py_repr(module.id)}")
+                kwargs.append(
+                    "target=fm.RegionRef("
+                    f"object_id={_py_repr(module.target.object_id)}, "
+                    f"region_id={'None' if module.target.region_id is None else _py_repr(module.target.region_id)})"
+                )
+                kwargs.append(f"stack_normal={_py_tuple3(module.stack_normal)}")
+                if module.interface_id is not None:
+                    kwargs.append(f"interface_id={_py_repr(module.interface_id)}")
             if module.current_density is not None:
                 kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
             if module.current_source is not None:
@@ -2395,7 +2437,7 @@ def _render_spin_torques(
                 kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
             if module.free_layer_thickness_m is not None:
                 kwargs.append(f"free_layer_thickness_m={_py_number(module.free_layer_thickness_m)}")
-            if module.fixed_layer_position is not None:
+            if module.formula_version == "slonczewski.legacy_fullmag.v0" and module.fixed_layer_position is not None:
                 kwargs.append(f"fixed_layer_position={_py_repr(module.fixed_layer_position)}")
             lines.append(f"fm.SlonczewskiSTT({', '.join(kwargs)})")
             continue
@@ -2409,6 +2451,16 @@ def _render_spin_torques(
                 kwargs.append(f"degree={_py_number(module.degree)}")
             if module.beta != 0.0:
                 kwargs.append(f"beta={_py_number(module.beta)}")
+            if module.formula_version == "zhang_li.fullmag.v1":
+                assert module.id is not None and module.target is not None
+                assert module.lande_g is not None
+                kwargs.append(f"id={_py_repr(module.id)}")
+                kwargs.append(
+                    "target=fm.RegionRef("
+                    f"object_id={_py_repr(module.target.object_id)}, "
+                    f"region_id={'None' if module.target.region_id is None else _py_repr(module.target.region_id)})"
+                )
+                kwargs.append(f"lande_g={_py_number(module.lande_g)}")
             lines.append(f"fm.ZhangLiSTT({', '.join(kwargs)})")
             continue
         if isinstance(module, InterfaceCppSTT):
@@ -2442,28 +2494,566 @@ def _render_spin_torques(
             lines.append(f"fm.DriftDiffusionSpinTorque({', '.join(kwargs)})")
             continue
         if isinstance(module, SpinOrbitTorque):
-            kwargs = []
-            if module.charge_current_density_a_per_m2 is not None:
-                kwargs.append(
-                    f"charge_current_density_a_per_m2={_py_number(module.charge_current_density_a_per_m2)}"
-                )
-            if module.current_source is not None:
-                kwargs.append(f"current_source={_py_repr(module.current_source)}")
-            kwargs.append(f"damping_like_efficiency={_py_number(module.damping_like_efficiency)}")
-            kwargs.append(f"spin_polarization={_py_tuple3(module.spin_polarization)}")
-            kwargs.append(
-                f"ferromagnet_thickness_m={_py_number(module.ferromagnet_thickness_m)}"
-            )
-            if module.field_like_efficiency != 0.0:
-                kwargs.append(
-                    f"field_like_efficiency={_py_number(module.field_like_efficiency)}"
-                )
-            lines.append(f"fm.SpinOrbitTorque({', '.join(kwargs)})")
+            lines.append(_render_prescribed_sot_entry(module.to_ir_module()))
             continue
         raise ValueError(
             f"canonical flat-script rewrite does not yet support spin torque {type(module).__name__}"
         )
-    return lines
+    register = _surface_call(surface, "spin_torque")
+    return [lines[0], *(f"{register}({expression})" for expression in lines[1:])]
+
+
+def _required_entry(entry: Mapping[str, object], key: str, *, context: str) -> object:
+    if key not in entry:
+        raise ValueError(f"{context} entry is missing required field {key!r}")
+    return entry[key]
+
+
+def _required_roundtrip_number(
+    entry: Mapping[str, object], key: str, *, context: str
+) -> str:
+    value = _required_entry(entry, key, context=context)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{context}.{key} must be a finite number")
+    candidate = float(value)
+    if not math.isfinite(candidate):
+        raise ValueError(f"{context}.{key} must be a finite number")
+    return repr(value)
+
+
+def _roundtrip_literal(value: object, *, context: str) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{context} must contain only finite numbers")
+        return repr(value)
+    if isinstance(value, str):
+        return _py_repr(value)
+    if isinstance(value, (list, tuple)):
+        opening, closing = ("[", "]") if isinstance(value, list) else ("(", ")")
+        return opening + ", ".join(
+            _roundtrip_literal(item, context=context) for item in value
+        ) + closing
+    if isinstance(value, dict):
+        return "{" + ", ".join(
+            f"{_py_repr(str(key))}: {_roundtrip_literal(item, context=context)}"
+            for key, item in sorted(value.items())
+        ) + "}"
+    raise ValueError(f"{context} contains unsupported value {type(value).__name__}")
+
+
+def _required_nonempty_string(
+    entry: Mapping[str, object], key: str, *, context: str
+) -> str:
+    value = _required_entry(entry, key, context=context)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context}.{key} must be a non-empty string")
+    return value
+
+
+def _reject_unexpected_fields(
+    entry: Mapping[str, object], allowed: set[str], *, context: str
+) -> None:
+    unexpected = sorted(set(entry) - allowed)
+    if unexpected:
+        raise ValueError(f"{context} has unsupported fields {unexpected!r}")
+
+
+def _required_mapping(entry: Mapping[str, object], key: str, *, context: str) -> Mapping[str, object]:
+    value = _required_entry(entry, key, context=context)
+    if not isinstance(value, dict):
+        raise ValueError(f"{context}.{key} must be an object")
+    return value
+
+
+def _required_vec3(entry: Mapping[str, object], key: str, *, context: str) -> Sequence[object]:
+    value = _required_entry(entry, key, context=context)
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{context}.{key} must be a three-component vector")
+    for index, component in enumerate(value):
+        if isinstance(component, bool) or not isinstance(component, (int, float)):
+            raise ValueError(f"{context}.{key}[{index}] must be a finite number")
+        if not math.isfinite(float(component)):
+            raise ValueError(f"{context}.{key}[{index}] must be a finite number")
+    return value
+
+
+def _render_region_ref(entry: Mapping[str, object]) -> str:
+    object_id = _required_nonempty_string(
+        entry, "object_id", context="prescribed_sot.target"
+    )
+    kwargs = [_py_repr(object_id)]
+    if "region_id" in entry:
+        region_id = entry["region_id"]
+        if not isinstance(region_id, str) or not region_id.strip():
+            raise ValueError("prescribed_sot.target.region_id must be a non-empty string")
+        kwargs.append(_py_repr(region_id))
+    return f"fm.RegionRef({', '.join(kwargs)})"
+
+
+def _render_sot_envelope(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="prescribed_sot.drive.envelope")
+    context = f"prescribed_sot.drive.envelope[{kind}]"
+    allowed_by_kind = {
+        "constant": {"kind", "value"},
+        "sinusoidal": {"kind", "amplitude", "frequency_hz", "phase_rad", "offset"},
+        "pulse": {"kind", "amplitude", "t_on_s", "t_off_s"},
+        "piecewise_linear": {"kind", "points"},
+        "sinc": {"kind", "amplitude", "center_s", "bandwidth_hz", "offset"},
+        "tabulated": {
+            "kind", "artifact_ref", "interpolation", "extrapolation", "bandwidth_hz",
+        },
+    }
+    allowed = allowed_by_kind.get(str(kind))
+    if allowed is None:
+        raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
+    _reject_unexpected_fields(entry, allowed, context=context)
+    if kind == "constant":
+        return f"fm.ConstantEnvelope({_required_roundtrip_number(entry, 'value', context=context)})"
+    if kind == "sinusoidal":
+        return (
+            "fm.SinusoidalEnvelope("
+            f"{_required_roundtrip_number(entry, 'amplitude', context=context)}, "
+            f"{_required_roundtrip_number(entry, 'frequency_hz', context=context)}, "
+            f"phase_rad={_required_roundtrip_number(entry, 'phase_rad', context=context)}, "
+            f"offset={_required_roundtrip_number(entry, 'offset', context=context)})"
+        )
+    if kind == "pulse":
+        return (
+            "fm.PulseEnvelope("
+            f"{_required_roundtrip_number(entry, 'amplitude', context=context)}, "
+            f"{_required_roundtrip_number(entry, 't_on_s', context=context)}, "
+            f"{_required_roundtrip_number(entry, 't_off_s', context=context)})"
+        )
+    if kind == "piecewise_linear":
+        points = _required_entry(entry, "points", context=context)
+        if not isinstance(points, list):
+            raise ValueError(f"{context}.points must be a list")
+        rendered_points: list[str] = []
+        for index, point in enumerate(points):
+            if not isinstance(point, dict):
+                raise ValueError(f"{context}.points[{index}] must be an object")
+            rendered_points.append(
+                "fm.TimeEnvelopePoint("
+                f"{_required_roundtrip_number(point, 'time_s', context=f'{context}.points[{index}]')}, "
+                f"{_required_roundtrip_number(point, 'value', context=f'{context}.points[{index}]')})"
+            )
+        return f"fm.PiecewiseLinearEnvelope([{', '.join(rendered_points)}])"
+    if kind == "sinc":
+        return (
+            "fm.SincEnvelope("
+            f"{_required_roundtrip_number(entry, 'amplitude', context=context)}, "
+            f"center_s={_required_roundtrip_number(entry, 'center_s', context=context)}, "
+            f"bandwidth_hz={_required_roundtrip_number(entry, 'bandwidth_hz', context=context)}, "
+            f"offset={_required_roundtrip_number(entry, 'offset', context=context)})"
+        )
+    if kind == "tabulated":
+        kwargs = [
+            _py_repr(_required_nonempty_string(entry, "artifact_ref", context=context)),
+            f"interpolation={_py_repr(_required_nonempty_string(entry, 'interpolation', context=context))}",
+            f"extrapolation={_py_repr(_required_nonempty_string(entry, 'extrapolation', context=context))}",
+        ]
+        if "bandwidth_hz" in entry:
+            kwargs.append(
+                f"bandwidth_hz={_required_roundtrip_number(entry, 'bandwidth_hz', context=context)}"
+            )
+        return f"fm.TabulatedEnvelope({', '.join(kwargs)})"
+    raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
+
+
+def _render_prescribed_sot_drive(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="prescribed_sot.drive")
+    if kind == "signed_scalar":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "current_density_Apm2", "sigma_hat", "envelope"},
+            context="prescribed_sot.drive[signed_scalar]",
+        )
+        kwargs = [
+            _required_roundtrip_number(
+                entry, "current_density_Apm2", context="prescribed_sot.drive"
+            ),
+            _roundtrip_literal(
+                list(_required_vec3(entry, "sigma_hat", context="prescribed_sot.drive")),
+                context="prescribed_sot.drive.sigma_hat",
+            ),
+        ]
+        if "envelope" in entry:
+            envelope = entry["envelope"]
+            if not isinstance(envelope, dict):
+                raise ValueError("prescribed_sot.drive.envelope must be an object")
+            kwargs.append(_render_sot_envelope(envelope))
+        return f"fm.SignedScalarDrive({', '.join(kwargs)})"
+    if kind == "vector_current_source":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "current_source_id", "drive_direction", "interface_normal"},
+            context="prescribed_sot.drive[vector_current_source]",
+        )
+        return (
+            "fm.VectorCurrentDrive("
+            f"{_py_repr(_required_nonempty_string(entry, 'current_source_id', context='prescribed_sot.drive'))}, "
+            f"{_roundtrip_literal(list(_required_vec3(entry, 'drive_direction', context='prescribed_sot.drive')), context='prescribed_sot.drive.drive_direction')}, "
+            f"{_roundtrip_literal(list(_required_vec3(entry, 'interface_normal', context='prescribed_sot.drive')), context='prescribed_sot.drive.interface_normal')})"
+        )
+    raise ValueError(f"unsupported prescribed SOT drive kind {kind!r}")
+
+
+def _render_prescribed_sot_entry(entry: Mapping[str, object]) -> str:
+    if _required_entry(entry, "kind", context="prescribed_sot") != "prescribed_sot":
+        raise ValueError("unsupported prescribed SOT kind")
+    if _required_entry(entry, "schema_version", context="prescribed_sot") != "prescribed_sot.v1":
+        raise ValueError("unsupported prescribed SOT schema_version")
+    formula = _required_entry(entry, "formula_version", context="prescribed_sot")
+    module_id = _required_entry(entry, "id", context="prescribed_sot")
+    if not isinstance(module_id, str) or not module_id.strip():
+        raise ValueError("prescribed_sot.id must be a non-empty string")
+    if formula == "prescribed_sot.fullmag.v1":
+        _reject_unexpected_fields(
+            entry,
+            {
+                "kind", "schema_version", "id", "target", "formula_version",
+                "drive", "xi_dl", "xi_fl", "free_layer_thickness_m",
+            },
+            context="prescribed_sot",
+        )
+        target = _required_mapping(entry, "target", context="prescribed_sot")
+        drive = _required_mapping(entry, "drive", context="prescribed_sot")
+        return (
+            "fm.PrescribedSpinOrbitTorque("
+            f"{_py_repr(module_id)}, {_render_region_ref(target)}, {_render_prescribed_sot_drive(drive)}, "
+            f"xi_dl={_required_roundtrip_number(entry, 'xi_dl', context='prescribed_sot')}, "
+            f"xi_fl={_required_roundtrip_number(entry, 'xi_fl', context='prescribed_sot')}, "
+            "free_layer_thickness_m="
+            f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context='prescribed_sot')})"
+        )
+    if formula != "prescribed_sot.legacy_fullmag.v0":
+        raise ValueError(f"unsupported prescribed SOT formula_version {formula!r}")
+    _reject_unexpected_fields(
+        entry,
+        {
+            "kind", "schema_version", "id", "target", "formula_version", "drive",
+            "raw_spin_polarization", "xi_dl", "xi_fl", "free_layer_thickness_m",
+            "compatibility_origin",
+        },
+        context="legacy prescribed_sot",
+    )
+    prefix = "legacy_prescribed_sot_"
+    if not module_id.startswith(prefix) or not module_id[len(prefix):].isdigit():
+        raise ValueError("legacy prescribed SOT id must encode its module_index")
+    if _required_entry(entry, "target", context="prescribed_sot") is not None:
+        raise ValueError("legacy prescribed SOT target must be explicitly null")
+    drive = _required_mapping(entry, "drive", context="prescribed_sot")
+    drive_kind = _required_entry(drive, "kind", context="prescribed_sot.drive")
+    drive_kwarg: str
+    if drive_kind == "legacy_scalar_magnitude":
+        _reject_unexpected_fields(
+            drive,
+            {"kind", "raw_charge_current_density_Apm2"},
+            context="legacy prescribed_sot.drive",
+        )
+        drive_kwarg = (
+            "raw_charge_current_density_Apm2="
+            f"{_required_roundtrip_number(drive, 'raw_charge_current_density_Apm2', context='prescribed_sot.drive')}"
+        )
+    elif drive_kind == "legacy_current_source_norm":
+        _reject_unexpected_fields(
+            drive,
+            {"kind", "current_source_id"},
+            context="legacy prescribed_sot.drive",
+        )
+        drive_kwarg = (
+            "current_source_id="
+            f"{_py_repr(_required_nonempty_string(drive, 'current_source_id', context='prescribed_sot.drive'))}"
+        )
+    else:
+        raise ValueError(f"unsupported legacy prescribed SOT drive kind {drive_kind!r}")
+    origin = _required_mapping(entry, "compatibility_origin", context="prescribed_sot")
+    return (
+        "fm.PrescribedSpinOrbitTorque.from_legacy_v0("
+        f"module_index={int(module_id[len(prefix):])}, target=None, {drive_kwarg}, "
+        "raw_spin_polarization="
+        f"{_roundtrip_literal(list(_required_vec3(entry, 'raw_spin_polarization', context='prescribed_sot')), context='prescribed_sot.raw_spin_polarization')}, "
+        f"xi_dl={_required_roundtrip_number(entry, 'xi_dl', context='prescribed_sot')}, "
+        f"xi_fl={_required_roundtrip_number(entry, 'xi_fl', context='prescribed_sot')}, "
+        "free_layer_thickness_m="
+        f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context='prescribed_sot')}, "
+        f"compatibility_origin={_roundtrip_literal(dict(origin), context='prescribed_sot.compatibility_origin')})"
+    )
+
+
+def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="spin_torque")
+    if kind == "prescribed_sot":
+        return _render_prescribed_sot_entry(entry)
+    constructors = {
+        "slonczewski": "SlonczewskiSTT",
+        "zhang_li": "ZhangLiSTT",
+        "interface_cpp": "InterfaceCppSTT",
+        "drift_diffusion": "DriftDiffusionSpinTorque",
+    }
+    constructor = constructors.get(str(kind))
+    if constructor is None:
+        raise ValueError(f"unsupported spin torque kind {kind!r}")
+    fields_by_kind = {
+        "slonczewski": {
+            "kind", "current_density", "current_source", "spin_polarization", "degree",
+            "lambda_asymmetry", "epsilon_prime", "free_layer_thickness_m",
+            "fixed_layer_position", "formula_version", "schema_version", "id", "target",
+            "stack_normal", "realization",
+        },
+        "zhang_li": {
+            "kind", "schema_version", "id", "target", "formula_version",
+            "operator_version", "current_density", "current_source", "degree", "beta", "lande_g",
+        },
+        "interface_cpp": {
+            "kind", "current_density", "current_source", "spin_polarization",
+            "interface_normal", "degree", "lambda_asymmetry", "epsilon_prime",
+        },
+        "drift_diffusion": {
+            "kind", "current_density", "current_source", "spin_polarization", "degree",
+            "beta", "spin_diffusion_length_m",
+        },
+    }
+    _reject_unexpected_fields(entry, fields_by_kind[str(kind)], context=str(kind))
+    kwargs: list[str] = []
+    has_density = "current_density" in entry
+    has_source = "current_source" in entry
+    if has_density == has_source:
+        raise ValueError(f"{kind} requires exactly one of current_density or current_source")
+    if has_density:
+        kwargs.append(
+            f"current_density={_roundtrip_literal(list(_required_vec3(entry, 'current_density', context=str(kind))), context=f'{kind}.current_density')}"
+        )
+    elif has_source:
+        kwargs.append(
+            f"current_source={_py_repr(_required_nonempty_string(entry, 'current_source', context=str(kind)))}"
+        )
+    else:
+        raise ValueError(f"{kind} requires current_density or current_source")
+    required_by_kind = {
+        "slonczewski": ("spin_polarization", "degree", "lambda_asymmetry", "epsilon_prime"),
+        "zhang_li": ("degree", "beta"),
+        "interface_cpp": ("spin_polarization", "interface_normal", "degree", "lambda_asymmetry", "epsilon_prime"),
+        "drift_diffusion": ("spin_polarization", "degree", "beta", "spin_diffusion_length_m"),
+    }
+    for field in required_by_kind[str(kind)]:
+        value = _required_entry(entry, field, context=str(kind))
+        if field in {"spin_polarization", "interface_normal"}:
+            value = list(_required_vec3(entry, field, context=str(kind)))
+            kwargs.append(
+                f"{field}={_roundtrip_literal(value, context=f'{kind}.{field}')}"
+            )
+        else:
+            kwargs.append(
+                f"{field}={_required_roundtrip_number(entry, field, context=str(kind))}"
+            )
+    if kind == "slonczewski":
+        formula_version = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
+        if formula_version == "slonczewski.fullmag.v2":
+            if _required_entry(entry, "schema_version", context=str(kind)) != "slonczewski_torque.v1":
+                raise ValueError("canonical slonczewski schema_version must be slonczewski_torque.v1")
+            kwargs.append(f"id={_py_repr(_required_nonempty_string(entry, 'id', context=str(kind)))}")
+            target = _required_entry(entry, "target", context=str(kind))
+            if not isinstance(target, Mapping):
+                raise ValueError("slonczewski target must be an object")
+            object_id = _required_nonempty_string(target, "object_id", context="slonczewski.target")
+            region_id = target.get("region_id")
+            if region_id is not None and not isinstance(region_id, str):
+                raise ValueError("slonczewski target region_id must be a string")
+            kwargs.append(
+                "target=fm.RegionRef("
+                f"object_id={_py_repr(object_id)}, region_id={'None' if region_id is None else _py_repr(region_id)})"
+            )
+            kwargs.append(
+                "stack_normal="
+                f"{_roundtrip_literal(list(_required_vec3(entry, 'stack_normal', context=str(kind))), context='slonczewski.stack_normal')}"
+            )
+            realization = _required_entry(entry, "realization", context=str(kind))
+            if not isinstance(realization, Mapping):
+                raise ValueError("canonical slonczewski realization must be an object")
+            realization_kind = realization.get("kind")
+            if realization_kind == "thin_layer_homogenized":
+                if realization.get("realization_version") != "slonczewski_thin_layer_homogenized.v1":
+                    raise ValueError("canonical slonczewski requires thin-layer realization v1")
+            elif realization_kind == "interface_flux":
+                if realization.get("realization_version") != "slonczewski_interface_flux.v1":
+                    raise ValueError("canonical slonczewski requires interface-flux realization v1")
+                kwargs.append(
+                    "interface_id="
+                    f"{_py_repr(_required_nonempty_string(realization, 'interface_id', context='slonczewski.realization'))}"
+                )
+            else:
+                raise ValueError(f"unsupported canonical slonczewski realization {realization_kind!r}")
+            if "fixed_layer_position" in entry:
+                raise ValueError("canonical slonczewski must not contain fixed_layer_position")
+        elif formula_version == "slonczewski.fullmag.v1":
+            raise ValueError("slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2")
+        elif formula_version != "slonczewski.legacy_fullmag.v0":
+            raise ValueError(f"unsupported slonczewski formula_version {formula_version!r}")
+        if "free_layer_thickness_m" in entry:
+            kwargs.append(
+                "free_layer_thickness_m="
+                f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context=str(kind))}"
+            )
+        if formula_version == "slonczewski.legacy_fullmag.v0" and "fixed_layer_position" in entry:
+            kwargs.append(
+                f"fixed_layer_position={_py_repr(_required_nonempty_string(entry, 'fixed_layer_position', context=str(kind)))}"
+            )
+    if kind == "zhang_li":
+        formula_version = entry.get("formula_version", "zhang_li.legacy_fullmag.v0")
+        if formula_version == "zhang_li.fullmag.v1":
+            if _required_entry(entry, "schema_version", context=str(kind)) != "zhang_li_torque.v1":
+                raise ValueError("canonical zhang_li schema_version must be zhang_li_torque.v1")
+            if _required_entry(entry, "operator_version", context=str(kind)) != "zl_central_reference_v1":
+                raise ValueError("canonical zhang_li requires zl_central_reference_v1")
+            kwargs.append(f"id={_py_repr(_required_nonempty_string(entry, 'id', context=str(kind)))}")
+            target = _required_entry(entry, "target", context=str(kind))
+            if not isinstance(target, Mapping):
+                raise ValueError("zhang_li target must be an object")
+            object_id = _required_nonempty_string(target, "object_id", context="zhang_li.target")
+            region_id = target.get("region_id")
+            if region_id is not None and not isinstance(region_id, str):
+                raise ValueError("zhang_li target region_id must be a string")
+            kwargs.append(
+                "target=fm.RegionRef("
+                f"object_id={_py_repr(object_id)}, region_id={'None' if region_id is None else _py_repr(region_id)})"
+            )
+            kwargs.append(
+                f"lande_g={_required_roundtrip_number(entry, 'lande_g', context=str(kind))}"
+            )
+        elif formula_version != "zhang_li.legacy_fullmag.v0":
+            raise ValueError(f"unsupported zhang_li formula_version {formula_version!r}")
+    return f"fm.{constructor}({', '.join(kwargs)})"
+
+
+def _render_oersted_time_dependence(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="oersted_cylinder.time_dependence")
+    context = f"oersted_cylinder.time_dependence[{kind}]"
+    allowed_by_kind = {
+        "constant": {"kind"},
+        "sinusoidal": {"kind", "frequency_hz", "phase_rad", "offset"},
+        "pulse": {"kind", "t_on", "t_off"},
+        "piecewise_linear": {"kind", "points"},
+        "sinc_pulse": {"kind", "cutoff_hz", "t0", "amplitude"},
+    }
+    allowed = allowed_by_kind.get(str(kind))
+    if allowed is None:
+        raise ValueError(f"unsupported Oersted time-dependence kind {kind!r}")
+    _reject_unexpected_fields(entry, allowed, context=context)
+    if kind == "constant":
+        return "fm.model.Constant()"
+    if kind == "sinusoidal":
+        return (
+            "fm.Sinusoidal("
+            f"{_required_roundtrip_number(entry, 'frequency_hz', context=context)}, "
+            f"phase_rad={_required_roundtrip_number(entry, 'phase_rad', context=context)}, "
+            f"offset={_required_roundtrip_number(entry, 'offset', context=context)})"
+        )
+    if kind == "pulse":
+        return (
+            "fm.model.Pulse("
+            f"{_required_roundtrip_number(entry, 't_on', context=context)}, "
+            f"{_required_roundtrip_number(entry, 't_off', context=context)})"
+        )
+    if kind == "piecewise_linear":
+        points = _required_entry(entry, "points", context=context)
+        if not isinstance(points, list):
+            raise ValueError(f"{context}.points must be a list")
+        rendered_points: list[list[object]] = []
+        for index, point in enumerate(points):
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError(f"{context}.points[{index}] must contain time and value")
+            for component in point:
+                if (
+                    isinstance(component, bool)
+                    or not isinstance(component, (int, float))
+                    or not math.isfinite(float(component))
+                ):
+                    raise ValueError(
+                        f"{context}.points[{index}] must contain finite numbers"
+                    )
+            rendered_points.append([point[0], point[1]])
+        return f"fm.PiecewiseLinear({_roundtrip_literal(rendered_points, context=context)})"
+    if kind == "sinc_pulse":
+        return (
+            "fm.SincPulse("
+            f"{_required_roundtrip_number(entry, 'cutoff_hz', context=context)}, "
+            f"t0={_required_roundtrip_number(entry, 't0', context=context)}, "
+            f"amplitude={_required_roundtrip_number(entry, 'amplitude', context=context)})"
+        )
+    raise ValueError(f"unsupported Oersted time-dependence kind {kind!r}")
+
+
+def _render_oersted_entry(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="oersted")
+    if kind == "oersted_field":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "model", "source"},
+            context="oersted_field",
+        )
+        model = _required_entry(entry, "model", context="oersted_field")
+        if model != "from_current_solution":
+            raise ValueError(f"unsupported OerstedField model {model!r}")
+        source = _required_nonempty_string(entry, "source", context="oersted_field")
+        return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)})"
+    if kind != "oersted_cylinder":
+        raise ValueError(f"unsupported Oersted term kind {kind!r}")
+    _reject_unexpected_fields(
+        entry,
+        {"kind", "current", "radius", "center", "axis", "time_dependence"},
+        context="oersted_cylinder",
+    )
+    kwargs = [
+        f"current={_required_roundtrip_number(entry, 'current', context='oersted_cylinder')}",
+        f"radius={_required_roundtrip_number(entry, 'radius', context='oersted_cylinder')}",
+        "center="
+        f"{_roundtrip_literal(list(_required_vec3(entry, 'center', context='oersted_cylinder')), context='oersted_cylinder.center')}",
+        "axis="
+        f"{_roundtrip_literal(list(_required_vec3(entry, 'axis', context='oersted_cylinder')), context='oersted_cylinder.axis')}",
+    ]
+    if "time_dependence" in entry:
+        time_dependence = entry["time_dependence"]
+        if not isinstance(time_dependence, dict):
+            raise ValueError("oersted_cylinder.time_dependence must be an object")
+        kwargs.append(
+            f"time_dependence={_render_oersted_time_dependence(time_dependence)}"
+        )
+    return f"fm.OerstedCylinder({', '.join(kwargs)})"
+
+
+def _render_oersted_terms(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+    surface: str = "flat",
+) -> list[str]:
+    if "oersted_terms" in overrides:
+        override_terms = overrides["oersted_terms"]
+        if not isinstance(override_terms, list):
+            raise ValueError("oersted_terms override must be a list")
+        terms: Sequence[object] = override_terms
+    else:
+        terms = tuple(
+            term
+            for term in problem.energy
+            if isinstance(term, (OerstedCylinder, OerstedField))
+        )
+    if not terms:
+        return []
+    lines = ["# Oersted terms"]
+    for term in terms:
+        if isinstance(term, (OerstedCylinder, OerstedField)):
+            lines.append(_render_oersted_entry(term.to_ir()))
+            continue
+        if isinstance(term, dict):
+            lines.append(_render_oersted_entry(term))
+            continue
+        raise ValueError(f"unsupported Oersted term {type(term).__name__}")
+    register = _surface_call(surface, "oersted")
+    return [lines[0], *(f"{register}({expression})" for expression in lines[1:])]
 
 
 def _render_excitation_analysis(

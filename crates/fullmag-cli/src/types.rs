@@ -200,6 +200,8 @@ pub(crate) struct LiveStateManifest {
     pub runtime_status: Option<fullmag_runner::RuntimeStatus>,
     pub updated_at_unix_ms: u128,
     pub latest_step: LiveStepView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupled_checkpoint: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -881,6 +883,8 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub metadata: Option<serde_json::Value>,
     pub run: Option<RunManifest>,
     pub live_state: Option<LiveStateManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coupled_checkpoint: Option<serde_json::Value>,
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: Option<CurrentLiveLatestFields>,
     pub preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,

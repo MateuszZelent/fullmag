@@ -129,7 +129,8 @@ void add_zhang_li_stt_rhs_aos(
     }
 
     constexpr double MU_B = 9.274009994e-24;
-    constexpr double E_CHARGE = 1.60217662e-19;
+    constexpr double E_CHARGE_LEGACY = 1.60217662e-19;
+    constexpr double E_CHARGE_EXACT = 1.602176634e-19;
 
     if (workspace.rhs_xyz.size() != rhs_xyz.size() ||
         workspace.node_weight.size() != static_cast<size_t>(ctx.mesh.n_nodes)) {
@@ -142,9 +143,14 @@ void add_zhang_li_stt_rhs_aos(
     std::fill(workspace.node_weight.begin(), workspace.node_weight.end(), 0.0);
 
     const double beta = ctx.stt.beta;
+    const bool canonical_v1 =
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
 
     for (size_t element_index = 0; element_index < static_cast<size_t>(ctx.mesh.n_elements); ++element_index) {
         if (!ctx.mesh.magnetic_element_mask.empty() && ctx.mesh.magnetic_element_mask[element_index] == 0u) {
+            continue;
+        }
+        if (!ctx.stt.active_element_mask.empty() && ctx.stt.active_element_mask[element_index] == 0u) {
             continue;
         }
         const size_t ebase = element_index * 4u;
@@ -177,8 +183,11 @@ void add_zhang_li_stt_rhs_aos(
             continue;
         }
 
-        const double drift_prefactor =
-            (ctx.stt.degree * MU_B) / (E_CHARGE * elem_ms * (1.0 + beta * beta));
+        const double drift_prefactor = canonical_v1
+            ? (ctx.stt.lande_g * MU_B * ctx.stt.degree) /
+                (2.0 * E_CHARGE_EXACT * elem_ms)
+            : (ctx.stt.degree * MU_B) /
+                (E_CHARGE_LEGACY * elem_ms * (1.0 + beta * beta));
         const Vec3 u = scale3(ctx.stt.current_density_am2, drift_prefactor);
 
         Vec3 grad_m[3] = {};
@@ -210,8 +219,11 @@ void add_zhang_li_stt_rhs_aos(
             const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
             const Vec3 c = cross3(m, dm);
             const Vec3 dc = cross3(m, c);
-            const double adiabatic_scale = (1.0 + alpha * beta) * inv_gilbert;
-            const double cross_scale = (alpha - beta) * inv_gilbert;
+            const double direction = canonical_v1 ? -1.0 : 1.0;
+            const double adiabatic_scale =
+                direction * (1.0 + alpha * beta) * inv_gilbert;
+            const double cross_scale =
+                direction * (alpha - beta) * inv_gilbert;
             workspace.rhs_xyz[base + 0] +=
                 nodal_weight * (adiabatic_scale * (-dc[0]) + cross_scale * c[0]);
             workspace.rhs_xyz[base + 1] +=

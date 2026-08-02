@@ -221,6 +221,12 @@ pub enum CurrentModuleIR {
         solve_region: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         conductivity_s_per_m: Option<f64>,
+        #[serde(default)]
+        coupling: crate::TransportCouplingIR,
+        /// Complete executable charge solve. Legacy records without this
+        /// payload remain readable but fail closed for `ohmic_poisson`.
+        #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+        definition: Option<crate::ChargeTransportDefinitionIR>,
     },
 }
 
@@ -229,6 +235,7 @@ pub enum CurrentModuleIR {
 pub enum CurrentTransportModelIR {
     PrescribedDensity,
     OhmicPoisson,
+    MagnetoresistivePoisson,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -236,11 +243,21 @@ pub enum CurrentTransportModelIR {
 pub enum SpinTorqueModuleIR {
     Slonczewski {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<RegionRefIR>,
+        #[serde(default = "default_legacy_slonczewski_formula_version")]
+        formula_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         current_density: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_source: Option<String>,
         degree: f64,
         spin_polarization: [f64; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stack_normal: Option<[f64; 3]>,
         lambda_asymmetry: f64,
         #[serde(default)]
         epsilon_prime: f64,
@@ -250,8 +267,20 @@ pub enum SpinTorqueModuleIR {
         /// Fixed-layer position: "top" or "bottom". Controls current sign.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fixed_layer_position: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        realization: Option<SlonczewskiRealizationIR>,
     },
     ZhangLi {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<RegionRefIR>,
+        #[serde(default = "default_legacy_zhang_li_formula_version")]
+        formula_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operator_version: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_density: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,6 +288,8 @@ pub enum SpinTorqueModuleIR {
         degree: f64,
         #[serde(default)]
         beta: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lande_g: Option<f64>,
     },
     InterfaceCpp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,6 +314,14 @@ pub enum SpinTorqueModuleIR {
         beta: f64,
         spin_diffusion_length_m: f64,
     },
+    DriftDiffusionSpinTorque {
+        schema_version: String,
+        id: String,
+        solve_id: String,
+        target: RegionRefIR,
+        formula_version: String,
+    },
+    #[serde(skip)]
     SpinOrbitTorque {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         charge_current_density_a_per_m2: Option<f64>,
@@ -294,6 +333,173 @@ pub enum SpinTorqueModuleIR {
         spin_polarization: [f64; 3],
         ferromagnet_thickness_m: f64,
     },
+    PrescribedSot {
+        schema_version: String,
+        id: String,
+        #[serde(default)]
+        target: Option<RegionRefIR>,
+        #[serde(flatten)]
+        formula: PrescribedSotFormulaIR,
+    },
+}
+
+fn default_legacy_slonczewski_formula_version() -> String {
+    "slonczewski.legacy_fullmag.v0".to_string()
+}
+
+fn default_legacy_zhang_li_formula_version() -> String {
+    "zhang_li.legacy_fullmag.v0".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RegionRefIR {
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SlonczewskiRealizationIR {
+    ThinLayerHomogenized {
+        realization_version: String,
+    },
+    InterfaceFlux {
+        interface_id: String,
+        realization_version: String,
+    },
+}
+
+/// Versioned lower-bound tolerance for prescribed-SOT authored axes.
+pub const PRESCRIBED_SOT_V1_EPSILON_AXIS: f64 = 1e-12;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TimeEnvelopePointIR {
+    pub time_s: f64,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeEnvelopeInterpolationIR {
+    Linear,
+    Previous,
+}
+
+impl Default for TimeEnvelopeInterpolationIR {
+    fn default() -> Self {
+        Self::Linear
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeEnvelopeExtrapolationIR {
+    Zero,
+    Hold,
+    Error,
+}
+
+impl Default for TimeEnvelopeExtrapolationIR {
+    fn default() -> Self {
+        Self::Error
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimeEnvelopeIR {
+    Constant {
+        value: f64,
+    },
+    Sinusoidal {
+        amplitude: f64,
+        frequency_hz: f64,
+        phase_rad: f64,
+        offset: f64,
+    },
+    Pulse {
+        amplitude: f64,
+        t_on_s: f64,
+        t_off_s: f64,
+    },
+    PiecewiseLinear {
+        points: Vec<TimeEnvelopePointIR>,
+    },
+    Sinc {
+        amplitude: f64,
+        center_s: f64,
+        bandwidth_hz: f64,
+        offset: f64,
+    },
+    Tabulated {
+        artifact_ref: String,
+        #[serde(default)]
+        interpolation: TimeEnvelopeInterpolationIR,
+        #[serde(default)]
+        extrapolation: TimeEnvelopeExtrapolationIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bandwidth_hz: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "formula_version", deny_unknown_fields)]
+pub enum PrescribedSotFormulaIR {
+    #[serde(rename = "prescribed_sot.fullmag.v1")]
+    FullmagV1 {
+        drive: PrescribedSotV1DriveIR,
+        xi_dl: f64,
+        xi_fl: f64,
+        free_layer_thickness_m: f64,
+    },
+    #[serde(rename = "prescribed_sot.legacy_fullmag.v0")]
+    LegacyFullmagV0 {
+        drive: PrescribedSotLegacyDriveIR,
+        raw_spin_polarization: [f64; 3],
+        xi_dl: f64,
+        xi_fl: f64,
+        free_layer_thickness_m: f64,
+        compatibility_origin: PrescribedSotCompatibilityOriginIR,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrescribedSotV1DriveIR {
+    SignedScalar {
+        #[serde(rename = "current_density_Apm2")]
+        current_density_apm2: f64,
+        sigma_hat: [f64; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<TimeEnvelopeIR>,
+    },
+    VectorCurrentSource {
+        current_source_id: String,
+        drive_direction: [f64; 3],
+        interface_normal: [f64; 3],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrescribedSotLegacyDriveIR {
+    LegacyScalarMagnitude {
+        #[serde(rename = "raw_charge_current_density_Apm2")]
+        raw_charge_current_density_apm2: f64,
+    },
+    LegacyCurrentSourceNorm {
+        current_source_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PrescribedSotCompatibilityOriginIR {
+    pub source_ir_version: String,
+    pub authored_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

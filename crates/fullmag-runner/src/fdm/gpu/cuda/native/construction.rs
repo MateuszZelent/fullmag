@@ -284,6 +284,7 @@ impl NativeFdmBackend {
     /// Create a new backend from an FDM execution plan.
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
         validate_single_grid_budget(plan)?;
+        let sot_formula = super::ffi_prescribed_sot_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
@@ -342,6 +343,11 @@ impl NativeFdmBackend {
         let active_mask_flat: Option<Vec<u8>> = plan.active_mask.as_ref().map(|mask| {
             mask.iter()
                 .map(|is_active| if *is_active { 1u8 } else { 0u8 })
+                .collect()
+        });
+        let sot_active_mask_flat: Option<Vec<u8>> = plan.sot_active_mask.as_ref().map(|mask| {
+            mask.iter()
+                .map(|is_target| if *is_target { 1u8 } else { 0u8 })
                 .collect()
         });
         let region_mask_flat = if plan.region_mask.is_empty() {
@@ -465,11 +471,18 @@ impl NativeFdmBackend {
             } else {
                 0
             },
+            sot_formula,
             sot_je: plan.sot_current_density.unwrap_or(0.0),
             sot_xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
             sot_xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
             sot_sigma: plan.sot_sigma.unwrap_or([0.0, 0.0, 1.0]),
             sot_thickness: plan.sot_thickness.unwrap_or(1.0e-9),
+            sot_active_mask: sot_active_mask_flat
+                .as_ref()
+                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+            sot_active_mask_len: sot_active_mask_flat
+                .as_ref()
+                .map_or(0, |mask| mask.len() as u64),
 
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),

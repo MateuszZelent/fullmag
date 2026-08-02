@@ -25,7 +25,12 @@ pub(crate) fn record_due_fields(
             step,
             time,
             solver_dt,
-            values: select_state_observable_field(observables, &name, false)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(observables, &name, false)?),
         })?;
     }
 

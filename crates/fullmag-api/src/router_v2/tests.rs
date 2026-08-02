@@ -148,9 +148,13 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             material_parameter_fields: Vec::new(),
         }],
         mesh_interfaces: Vec::new(),
-        current_modules: Vec::new(),
         field_drives: Vec::new(),
         planar_monitors: Vec::new(),
+        current_modules: Vec::new(),
+        current_transports: Vec::new(),
+        spin_transports: Vec::new(),
+        spin_torques: Vec::new(),
+        oersted_terms: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -699,6 +703,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         session,
         run: None,
         live_state: None,
+        coupled_checkpoint: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -845,6 +850,149 @@ fn assert_bounded_preparation_value(actual: &serde_json::Value, source: &str, ma
     );
 }
 
+#[cfg(feature = "fem-gpu")]
+fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMeshPayload) {
+    use fullmag_ir::*;
+
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = BackendTarget::Fem;
+    problem.geometry_assets = Some(GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(MeshIR {
+                mesh_name: "transport_tet".into(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                boundary_markers: vec![1, 1, 1, 1],
+                periodic_boundary_pairs: vec![],
+                periodic_node_pairs: vec![],
+                per_domain_quality: HashMap::new(),
+            }),
+            region_markers: vec![FemDomainRegionMarkerIR {
+                geometry_name: "strip".into(),
+                marker: 1,
+            }],
+            object_region_markers: vec![],
+            build_report: None,
+        }),
+    });
+
+    let region = RegionRefIR {
+        object_id: "strip".into(),
+        region_id: None,
+    };
+    let linear = LinearTransportSolverPolicyIR {
+        relative_tolerance: 1.0e-10,
+        absolute_tolerance: 0.0,
+        max_iterations: 500,
+    };
+    let charge_definition = ChargeTransportDefinitionIR {
+        domain: vec![region.clone()],
+        materials: vec![ChargeTransportMaterialAssignmentIR {
+            region: region.clone(),
+            material: ChargeTransportMaterialIR {
+                sigma_spm: 4.0,
+                sigma_parallel_spm: None,
+                sigma_perpendicular_spm: None,
+                sigma_ahe_spm: None,
+            },
+        }],
+        boundaries: vec![],
+        gauge: ChargePotentialGaugeIR::ZeroMean,
+        solver: ChargeSolverPolicyIR {
+            engine: "cg".into(),
+            linear: linear.clone(),
+            physical_residual_version: "charge_balance_integrated_l2.v1".into(),
+            operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
+        },
+    };
+    problem.current_modules = vec![CurrentModuleIR::CurrentTransport {
+        name: "charge".into(),
+        model: CurrentTransportModelIR::OhmicPoisson,
+        current_density: None,
+        solve_region: None,
+        conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        definition: Some(charge_definition),
+    }];
+    problem.spin_transport_modules = vec![SpinTransportModuleIR {
+        schema_version: "spin_transport.v1".into(),
+        id: "spin".into(),
+        current_source_id: "charge".into(),
+        mode: SpinTransportModeIR::Steady,
+        domain: vec![region.clone()],
+        materials: vec![SpinTransportMaterialAssignmentIR {
+            region,
+            material: SpinTransportMaterialIR {
+                sigma_s_spm: 5.0,
+                polarization_p: 0.2,
+                theta_sh: 0.1,
+                lambda_sf_m: 0.5,
+                lambda_j_m: ReactionLengthIR::Enabled(0.4),
+                lambda_phi_m: ReactionLengthIR::Enabled(0.6),
+                spin_capacitance_as_per_v_m3: None,
+                capacitance_formula_version: None,
+                density_of_states_per_spin_j_inv_m3: None,
+            },
+        }],
+        interfaces: vec![],
+        boundaries: vec![],
+        solver: SpinSolverPolicyIR {
+            engine: "gmres".into(),
+            linear,
+            physical_residual_version: "transport_balance_integrated_l2.v1".into(),
+            operator_version: "fem_charge_spin_conforming_h1_p1.transparent.v1".into(),
+            default_external_boundary: "spin_insulating".into(),
+            reciprocal_nonlinear: None,
+        },
+        requested_execution: RequestedTransportExecutionIR {
+            discretization: BackendTarget::Fem,
+            device: ExecutionDevice::Cpu,
+            precision: ExecutionPrecision::Double,
+            execution_mode: ExecutionMode::Strict,
+        },
+        constitutive_version: "transport_constitutive.one_way.fullmag.v1".into(),
+    }];
+    match &mut problem.study {
+        StudyIR::TimeEvolution { sampling, .. }
+        | StudyIR::Relaxation { sampling, .. }
+        | StudyIR::Eigenmodes { sampling, .. }
+        | StudyIR::FrequencyResponse { sampling, .. }
+        | StudyIR::Hysteresis { sampling, .. } => {
+            sampling.outputs = vec![
+                OutputIR::Field {
+                    name: "V_electric".into(),
+                    every_seconds: 1.0,
+                },
+                OutputIR::Field {
+                    name: "J_charge".into(),
+                    every_seconds: 1.0,
+                },
+                OutputIR::Field {
+                    name: "spin_current_tensor".into(),
+                    every_seconds: 1.0,
+                },
+            ];
+        }
+    }
+
+    let plan = fullmag_plan::plan(&problem).expect("authored public FEM M1 problem should plan");
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        panic!("expected FEM plan")
+    };
+    assert_eq!(fem.spin_transport_plans.len(), 1);
+    assert_eq!(fem.current_modules.len(), 1);
+    (problem, FemMeshPayload::from(fem))
+}
 async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.stage_execution = Some(StageExecutionState {
@@ -1409,6 +1557,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         session,
         run: None,
         live_state: None,
+        coupled_checkpoint: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -1566,6 +1715,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 finished: false,
             },
         }),
+        coupled_checkpoint: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -2047,6 +2197,30 @@ async fn status_returns_200_with_live_session() {
     assert_eq!(json["resources"]["stages_revision"], 0);
     assert!(json["resources"]["scene_revision"].is_null());
     assert!(json["capabilities"].is_object());
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["contract_version"],
+        "transport-authoring-capabilities.v1"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m1_one_way_steady"]["authoring_allowed"],
+        true
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m2_reciprocal"]["status"],
+        "unsupported"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m3_transient"]["status"],
+        "unsupported"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["gpu"]["authoring_allowed"],
+        false
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["single_precision"]["authoring_allowed"],
+        false
+    );
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
 }
@@ -2354,9 +2528,13 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
     );
     assert_eq!(
         json["resources"]["topology_revision"].as_u64(),
-        json["domain"]["generation_id"]
-            .as_str()
-            .and_then(|value| value.parse::<u64>().ok())
+        Some(
+            json["domain"]["generation_id"]
+                .as_str()
+                .expect("domain generation id must use the decimal-string contract")
+                .parse::<u64>()
+                .expect("domain generation id must contain a u64"),
+        )
     );
 }
 
@@ -2581,7 +2759,7 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
             .headers()
             .get("content-range")
             .and_then(|value| value.to_str().ok()),
-        Some("bytes 0-3/244")
+        Some("bytes 0-3/264")
     );
     let body = body_bytes(response).await;
     assert_eq!(&body[..], b"FMMT");
@@ -2783,6 +2961,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -7131,6 +7310,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -7185,6 +7365,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -7238,6 +7419,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -7271,6 +7453,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -19677,10 +19860,144 @@ async fn session_import_commit_round_trips_exported_session() {
     let _ = fs::remove_dir_all(&repo_root);
 }
 
+fn complete_coupled_m3_checkpoint() -> serde_json::Value {
+    serde_json::json!({
+        "schema": "fullmag.fdm.coupled_m3_checkpoint.v1",
+        "problem_ir_abi": "fullmag.problem_ir.v1",
+        "scalar_layout": "f64",
+        "vector_layout": "aos_xyz",
+        "endianness": "little",
+        "formula_version": "transient_spin_balance.fullmag.v1",
+        "integrator_version": "coupled_imex_ark2.v1",
+        "integrator_implementation_revision": "imex_ars_232_step_doubling.fullmag.v1",
+        "identity": {
+            "requested_discretization": "fdm",
+            "requested_device": "auto",
+            "requested_precision": "double",
+            "requested_execution_mode": "strict",
+            "resolved_discretization": "fdm",
+            "resolved_device": "cpu",
+            "resolved_precision": "double",
+            "resolved_execution_mode": "strict",
+            "scene_revision": 1,
+            "plan_revision": 2,
+            "mesh_revision": 3,
+            "material_revision": 4,
+            "current_operator_revision": 5,
+            "spin_operator_revision": 6,
+            "oersted_operator_revision": 7,
+            "charge_cache_identity": "charge-cache:5",
+            "spin_cache_identity": "spin-cache:6",
+            "oersted_cache_identity": "oersted-cache:7",
+            "source_identity": "source:8"
+        },
+        "magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        "previous_magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        "time_s": 2.5e-9,
+        "previous_dt_s": 1.0e-13,
+        "accepted": {
+            "revision": 4,
+            "evaluated_time_s": 2.5e-9,
+            "refresh_count": 4,
+            "modules": [{
+                "module_id": "spin",
+                "current_source_id": "charge",
+                "potential_volts": [0.0, 0.1],
+                "current_density_apm2": [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                "spin_potential_volts": [[0.01, 0.0, 0.0], [0.02, 0.0, 0.0]],
+                "spin_current_tensor_apm2": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+                "interface_fluxes": [],
+                "transport_torque_per_s": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+                "oersted_field_apm": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+                "telemetry": {
+                    "charge_iterations": 1,
+                    "charge_residual_l2": 0.0,
+                    "charge_net_boundary_current_a": 0.0,
+                    "charge_max_abs_divergence_a_per_m3": 0.0,
+                    "spin_iterations": 1,
+                    "spin_initial_residual_l2": 0.0,
+                    "spin_final_residual_l2": 0.0,
+                    "spin_scaled_residual": 0.0,
+                    "spin_relative_balance_closure": 0.0,
+                    "convergence_reason": "converged",
+                    "preconditioner": "none"
+                },
+                "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
+                "charge_operator_version": "fv_charge_face_flux.v1",
+                "spin_operator_version": "fv_spin_upwind_v1",
+                "torque_formula_version": "drift_diffusion_absorbed_flux.v1",
+                "state_revision": 1,
+                "operator_revision": 0
+            }],
+            "combined_transport_torque_per_s": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            "combined_oersted_field_apm": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]
+        },
+        "transient_states": {
+            "spin": {
+                "spin_potential_v": [[0.01, 0.0, 0.0], [0.02, 0.0, 0.0]],
+                "previous_spin_potential_v": [[0.005, 0.0, 0.0], [0.01, 0.0, 0.0]],
+                "time_s": 2.5e-9,
+                "previous_dt_s": 1.0e-13,
+                "state_revision": 1
+            }
+        },
+        "next_revision": 5,
+        "refresh_count": 4,
+        "accepted_steps": 42,
+        "rejected_steps": 0,
+        "error_controller": {"next_dt_s": 1.0e-13, "last_normalized_error": 0.0},
+        "charge_nonlinear_history": {"spin": []},
+        "telemetry_cursor": 42,
+        "thermal_rng_algorithm": "counter_hash_box_muller.fullmag.v1",
+        "thermal_seed": 17,
+        "thermal_counter": 42
+    })
+}
+
+fn append_coupled_m3_checkpoint_module(checkpoint: &mut serde_json::Value, module_id: &str) {
+    let mut module = checkpoint["accepted"]["modules"][0].clone();
+    module["module_id"] = serde_json::json!(module_id);
+    module["current_source_id"] = serde_json::json!(format!("charge-{module_id}"));
+    checkpoint["accepted"]["modules"]
+        .as_array_mut()
+        .unwrap()
+        .push(module);
+    let transient = checkpoint["transient_states"]["spin"].clone();
+    checkpoint["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .insert(module_id.to_string(), transient);
+    checkpoint["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .insert(module_id.to_string(), serde_json::json!([]));
+    refresh_coupled_m3_checkpoint_aggregates(checkpoint);
+}
+
+fn refresh_coupled_m3_checkpoint_aggregates(checkpoint: &mut serde_json::Value) {
+    let module_count = checkpoint["accepted"]["modules"]
+        .as_array()
+        .unwrap()
+        .len() as f64;
+    let vector_count = checkpoint["magnetization"].as_array().unwrap().len();
+    checkpoint["accepted"]["combined_transport_torque_per_s"] =
+        serde_json::json!(vec![[0.0, module_count, 0.0]; vector_count]);
+    checkpoint["accepted"]["combined_oersted_field_apm"] =
+        serde_json::json!(vec![[0.0, 0.0, module_count]; vector_count]);
+}
+
 #[tokio::test]
 async fn session_checkpoint_create_captures_live_magnetization() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     set_running_stage_execution(&state, 0).await;
+    let coupled_checkpoint = complete_coupled_m3_checkpoint();
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .coupled_checkpoint = Some(coupled_checkpoint.clone());
 
     let response = app
         .clone()
@@ -19762,6 +20079,15 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let detail = body_json(detail_response).await;
     assert_eq!(detail["checkpoint_id"], "cp-000042");
     assert_eq!(detail["vector_count"], 2);
+    let mut active_after_capture = coupled_checkpoint.clone();
+    active_after_capture["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .coupled_checkpoint = Some(active_after_capture);
 
     let restore_response = app
         .clone()
@@ -19789,6 +20115,17 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(restored["field_revision"], 2);
     assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
     assert_eq!(restored["checkpoint"]["command_id"], "cmd-stage-1");
+    assert_eq!(
+        state
+            .current_live_state
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .coupled_checkpoint
+            .as_ref(),
+        Some(&coupled_checkpoint)
+    );
 
     let stage_after_restore_response = app
         .clone()
@@ -19845,6 +20182,375 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let listed = body_json(list_response).await;
     assert_eq!(listed["checkpoints"][0]["checkpoint_id"], "cp-000042");
 
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"profile": "resume"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .coupled_checkpoint =
+        Some(serde_json::json!({"schema": "fullmag.fdm.coupled_m3_checkpoint.v1"}));
+
+    let restore = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restore.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(restore).await;
+    assert!(body
+        .to_string()
+        .contains("legacy magnetization-only checkpoint"));
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let mut expected = complete_coupled_m3_checkpoint();
+    append_coupled_m3_checkpoint_module(&mut expected, "spin-b");
+    let mut invalid = Vec::<(&str, serde_json::Value)>::new();
+
+    let mut subset = expected.clone();
+    subset["accepted"]["modules"].as_array_mut().unwrap().pop();
+    subset["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b");
+    subset["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b");
+    refresh_coupled_m3_checkpoint_aggregates(&mut subset);
+    invalid.push(("module identity subset", subset));
+
+    let mut superset = expected.clone();
+    append_coupled_m3_checkpoint_module(&mut superset, "spin-c");
+    invalid.push(("module identity superset", superset));
+
+    let mut unknown = expected.clone();
+    unknown["accepted"]["modules"][1]["module_id"] = serde_json::json!("spin-unknown");
+    let transient = unknown["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b")
+        .unwrap();
+    unknown["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .insert("spin-unknown".into(), transient);
+    let history = unknown["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b")
+        .unwrap();
+    unknown["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .insert("spin-unknown".into(), history);
+    invalid.push(("unknown module identity", unknown));
+
+    for (field, value) in [
+        ("requested_discretization", serde_json::json!("fem")),
+        ("requested_device", serde_json::json!("gpu")),
+        ("requested_precision", serde_json::json!("single")),
+        ("requested_execution_mode", serde_json::json!("extended")),
+        ("resolved_discretization", serde_json::json!("fem")),
+        ("resolved_device", serde_json::json!("gpu")),
+        ("resolved_precision", serde_json::json!("single")),
+        ("resolved_execution_mode", serde_json::json!("extended")),
+        ("charge_cache_identity", serde_json::json!("charge-cache:other")),
+        ("spin_cache_identity", serde_json::json!("spin-cache:other")),
+        ("oersted_cache_identity", serde_json::json!("oersted-cache:other")),
+        ("source_identity", serde_json::json!("source:other")),
+    ] {
+        let mut candidate = expected.clone();
+        candidate["identity"][field] = value;
+        invalid.push((field, candidate));
+    }
+    for field in [
+        "scene_revision",
+        "plan_revision",
+        "mesh_revision",
+        "material_revision",
+        "current_operator_revision",
+        "spin_operator_revision",
+        "oersted_operator_revision",
+    ] {
+        let mut candidate = expected.clone();
+        candidate["identity"][field] = serde_json::json!(99);
+        invalid.push((field, candidate));
+    }
+    for (label, path) in [
+        ("magnetization", vec!["magnetization"]),
+        ("previous_magnetization", vec!["previous_magnetization"]),
+        (
+            "accepted potential",
+            vec!["accepted", "modules", "0", "potential_volts"],
+        ),
+        (
+            "accepted current",
+            vec!["accepted", "modules", "0", "current_density_apm2"],
+        ),
+        (
+            "accepted spin potential",
+            vec!["accepted", "modules", "0", "spin_potential_volts"],
+        ),
+        (
+            "accepted spin tensor",
+            vec!["accepted", "modules", "0", "spin_current_tensor_apm2"],
+        ),
+        (
+            "accepted torque",
+            vec!["accepted", "modules", "0", "transport_torque_per_s"],
+        ),
+        (
+            "accepted Oersted",
+            vec!["accepted", "modules", "0", "oersted_field_apm"],
+        ),
+        (
+            "combined torque",
+            vec!["accepted", "combined_transport_torque_per_s"],
+        ),
+        (
+            "combined Oersted",
+            vec!["accepted", "combined_oersted_field_apm"],
+        ),
+        (
+            "transient spin potential",
+            vec!["transient_states", "spin", "spin_potential_v"],
+        ),
+        (
+            "transient previous spin potential",
+            vec!["transient_states", "spin", "previous_spin_potential_v"],
+        ),
+    ] {
+        let mut candidate = expected.clone();
+        let mut target = &mut candidate;
+        for segment in &path[..path.len() - 1] {
+            target = if let Ok(index) = segment.parse::<usize>() {
+                &mut target[index]
+            } else {
+                &mut target[*segment]
+            };
+        }
+        target[path[path.len() - 1]] = serde_json::json!([]);
+        invalid.push((label, candidate));
+    }
+    for (label, mutate) in [
+        ("transient module keys", "transient_states"),
+        ("history module keys", "charge_nonlinear_history"),
+    ] {
+        let mut candidate = expected.clone();
+        candidate[mutate] = serde_json::json!({"other": []});
+        invalid.push((label, candidate));
+    }
+    let mut missing_accepted_module = expected.clone();
+    missing_accepted_module["accepted"]["modules"] = serde_json::json!([]);
+    invalid.push(("accepted module keys", missing_accepted_module));
+    let mut inconsistent_time = expected.clone();
+    inconsistent_time["time_s"] = serde_json::json!(3.0e-9);
+    invalid.push(("checkpoint time", inconsistent_time));
+    let mut inconsistent_magnetization = expected.clone();
+    inconsistent_magnetization["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
+    invalid.push(("common-state magnetization", inconsistent_magnetization));
+    let mut revision_overflow = expected.clone();
+    revision_overflow["accepted"]["revision"] = serde_json::json!(u64::MAX);
+    revision_overflow["accepted"]["refresh_count"] = serde_json::json!(u64::MAX);
+    revision_overflow["refresh_count"] = serde_json::json!(u64::MAX);
+    invalid.push(("revision overflow", revision_overflow));
+    for (label, path, value) in [
+        ("accepted revision", vec!["accepted", "revision"], serde_json::json!(3)),
+        ("next revision", vec!["next_revision"], serde_json::json!(6)),
+        (
+            "accepted refresh",
+            vec!["accepted", "refresh_count"],
+            serde_json::json!(99),
+        ),
+        ("accepted steps", vec!["accepted_steps"], serde_json::json!(0)),
+        ("telemetry cursor", vec!["telemetry_cursor"], serde_json::json!(0)),
+        ("thermal counter", vec!["thermal_counter"], serde_json::json!(99)),
+        (
+            "controller timestep",
+            vec!["error_controller", "next_dt_s"],
+            serde_json::json!(0.0),
+        ),
+        (
+            "controller error",
+            vec!["error_controller", "last_normalized_error"],
+            serde_json::json!(-1.0),
+        ),
+        (
+            "module revision",
+            vec!["accepted", "modules", "0", "state_revision"],
+            serde_json::json!(99),
+        ),
+        (
+            "module telemetry",
+            vec!["accepted", "modules", "0", "telemetry"],
+            serde_json::json!([]),
+        ),
+    ] {
+        let mut candidate = expected.clone();
+        let mut target = &mut candidate;
+        for segment in &path[..path.len() - 1] {
+            target = if let Ok(index) = segment.parse::<usize>() {
+                &mut target[index]
+            } else {
+                &mut target[*segment]
+            };
+        }
+        let last = path[path.len() - 1];
+        if let Ok(index) = last.parse::<usize>() {
+            target[index] = value;
+        } else {
+            target[last] = value;
+        }
+        invalid.push((label, candidate));
+    }
+    for (label, path, value) in [
+        (
+            "accepted spin differs from transient state",
+            vec!["accepted", "modules", "0", "spin_potential_volts", "0", "0"],
+            serde_json::json!(9.0),
+        ),
+        (
+            "operator revision differs from active contract",
+            vec!["accepted", "modules", "0", "operator_revision"],
+            serde_json::json!(1),
+        ),
+        (
+            "combined torque differs from module sum",
+            vec!["accepted", "combined_transport_torque_per_s", "0", "1"],
+            serde_json::json!(99.0),
+        ),
+        (
+            "combined Oersted differs from module sum",
+            vec!["accepted", "combined_oersted_field_apm", "0", "2"],
+            serde_json::json!(99.0),
+        ),
+        (
+            "empty torque formula version",
+            vec!["accepted", "modules", "0", "torque_formula_version"],
+            serde_json::json!("   "),
+        ),
+    ] {
+        let mut candidate = expected.clone();
+        let mut target = &mut candidate;
+        for segment in &path[..path.len() - 1] {
+            target = if let Ok(index) = segment.parse::<usize>() {
+                &mut target[index]
+            } else {
+                &mut target[*segment]
+            };
+        }
+        let last = path[path.len() - 1];
+        if let Ok(index) = last.parse::<usize>() {
+            target[index] = value;
+        } else {
+            target[last] = value;
+        }
+        invalid.push((label, candidate));
+    }
+
+    for (label, candidate) in invalid {
+        let (before_m, before_step, before_time, before_version) = {
+            let mut guard = state.current_live_state.write().await;
+            let snapshot = guard.as_mut().unwrap();
+            snapshot.coupled_checkpoint = Some(candidate);
+            let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+            (
+                latest.magnetization.clone(),
+                latest.step,
+                latest.time,
+                snapshot.state_version,
+            )
+        };
+        let create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/persistence/checkpoints")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({"profile": "resume"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if create.status() == StatusCode::BAD_REQUEST {
+            let mut guard = state.current_live_state.write().await;
+            let snapshot = guard.as_mut().unwrap();
+            let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+            assert_eq!(latest.magnetization, before_m, "capture {label}");
+            assert_eq!(latest.step, before_step, "capture {label}");
+            assert_eq!(latest.time, before_time, "capture {label}");
+            assert_eq!(snapshot.state_version, before_version, "capture {label}");
+            snapshot.coupled_checkpoint = Some(expected.clone());
+            continue;
+        }
+        assert_eq!(create.status(), StatusCode::OK, "capture {label}");
+        let checkpoint_id = body_json(create).await["checkpoint"]["checkpoint_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        {
+            let mut guard = state.current_live_state.write().await;
+            let snapshot = guard.as_mut().unwrap();
+            snapshot.coupled_checkpoint = Some(expected.clone());
+        }
+        let restore = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore"
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restore.status(), StatusCode::BAD_REQUEST, "restore {label}");
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+        assert_eq!(snapshot.coupled_checkpoint.as_ref(), Some(&expected), "{label}");
+        assert_eq!(latest.magnetization, before_m, "{label}");
+        assert_eq!(latest.step, before_step, "{label}");
+        assert_eq!(latest.time, before_time, "{label}");
+        assert_eq!(snapshot.state_version, before_version, "{label}");
+    }
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -25472,6 +26178,286 @@ async fn v2_material_scalar_quantity_is_available_as_field_vector() {
 }
 
 #[tokio::test]
+async fn v2_field_data_plane_reads_canonical_transport_field_artifacts() {
+    assert_v2_field_data_plane_reads_canonical_transport_field_artifacts().await;
+}
+
+#[tokio::test]
+async fn v2_field_data_plane_reads_transport_scalar_vector_and_tensor_snapshots() {
+    assert_v2_field_data_plane_reads_canonical_transport_field_artifacts().await;
+}
+
+async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-transport-fields-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    let fixtures = [
+        ("V_electric", 1usize, 41u64, vec![1.0, 0.0]),
+        ("J_charge", 3, 42, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        (
+            "spin_current_tensor",
+            9,
+            43,
+            (1..=18).map(f64::from).collect::<Vec<_>>(),
+        ),
+    ];
+    for (quantity, components, revision, values) in &fixtures {
+        let quantity_dir = artifact_dir.join("fields").join(quantity);
+        fs::create_dir_all(&quantity_dir).expect("transport field artifact directory");
+        fs::write(
+            quantity_dir.join("step_000000.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "observable": quantity,
+                "component_count": components,
+                "revision": revision,
+                "values": values,
+            }))
+            .expect("transport field artifact JSON"),
+        )
+        .expect("write transport field artifact");
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "V_electric": {"values": [900.0, 901.0]},
+            "J_charge": {"values": [900.0, 901.0, 902.0, 903.0, 904.0, 905.0]},
+            "spin_current_tensor": {"values": [900.0, 901.0, 902.0, 903.0, 904.0, 905.0, 906.0, 907.0, 908.0, 909.0, 910.0, 911.0, 912.0, 913.0, 914.0, 915.0, 916.0, 917.0]},
+        }))
+        .expect("stale in-memory transport fields");
+        for quantity in ["V_electric", "J_charge", "spin_current_tensor"] {
+            snapshot
+                .field_quantity_revisions
+                .insert(quantity.to_string(), 900);
+        }
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (quantity, components, revision, expected) in fixtures {
+        let expected_components = components.to_string();
+        let expected_revision = revision.to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{quantity}");
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-n-comp")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_components.as_str()),
+            "{quantity}"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-field-revision")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_revision.as_str()),
+            "{quantity}"
+        );
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("transport ETag")
+            .to_string();
+        let bytes = body_bytes(response).await;
+        assert_eq!(&bytes[..4], b"FMVP", "{quantity}");
+        assert_eq!(bytes.len(), 48 + expected.len() * 8, "{quantity}");
+        let decoded = decode_fmvp_payload_f64(&bytes);
+        assert_eq!(decoded, expected, "{quantity}");
+
+        let meta = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v2/sessions/current/data/fields/{quantity}/meta"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(meta.status(), StatusCode::OK, "{quantity}");
+        let meta = body_json(meta).await;
+        assert_eq!(meta["field_revision"], revision, "{quantity}");
+        assert_eq!(
+            meta["stats"]["mean"],
+            serde_json::json!(expected.iter().sum::<f64>() / expected.len() as f64),
+            "{quantity}"
+        );
+
+        let not_modified = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin"
+                    ))
+                    .header("if-none-match", etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            not_modified.status(),
+            StatusCode::NOT_MODIFIED,
+            "{quantity}"
+        );
+        assert!(body_bytes(not_modified).await.is_empty(), "{quantity}");
+    }
+    fs::remove_dir_all(artifact_dir).expect("remove transport field artifacts");
+}
+
+#[cfg(feature = "fem-gpu")]
+#[tokio::test]
+async fn public_fem_m1_run_is_decoded_by_v2_with_artifact_revisions() {
+    let (problem, fem_mesh) = public_m1_fem_run_fixture();
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-public-m1-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    unsafe {
+        std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+    }
+    let result = fullmag_runner::run_problem(&problem, 1.0e-13, &artifact_dir)
+        .expect("public authored FEM M1 run through planner and native runtime");
+    unsafe {
+        std::env::remove_var("FULLMAG_FEM_EXECUTION");
+    }
+    assert_eq!(result.status, fullmag_runner::RunStatus::Completed);
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+        snapshot.fem_mesh = Some(fem_mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (quantity, components) in [
+        ("V_electric", 1usize),
+        ("J_charge", 3usize),
+        ("spin_current_tensor", 9usize),
+    ] {
+        let expected_components = components.to_string();
+        let artifact: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                artifact_dir
+                    .join("fields")
+                    .join(quantity)
+                    .join("step_000000.json"),
+            )
+            .unwrap_or_else(|error| panic!("missing {quantity} artifact: {error}")),
+        )
+        .expect("canonical transport field artifact");
+        let expected = artifact["values"]
+            .as_array()
+            .expect("transport artifact values")
+            .iter()
+            .map(|value| value.as_f64().expect("finite transport artifact value"))
+            .collect::<Vec<_>>();
+        let expected_revision = artifact["revision"]
+            .as_u64()
+            .expect("transport artifact revision")
+            .to_string();
+        assert!(
+            artifact["provenance"]["transport_modules"]
+                .as_array()
+                .is_some_and(|modules| !modules.is_empty()),
+            "streamed {quantity} artifact must retain transport provenance"
+        );
+
+        let uri = format!("/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin");
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{quantity}");
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-n-comp")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_components.as_str()),
+            "{quantity}"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-field-revision")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_revision.as_str()),
+            "{quantity}"
+        );
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| panic!("missing non-empty ETag for {quantity}"))
+            .to_string();
+        let bytes = body_bytes(response).await;
+        assert_eq!(&bytes[..4], b"FMVP", "{quantity}");
+        let decoded = decode_fmvp_payload_f64(&bytes);
+        assert_eq!(decoded, expected, "{quantity}");
+
+        let repeated = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(repeated.status(), StatusCode::OK, "{quantity}");
+        assert_eq!(
+            repeated
+                .headers()
+                .get("etag")
+                .and_then(|value| value.to_str().ok()),
+            Some(etag.as_str()),
+            "{quantity} ETag must be stable"
+        );
+
+        let not_modified = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header("if-none-match", &etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            not_modified.status(),
+            StatusCode::NOT_MODIFIED,
+            "{quantity}"
+        );
+        assert!(body_bytes(not_modified).await.is_empty(), "{quantity}");
+    }
+    fs::remove_dir_all(artifact_dir).expect("remove public FEM M1 artifacts");
+}
+
+#[tokio::test]
 async fn python_waveguide_box_region_ms_override_changes_backend_mat_ms_mean() {
     let base_ir = export_problem_ir_from_python_script(
         "waveguide_box_base.py",
@@ -29183,6 +30169,783 @@ fn openapi_v2_has_no_public_v1_paths() {
         public_v1_paths.is_empty(),
         "OpenAPI v2 must not expose public v1 paths: {public_v1_paths:?}"
     );
+}
+
+#[tokio::test]
+async fn spin_authoring_current_transport_crud_is_revision_safe() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let initial_revision = sample_scene_document().revision;
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/current-transports")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "base_revision": initial_revision,
+                        "resource": {
+                            "kind": "current_transport",
+                            "name": "transport",
+                            "model": "prescribed_density",
+                            "current_density": [1.0e11, 0.0, 0.0],
+                            "solve_region": "body"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let committed = body_json(response).await;
+    assert_eq!(committed["resource"]["name"], "transport");
+    let committed_revision = committed["committed_scene"]["revision"].as_u64().unwrap();
+    assert_eq!(committed["scene_revision"], committed_revision);
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/current-transports")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(body_json(list).await["items"][0]["name"], "transport");
+
+    let stale = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/model/current-transports/transport")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "base_revision": initial_revision,
+                        "resource": {
+                            "kind": "current_transport",
+                            "name": "transport",
+                            "model": "prescribed_density",
+                            "current_density": [2.0e11, 0.0, 0.0],
+                            "solve_region": "body"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, committed_revision);
+    assert_eq!(
+        scene.current_transports[0].known().unwrap().current_density,
+        Some([1.0e11, 0.0, 0.0])
+    );
+}
+
+#[tokio::test]
+async fn deleting_referenced_current_transport_is_unprocessable_and_revision_safe() {
+    let state = test_app_state_with_live_session().await;
+    let initial_revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport", "name": "charge", "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0], "solve_region": "body"
+        }]))
+        .unwrap();
+        scene.spin_transports = serde_json::from_value(serde_json::json!([{
+            "schema_version": "spin_transport.v1", "id": "spin", "current_source_id": "charge",
+            "mode": "steady", "domain": [], "materials": [],
+            "solver": {"engine":"gmres","linear":{"relative_tolerance":1.0e-8,"absolute_tolerance":0.0,"max_iterations":10},"physical_residual_version":"transport_balance_integrated_l2.v1","operator_version":"fv_spin_upwind_v1","default_external_boundary":"spin_insulating"},
+            "requested_execution":{"discretization":"fdm","device":"cpu","precision":"double","execution_mode":"strict"},
+            "constitutive_version":"transport_constitutive.one_way.fullmag.v1"
+        }])).unwrap();
+        initial_revision = scene.revision;
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    } else {
+        panic!("live state missing");
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/v2/sessions/current/model/current-transports/charge")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"base_revision": initial_revision}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, initial_revision);
+    assert_eq!(scene.current_transports.len(), 1);
+}
+
+#[tokio::test]
+async fn current_transport_api_preserves_complete_ohmic_charge_contract() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+    let resource = serde_json::json!({
+        "kind": "current_transport",
+        "name": "charge",
+        "model": "ohmic_poisson",
+        "coupling": "one_way",
+        "domain": [{"object_id": "body"}],
+        "materials": [{
+            "region": {"object_id": "body"},
+            "material": {"sigma_Spm": 5.0e6}
+        }],
+        "boundaries": [
+            {
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            },
+            {
+                "kind": "normal_current_electrode",
+                "id": "right",
+                "surfaces": [{"object_id": "body", "surface_id": "right", "orientation": [1.0, 0.0, 0.0]}],
+                "outward_current_density_Apm2": 2.0e10
+            }
+        ],
+        "gauge": "dirichlet_reference",
+        "solver": {
+            "engine": "cg",
+            "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+            "physical_residual_version": "charge_balance_integrated_l2.v1",
+            "operator_version": "fv_charge_harmonic_v1"
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/current-transports")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": sample_scene_document().revision,
+                        "resource": resource
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let committed = body_json(response).await;
+    assert_eq!(committed["resource"], resource);
+    assert_eq!(
+        committed["committed_scene"]["current_transports"][0],
+        resource
+    );
+}
+
+#[tokio::test]
+async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+    let mut revision = sample_scene_document().revision;
+
+    for (uri, resource) in [
+        (
+            "/v2/sessions/current/model/current-transports",
+            serde_json::json!({
+                "kind": "current_transport",
+                "name": "transport",
+                "model": "prescribed_density",
+                "current_density": [1.0e11, 0.0, 0.0]
+            }),
+        ),
+        (
+            "/v2/sessions/current/model/spin-transports",
+            serde_json::json!({
+                "schema_version": "spin_transport.v1",
+                "id": "spin-transport",
+                "current_source_id": "transport",
+                "mode": "steady",
+                "domain": [{ "object_id": "body" }],
+                "materials": [{
+                    "region": { "object_id": "body" },
+                    "material": {
+                        "sigma_s_Spm": 5.0e6,
+                        "polarization_p": 0.6,
+                        "theta_sh": 0.1,
+                        "lambda_sf_m": 2.0e-9,
+                        "lambda_j_m": 1.0e-9,
+                        "lambda_phi_m": "disabled"
+                    }
+                }],
+                "solver": {
+                    "engine": "gmres",
+                    "linear": {
+                        "relative_tolerance": 1.0e-8,
+                        "absolute_tolerance": 0.0,
+                        "max_iterations": 500
+                    },
+                    "physical_residual_version": "spin_residual.fullmag.v1",
+                    "operator_version": "spin_operator.fullmag.v1",
+                    "default_external_boundary": "spin_insulating"
+                },
+                "requested_execution": {
+                    "discretization": "auto",
+                    "device": "auto",
+                    "precision": "double",
+                    "execution_mode": "strict"
+                },
+                "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+            }),
+        ),
+        (
+            "/v2/sessions/current/model/spin-torques",
+            serde_json::json!({
+                "kind": "zhang_li",
+                "id": "zhang-li",
+                "current_source": "transport",
+                "degree": 0.5,
+                "beta": 0.02
+            }),
+        ),
+        (
+            "/v2/sessions/current/model/oersted-fields",
+            serde_json::json!({
+                "kind": "oersted_field",
+                "id": "oersted",
+                "model": "from_current_solution",
+                "source": "transport"
+            }),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "base_revision": revision, "resource": resource })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "failed POST {uri}");
+        let committed = body_json(response).await;
+        revision = committed["committed_scene"]["revision"].as_u64().unwrap();
+        assert_eq!(
+            committed["scene_revision"], revision,
+            "missing top-level revision for {uri}"
+        );
+    }
+
+    let scene = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/scene")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scene.status(), StatusCode::OK);
+    let scene = body_json(scene).await;
+    assert_eq!(scene["revision"], revision);
+    assert_eq!(scene["current_transports"][0]["name"], "transport");
+    assert_eq!(scene["spin_transports"][0]["id"], "spin-transport");
+    assert_eq!(scene["spin_torques"][0]["id"], "zhang-li");
+    assert_eq!(scene["oersted_fields"][0]["id"], "oersted");
+}
+
+#[tokio::test]
+async fn direct_transport_crud_fails_closed_when_candidate_capability_is_unsupported() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let revision = sample_scene_document().revision;
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/current-transports")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": revision,
+                        "resource": {
+                            "kind": "current_transport",
+                            "name": "reciprocal",
+                            "model": "prescribed_density",
+                            "coupling": "bidirectional",
+                            "current_density": [1.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, revision);
+    assert!(scene.current_transports.is_empty());
+}
+
+#[tokio::test]
+async fn spin_transport_api_returns_opaque_variants_losslessly_as_read_only() {
+    let state = test_app_state_with_live_session().await;
+    let opaque = serde_json::json!({
+        "id": "future-spin",
+        "schema_version": "vendor.spin.v9",
+        "nested": { "tensor": [[1, 2], [3, 4]] }
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.spin_transports =
+            serde_json::from_value(serde_json::json!([opaque.clone()])).unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/spin-transports")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["items"][0], opaque);
+
+    let before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/model/spin-transports/future-spin")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": before.revision,
+                        "resource": opaque
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let after = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn spin_authoring_api_returns_opaque_variants_losslessly_as_read_only() {
+    let state = test_app_state_with_live_session().await;
+    let opaque = serde_json::json!({
+        "id": "future-torque",
+        "kind": "vendor_future_torque",
+        "nested": { "coefficients": [1, true, null] }
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.spin_torques = serde_json::from_value(serde_json::json!([opaque.clone()])).unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/spin-torques")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["items"][0], opaque);
+
+    let before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/model/spin-torques/future-torque")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"base_revision": before.revision, "resource": opaque})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let after = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+}
+
+#[test]
+fn openapi_exposes_typed_spin_authoring_resources() {
+    let value = crate::openapi_v2::openapi_json();
+    let paths = value["paths"].as_object().unwrap();
+    let schemas = value["components"]["schemas"].as_object().unwrap();
+    for path in [
+        "/v2/sessions/current/model/current-transports",
+        "/v2/sessions/current/model/spin-transports",
+        "/v2/sessions/current/model/spin-interfaces",
+        "/v2/sessions/current/model/transport-validation",
+        "/v2/sessions/current/model/spin-torques",
+        "/v2/sessions/current/model/oersted-fields",
+    ] {
+        assert!(paths.contains_key(path), "missing OpenAPI path {path}");
+    }
+    for schema in [
+        "SceneCurrentTransport",
+        "SceneChargeBoundary",
+        "SceneChargeSolverPolicy",
+        "SceneSpinTransport",
+        "SpinInterfaceListResource",
+        "TransportValidationRequest",
+        "TransportValidationResponse",
+        "KnownSceneSpinTransport",
+        "SceneSpinTorque",
+        "SceneOerstedField",
+        "SpinAuthoringDeleteRequest",
+    ] {
+        assert!(
+            schemas.contains_key(schema),
+            "missing OpenAPI schema {schema}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn transport_validation_is_clone_only_and_separates_semantics_from_capability() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let revision = sample_scene_document().revision;
+    let app = build_v2_router().with_state(state.clone());
+    let valid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": " charge ",
+                                "model": "prescribed_density",
+                                "current_density": [1.0e11, 0.0, 0.0],
+                                "solve_region": "body"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid.status(), StatusCode::OK);
+    let valid = body_json(valid).await;
+    assert_eq!(valid["semantic"]["valid"], true);
+    assert_eq!(valid["execution"]["status"], "semantic_only");
+    assert_eq!(valid["execution"]["authoring_allowed"], true);
+    assert_eq!(
+        valid["execution"]["requested_lane"],
+        serde_json::Value::Null
+    );
+    assert_eq!(valid["execution"]["resolved_lane"], serde_json::Value::Null);
+
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, revision);
+    assert!(scene.current_transports.is_empty());
+    drop(stored);
+
+    let unsupported = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": "reciprocal",
+                                "model": "prescribed_density",
+                                "coupling": "bidirectional",
+                                "current_density": [1.0e11, 0.0, 0.0]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), StatusCode::OK);
+    let unsupported = body_json(unsupported).await;
+    assert_eq!(unsupported["semantic"]["valid"], true);
+    assert_eq!(unsupported["execution"]["status"], "unsupported");
+    assert_eq!(unsupported["execution"]["authoring_allowed"], false);
+    assert!(unsupported["execution"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("M2"));
+
+    let unknown = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "spin_torque",
+                            "operation": "create",
+                            "resource": {"kind": "vendor_torque.v9", "id": "opaque", "keep": true}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::OK);
+    let unknown = body_json(unknown).await;
+    assert_eq!(unknown["execution"]["status"], "unsupported");
+    assert_eq!(unknown["execution"]["authoring_allowed"], false);
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": "invalid",
+                                "model": "ohmic_poisson",
+                                "domain": [],
+                                "materials": [],
+                                "boundaries": []
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::OK);
+    let invalid = body_json(invalid).await;
+    assert_eq!(invalid["semantic"]["valid"], false);
+    assert_eq!(invalid["execution"]["authoring_allowed"], false);
+    assert!(invalid["semantic"]["issues"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("requires non-empty domain"));
+
+    let stale = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision - 1,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": "stale",
+                                "model": "prescribed_density",
+                                "current_density": [1.0, 0.0, 0.0]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn spin_interface_projection_preserves_owner_and_unknown_payloads() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.spin_transports = serde_json::from_value(serde_json::json!([{
+            "schema_version": "spin_transport.v1",
+            "id": "spin",
+            "current_source_id": "charge",
+            "mode": "steady",
+            "domain": [],
+            "materials": [],
+            "interfaces": [
+                {
+                    "id": "nf",
+                    "kind": "transparent",
+                    "side_a": {"object_id": "body"},
+                    "side_b": {"object_id": "body"},
+                    "normal_a_to_b": [1.0, 0.0, 0.0]
+                },
+                {"id": "future", "kind": "vendor.interface.v2", "opaque": {"keep": true}}
+            ],
+            "solver": {
+                "engine": "gmres",
+                "linear": {"relative_tolerance": 1.0e-8, "absolute_tolerance": 0.0, "max_iterations": 10},
+                "physical_residual_version": "transport_balance_integrated_l2.v1",
+                "operator_version": "fv_spin_upwind_v1",
+                "default_external_boundary": "spin_insulating"
+            },
+            "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+            "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+        }])).unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/spin-interfaces")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["items"][0]["owner_spin_transport_id"], "spin");
+    assert_eq!(body["items"][0]["interface"]["id"], "nf");
+    assert_eq!(body["items"][1]["interface"]["opaque"]["keep"], true);
 }
 
 #[test]

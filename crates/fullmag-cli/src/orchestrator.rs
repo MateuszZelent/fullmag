@@ -1401,6 +1401,7 @@ fn apply_live_step_update_to_workspace_state(
     }
     let remainder = fullmag_runner::StepUpdate {
         stats: update.stats.clone(),
+        coupled_checkpoint: update.coupled_checkpoint.clone(),
         grid: update.grid,
         fem_mesh_generation_id: update.fem_mesh_generation_id.clone(),
         magnetization: None,
@@ -8528,6 +8529,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
                 let update = fullmag_runner::StepUpdate {
+                    coupled_checkpoint: None,
                     stats: offset_step_stats(std::slice::from_ref(stats), step_offset, time_offset)
                         .into_iter()
                         .next()
@@ -10104,6 +10106,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 for stats in &stage_result.steps {
                     let update = fullmag_runner::StepUpdate {
+                        coupled_checkpoint: None,
                         stats: offset_step_stats(
                             std::slice::from_ref(stats),
                             step_offset,
@@ -11064,6 +11067,7 @@ mod tests {
 
     fn test_step_update(step: u64) -> StepUpdate {
         StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats {
                 step,
                 ..StepStats::default()
@@ -12131,6 +12135,7 @@ mod tests {
         let mut per_object_scalars = std::collections::HashMap::new();
         per_object_scalars.insert("fem_frequency_response_progress".to_string(), progress);
         let update = fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats: fullmag_runner::StepStats {
                 step: 257,
                 max_h_eff: 1.0,
@@ -13000,6 +13005,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -13019,6 +13025,7 @@ mod tests {
             current_density: None,
             stt_degree: None,
             stt_beta: None,
+            spin_torque_contract: None,
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
@@ -13138,6 +13145,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -13157,6 +13165,7 @@ mod tests {
             current_density: None,
             stt_degree: None,
             stt_beta: None,
+            spin_torque_contract: None,
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
@@ -13187,6 +13196,7 @@ mod tests {
 
     fn tiny_problem_with_shared_domain_asset() -> ProblemIR {
         ProblemIR {
+            spin_transport_modules: Vec::new(),
             ir_version: "test-ir".to_string(),
             problem_meta: ProblemMeta {
                 name: "shared-domain-test".to_string(),

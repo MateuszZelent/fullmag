@@ -182,6 +182,32 @@ pub struct SpatialScalarFieldProvider {
     id: QuantityId,
 }
 
+/// A provider that reads a named tensor field from the eval context.
+pub struct TensorFieldProvider {
+    id: QuantityId,
+}
+
+impl TensorFieldProvider {
+    pub fn new(id: QuantityId) -> Self {
+        Self { id }
+    }
+}
+
+impl QuantityProvider for TensorFieldProvider {
+    fn quantity_id(&self) -> QuantityId {
+        self.id
+    }
+
+    fn evaluate(&self, ctx: &QuantityEvalContext<'_>) -> Option<QuantityValue> {
+        let data = ctx.named_fields.get_field(self.id.as_str())?;
+        Some(QuantityValue::TensorField(data.to_vec()))
+    }
+
+    fn is_available(&self, ctx: &QuantityEvalContext<'_>) -> bool {
+        ctx.named_fields.get_field(self.id.as_str()).is_some()
+    }
+}
+
 impl SpatialScalarFieldProvider {
     pub fn new(id: QuantityId) -> Self {
         Self { id }
@@ -213,9 +239,30 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Vector fields
     for id in [
-        M, HEx, HDemag, HExt, HAnt, HDrive, HEff, Torque, HAni, HDmi, HMel, U, Eps, Sigma,
-        HAniCubic, HDmiBulk, HOe, HTherm, ModeReal, ModeImag, // Second wave (QB-17)
-        DmDt, TorqueStt, TorqueSot,
+        M,
+        HEx,
+        HDemag,
+        HExt,
+        HAnt,
+        HEff,
+        Torque,
+        HAni,
+        HDmi,
+        HMel,
+        U,
+        Eps,
+        Sigma,
+        HAniCubic,
+        HDmiBulk,
+        HOe,
+        HTherm,
+        ModeReal,
+        ModeImag, // Second wave (QB-17)
+        DmDt,
+        JCharge,
+        SpinPotential,
+        TorqueStt,
+        TorqueSot,
     ] {
         registry.register(Box::new(VectorFieldProvider::new(id)));
     }
@@ -236,11 +283,14 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         MatMs,
         MatAex,
         MatAlpha,
+        VElectric,
         MatDind,
         MatDbulk,
     ] {
         registry.register(Box::new(SpatialScalarFieldProvider::new(id)));
     }
+
+    registry.register(Box::new(TensorFieldProvider::new(SpinCurrentTensor)));
 
     // Global scalars (with their metric keys from the catalog)
     let scalars: &[(QuantityId, &str)] = &[

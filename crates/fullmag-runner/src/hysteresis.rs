@@ -818,6 +818,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             )?;
 
             (*on_step)(StepUpdate {
+                coupled_checkpoint: None,
                 stats: StepStats {
                     step: global_step_count,
                     mx: m_avg[0],
@@ -3166,6 +3167,7 @@ fn hysteresis_progress_update(
     stats: Option<&StepStats>,
 ) -> StepUpdate {
     StepUpdate {
+        coupled_checkpoint: None,
         stats: stats.cloned().unwrap_or_default(),
         grid: hysteresis_progress_grid(backend_plan, magnetization),
         fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -6100,6 +6102,7 @@ mod tests {
             retry_max_attempts: None,
         };
         let update = StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats {
                 step: 42,
                 ..StepStats::default()
@@ -6310,6 +6313,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
@@ -6334,6 +6338,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -6653,7 +6658,7 @@ mod tests {
                     method: "llg_overdamped".to_string(),
                     alpha: 1.0,
                     torque_tolerance: 1.0e-3,
-                    max_steps: 1,
+                    max_steps: 4,
                     applies_to: None,
                     stop_criteria: None,
                     timestep_s: None,

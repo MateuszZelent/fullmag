@@ -12,19 +12,64 @@ use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
 use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
 use crate::{
-    EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, RhsEvaluation,
-    SlonczewskiSttConfig, SotConfig, Vector3, VectorFieldSoA, ZhangLiSttConfig, MU0,
+    EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig,
+    RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula, Vector3,
+    VectorFieldSoA,
+    ZhangLiSttConfig, MU0,
 };
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-fn gilbert_slonczewski_scales(beta_stt: f64, epsilon_prime: f64, alpha: f64) -> (f64, f64) {
+fn slonczewski_prefactor(
+    formula: SlonczewskiFormula,
+    current_sign: f64,
+    current_density_magnitude: f64,
+    gamma0: f64,
+    saturation_magnetisation: f64,
+    thickness: f64,
+) -> f64 {
+    const HBAR: f64 = 1.054571817e-34;
+    const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+    const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
+    const MU0_CONST: f64 = 1.2566370614359173e-6;
+    let charge = match formula {
+        SlonczewskiFormula::FullmagV2 | SlonczewskiFormula::FullmagV1 => EXACT_E_CHARGE,
+        SlonczewskiFormula::LegacyFullmagV0 => LEGACY_E_CHARGE,
+    };
+    let omega_denominator_factor = match formula {
+        SlonczewskiFormula::FullmagV2 => 1.0,
+        SlonczewskiFormula::FullmagV1 | SlonczewskiFormula::LegacyFullmagV0 => 2.0,
+    };
+    current_sign * (current_density_magnitude * HBAR * gamma0)
+        / (omega_denominator_factor
+            * charge
+            * MU0_CONST
+            * saturation_magnetisation
+            * thickness)
+}
+
+fn gilbert_slonczewski_scales(
+    formula: SlonczewskiFormula,
+    omega_j: f64,
+    epsilon: f64,
+    epsilon_prime: f64,
+    alpha: f64,
+) -> (f64, f64) {
     let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
-    (
-        beta_stt * (1.0 + alpha * epsilon_prime) * inv_gilbert,
-        beta_stt * (epsilon_prime - alpha) * inv_gilbert,
-    )
+    match formula {
+        SlonczewskiFormula::FullmagV2 | SlonczewskiFormula::FullmagV1 => (
+            omega_j * (epsilon + alpha * epsilon_prime) * inv_gilbert,
+            omega_j * (epsilon_prime - alpha * epsilon) * inv_gilbert,
+        ),
+        SlonczewskiFormula::LegacyFullmagV0 => {
+            let beta_stt = omega_j * epsilon;
+            (
+                beta_stt * (1.0 + alpha * epsilon_prime) * inv_gilbert,
+                beta_stt * (epsilon_prime - alpha) * inv_gilbert,
+            )
+        }
+    }
 }
 
 fn gilbert_zhang_li_scales(beta: f64, alpha: f64) -> (f64, f64) {
@@ -58,20 +103,76 @@ fn anisotropy_energy_density_for_magnetization(
     energy_density
 }
 
+fn oersted_envelope_at_time(cfg: &OerstedCylinderConfig, time_seconds: f64) -> f64 {
+    match cfg.time_dep_kind {
+        0 => 1.0,
+        1 => {
+            (2.0 * std::f64::consts::PI * cfg.time_dep_freq * time_seconds + cfg.time_dep_phase)
+                .sin()
+                + cfg.time_dep_offset
+        }
+        2 => {
+            if time_seconds >= cfg.time_dep_t_on && time_seconds < cfg.time_dep_t_off {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn prescribed_sot_scales(
+    cfg: &SotConfig,
+    saturation_magnetisation: f64,
+    gamma0: f64,
+    alpha: f64,
+) -> (f64, f64) {
+    const HBAR: f64 = 1.054571817e-34;
+    const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+    const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
+    let envelope_multiplier = match cfg.envelope.as_ref() {
+        None => 1.0,
+        Some(fullmag_ir::TimeEnvelopeIR::Constant { value }) => *value,
+        Some(_) => unreachable!("non-constant SOT envelopes must fail construction"),
+    };
+    let current_density = cfg.current_density * envelope_multiplier;
+
+    match cfg.formula {
+        SotFormula::FullmagV1 => {
+            let gamma_e = gamma0 / MU0;
+            let omega_base = gamma_e * HBAR * current_density
+                / (2.0 * EXACT_E_CHARGE * saturation_magnetisation * cfg.thickness.max(1e-30));
+            let omega_dl = omega_base * cfg.xi_dl;
+            let omega_fl = omega_base * cfg.xi_fl;
+            let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+            (
+                (omega_dl - alpha * omega_fl) * inv_gilbert,
+                (omega_fl + alpha * omega_dl) * inv_gilbert,
+            )
+        }
+        SotFormula::LegacyFullmagV0 => {
+            let amplitude = current_density.abs() * HBAR
+                / (2.0
+                    * LEGACY_E_CHARGE
+                    * MU0
+                    * saturation_magnetisation
+                    * cfg.thickness.max(1e-30));
+            (amplitude * cfg.xi_dl, amplitude * cfg.xi_fl)
+        }
+    }
+}
+
 impl ExchangeLlgProblem {
     // ===================================================================
     // Observables
     // ===================================================================
 
-    pub(crate) fn observe_vectors(&self, magnetization: &[Vector3]) -> EffectiveFieldObservables {
-        let mut ws = self.create_workspace();
-        self.observe_vectors_ws(magnetization, &mut ws)
-    }
-
-    pub(crate) fn observe_vectors_ws(
+    pub(crate) fn observe_vectors_ws_at_time(
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
+        time_seconds: f64,
     ) -> EffectiveFieldObservables {
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -98,7 +199,14 @@ impl ExchangeLlgProblem {
         for (i, h) in effective_field.iter_mut().enumerate() {
             *h = add(add(*h, ani_field[i]), dmi_field[i]);
         }
-        self.oersted_field_add_into(&mut effective_field);
+        let mut cylinder_oersted_field = zero_vectors(self.grid.cell_count());
+        self.oersted_field_add_into_at_time(&mut cylinder_oersted_field, time_seconds);
+        for (effective, oersted) in effective_field
+            .iter_mut()
+            .zip(cylinder_oersted_field.iter())
+        {
+            *effective = add(*effective, *oersted);
+        }
         let rhs = {
             let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
             #[cfg(feature = "parallel")]
@@ -124,9 +232,16 @@ impl ExchangeLlgProblem {
         } else {
             0.0
         };
-        let external_energy_joules = if self.has_external_zeeman_source() {
-            let external_zeeman_field = self.external_zeeman_field_vectors();
-            self.external_energy_from_fields(magnetization, &external_zeeman_field)
+        let external_energy_joules = if self.terms.external_field.is_some()
+            || self.terms.per_node_field.is_some()
+            || self.terms.oersted_cylinder.is_some()
+        {
+            let combined_external = external_field
+                .iter()
+                .zip(cylinder_oersted_field.iter())
+                .map(|(external, oersted)| add(*external, *oersted))
+                .collect::<Vec<_>>();
+            self.external_energy_from_fields(magnetization, &combined_external)
         } else {
             0.0
         };
@@ -1292,16 +1407,22 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn oersted_field_add_into_soa(&self, h_eff: &mut VectorFieldSoA) {
+        self.oersted_field_add_into_soa_at_time(h_eff, 0.0);
+    }
+
+    pub(crate) fn oersted_field_add_into_soa_at_time(
+        &self,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
+    ) {
         let oe = match self.terms.oersted_cylinder {
             Some(ref cfg) => cfg,
             None => return,
         };
 
-        let envelope = match oe.time_dep_kind {
-            0 => 1.0,
-            _ => 1.0,
-        };
+        let envelope = oersted_envelope_at_time(oe, time_seconds);
 
         let current = oe.current * envelope;
         if current == 0.0 {
@@ -1413,21 +1534,22 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut VectorFieldSoA,
     ) {
-        self.effective_field_into_soa_fft_backend(magnetization, ws, h_eff);
-        for drive in self
-            .regional_field_drives
-            .iter()
-            .filter(|drive| drive.enabled)
-        {
-            let multiplier = drive.multiplier_at(evaluation_time_s);
-            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
-                if self.is_active(index) {
-                    h_eff.x[index] += multiplier * basis[0];
-                    h_eff.y[index] += multiplier * basis[1];
-                    h_eff.z[index] += multiplier * basis[2];
-                }
-            }
-        }
+        self.effective_field_into_soa_fft_backend_at_time(
+            magnetization,
+            ws,
+            h_eff,
+            evaluation_time_s,
+        );
+    }
+
+    pub(crate) fn effective_field_into_soa_ws_at_time(
+        &self,
+        magnetization: &VectorFieldSoA,
+        ws: &mut FftWorkspace,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
+    ) {
+        self.effective_field_into_soa_fft_backend_at_time(magnetization, ws, h_eff, time_seconds);
     }
 
     pub(crate) fn effective_field_into_soa_fft_backend(
@@ -1435,6 +1557,16 @@ impl ExchangeLlgProblem {
         magnetization: &VectorFieldSoA,
         fft_backend: &mut dyn FdmFftBackend,
         h_eff: &mut VectorFieldSoA,
+    ) {
+        self.effective_field_into_soa_fft_backend_at_time(magnetization, fft_backend, h_eff, 0.0);
+    }
+
+    pub(crate) fn effective_field_into_soa_fft_backend_at_time(
+        &self,
+        magnetization: &VectorFieldSoA,
+        fft_backend: &mut dyn FdmFftBackend,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
     ) {
         h_eff.fill_zero();
 
@@ -1450,7 +1582,21 @@ impl ExchangeLlgProblem {
         self.thermal_field_add_into_soa(h_eff);
         self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
         self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
-        self.oersted_field_add_into_soa(h_eff);
+        self.oersted_field_add_into_soa_at_time(h_eff, time_seconds);
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
+            let multiplier = drive.multiplier_at(time_seconds);
+            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
+                if self.is_active(index) {
+                    h_eff.x[index] += multiplier * basis[0];
+                    h_eff.y[index] += multiplier * basis[1];
+                    h_eff.z[index] += multiplier * basis[2];
+                }
+            }
+        }
     }
 
     pub(crate) fn llg_rhs_soa_into(
@@ -1981,22 +2127,34 @@ impl ExchangeLlgProblem {
     /// H_φ(r) = I / (2π·r)      for r > R
     ///
     /// The field is purely azimuthal around the conductor axis.
-    /// Currently supports constant time-dependence (kind=0) only; sinusoidal
-    /// and pulse envelopes require threading simulation time through the
-    /// effective-field call chain — tracked as a future enhancement.
+    /// Sinusoidal and pulse envelopes are evaluated at the explicit RK stage
+    /// time supplied by the integrator.
     pub(crate) fn oersted_field_add_into(&self, h_eff: &mut [Vector3]) {
+        self.oersted_field_add_into_at_time(h_eff, 0.0);
+    }
+
+    pub fn oersted_field_at_time(&self, time_seconds: f64) -> Vec<Vector3> {
+        let mut field = self
+            .terms
+            .per_node_field
+            .clone()
+            .unwrap_or_else(|| zero_vectors(self.grid.cell_count()));
+        for (index, value) in field.iter_mut().enumerate() {
+            if !self.is_active(index) {
+                *value = [0.0, 0.0, 0.0];
+            }
+        }
+        self.oersted_field_add_into_at_time(&mut field, time_seconds);
+        field
+    }
+
+    pub(crate) fn oersted_field_add_into_at_time(&self, h_eff: &mut [Vector3], time_seconds: f64) {
         let oe = match self.terms.oersted_cylinder {
             Some(ref cfg) => cfg,
             None => return,
         };
 
-        // Time-dependence envelope (constant only for CPU reference).
-        let envelope = match oe.time_dep_kind {
-            0 => 1.0, // Constant
-            // Sinusoidal / pulse require current sim time — not available in
-            // the current effective-field signature.  Fall back to DC.
-            _ => 1.0,
-        };
+        let envelope = oersted_envelope_at_time(oe, time_seconds);
 
         let current = oe.current * envelope;
         if current == 0.0 {
@@ -2092,15 +2250,15 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut [Vector3],
     ) {
-        self.effective_field_into_ws_at(magnetization, 0.0, ws, h_eff);
+        self.effective_field_into_ws_at_time(magnetization, ws, h_eff, 0.0);
     }
 
-    pub(crate) fn effective_field_into_ws_at(
+    pub(crate) fn effective_field_into_ws_at_time(
         &self,
         magnetization: &[Vector3],
-        evaluation_time_s: f64,
         ws: &mut FftWorkspace,
         h_eff: &mut [Vector3],
+        time_seconds: f64,
     ) {
         for h in h_eff.iter_mut() {
             *h = [0.0, 0.0, 0.0];
@@ -2125,19 +2283,18 @@ impl ExchangeLlgProblem {
         self.bulk_dmi_field_add_into(magnetization, h_eff);
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
-        self.oersted_field_add_into(h_eff);
-
+        self.oersted_field_add_into_at_time(h_eff, time_seconds);
         for drive in self
             .regional_field_drives
             .iter()
             .filter(|drive| drive.enabled)
         {
-            let multiplier = drive.multiplier_at(evaluation_time_s);
-            for (index, (total, basis)) in h_eff.iter_mut().zip(&drive.basis_field).enumerate() {
+            let multiplier = drive.multiplier_at(time_seconds);
+            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
                 if self.is_active(index) {
-                    total[0] += multiplier * basis[0];
-                    total[1] += multiplier * basis[1];
-                    total[2] += multiplier * basis[2];
+                    h_eff[index][0] += multiplier * basis[0];
+                    h_eff[index][1] += multiplier * basis[1];
+                    h_eff[index][2] += multiplier * basis[2];
                 }
             }
         }
@@ -2214,6 +2371,8 @@ impl ExchangeLlgProblem {
         cfg: &ZhangLiSttConfig,
     ) -> Vec<Vector3> {
         const MU_B: f64 = 9.274009994e-24;
+        // Zhang-Li remains an unversioned legacy evaluator. Preserve its
+        // historical literal until a canonical formula version is introduced.
         const E_CHARGE: f64 = 1.60217662e-19;
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
@@ -2316,16 +2475,18 @@ impl ExchangeLlgProblem {
         magnetization: &[Vector3],
         cfg: &SlonczewskiSttConfig,
     ) -> Vec<Vector3> {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let alpha = self.material.damping;
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = cfg.current_sign * (js * HBAR * self.dynamics.gyromagnetic_ratio)
-            / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = slonczewski_prefactor(
+            cfg.formula,
+            cfg.current_sign,
+            js,
+            self.dynamics.gyromagnetic_ratio,
+            ms,
+            d,
+        );
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -2337,16 +2498,25 @@ impl ExchangeLlgProblem {
 
         (0..n)
             .map(|flat| {
-                if !self.is_active(flat) {
+                if !self.is_active(flat)
+                    || cfg
+                        .active_mask
+                        .as_ref()
+                        .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+                {
                     return [0.0, 0.0, 0.0];
                 }
                 let [m0, m1, m2] = magnetization[flat];
                 let m_dot_p = m0 * px + m1 * py + m2 * pz;
 
-                let g = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
-                let beta_stt = prefactor * g;
-                let (damping_like, field_like) =
-                    gilbert_slonczewski_scales(beta_stt, eps_prime, alpha);
+                let epsilon = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
+                let (damping_like, field_like) = gilbert_slonczewski_scales(
+                    cfg.formula,
+                    prefactor,
+                    epsilon,
+                    eps_prime,
+                    alpha,
+                );
 
                 let mcp_x = m1 * pz - m2 * py;
                 let mcp_y = m2 * px - m0 * pz;
@@ -2367,15 +2537,13 @@ impl ExchangeLlgProblem {
 
     #[allow(dead_code)]
     pub(crate) fn sot_torque(&self, magnetization: &[Vector3], cfg: &SotConfig) -> Vec<Vector3> {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
-        let d = cfg.thickness.max(1e-30);
-        let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
-        let alpha = self.material.damping;
-        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
+        let (damping_like, field_like) = prescribed_sot_scales(
+            cfg,
+            ms,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        );
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2383,13 +2551,16 @@ impl ExchangeLlgProblem {
         let sy = sy / snorm;
         let sz = sz / snorm;
 
-        let xi_dl = cfg.xi_dl;
-        let xi_fl = cfg.xi_fl;
         let n = self.grid.cell_count();
 
         (0..n)
             .map(|flat| {
-                if !self.is_active(flat) {
+                if !self.is_active(flat)
+                    || cfg
+                        .active_mask
+                        .as_ref()
+                        .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+                {
                     return [0.0, 0.0, 0.0];
                 }
                 let [m0, m1, m2] = magnetization[flat];
@@ -2402,16 +2573,10 @@ impl ExchangeLlgProblem {
                 let mmxs_y = m2 * mxs_x - m0 * mxs_z;
                 let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-                let raw = [
-                    -xi_dl * mmxs_x + xi_fl * mxs_x,
-                    -xi_dl * mmxs_y + xi_fl * mxs_y,
-                    -xi_dl * mmxs_z + xi_fl * mxs_z,
-                ];
-                let m_cross_raw = cross([m0, m1, m2], raw);
                 [
-                    gamma_bar * amp * (raw[0] + alpha * m_cross_raw[0]),
-                    gamma_bar * amp * (raw[1] + alpha * m_cross_raw[1]),
-                    gamma_bar * amp * (raw[2] + alpha * m_cross_raw[2]),
+                    -damping_like * mmxs_x + field_like * mxs_x,
+                    -damping_like * mmxs_y + field_like * mxs_y,
+                    -damping_like * mmxs_z + field_like * mxs_z,
                 ]
             })
             .collect()
@@ -2633,16 +2798,18 @@ impl ExchangeLlgProblem {
         cfg: &SlonczewskiSttConfig,
         out: &mut [Vector3],
     ) {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let alpha = self.material.damping;
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = cfg.current_sign * (js * HBAR * self.dynamics.gyromagnetic_ratio)
-            / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = slonczewski_prefactor(
+            cfg.formula,
+            cfg.current_sign,
+            js,
+            self.dynamics.gyromagnetic_ratio,
+            ms,
+            d,
+        );
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -2653,15 +2820,25 @@ impl ExchangeLlgProblem {
         let n = self.grid.cell_count();
 
         let compute = |flat: usize, o: &mut Vector3| {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+            {
                 return;
             }
             let [m0, m1, m2] = magnetization[flat];
             let m_dot_p = m0 * px + m1 * py + m2 * pz;
 
-            let g = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
-            let beta_stt = prefactor * g;
-            let (damping_like, field_like) = gilbert_slonczewski_scales(beta_stt, eps_prime, alpha);
+            let epsilon = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
+            let (damping_like, field_like) = gilbert_slonczewski_scales(
+                cfg.formula,
+                prefactor,
+                epsilon,
+                eps_prime,
+                alpha,
+            );
 
             let mcp_x = m1 * pz - m2 * py;
             let mcp_y = m2 * px - m0 * pz;
@@ -2696,16 +2873,18 @@ impl ExchangeLlgProblem {
         cfg: &SlonczewskiSttConfig,
         out: &mut VectorFieldSoA,
     ) {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let alpha = self.material.damping;
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = cfg.current_sign * (js * HBAR * self.dynamics.gyromagnetic_ratio)
-            / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = slonczewski_prefactor(
+            cfg.formula,
+            cfg.current_sign,
+            js,
+            self.dynamics.gyromagnetic_ratio,
+            ms,
+            d,
+        );
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -2714,7 +2893,12 @@ impl ExchangeLlgProblem {
         let [px, py, pz] = cfg.spin_polarization_axis;
 
         for flat in 0..self.grid.cell_count() {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+            {
                 continue;
             }
             let m0 = magnetization.x[flat];
@@ -2722,9 +2906,14 @@ impl ExchangeLlgProblem {
             let m2 = magnetization.z[flat];
             let m_dot_p = m0 * px + m1 * py + m2 * pz;
 
-            let g = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
-            let beta_stt = prefactor * g;
-            let (damping_like, field_like) = gilbert_slonczewski_scales(beta_stt, eps_prime, alpha);
+            let epsilon = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
+            let (damping_like, field_like) = gilbert_slonczewski_scales(
+                cfg.formula,
+                prefactor,
+                epsilon,
+                eps_prime,
+                alpha,
+            );
 
             let mcp_x = m1 * pz - m2 * py;
             let mcp_y = m2 * px - m0 * pz;
@@ -2746,15 +2935,13 @@ impl ExchangeLlgProblem {
         cfg: &SotConfig,
         out: &mut [Vector3],
     ) {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
-        let d = cfg.thickness.max(1e-30);
-        let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
-        let alpha = self.material.damping;
-        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
+        let (damping_like, field_like) = prescribed_sot_scales(
+            cfg,
+            ms,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        );
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2762,12 +2949,15 @@ impl ExchangeLlgProblem {
         let sy = sy / snorm;
         let sz = sz / snorm;
 
-        let xi_dl = cfg.xi_dl;
-        let xi_fl = cfg.xi_fl;
         let n = self.grid.cell_count();
 
         let compute = |flat: usize, o: &mut Vector3| {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+            {
                 return;
             }
             let [m0, m1, m2] = magnetization[flat];
@@ -2780,15 +2970,9 @@ impl ExchangeLlgProblem {
             let mmxs_y = m2 * mxs_x - m0 * mxs_z;
             let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-            let raw = [
-                -xi_dl * mmxs_x + xi_fl * mxs_x,
-                -xi_dl * mmxs_y + xi_fl * mxs_y,
-                -xi_dl * mmxs_z + xi_fl * mxs_z,
-            ];
-            let m_cross_raw = cross([m0, m1, m2], raw);
-            o[0] += gamma_bar * amp * (raw[0] + alpha * m_cross_raw[0]);
-            o[1] += gamma_bar * amp * (raw[1] + alpha * m_cross_raw[1]);
-            o[2] += gamma_bar * amp * (raw[2] + alpha * m_cross_raw[2]);
+            o[0] += -damping_like * mmxs_x + field_like * mxs_x;
+            o[1] += -damping_like * mmxs_y + field_like * mxs_y;
+            o[2] += -damping_like * mmxs_z + field_like * mxs_z;
         };
 
         #[cfg(feature = "parallel")]
@@ -2811,15 +2995,13 @@ impl ExchangeLlgProblem {
         cfg: &SotConfig,
         out: &mut VectorFieldSoA,
     ) {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
-        let d = cfg.thickness.max(1e-30);
-        let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
-        let alpha = self.material.damping;
-        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
+        let (damping_like, field_like) = prescribed_sot_scales(
+            cfg,
+            ms,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        );
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2827,11 +3009,13 @@ impl ExchangeLlgProblem {
         let sy = sy / snorm;
         let sz = sz / snorm;
 
-        let xi_dl = cfg.xi_dl;
-        let xi_fl = cfg.xi_fl;
-
         for flat in 0..self.grid.cell_count() {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+            {
                 continue;
             }
             let m0 = magnetization.x[flat];
@@ -2846,15 +3030,9 @@ impl ExchangeLlgProblem {
             let mmxs_y = m2 * mxs_x - m0 * mxs_z;
             let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-            let raw_x = -xi_dl * mmxs_x + xi_fl * mxs_x;
-            let raw_y = -xi_dl * mmxs_y + xi_fl * mxs_y;
-            let raw_z = -xi_dl * mmxs_z + xi_fl * mxs_z;
-            let m_cross_raw_x = m1 * raw_z - m2 * raw_y;
-            let m_cross_raw_y = m2 * raw_x - m0 * raw_z;
-            let m_cross_raw_z = m0 * raw_y - m1 * raw_x;
-            out.x[flat] += gamma_bar * amp * (raw_x + alpha * m_cross_raw_x);
-            out.y[flat] += gamma_bar * amp * (raw_y + alpha * m_cross_raw_y);
-            out.z[flat] += gamma_bar * amp * (raw_z + alpha * m_cross_raw_z);
+            out.x[flat] += -damping_like * mmxs_x + field_like * mxs_x;
+            out.y[flat] += -damping_like * mmxs_y + field_like * mxs_y;
+            out.z[flat] += -damping_like * mmxs_z + field_like * mxs_z;
         }
     }
 
@@ -2867,7 +3045,7 @@ impl ExchangeLlgProblem {
     ///
     /// Uses `h_scratch` for individual field components to compute decomposed
     /// energies, accumulates into `h_eff`, then computes RHS into `rhs_out`.
-    #[allow(non_snake_case)]
+    #[allow(dead_code, non_snake_case)]
     pub(crate) fn compute_step_observables_zero_alloc(
         &self,
         magnetization: &[Vector3],
@@ -2875,6 +3053,26 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         h_scratch: &mut [Vector3],
         rhs_out: &mut [Vector3],
+    ) -> RhsEvaluation {
+        self.compute_step_observables_zero_alloc_at_time(
+            magnetization,
+            ws,
+            h_eff,
+            h_scratch,
+            rhs_out,
+            0.0,
+        )
+    }
+
+    #[allow(non_snake_case)]
+    pub(crate) fn compute_step_observables_zero_alloc_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        h_scratch: &mut [Vector3],
+        rhs_out: &mut [Vector3],
+        time_seconds: f64,
     ) -> RhsEvaluation {
         let n = magnetization.len();
 
@@ -2920,7 +3118,7 @@ impl ExchangeLlgProblem {
                 *h = [0.0, 0.0, 0.0];
             }
             self.external_field_add_into(&mut h_scratch[..n]);
-            self.oersted_field_add_into(&mut h_scratch[..n]);
+            self.oersted_field_add_into_at_time(&mut h_scratch[..n], time_seconds);
             let e = self.external_energy_from_fields(magnetization, &h_scratch[..n]);
             for i in 0..n {
                 h_eff[i] = add(h_eff[i], h_scratch[i]);
@@ -3007,8 +3205,20 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         rhs_out: &mut [Vector3],
     ) -> RhsEvaluation {
+        self.compute_step_observables_minimal_at_time(magnetization, ws, h_eff, rhs_out, 0.0)
+    }
+
+    #[allow(dead_code, non_snake_case)]
+    pub(crate) fn compute_step_observables_minimal_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        rhs_out: &mut [Vector3],
+        time_seconds: f64,
+    ) -> RhsEvaluation {
         // Compute h_eff in-place (zero + accumulate all terms)
-        self.effective_field_into_ws(magnetization, ws, h_eff);
+        self.effective_field_into_ws_at_time(magnetization, ws, h_eff, time_seconds);
 
         let n = magnetization.len();
         let max_effective_field_amplitude = max_norm(&h_eff[..n]);
@@ -3070,16 +3280,42 @@ impl ExchangeLlgProblem {
         rhs_out: &mut [Vector3],
         request: crate::EvaluationRequest,
     ) -> RhsEvaluation {
+        self.compute_step_observables_at_time(
+            magnetization,
+            ws,
+            h_eff,
+            h_scratch,
+            rhs_out,
+            request,
+            0.0,
+        )
+    }
+
+    pub(crate) fn compute_step_observables_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        h_scratch: &mut [Vector3],
+        rhs_out: &mut [Vector3],
+        request: crate::EvaluationRequest,
+        time_seconds: f64,
+    ) -> RhsEvaluation {
         match request {
-            crate::EvaluationRequest::Minimal => {
-                self.compute_step_observables_minimal(magnetization, ws, h_eff, rhs_out)
-            }
-            crate::EvaluationRequest::Full => self.compute_step_observables_zero_alloc(
+            crate::EvaluationRequest::Minimal => self.compute_step_observables_minimal_at_time(
+                magnetization,
+                ws,
+                h_eff,
+                rhs_out,
+                time_seconds,
+            ),
+            crate::EvaluationRequest::Full => self.compute_step_observables_zero_alloc_at_time(
                 magnetization,
                 ws,
                 h_eff,
                 h_scratch,
                 rhs_out,
+                time_seconds,
             ),
         }
     }
@@ -3101,6 +3337,15 @@ impl ExchangeLlgProblem {
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
+    ) -> Vec<Vector3> {
+        self.effective_field_from_vectors_ws_at_time(magnetization, ws, 0.0)
+    }
+
+    pub(crate) fn effective_field_from_vectors_ws_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        time_seconds: f64,
     ) -> Vec<Vector3> {
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -3175,15 +3420,16 @@ impl ExchangeLlgProblem {
         }
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
-        self.oersted_field_add_into(&mut h_eff);
+        self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
 
         h_eff
     }
 
-    pub(crate) fn observable_effective_field_from_vectors_ws(
+    pub(crate) fn observable_effective_field_from_vectors_ws_at_time(
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
+        time_seconds: f64,
     ) -> Vec<Vector3> {
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -3205,7 +3451,7 @@ impl ExchangeLlgProblem {
         for (i, h) in h_eff.iter_mut().enumerate() {
             *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
         }
-        self.oersted_field_add_into(&mut h_eff);
+        self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
         h_eff
     }
 
@@ -3740,6 +3986,220 @@ mod stt_tests {
         )
     }
 
+    fn canonical_slonczewski_oracle(
+        problem: &ExchangeLlgProblem,
+        cfg: &SlonczewskiSttConfig,
+        m: Vector3,
+    ) -> Vector3 {
+        const HBAR: f64 = 1.054571817e-34;
+        const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+
+        let signed_current = cfg.current_sign * cfg.current_density_magnitude;
+        let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
+        let omega = gamma_e * HBAR * signed_current
+            / (EXACT_E_CHARGE
+                * problem.material.saturation_magnetisation
+                * cfg.thickness);
+        let lambda_sq = cfg.lambda * cfg.lambda;
+        let c = dot(m, cfg.spin_polarization_axis);
+        let epsilon = cfg.degree * lambda_sq
+            / ((lambda_sq + 1.0) + (lambda_sq - 1.0) * c);
+        let cross_mp = cross(m, cfg.spin_polarization_axis);
+        let double_cross = cross(m, cross_mp);
+        let inv_gilbert = 1.0 / (1.0 + problem.material.damping.powi(2));
+        let damping_like = omega
+            * (epsilon + problem.material.damping * cfg.epsilon_prime)
+            * inv_gilbert;
+        let field_like = omega
+            * (cfg.epsilon_prime - problem.material.damping * epsilon)
+            * inv_gilbert;
+        add(scale(double_cross, damping_like), scale(cross_mp, field_like))
+    }
+
+    #[test]
+    fn canonical_slonczewski_matches_independent_signed_si_gilbert_oracle() {
+        let problem = one_cell_problem(0.2);
+        let cfg = SlonczewskiSttConfig {
+            formula: crate::SlonczewskiFormula::FullmagV2,
+            current_density_magnitude: 7.0e11,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.7,
+            epsilon_prime: 0.13,
+            degree: 0.6,
+            thickness: 1.5e-9,
+            current_sign: -1.0,
+            active_mask: None,
+        };
+        let m = [0.6, 0.8, 0.0];
+        let actual = problem.slonczewski_stt_torque(&[m], &cfg)[0];
+        let expected = canonical_slonczewski_oracle(&problem, &cfg, m);
+
+        for component in 0..3 {
+            check_close(
+                actual[component],
+                expected[component],
+                expected[component].abs() * 1.0e-13 + 1.0e-15,
+            );
+        }
+
+        let mut reversed = cfg.clone();
+        reversed.current_sign *= -1.0;
+        let reversed_torque = problem.slonczewski_stt_torque(&[m], &reversed)[0];
+        for component in 0..3 {
+            check_close(reversed_torque[component], -actual[component], 1.0e-15);
+        }
+    }
+
+    #[test]
+    fn canonical_slonczewski_aos_soa_share_target_mask_and_oracle() {
+        let problem = ExchangeLlgProblem::new(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.2).unwrap(),
+            LlgConfig::default(),
+        );
+        let cfg = SlonczewskiSttConfig {
+            formula: crate::SlonczewskiFormula::FullmagV2,
+            current_density_magnitude: 7.0e11,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.7,
+            epsilon_prime: 0.13,
+            degree: 0.6,
+            thickness: 1.5e-9,
+            current_sign: 1.0,
+            active_mask: Some(vec![true, false]),
+        };
+        let magnetization = vec![[0.6, 0.8, 0.0]; 2];
+        let mut aos_out = vec![[0.0; 3]; 2];
+        problem.slonczewski_stt_torque_add_into(&magnetization, &cfg, &mut aos_out);
+
+        let soa_m = VectorFieldSoA::from_aos(&magnetization);
+        let mut soa_out = VectorFieldSoA::zeros(2);
+        problem.slonczewski_stt_torque_add_into_soa(&soa_m, &cfg, &mut soa_out);
+        let soa_out = soa_out.gather_to_aos();
+        let expected = canonical_slonczewski_oracle(&problem, &cfg, magnetization[0]);
+
+        for component in 0..3 {
+            let tolerance = expected[component].abs() * 1.0e-13 + 1.0e-15;
+            check_close(aos_out[0][component], expected[component], tolerance);
+            check_close(soa_out[0][component], expected[component], tolerance);
+        }
+        assert_eq!(aos_out[1], [0.0; 3]);
+        assert_eq!(soa_out[1], [0.0; 3]);
+    }
+
+    #[test]
+    fn legacy_slonczewski_prefactor_is_bit_compatible() {
+        const HBAR: f64 = 1.054571817e-34;
+        const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
+        const MU0_CONST: f64 = 1.2566370614359173e-6;
+        let current_sign = -1.0;
+        let current_density_magnitude = 7.0e11;
+        let gamma0 = 2.211e5;
+        let saturation_magnetisation = 8.0e5;
+        let thickness = 1.5e-9;
+        let historical = current_sign * (current_density_magnitude * HBAR * gamma0)
+            / (2.0
+                * LEGACY_E_CHARGE
+                * MU0_CONST
+                * saturation_magnetisation
+                * thickness);
+        let versioned = slonczewski_prefactor(
+            SlonczewskiFormula::LegacyFullmagV0,
+            current_sign,
+            current_density_magnitude,
+            gamma0,
+            saturation_magnetisation,
+            thickness,
+        );
+        assert_eq!(versioned.to_bits(), historical.to_bits());
+    }
+
+    #[test]
+    fn slonczewski_v2_lambda_one_has_standard_hbar_over_two_e_prefactor() {
+        const HBAR: f64 = 1.054571817e-34;
+        const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+        const MU0_CONST: f64 = 1.2566370614359173e-6;
+        let current_sign = -1.0;
+        let current_density_magnitude = 7.0e11;
+        let gamma0 = 2.211e5;
+        let saturation_magnetisation = 8.0e5;
+        let thickness = 1.5e-9;
+        let omega_v2 = slonczewski_prefactor(
+            SlonczewskiFormula::FullmagV2,
+            current_sign,
+            current_density_magnitude,
+            gamma0,
+            saturation_magnetisation,
+            thickness,
+        );
+        let standard = current_sign * (current_density_magnitude * HBAR * gamma0)
+            / (2.0
+                * EXACT_E_CHARGE
+                * MU0_CONST
+                * saturation_magnetisation
+                * thickness);
+        check_close(omega_v2 * 0.5, standard, standard.abs() * 1.0e-15);
+
+        let omega_v1 = slonczewski_prefactor(
+            SlonczewskiFormula::FullmagV1,
+            current_sign,
+            current_density_magnitude,
+            gamma0,
+            saturation_magnetisation,
+            thickness,
+        );
+        check_close(omega_v1, standard, standard.abs() * 1.0e-15);
+        check_close(omega_v2, 2.0 * omega_v1, standard.abs() * 1.0e-15);
+    }
+
+    #[test]
+    fn oersted_envelope_is_evaluated_at_requested_stage_time_for_aos_and_soa() {
+        let mut problem = one_cell_problem(0.1);
+        problem.terms.exchange = false;
+        problem.terms.demag = false;
+        problem.terms.oersted_cylinder = Some(OerstedCylinderConfig {
+            current: 2.0,
+            radius: 0.25e-9,
+            center: [0.0, 0.5e-9, 0.5e-9],
+            axis: [0.0, 0.0, 1.0],
+            time_dep_kind: 1,
+            time_dep_freq: 1.0,
+            time_dep_phase: 0.0,
+            time_dep_offset: 0.0,
+            time_dep_t_on: 0.0,
+            time_dep_t_off: 0.0,
+        });
+
+        let mut aos_zero = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut aos_zero, 0.0);
+        assert_eq!(aos_zero, vec![[0.0; 3]; 1]);
+
+        let mut aos_peak = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut aos_peak, 0.25);
+        assert!(aos_peak[0][1] > 0.0);
+
+        let mut soa_peak = VectorFieldSoA::zeros(1);
+        problem.oersted_field_add_into_soa_at_time(&mut soa_peak, 0.25);
+        check_close(soa_peak.x[0], aos_peak[0][0], 1.0e-12);
+        check_close(soa_peak.y[0], aos_peak[0][1], 1.0e-12);
+        check_close(soa_peak.z[0], aos_peak[0][2], 1.0e-12);
+
+        let cfg = problem.terms.oersted_cylinder.as_mut().unwrap();
+        cfg.time_dep_kind = 2;
+        cfg.time_dep_t_on = 2.0;
+        cfg.time_dep_t_off = 3.0;
+        let mut pulse_before = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut pulse_before, 1.999);
+        assert_eq!(pulse_before, vec![[0.0; 3]; 1]);
+        let mut pulse_on = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut pulse_on, 2.0);
+        assert!(pulse_on[0][1] > 0.0);
+        let mut pulse_off = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut pulse_off, 3.0);
+        assert_eq!(pulse_off, vec![[0.0; 3]; 1]);
+    }
+
     #[test]
     fn kc3_only_cubic_anisotropy_matches_its_analytic_energy_and_field() {
         let kc3 = 4.2e4;
@@ -3808,27 +4268,30 @@ mod stt_tests {
     fn sot_macrospin_is_converted_to_rhs_with_gilbert_projection() {
         let problem = one_cell_problem(0.2);
         let cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
             current_density: 1.0e12,
             xi_dl: 0.35,
             xi_fl: 0.15,
             sigma: [0.0, 0.0, 1.0],
             thickness: 1.5e-9,
+            active_mask: None,
+            envelope: None,
         };
         let magnetization = [[1.0, 0.0, 0.0]];
         let actual = problem.sot_torque(&magnetization, &cfg)[0];
 
         const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        let field_amplitude =
-            cfg.current_density * HBAR / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
+        const E_CHARGE: f64 = 1.602176634e-19;
+        let field_amplitude = cfg.current_density * HBAR
+            / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
         let alpha = problem.material.damping;
-        let gamma_bar = problem.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
-        let raw = [0.0, -cfg.xi_fl, cfg.xi_dl];
-        let m_cross_raw = [0.0, -raw[2], raw[1]];
+        let denominator = 1.0 + alpha * alpha;
+        let omega_dl = field_amplitude * problem.dynamics.gyromagnetic_ratio * cfg.xi_dl;
+        let omega_fl = field_amplitude * problem.dynamics.gyromagnetic_ratio * cfg.xi_fl;
         let expected = [
-            gamma_bar * field_amplitude * (raw[0] + alpha * m_cross_raw[0]),
-            gamma_bar * field_amplitude * (raw[1] + alpha * m_cross_raw[1]),
-            gamma_bar * field_amplitude * (raw[2] + alpha * m_cross_raw[2]),
+            0.0,
+            -(omega_fl + alpha * omega_dl) / denominator,
+            (omega_dl - alpha * omega_fl) / denominator,
         ];
 
         for component in 0..3 {
@@ -3844,6 +4307,7 @@ mod stt_tests {
     fn slonczewski_direct_torque_matches_effective_field_form() {
         let problem = one_cell_problem(0.2);
         let cfg = SlonczewskiSttConfig {
+            formula: SlonczewskiFormula::LegacyFullmagV0,
             current_density_magnitude: 1.0e12,
             spin_polarization_axis: [0.0, 0.0, 1.0],
             lambda: 1.0,
@@ -3851,6 +4315,7 @@ mod stt_tests {
             degree: 1.0,
             thickness: 1.0e-9,
             current_sign: 1.0,
+            active_mask: None,
         };
         let m = [1.0, 0.0, 0.0];
         let torque = problem.slonczewski_stt_torque(&[m], &cfg);
@@ -3886,6 +4351,7 @@ mod stt_tests {
         problem.terms.exchange = false;
         problem.terms.demag = false;
         problem.terms.slonczewski_stt = Some(SlonczewskiSttConfig {
+            formula: SlonczewskiFormula::LegacyFullmagV0,
             current_density_magnitude: 1.0e12,
             spin_polarization_axis: [0.0, 0.0, 1.0],
             lambda: 1.0,
@@ -3893,6 +4359,7 @@ mod stt_tests {
             degree: 1.0,
             thickness: 1.0e-9,
             current_sign: 1.0,
+            active_mask: None,
         });
         let magnetization = [[1.0, 0.0, 0.0]];
         let mut workspace = problem.create_workspace();
@@ -3910,6 +4377,122 @@ mod stt_tests {
 
         assert_eq!(observables.max_torque_Apm, 0.0);
         assert!(observables.max_rhs_amplitude > 0.0);
+    }
+
+    #[test]
+    fn prescribed_sot_matches_signed_si_gilbert_source_oracle() {
+        const HBAR: f64 = 1.054571817e-34;
+        const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+
+        let problem = one_cell_problem(0.2);
+        let cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
+            current_density: -1.0e12,
+            xi_dl: 0.12,
+            xi_fl: -0.03,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.5e-9,
+            active_mask: None,
+            envelope: None,
+        };
+        let m = [1.0, 0.0, 0.0];
+        let torque = problem.sot_torque(&[m], &cfg)[0];
+
+        let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
+        let omega_base = gamma_e * HBAR * cfg.current_density
+            / (2.0 * EXACT_E_CHARGE * problem.material.saturation_magnetisation * cfg.thickness);
+        let omega_dl = omega_base * cfg.xi_dl;
+        let omega_fl = omega_base * cfg.xi_fl;
+        let alpha = problem.material.damping;
+        let denominator = 1.0 + alpha * alpha;
+        let expected = [
+            0.0,
+            (omega_dl - alpha * omega_fl) / denominator,
+            (omega_fl + alpha * omega_dl) / denominator,
+        ];
+
+        for component in 0..3 {
+            check_close(
+                torque[component],
+                expected[component],
+                expected[component].abs() * 1.0e-12 + 1.0e-12,
+            );
+        }
+    }
+
+    #[test]
+    fn prescribed_sot_reverses_with_signed_current() {
+        let problem = one_cell_problem(0.1);
+        let mut cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
+            current_density: 7.0e11,
+            xi_dl: 0.2,
+            xi_fl: 0.05,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.0e-9,
+            active_mask: None,
+            envelope: None,
+        };
+        let positive = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
+        cfg.current_density = -cfg.current_density;
+        let negative = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
+
+        for component in 0..3 {
+            check_close(negative[component], -positive[component], 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn prescribed_sot_applies_only_on_target_mask() {
+        let problem = ExchangeLlgProblem::new(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+        );
+        let cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
+            current_density: 7.0e11,
+            xi_dl: 0.2,
+            xi_fl: 0.05,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.0e-9,
+            active_mask: Some(vec![true, false]),
+            envelope: None,
+        };
+
+        let torque = problem.sot_torque(&[[1.0, 0.0, 0.0]; 2], &cfg);
+        assert!(torque[0].iter().any(|component| *component != 0.0));
+        assert_eq!(torque[1], [0.0; 3]);
+    }
+
+    #[test]
+    fn legacy_prescribed_sot_preserves_historical_abs_field_like_evaluator() {
+        const HBAR: f64 = 1.054571817e-34;
+        const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
+
+        let problem = one_cell_problem(0.2);
+        let cfg = SotConfig {
+            formula: SotFormula::LegacyFullmagV0,
+            current_density: -1.0e12,
+            xi_dl: 0.12,
+            xi_fl: -0.03,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.5e-9,
+            active_mask: None,
+            envelope: None,
+        };
+        let torque = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
+        let amplitude = cfg.current_density.abs() * HBAR
+            / (2.0
+                * LEGACY_E_CHARGE
+                * MU0
+                * problem.material.saturation_magnetisation
+                * cfg.thickness);
+        let expected = [0.0, amplitude * cfg.xi_dl, amplitude * cfg.xi_fl];
+        for component in 0..3 {
+            check_close(torque[component], expected[component], 1.0e-15);
+        }
     }
 
     #[test]

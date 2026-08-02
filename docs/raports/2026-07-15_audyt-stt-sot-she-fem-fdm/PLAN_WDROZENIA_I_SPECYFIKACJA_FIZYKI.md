@@ -2932,3 +2932,241 @@ użycie go jako produkcyjnego dowodu. Ledger rozróżnia `source_visible`,
 - nie oznaczać GPU jako wykonane bez identity i telemetry urządzenia;
 - nie podnosić capability po merge bez świeżego post-merge gate na dokładnym
   commicie przeznaczonym do publikacji.
+
+## 27. Addendum — stan po implementacji OE-T0/OE-F1/OE-F2, Slonczewski v2, C_s i SML v2 (2026-08-02)
+
+Ten rozdział jest nowszym źródłem stanu niż historyczne snapshoty w rozdziałach
+0 i 26. Wpisy z wcześniejszą gałęzią, SHA lub statusem muszą być czytane jako
+archiwalne. Nie oznacza to zakończenia celu ani zgody na merge bez replayu
+semantycznego.
+
+### 27.1. Identyfikacja stanu
+
+| Pole | Wartość |
+|---|---|
+| worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-final` |
+| branch | `codex/spin-transport-final` |
+| HEAD po bieżącym OE-F1 singular/near slice | `7f9b2ade4cfb086bc9c264805ae335dd329ace9f` |
+| v2 slice commit | `bb0031df5ca05766b379e27f569f8945f515674c` |
+| bieżący slice DOS/SML FDM reference | `f6e9060fac5b0bad36c7e3cf91a716544469be36` |
+| bieżący test-gate fix | `6c865437e073a9841fe03c0de3e9b38603ad1ff0` |
+| aktualny `master` | `c262fa9d1ba660d70ed3d0849e6fe3469c9e5f32` |
+| poprzedni plan checkpoint | `126e4cb736d6ec48cd7228d6166193d29d5aa98f` |
+| ostatni zapisany plan commit | `226236a0` |
+| rozjazd po bieżącym slice | `125` commitów tylko na gałęzi, `574` tylko na `master` |
+| integracja | nie wykonana; wymagany nowy worktree od aktualnego `master` i replay konfliktów semantycznych |
+| ciężkie artefakty | kanoniczny root `/zfn2/mateuszz/git/fullmag`; kompilacje FEM wykonywane przez repozytoryjne receptury `just` w zarządzanych kontenerach; brak twierdzenia o zapisie bezpośrednim do root-owned CIFS/WSL |
+
+### 27.2. Zrealizowane korekty Slonczewskiego
+
+Wprowadzono nowy, jednoznaczny identyfikator `slonczewski.fullmag.v2` we
+wszystkich warstwach nowego runu:
+
+- formuła używa `Omega_J = gamma_e hbar J_n/(e M_s t_F)` oraz
+  `epsilon=P Lambda^2/[(Lambda^2+1)+(Lambda^2-1)c]`; dla `Lambda=1` niezależny
+  oracle daje standardowy `gamma_e hbar P J_n/(2 e M_s t_F)`;
+- FDM CPU, FEM CPU, native ABI, planner, IR validation, Python DSL, script
+  export, SceneDocument, OpenAPI schema/types, Control Room recognition,
+  runner diagnostics, capability matrix i provenance emitują v2;
+- `slonczewski.fullmag.v1` zachowuje historyczny evaluator wyłącznie jako
+  read-only provenance i jest odrzucany przez authoring, IR/planner oraz native
+  FEM import dla nowych uruchomień; nie ma cichej konwersji v1 -> v2;
+- dodano niezależny test SI prefaktora FDM oraz test native FEM odrzucający v1;
+  testy zachowują również bitową zgodność osobnej gałęzi legacy v0.
+
+### 27.3. Świeże dowody wykonania
+
+| Gate | Wynik | Zakres i ograniczenia |
+|---|---|---|
+| `cargo test -p fullmag-engine canonical_slonczewski_matches_independent_signed_si_gilbert_oracle` | `pass` | v2 FDM CPU algebraic oracle; nie jest to trajectory/convergence proof |
+| `cargo test -p fullmag-ir --test ir_tests` | `132 pass` | IR round-trip/validation; nie jest to native runtime proof |
+| `cargo test -p fullmag-authoring` | `46 pass` | Rust authoring validation; browser/UI nie zostały tym zastąpione |
+| `PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-pytest python3 -m pytest -q packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `21 pass, 45 subtests pass` | Python canonical v2 export/decode round-trip |
+| `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-runner` | `pass` | Rust runner compiles; no execution/device proof |
+| `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-ir -p fullmag-authoring -p fullmag-plan -p fullmag-runner -p fullmag-engine -p fullmag-api` | `pass` | C_s whitelist, SML v2 schema and bounded engine algebra compile; no native weak-form proof |
+| `cargo test -p fullmag-plan sml_reservoir_v2_lowers_to_the_fdm_m2_reference_descriptor` | `pass` | nested SML v2 lowers only to the bounded FDM CPU M2 reference lane; native production lanes remain fail-closed |
+| `cargo test -p fullmag-engine mixing_flux_balance` | `pass` | v2 interface balance algebra; reference lane only |
+| `cargo test -p fullmag-engine sml_reservoir_closes_surface_balance_and_has_nonnegative_entropy` | `pass` | local reservoir elimination, trace balance and nonnegative surface power; not a discretized weak form |
+| `cargo test -p fullmag-engine m2_mixing_interface` | `pass` | reciprocal reference observations retain backflow/absorption/SML channels |
+| `cargo test -p fullmag-ir --test ir_tests` | `132 pass` (fresh) | exact DOS formula whitelist and nested SML v2 validation; not runtime/device proof |
+| `cargo test -p fullmag-authoring` | `46 pass` (fresh) | authoring C_s/SML v2 validation; browser/UI remains unverified |
+| `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-ir -p fullmag-authoring -p fullmag-plan -p fullmag-runner -p fullmag-engine -p fullmag-api` | `pass` (fresh) | DOS adapter, SML v2 lowering, reciprocal checkpoint identity and runner artifact path compile; no native weak-form/device proof |
+| `PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-pytest python3 -m pytest -q packages/fullmag-py/tests/test_spin_drift_diffusion.py packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `30 pass, 45 subtests pass` | Python C_s/DOS validation and canonical v2 round-trip; browser/UI remains unverified |
+| `cargo test -p fullmag-runner reference_runner_executes_reciprocal_m2_through_corrected_stage_lte_gate` | `pass` | reciprocal descriptor checkpoint identity and stage LTE gate; reference runner only |
+| `cargo test -p fullmag-runner reference_runner_publishes_sml_reservoir_balance_and_power` | `pass` | runner publishes reservoir potential, trace/lattice flux and non-negative surface power artifact; bounded FDM CPU only |
+| `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo test -p fullmag-plan` | `241 pass, 0 fail` (fresh) | planner suite is green after aligning the certified Gamma_out/periodic-marker fixture and canonical prescribed-SOT relaxation rejection; this closes a verification gate, not a production backend gate |
+| `just verify-fem-stt-native-contract` | `pass` | managed CUDA/MFEM build, native FEM STT contract and append-only ABI test; GPU STT remains fail-closed |
+| `just verify-fem-oersted-oet0-cpu-contract` | `pass` (earlier evidence) | managed CPU/MPI weighted RT0/KKT contract; TSAN runtime remains WSL-blocked |
+| `just verify-fem-oersted-oef1-cpu-contract` | `pass` (fresh, managed, `7f9b2ade`) | direct tetra CPU/FP64 now covers representative interior/face/edge targets with cutoff-free Duffy integration, deterministic h+p near refinement, default-profile convergence, and fail-closed depth exhaustion; target-space projection, independent high-depth convergence and production scaling remain open |
+| `just verify-fem-oersted-oef2-cpu-contract` | `pass` (bounded prerequisite) | dense mixed exact-sequence reference; no scalable AMS/BoomerAMG/airbox qualification |
+
+The full `fullmag-plan` suite now passes 241/241. The two earlier failures were
+fixture/schema drift: the airbox test used one marker for both a periodic seam
+and `Gamma_out`, while the relaxation test instantiated the IR-only legacy
+`spin_orbit_torque` variant instead of canonical `prescribed_sot.fullmag.v1`.
+Both are now fail-closed and covered by the passing suite. The dedicated OE-T0
+TSAN recipe compiles and instruments the target but cannot start under the
+current WSL2 mapping
+(`ThreadSanitizer: unexpected memory mapping`); this is an environment blocker,
+not a passing race proof.
+
+### 27.4. Re-estimated completion
+
+The previous ledger value was **69% implementation / 41% production readiness**.
+After the DOS-backed `C_s` adapter, executable bounded FDM M2 SML lowering,
+reciprocal checkpoint identity repair, runner balance/power artifact proof, and
+the managed cutoff-free OE-F1 singular/near quadrature gate, the current
+estimate is **73% implementation / 45% production readiness**.
+The increase is deliberately bounded: SML is executable only in the reference
+FDM CPU lane, `C_s=e^2N_0` is still a scalar nonmagnetic reduction, and no
+native weak-form, FEM/GPU, device-residency, or browser proof is implied. The
+planner-suite closure adds verification confidence but no new executable
+backend lane. These percentages do not count source stubs or semantic-only
+capability rows as
+production work. The following independent gates remain open:
+
+1. production SML reservoir weak form, spatially coupled DOS/susceptibility
+   `C_s`, and thermodynamic production proof beyond the bounded local FDM
+   reference algebra;
+2. OE-F1 target-space projection, independent high-depth/reference convergence,
+   and FEM/FDM convergence (the direct singular/near quadrature sub-gate is now
+   green only within the bounded CPU/FP64 oracle envelope);
+3. scalable OE-F2 `H_0(curl) x H1_0` solve with topology certificate,
+   AMS/BoomerAMG, airbox study, and supported-source policy;
+4. native FDM production owner, FDM/CUDA FP64 parity, and any FP32 envelope;
+5. complete FEM/GPU cross-backend parity and device-residency proof;
+6. Control Room typecheck/lint/tests plus browser author/export/run/inspect
+   proof for all v2 parameters;
+7. semantic replay onto current `master`, post-merge managed gates and final
+   scientific report.
+
+These percentages are progress indicators, not capability labels. No row may
+be promoted to `production_executable` or `validated` solely because the
+percentage increased or a bounded contract test passed.
+
+## 28. Addendum — bounded OE-F1 target-space projection (2026-08-02)
+
+This addendum records the next OE-F1 implementation slice after the
+cutoff-free singular/near quadrature gate. It is deliberately narrower than a
+production field publication: the code now demonstrates a consistent target
+space projection contract, but it does not promote FEM Oersted to a runtime
+capability.
+
+### 28.1. Reproducible identity
+
+| Pole | Wartość |
+|---|---|
+| worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-final` |
+| branch | `codex/spin-transport-final` |
+| implementation HEAD | `e3f178192eafb2e638ca231c343263d3881778e6` |
+| prior singular/near implementation checkpoint | `7f9b2ade4cfb086bc9c264805ae335dd329ace9f` |
+| prior plan checkpoint | `acece2bb0f675c3d3a85b7cad97994cf134dc781` |
+| current local `master` | `c262fa9d1ba660d70ed3d0849e6fe3469c9e5f32` |
+| merge-base (`HEAD`, `master`) | `0612941f3b99137cbb171c183452368cc0f71029` |
+| divergence at this checkpoint | `128` commitów tylko na gałęzi, `574` tylko na `master` |
+| integration | nie wykonana; wymagany semantic replay na nowym worktree od aktualnego `master` |
+| build storage | `/zfn2/mateuszz/git/fullmag`; native FEM proof wyłącznie przez repozytoryjne receptury `just` i zarządzany kontener |
+
+### 28.2. Zrealizowany slice OE-F1
+
+`DirectTetraQuadrature::ProjectField` dodaje bounded CPU/FP64 consistent
+`L2` projection do docelowego pola H1. Kontrakt waliduje trójwymiarową siatkę
+tetraedryczną, `vdim=3`, `Ordering::byVDIM` i kolekcję `H1_3D_*`; odrzuca
+inne przestrzenie zamiast wykonywać niejawny fallback. Dla każdego komponentu
+montowany jest scalar consistent mass system na tej samej kolekcji H1, RHS
+próbkuje cutoff-free direct Biot--Savart na targetowych punktach całkowania,
+a rozwiązanie przechodzi jawny residual check układu masowego. Diagnostyka
+sumuje source-target pairs, near refinement, błędy i fail-closed
+unconverged-pair count dla wszystkich trzech komponentów.
+
+Ważna granica: to jest reference-only API. Nie ma jeszcze materializacji
+`H_oe` w runtime/session/ProblemIR, nie ma publicznej capability, nie ma
+target-quadrature error estimatora ani dowodu zachowania dla nakładających się
+siatek źródła i celu przy produkcyjnym limicie kosztu. Dla bliskich par
+wyczerpanie budżetu głębokości nadal kończy się błędem, a nie przybliżeniem.
+
+### 28.3. Świeży dowód managed
+
+| Gate | Wynik | Zakres i ograniczenia |
+|---|---|---|
+| `just verify-fem-oersted-oef1-cpu-contract` | `pass` (fresh, managed, `e3f17819`) | CPU-only CMake (`FULLMAG_ENABLE_CUDA=OFF`, `FULLMAG_ENABLE_FEM_GPU=OFF`, `FULLMAG_USE_MFEM_STACK=ON`); cztery testy conservative-current CTest przeszły; direct contract obejmuje signed far, interior/face/edge singular/near, default h+p convergence, depth fail-closed oraz bounded H1 projection na rozdzielonych siatkach; brak device/GPU/production-scaling proof |
+| `python3 scripts/check_physics_docs_gate.py --base HEAD~1 --head HEAD` | `pass` | zmiana fizyki i implementacji ma odpowiadającą aktualizację `docs/physics/0980...`; nie jest to runtime qualification |
+
+### 28.4. Aktualizacja oceny
+
+Ocena pozostaje **73% implementacji / 45% gotowości produkcyjnej**. Projekcja
+H1 zamyka następny bounded reference sub-gate, ale nie dostarcza jeszcze
+niezależnego target-space convergence, porównania FEM/FDM ani integracji z
+runtime. Podniesienie procentu byłoby mylące bez tych dowodów.
+
+Następne wymagane bramki OE-F1 są rozłączne:
+
+1. target-rule refinement/error estimator oraz test projekcji na nakładających
+   się siatkach z certyfikowaną tolerancją near-pair;
+2. niezależny high-depth/reference oracle i tabela zbieżności FEM/FDM;
+3. cross-layer materializacja `H_oe` (ProblemIR/planner/runtime/API/UI) z
+   requested/resolved provenance;
+4. dopiero potem kwalifikacja OE-F2 na airboxie i porównanie obu realizacji.
+
+## 29. Addendum — stan replayu STT/SOT/SHE/Oersted po integracji kontraktów (2026-08-02)
+
+Ten wpis zastępuje procentowy snapshot z rozdziału 28 dla bieżącego replayu.
+Nie jest jeszcze post-merge release reportem: replay znajduje się w osobnym
+worktree, a `master` pozostaje nienaruszony.
+
+### 29.1. Tożsamość i stan integracji
+
+| Pole | Wartość |
+|---|---|
+| worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-replay-20260802` |
+| branch | `codex/spin-transport-replay-20260802` |
+| base HEAD | `c262fa9d1ba660d70ed3d0849e6fe3469c9e5f32` |
+| merge source | `f2c5bb9bcdc9c0e18b3d0fb1ea98e2a3de8a66f6` (`codex/spin-transport-final`) |
+| stan Git | merge rozstrzygnięty tekstowo i staged; `MERGE_HEAD` nadal aktywny, bez merge commit |
+| ciężkie artefakty | `/zfn2/mateuszz/git/fullmag`; native FEM/FDM przez repozytoryjne receptury `just` w zarządzanych kontenerach |
+
+### 29.2. Co jest obecnie potwierdzone
+
+| Obszar | Dowód | Granica dowodu |
+|---|---|---|
+| Rust engine/API/IR/planner/runner | zapisane zielone suite: engine `293`, API `740`, IR `78 + 178` integracyjnych, plan `290`, runner `725` | testy host/container nie są dowodem urządzenia GPU ani pełnej trajektorii fizycznej |
+| Python DSL i round-trip | focused round-trip dla field drives, monitorów planarnych i thermal metadata zielony; pełna suita `1354 passed, 83 failed, 3 skipped, 69 warnings, 549 subtests` | pozostałe awarie dotyczą m.in. benchmarków, meshingu, managed runtime i historycznych kontraktów relaxation; pełna suita nie jest zielona |
+| FEM CPU Oersted/transport | managed OE-T0, OE-F1, OE-F2 oraz steady-transport ABI/contract przeszły | OE-F1 nadal bounded CPU/FP64; brak niezależnej zbieżności target-space i skalowania produkcyjnego |
+| FDM SOT | `just verify-fdm-prescribed-sot-native-contract` — algebra, CUDA fp64/fp32 contract i runner CUDA check przeszły | brak świeżego device-residency/parity proof na docelowej karcie |
+| FDM dynamiczne Oersted | `just verify-fdm-oersted-native-contract` — stage-time, rollback, adaptive, FSAL, ABM3 i axis oracle przeszły | nie zastępuje end-to-end produkcyjnej symulacji racetrack/skyrmion |
+| FEM STT | `just verify-fem-stt-native-contract` po dodaniu `libboost-dev` do obrazu GPU; native contract i append-only FFI test przeszły | kontrakt kompilacyjny/ABI, nie kwalifikacja wykonania na urządzeniu |
+| Python–API–UI | wygenerowany OpenAPI v2, route/client parity; `pnpm ... typecheck` przechodzi; focused Control Room `8 files, 103 tests` przechodzi | browser/CDP smoke dla authoring/export/run/inspect nie został jeszcze wykonany |
+| UI field drives/planar monitors | dodano brakujące ścieżki, metody `ControlRoomApi`, selekcję `physics-field-drive`, manifest mesh i dedykowane inspectory | visual proof i testy interakcji w realnej przeglądarce nadal otwarte |
+
+### 29.3. Zaktualizowana ocena celu
+
+Na podstawie powyższych, rozdzielonych bram:
+
+- **implementacja: 82%** — semantyka STT/SOT/SHE/Oersted jest przeprowadzona
+  przez IR, planner, runner, FDM/FEM, Python i API/UI, a główne kontrakty
+  algebraiczne/ABI są wykonywalne;
+- **gotowość produkcyjna: 58%** — istnieją zarządzane CPU/native gates, ale
+  nadal brakuje dowodu urządzenia GPU, pełnej zbieżności FEM/FDM, produkcyjnego
+  weak-form SML/transportu, cross-backend parity, browser smoke i post-merge
+  replayu na docelowym `master`.
+
+Procenty są wskaźnikiem postępu, nie capability label. Nie podnoszą żadnego
+wiersza do `production_executable` ani `validated`.
+
+### 29.4. Pozostałe bramki do zamknięcia celu
+
+1. Zakończyć merge commit w replay worktree i wykonać post-merge managed gates
+   na dokładnym SHA, a dopiero potem lokalnie zmergować do `master`.
+2. Uruchomić rzeczywisty browser/CDP smoke dla authoring, eksportu, run,
+   selekcji monitorów i inspekcji wszystkich parametrów; osobno zachować
+   wynik niezweryfikowany, gdy środowisko przeglądarki nie wystartuje.
+3. Wykonać pełną kwalifikację GPU z identity urządzenia, brakiem fallbacku,
+   telemetry transfer/residency oraz FP64 parity.
+4. Dokończyć OE-F1 target-space error estimator, niezależny high-depth oracle,
+   tabelę zbieżności FEM/FDM i skalowalny OE-F2 z certyfikatem topologii.
+5. Zastąpić bounded SML/FDM reference lane produkcyjnym weak-form transportem,
+   przestrzennym `C_s`/DOS i thermodynamic proof.
+6. Zamknąć 83 awarie pełnej suity Pythona albo udokumentować każdą jako
+   niepowiązaną z celem i uzyskać odrębne, zielone gates dla całego łańcucha.
+7. Dopiero po tych punktach przygotować końcowy raport porównawczy z external
+   solvers i oznaczyć zakresy jako `validated`.

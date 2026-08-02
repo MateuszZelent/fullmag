@@ -24,7 +24,7 @@ namespace fdm {
 // External declarations
 extern void launch_exchange_field_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
-extern void launch_effective_field_fp64(Context &ctx);
+extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
@@ -102,7 +102,7 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
 /* ── Compute fields + LLG RHS ── */
 
 static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, double gamma_bar, double alpha)
+    int n, int grid, double gamma_bar, double alpha, double evaluation_time)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp64(ctx);
@@ -118,7 +118,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             return false;
         }
     }
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, evaluation_time);
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx, false);
         return false;
@@ -151,12 +151,13 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
 
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    const double step_start_time = ctx.current_time;
 
     // Save original m
     copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count);
 
     // Stage 1: k1 = RHS(m0)
-    if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha)) return;
+    if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha, step_start_time)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Stage 2: m2 = normalize(m0 + 0.5*dt*k1), k2 = RHS(m2)
@@ -165,7 +166,8 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, 0.5 * dt);
-    if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha)) return;
+    if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha,
+                          step_start_time + 0.5 * dt)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Stage 3: m3 = normalize(m0 + 0.5*dt*k2), k3 = RHS(m3)
@@ -174,7 +176,8 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<const double*>(ctx.k2.x), static_cast<const double*>(ctx.k2.y), static_cast<const double*>(ctx.k2.z),
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, 0.5 * dt);
-    if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha)) return;
+    if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha,
+                          step_start_time + 0.5 * dt)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Stage 4: m4 = normalize(m0 + dt*k3), k4 = RHS(m4)
@@ -183,7 +186,8 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<const double*>(ctx.k3.x), static_cast<const double*>(ctx.k3.y), static_cast<const double*>(ctx.k3.z),
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, dt);
-    if (!compute_rhs_into(ctx, ctx.k4, n, grid, gamma_bar, alpha)) return;
+    if (!compute_rhs_into(ctx, ctx.k4, n, grid, gamma_bar, alpha,
+                          step_start_time + dt)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Final: m_new = normalize(m0 + dt/6*(k1 + 2k2 + 2k3 + k4))
@@ -208,7 +212,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     // Diagnostics on accepted state
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, ctx.current_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp64(ctx);

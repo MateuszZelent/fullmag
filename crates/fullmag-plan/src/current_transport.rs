@@ -62,15 +62,26 @@ pub(crate) fn resolve_current_transports(
                 )),
             },
             CurrentModuleIR::CurrentTransport {
-                model: CurrentTransportModelIR::OhmicPoisson,
+                name,
+                model:
+                    CurrentTransportModelIR::OhmicPoisson
+                    | CurrentTransportModelIR::MagnetoresistivePoisson,
                 ..
-            } => reasons.push(format!(
-                "current_modules[{index}] current_transport(ohmic_poisson) is semantic_only on the current public {} path",
-                match lane {
-                    CurrentTransportExecutableLane::Fdm => "FDM",
-                    CurrentTransportExecutableLane::Fem => "FEM",
+            } => {
+                if lane == CurrentTransportExecutableLane::Fem
+                    && !problem
+                        .spin_transport_modules
+                        .iter()
+                        .any(|module| module.current_source_id == *name)
+                {
+                    reasons.push(format!(
+                        "current_modules[{index}] current_transport(ohmic_poisson) requires a bound FEM spin_transport module on the M1 lane"
+                    ));
                 }
-            )),
+                // M1 materializes the complete charge solve together with its
+                // owning spin-transport plan. It deliberately does not
+                // masquerade as a prescribed uniform-current source.
+            }
         }
     }
 
@@ -97,6 +108,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: None,
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
 
         let resolved =
@@ -118,6 +131,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: None,
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
 
         let resolved =

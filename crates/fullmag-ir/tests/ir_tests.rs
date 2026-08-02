@@ -674,6 +674,175 @@ fn bootstrap_example_round_trips_as_json() {
 }
 
 #[test]
+fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
+    let mut value = problem_ir_value_with_version(CURRENT_IR_VERSION);
+    value["current_modules"] = serde_json::json!([{
+        "kind": "current_transport", "name": "charge",
+        "model": "ohmic_poisson", "coupling": "one_way",
+        "domain": [{"object_id": "strip"}],
+        "materials": [{"region": {"object_id": "strip"},
+            "material": {"sigma_Spm": 4.0e6}}],
+        "boundaries": [
+            {"kind": "voltage_electrode", "id": "ground", "surfaces": [
+                {"object_id": "strip", "surface_id": "x_min", "orientation": [-1.0, 0.0, 0.0]}
+            ], "potential_V": 0.0},
+            {"kind": "voltage_electrode", "id": "drive", "surfaces": [
+                {"object_id": "strip", "surface_id": "x_max", "orientation": [1.0, 0.0, 0.0]}
+            ], "potential_V": 0.1}
+        ],
+        "gauge": "dirichlet_reference",
+        "solver": {"engine": "cg", "linear": {"relative_tolerance": 1.0e-10,
+            "absolute_tolerance": 0.0, "max_iterations": 1000},
+            "physical_residual_version": "charge_balance_integrated_l2.v1",
+            "operator_version": "fv_charge_harmonic_v1"}
+    }]);
+    value["spin_transport_modules"] = serde_json::json!([{
+        "schema_version": "spin_transport.v1", "id": "spin_solve",
+        "current_source_id": "charge", "mode": "steady",
+        "domain": [{"object_id": "strip"}],
+        "materials": [{"region": {"object_id": "strip"}, "material": {
+            "sigma_s_Spm": 5.0e6, "polarization_p": 0.4, "theta_sh": 0.1,
+            "lambda_sf_m": 5.0e-9, "lambda_j_m": 1.0e-9,
+            "lambda_phi_m": "disabled"
+        }}],
+        "interfaces": [{
+            "kind": "mixing_conductance", "id": "nf",
+            "normal_to_ferromagnet": [1.0, 0.0, 0.0],
+            "normal_side": {"object_id": "strip"},
+            "ferromagnet_side": {"object_id": "strip"},
+            "g_up_Spm2": 1.0, "g_down_Spm2": 1.0,
+            "g_r_Spm2": 1.0, "g_i_Spm2": 0.0,
+            "spin_memory_loss": {
+                "g_n_Spm2": 1.0, "g_f_Spm2": 2.0,
+                "g_lattice_Spm2": 3.0,
+                "formula_version": "sml_reservoir.fullmag.v2"
+            },
+            "absorption": "full_absorption",
+            "formula_version": "magnetoelectronic.fullmag.v2"
+        }], "boundaries": [],
+        "solver": {"engine": "auto", "linear": {"relative_tolerance": 1.0e-8,
+            "absolute_tolerance": 0.0, "max_iterations": 500},
+            "physical_residual_version": "transport_balance_integrated_l2.v1",
+            "operator_version": "fv_spin_upwind_v1",
+            "default_external_boundary": "spin_insulating"},
+        "requested_execution": {"discretization": "fdm", "device": "cpu",
+            "precision": "double", "execution_mode": "strict"},
+        "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+    }]);
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "drift_diffusion_spin_torque",
+        "schema_version": "drift_diffusion_spin_torque.v1", "id": "tr",
+        "solve_id": "spin_solve", "target": {"object_id": "strip"},
+        "formula_version": "transport_torque_angular_momentum.fullmag.v1"
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value).expect("typed M1 IR should decode");
+    decoded.validate().expect("typed M1 IR should validate");
+    assert_eq!(decoded.spin_transport_modules.len(), 1);
+    let encoded = serde_json::to_value(decoded).expect("typed M1 IR should encode");
+    assert_eq!(
+        encoded["current_modules"][0]["gauge"],
+        "dirichlet_reference"
+    );
+    assert_eq!(
+        encoded["current_modules"][0]["boundaries"][1]["potential_V"],
+        0.1
+    );
+    assert_eq!(encoded["spin_transport_modules"][0]["mode"], "steady");
+    assert!(encoded["spin_transport_modules"][0]
+        .get("coupling")
+        .is_none());
+
+    let mut transient_value = encoded;
+    transient_value["spin_transport_modules"][0]["mode"] = serde_json::json!("transient");
+    transient_value["spin_transport_modules"][0]["materials"][0]["material"]
+        ["density_of_states_per_spin_Jinv_m3"] = serde_json::json!(2.0);
+    transient_value["spin_transport_modules"][0]["materials"][0]["material"]
+        ["capacitance_formula_version"] =
+            serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
+    let transient: ProblemIR =
+        serde_json::from_value(transient_value.clone()).expect("transient M3 IR should decode");
+    let mut transient = transient;
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut transient.study else {
+        panic!("typed transport fixture must be time evolution")
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "coupled_imex_ark2".to_string();
+    transient
+        .validate()
+        .expect("transient M3 IR with the coupled integrator should validate semantically");
+    assert_eq!(
+        transient.spin_transport_modules[0].materials[0]
+            .material
+            .density_of_states_per_spin_j_inv_m3,
+        Some(2.0)
+    );
+    let mut inconsistent = transient.clone();
+    inconsistent.spin_transport_modules[0].materials[0]
+        .material
+        .spin_capacitance_as_per_v_m3 = Some(1.0);
+    assert!(inconsistent
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("must equal e^2 times density_of_states")));
+
+    let mut unsupported_capacitance = transient.clone();
+    unsupported_capacitance.spin_transport_modules[0].materials[0]
+        .material
+        .capacitance_formula_version = Some("dos_constant.fullmag.v1".to_string());
+    assert!(unsupported_capacitance
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("unsupported capacitance_formula_version")));
+
+    let mut unsupported_sml = transient.clone();
+    if let SpinInterfaceIR::MixingConductance { formula_version, .. } =
+        &mut unsupported_sml.spin_transport_modules[0].interfaces[0]
+    {
+        *formula_version = "magnetoelectronic.fullmag.v1".to_string();
+    }
+    assert!(unsupported_sml
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("magnetoelectronic.fullmag.v2")));
+
+    let mut explicit_transient = transient.clone();
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut explicit_transient.study else {
+        unreachable!()
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk45".to_string();
+    assert!(explicit_transient
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("transient spin requires llg.integrator='coupled_imex_ark2'")));
+
+    let mut steady_coupled = transient.clone();
+    steady_coupled.spin_transport_modules[0].mode = SpinTransportModeIR::Steady;
+    assert!(steady_coupled
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("steady spin rejects llg.integrator='coupled_imex_ark2'")));
+
+    let mut transient_value = serde_json::to_value(transient).unwrap();
+    transient_value["spin_transport_modules"][0]["materials"][0]["material"]
+        .as_object_mut()
+        .unwrap()
+        .remove("density_of_states_per_spin_Jinv_m3");
+    let invalid: ProblemIR = serde_json::from_value(transient_value).unwrap();
+    assert!(invalid
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("capacitance_formula_version requires spin capacitance")));
+}
+
+#[test]
 fn current_ir_version_is_supported_for_read() {
     assert!(is_supported_ir_version_for_read(CURRENT_IR_VERSION));
     assert!(!requires_ir_migration(CURRENT_IR_VERSION));
@@ -694,6 +863,581 @@ fn magnetostatic_bc_floquet_airbox_round_trips_as_snake_case_json() {
 fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
     assert!(is_supported_ir_version_for_read(PREVIOUS_PUBLIC_IR_VERSION));
     assert!(requires_ir_migration(PREVIOUS_PUBLIC_IR_VERSION));
+}
+
+fn problem_ir_value_with_version(version: &str) -> serde_json::Value {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("bootstrap ProblemIR should serialize");
+    value["ir_version"] = serde_json::json!(version);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(version);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(version);
+    value
+}
+
+#[test]
+fn prescribed_sot_migrates_0_2_inline_scalar_without_losing_sign_or_zero_sigma() {
+    let mut value = problem_ir_value_with_version("0.2.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "charge_current_density_a_per_m2": -5.0e10,
+        "damping_like_efficiency": 0.12,
+        "field_like_efficiency": -0.03,
+        "spin_polarization": [0.0, 0.0, 0.0],
+        "ferromagnet_thickness_m": 1.5e-9
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value).expect("0.2 SOT should migrate");
+    let canonical = serde_json::to_value(decoded).expect("migrated SOT should serialize");
+    let sot = &canonical["spin_torque_modules"][0];
+    assert_eq!(canonical["ir_version"], "0.3.0");
+    assert_eq!(sot["kind"], "prescribed_sot");
+    assert_eq!(sot["schema_version"], "prescribed_sot.v1");
+    assert_eq!(sot["id"], "legacy_prescribed_sot_0");
+    assert_eq!(sot.get("target"), Some(&serde_json::Value::Null));
+    assert_eq!(sot["formula_version"], "prescribed_sot.legacy_fullmag.v0");
+    assert_eq!(sot["drive"]["kind"], "legacy_scalar_magnitude");
+    assert_eq!(sot["drive"]["raw_charge_current_density_Apm2"], -5.0e10);
+    assert_eq!(
+        sot["raw_spin_polarization"],
+        serde_json::json!([0.0, 0.0, 0.0])
+    );
+    assert_eq!(sot["compatibility_origin"]["source_ir_version"], "0.2.0");
+    assert_eq!(
+        sot["compatibility_origin"]["authored_kind"],
+        "spin_orbit_torque"
+    );
+}
+
+#[test]
+fn prescribed_sot_migrates_0_2_current_source_to_legacy_norm_drive() {
+    let mut value = problem_ir_value_with_version("0.2.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "current_source": "charge",
+        "damping_like_efficiency": 0.12,
+        "field_like_efficiency": 0.03,
+        "spin_polarization": [0.0, 2.0, 0.0],
+        "ferromagnet_thickness_m": 1.5e-9
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value).expect("0.2 source SOT should migrate");
+    let canonical = serde_json::to_value(decoded).expect("migrated SOT should serialize");
+    let sot = &canonical["spin_torque_modules"][0];
+    assert_eq!(sot["drive"]["kind"], "legacy_current_source_norm");
+    assert_eq!(sot["drive"]["current_source_id"], "charge");
+    assert_eq!(
+        sot["raw_spin_polarization"],
+        serde_json::json!([0.0, 2.0, 0.0])
+    );
+}
+
+#[test]
+fn explicit_0_1_migration_chain_preserves_cylinder_axis_and_reaches_0_3() {
+    let mut value = problem_ir_value_with_version("0.1.0");
+    value["geometry"]["entries"] = serde_json::json!([{
+        "kind": "cylinder", "name": "legacy", "radius": 1.0, "height": 2.0
+    }]);
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "charge_current_density_a_per_m2": 1.0,
+        "damping_like_efficiency": 0.1,
+        "field_like_efficiency": 0.0,
+        "spin_polarization": [0.0, 1.0, 0.0],
+        "ferromagnet_thickness_m": 1.0e-9
+    }]);
+
+    assert!(migrate_problem_ir_json_value(&mut value).expect("explicit chain should migrate"));
+    assert_eq!(value["ir_version"], "0.3.0");
+    assert_eq!(
+        value["geometry"]["entries"][0]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
+    assert_eq!(value["spin_torque_modules"][0]["kind"], "prescribed_sot");
+}
+
+#[test]
+fn standard_reader_rejects_0_1_without_explicit_chain() {
+    let value = problem_ir_value_with_version("0.1.0");
+    let error = serde_json::from_value::<ProblemIR>(value)
+        .expect_err("standard reader must not silently chain 0.1.0");
+    assert!(error.to_string().contains("not supported for direct read"));
+}
+
+#[test]
+fn canonical_prescribed_sot_v1_round_trips_signed_scalar() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot",
+        "schema_version": "prescribed_sot.v1",
+        "id": "sot",
+        "target": {"object_id": "strip"},
+        "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": -5.0e10,
+                  "sigma_hat": [0.0, 2.0, 0.0],
+                  "envelope": {"kind": "piecewise_linear",
+                               "points": [{"time_s": 0.0, "value": 0.0},
+                                          {"time_s": 1.0e-9, "value": 1.0}]}},
+        "xi_dl": 0.12,
+        "xi_fl": -0.03,
+        "free_layer_thickness_m": 1.5e-9
+    }]);
+
+    let decoded: ProblemIR =
+        serde_json::from_value(value.clone()).expect("canonical v1 should decode");
+    assert!(decoded.validate().is_ok());
+    let encoded = serde_json::to_value(decoded).expect("canonical v1 should encode");
+    assert_eq!(encoded["spin_torque_modules"], value["spin_torque_modules"]);
+}
+
+#[test]
+fn prescribed_sot_time_envelope_round_trips_every_canonical_variant() {
+    let envelopes = vec![
+        serde_json::json!({"kind": "constant", "value": 0.5}),
+        serde_json::json!({"kind": "sinusoidal", "amplitude": 2.0,
+            "frequency_hz": 0.0, "phase_rad": 0.25, "offset": -0.5}),
+        serde_json::json!({"kind": "pulse", "amplitude": 3.0,
+            "t_on_s": 1.0e-12, "t_off_s": 2.0e-12}),
+        serde_json::json!({"kind": "piecewise_linear", "points": [
+            {"time_s": 0.0, "value": 0.0}, {"time_s": 1.0e-9, "value": 1.0}]}),
+        serde_json::json!({"kind": "sinc", "amplitude": 1.5,
+            "center_s": 2.0e-9, "bandwidth_hz": 3.0e9, "offset": 0.1}),
+        serde_json::json!({"kind": "tabulated", "artifact_ref": "artifact://drive.csv",
+            "interpolation": "previous", "extrapolation": "hold", "bandwidth_hz": 1.0e9}),
+    ];
+
+    for envelope in envelopes {
+        let mut value = problem_ir_value_with_version("0.3.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+            "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+            "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                      "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
+            "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+        }]);
+        let decoded: ProblemIR = serde_json::from_value(value.clone())
+            .expect("canonical TimeEnvelopeIR variant should decode");
+        assert!(decoded.validate().is_ok());
+        let encoded = serde_json::to_value(decoded).expect("TimeEnvelopeIR should encode");
+        assert_eq!(encoded["spin_torque_modules"], value["spin_torque_modules"]);
+    }
+}
+
+#[test]
+fn prescribed_sot_tabulated_envelope_serializes_canonical_defaults() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 2.0, 0.0],
+                  "envelope": {"kind": "tabulated", "artifact_ref": "artifact://drive.csv"}},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(value).expect("defaults should decode");
+    assert!(decoded.validate().is_ok());
+    let encoded = serde_json::to_value(decoded).expect("defaults should encode");
+    let envelope = &encoded["spin_torque_modules"][0]["drive"]["envelope"];
+    assert_eq!(envelope["interpolation"], "linear");
+    assert_eq!(envelope["extrapolation"], "error");
+}
+
+#[test]
+fn prescribed_sot_time_envelope_rejects_invalid_boundaries() {
+    let invalid = [
+        (
+            serde_json::json!({"kind": "sinusoidal", "amplitude": 1.0,
+            "frequency_hz": -1.0, "phase_rad": 0.0, "offset": 0.0}),
+            "frequency_hz",
+        ),
+        (
+            serde_json::json!({"kind": "pulse", "amplitude": 1.0,
+            "t_on_s": 1.0, "t_off_s": 1.0}),
+            "t_off_s",
+        ),
+        (
+            serde_json::json!({"kind": "piecewise_linear", "points": [
+            {"time_s": 1.0, "value": 0.0}, {"time_s": 0.0, "value": 1.0}]}),
+            "strictly increasing",
+        ),
+        (
+            serde_json::json!({"kind": "sinc", "amplitude": 1.0,
+            "center_s": 0.0, "bandwidth_hz": 0.0, "offset": 0.0}),
+            "bandwidth_hz",
+        ),
+        (
+            serde_json::json!({"kind": "tabulated", "artifact_ref": "",
+            "interpolation": "linear", "extrapolation": "error"}),
+            "artifact_ref",
+        ),
+        (
+            serde_json::json!({"kind": "tabulated", "artifact_ref": "artifact://drive.csv",
+            "interpolation": "linear", "extrapolation": "error", "bandwidth_hz": 0.0}),
+            "bandwidth_hz",
+        ),
+    ];
+
+    for (envelope, expected) in invalid {
+        let mut value = problem_ir_value_with_version("0.3.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+            "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+            "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                      "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
+            "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+        }]);
+        let decoded: ProblemIR =
+            serde_json::from_value(value).expect("invalid value shape should decode");
+        let errors = decoded
+            .validate()
+            .expect_err("invalid envelope must fail validation");
+        assert!(
+            errors.iter().any(|error| error.contains(expected)),
+            "missing {expected}: {errors:?}"
+        );
+    }
+
+    for envelope in [
+        serde_json::json!({"kind": "tabulated", "artifact_ref": "a",
+            "interpolation": "cubic", "extrapolation": "error"}),
+        serde_json::json!({"kind": "tabulated", "artifact_ref": "a",
+            "interpolation": "linear", "extrapolation": "periodic"}),
+        serde_json::json!({"kind": "constant", "value": 1.0,
+            "unknown_backend_field": true}),
+    ] {
+        let mut value = problem_ir_value_with_version("0.3.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+            "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+            "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                      "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
+            "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+        }]);
+        assert!(serde_json::from_value::<ProblemIR>(value).is_err());
+    }
+}
+
+#[test]
+fn canonical_0_3_rejects_deprecated_spin_orbit_torque_wire_kind() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "charge_current_density_a_per_m2": 1.0,
+        "damping_like_efficiency": 0.1,
+        "field_like_efficiency": 0.0,
+        "spin_polarization": [0.0, 1.0, 0.0],
+        "ferromagnet_thickness_m": 1.0e-9
+    }]);
+    assert!(serde_json::from_value::<ProblemIR>(value).is_err());
+
+    let legacy = SpinTorqueModuleIR::SpinOrbitTorque {
+        charge_current_density_a_per_m2: Some(1.0),
+        current_source: None,
+        damping_like_efficiency: 0.1,
+        field_like_efficiency: 0.0,
+        spin_polarization: [0.0, 1.0, 0.0],
+        ferromagnet_thickness_m: 1.0e-9,
+    };
+    assert!(serde_json::to_value(legacy).is_err());
+}
+
+#[test]
+fn canonical_prescribed_sot_v1_rejects_invalid_axes_and_nonfinite_signed_input() {
+    let mut zero_sigma = problem_ir_value_with_version("0.3.0");
+    zero_sigma["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"},
+        "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 0.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(zero_sigma).expect("shape should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("zero v1 sigma must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("sigma_hat") && error.contains("epsilon_axis")));
+
+    let mut parallel_axes = problem_ir_value_with_version("0.3.0");
+    parallel_axes["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"},
+        "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "vector_current_source", "current_source_id": "charge",
+                  "drive_direction": [1.0, 0.0, 0.0], "interface_normal": [1.0, 0.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(parallel_axes).expect("shape should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("parallel v1 axes must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("interface_normal") && error.contains("parallel")));
+
+    let mut nonfinite = ProblemIR::bootstrap_example();
+    nonfinite.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot".to_string(),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: PrescribedSotFormulaIR::FullmagV1 {
+            drive: PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: f64::NAN,
+                sigma_hat: [0.0, 1.0, 0.0],
+                envelope: None,
+            },
+            xi_dl: 0.1,
+            xi_fl: 0.0,
+            free_layer_thickness_m: 1.0e-9,
+        },
+    }];
+    let errors = nonfinite
+        .validate()
+        .expect_err("nonfinite signed v1 current must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("current_density_Apm2") && error.contains("finite")));
+
+    let mut near_zero = ProblemIR::bootstrap_example();
+    near_zero.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot".to_string(),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: PrescribedSotFormulaIR::FullmagV1 {
+            drive: PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: 1.0,
+                sigma_hat: [1.0e-13, 0.0, 0.0],
+                envelope: None,
+            },
+            xi_dl: 0.1,
+            xi_fl: 0.0,
+            free_layer_thickness_m: 1.0e-9,
+        },
+    }];
+    let errors = near_zero
+        .validate()
+        .expect_err("near-zero v1 axis must fail epsilon_axis validation");
+    assert!(errors.iter().any(|error| error.contains("epsilon_axis")));
+}
+
+#[test]
+fn prescribed_sot_v1_rejects_invalid_signed_scalar_envelope() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 2.0, 0.0],
+                  "envelope": {"kind": "piecewise_linear", "points": [
+                      {"time_s": 1.0, "value": 0.0}, {"time_s": 0.0, "value": 1.0}]}},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(value).expect("envelope shape should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("non-monotone envelope must fail");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("envelope") && error.contains("strictly increasing")));
+}
+
+#[test]
+fn prescribed_sot_time_envelope_rejects_nonfinite_numbers_in_every_variant() {
+    let envelopes = vec![
+        TimeEnvelopeIR::Constant { value: f64::NAN },
+        TimeEnvelopeIR::Sinusoidal {
+            amplitude: f64::NAN,
+            frequency_hz: 0.0,
+            phase_rad: 0.0,
+            offset: 0.0,
+        },
+        TimeEnvelopeIR::Pulse {
+            amplitude: 1.0,
+            t_on_s: f64::NAN,
+            t_off_s: 1.0,
+        },
+        TimeEnvelopeIR::PiecewiseLinear {
+            points: vec![TimeEnvelopePointIR {
+                time_s: 0.0,
+                value: f64::NAN,
+            }],
+        },
+        TimeEnvelopeIR::Sinc {
+            amplitude: 1.0,
+            center_s: f64::NAN,
+            bandwidth_hz: 1.0,
+            offset: 0.0,
+        },
+        TimeEnvelopeIR::Tabulated {
+            artifact_ref: "artifact://drive.csv".to_string(),
+            interpolation: TimeEnvelopeInterpolationIR::Linear,
+            extrapolation: TimeEnvelopeExtrapolationIR::Error,
+            bandwidth_hz: Some(f64::NAN),
+        },
+    ];
+
+    for envelope in envelopes {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+            schema_version: "prescribed_sot.v1".to_string(),
+            id: "sot".to_string(),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula: PrescribedSotFormulaIR::FullmagV1 {
+                drive: PrescribedSotV1DriveIR::SignedScalar {
+                    current_density_apm2: 1.0,
+                    sigma_hat: [0.0, 2.0, 0.0],
+                    envelope: Some(envelope),
+                },
+                xi_dl: 0.1,
+                xi_fl: 0.0,
+                free_layer_thickness_m: 1.0e-9,
+            },
+        }];
+        let errors = problem
+            .validate()
+            .expect_err("nonfinite envelope value must fail validation");
+        assert!(
+            errors.iter().any(|error| error.contains("finite")),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
+fn prescribed_sot_v1_accepts_nonunit_vector_source_axes_and_rejects_near_parallel_axes() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.current_modules = vec![CurrentModuleIR::CurrentTransport {
+        name: "charge".to_string(),
+        model: CurrentTransportModelIR::PrescribedDensity,
+        current_density: Some([1.0, 0.0, 0.0]),
+        solve_region: None,
+        conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        definition: None,
+    }];
+    let module = |drive_direction, interface_normal| SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot".to_string(),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: PrescribedSotFormulaIR::FullmagV1 {
+            drive: PrescribedSotV1DriveIR::VectorCurrentSource {
+                current_source_id: "charge".to_string(),
+                drive_direction,
+                interface_normal,
+            },
+            xi_dl: 0.1,
+            xi_fl: 0.0,
+            free_layer_thickness_m: 1.0e-9,
+        },
+    };
+
+    problem.spin_torque_modules = vec![module([2.0, 0.0, 0.0], [0.0, 3.0, 0.0])];
+    assert!(problem.validate().is_ok());
+
+    problem.spin_torque_modules = vec![module([2.0, 0.0, 0.0], [4.0, 1.0e-13, 0.0])];
+    let errors = problem
+        .validate()
+        .expect_err("near-parallel normalized axes must fail epsilon_axis validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("parallel") && error.contains("epsilon_axis")));
+}
+
+#[test]
+fn prescribed_sot_legacy_v0_rejects_missing_or_forged_migration_origin() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "legacy",
+        "formula_version": "prescribed_sot.legacy_fullmag.v0",
+        "drive": {"kind": "legacy_scalar_magnitude", "raw_charge_current_density_Apm2": -1.0},
+        "raw_spin_polarization": [0.0, 0.0, 0.0],
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    assert!(serde_json::from_value::<ProblemIR>(value.clone()).is_err());
+
+    value["spin_torque_modules"][0]["compatibility_origin"] = serde_json::json!({
+        "source_ir_version": "0.3.0", "authored_kind": "prescribed_sot"
+    });
+    let decoded: ProblemIR =
+        serde_json::from_value(value).expect("shape with origin should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("forged legacy origin must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("compatibility_origin")));
+}
+
+#[test]
+fn migrated_legacy_current_source_must_resolve_to_current_transport() {
+    let mut value = problem_ir_value_with_version("0.2.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque", "current_source": "missing_charge",
+        "damping_like_efficiency": 0.1, "field_like_efficiency": 0.0,
+        "spin_polarization": [0.0, 1.0, 0.0], "ferromagnet_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(value).expect("legacy source should migrate");
+    let errors = decoded
+        .validate()
+        .expect_err("missing migrated source must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("current_source_id") && error.contains("current_transport")));
+}
+
+#[test]
+fn prescribed_sot_rejects_duplicate_module_ids_and_unsupported_ir_version() {
+    let module = serde_json::json!({
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "duplicate",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 1.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    });
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([module.clone(), module]);
+    let decoded: ProblemIR = serde_json::from_value(value).expect("duplicate ids should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("duplicate ids must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("duplicate") && error.contains("id")));
+
+    let unsupported = problem_ir_value_with_version("9.9.9");
+    let error = serde_json::from_value::<ProblemIR>(unsupported)
+        .expect_err("unsupported IR version must fail closed");
+    assert!(error.to_string().contains("not supported"));
+}
+
+#[test]
+fn prescribed_sot_rejects_unknown_formula_fields() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 1.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9,
+        "backend_default": "must_not_be_ignored"
+    }]);
+
+    let error = serde_json::from_value::<ProblemIR>(value)
+        .expect_err("unknown prescribed-SOT formula fields must fail closed");
+    assert!(error.to_string().contains("unknown field"));
 }
 
 #[test]
@@ -764,12 +1508,12 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 }
 
 #[test]
-fn previous_public_cylinder_without_axis_migrates_explicitly() {
+fn historical_0_1_cylinder_without_axis_migrates_through_explicit_chain() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
         .expect("bootstrap ProblemIR should serialize");
-    value["ir_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
-    value["problem_meta"]["script_api_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
-    value["problem_meta"]["serializer_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    value["ir_version"] = serde_json::json!("0.1.0");
+    value["problem_meta"]["script_api_version"] = serde_json::json!("0.1.0");
+    value["problem_meta"]["serializer_version"] = serde_json::json!("0.1.0");
     value["geometry"]["entries"] = serde_json::json!([{
         "kind": "cylinder",
         "name": "legacy",
@@ -777,8 +1521,9 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
         "height": 2.0
     }]);
 
+    migrate_problem_ir_json_value(&mut value).expect("explicit chain should migrate 0.1.0");
     let decoded: ProblemIR =
-        serde_json::from_value(value).expect("legacy cylinder should migrate its axis explicitly");
+        serde_json::from_value(value).expect("migrated cylinder should deserialize");
     match &decoded.geometry.entries[0] {
         GeometryEntryIR::Cylinder { axis, .. } => assert_eq!(*axis, [0.0, 0.0, 1.0]),
         other => panic!("expected migrated cylinder, got {other:?}"),
@@ -788,7 +1533,7 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
 #[test]
 fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
     let mut value = serde_json::json!({
-        "ir_version": LEGACY_PUBLIC_IR_VERSION,
+        "ir_version": "0.1.0",
         "geometry": {"entries": [{
             "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
             "base": {"kind": "difference", "name": "difference",
@@ -817,8 +1562,11 @@ fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
 #[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
     let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
-    let decoded: ProblemIR =
-        serde_json::from_str(fixture).expect("golden v0.1.0 fixture should migrate");
+    let mut value: serde_json::Value =
+        serde_json::from_str(fixture).expect("golden v0.1.0 fixture should parse");
+    migrate_problem_ir_json_value(&mut value).expect("golden fixture should explicitly migrate");
+    let decoded: ProblemIR = serde_json::from_value(value)
+        .expect("explicitly migrated golden v0.1.0 fixture should deserialize");
 
     assert_eq!(decoded.ir_version, CURRENT_IR_VERSION);
     assert_eq!(decoded.problem_meta.script_api_version, CURRENT_IR_VERSION);
@@ -3411,6 +4159,28 @@ fn managed_runtime_device_override_has_a_separate_validated_identity() {
 }
 
 #[test]
+fn coupled_imex_ark2_round_trips_as_canonical_llg_integrator() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap example must use time evolution")
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "coupled_imex_ark2".to_string();
+
+    let encoded = serde_json::to_value(&ir).expect("ProblemIR serialization");
+    assert_eq!(
+        encoded["study"]["dynamics"]["integrator"],
+        "coupled_imex_ark2"
+    );
+    let decoded: ProblemIR = serde_json::from_value(encoded).expect("ProblemIR round-trip");
+    let StudyIR::TimeEvolution { dynamics, .. } = decoded.study else {
+        panic!("round-trip must preserve time evolution")
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    assert_eq!(integrator, "coupled_imex_ark2");
+}
+
+#[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });
@@ -4899,10 +5669,16 @@ fn eigenmodes_require_spectrum_or_mode_output() {
 fn spin_torque_current_source_must_reference_current_transport() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+        schema_version: None,
+        id: None,
+        target: None,
+        formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+        operator_version: None,
         current_density: None,
         current_source: Some("drive".to_string()),
         degree: 0.4,
         beta: 0.02,
+        lande_g: None,
     }];
 
     let errors = ir
@@ -4914,18 +5690,155 @@ fn spin_torque_current_source_must_reference_current_transport() {
 }
 
 #[test]
+fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: Some("slonczewski_torque.v1".to_string()),
+        id: Some("cpp".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "slonczewski.fullmag.v2".to_string(),
+        current_density: Some([0.0, 0.0, -5e10]),
+        current_source: None,
+        degree: 0.4,
+        spin_polarization: [0.0, 1.0, 0.0],
+        stack_normal: Some([0.0, 0.0, 1.0]),
+        lambda_asymmetry: 1.2,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: Some(1.5e-9),
+        fixed_layer_position: None,
+        realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+            realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+        }),
+    }];
+    ir.validate()
+        .unwrap_or_else(|errors| panic!("canonical Slonczewski should validate: {errors:?}"));
+    let json = serde_json::to_string(&ir).unwrap();
+    let restored: ProblemIR = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.spin_torque_modules, ir.spin_torque_modules);
+}
+
+#[test]
+fn canonical_slonczewski_rejects_nonfinite_scalar_coefficients() {
+    for (name, lambda_asymmetry, epsilon_prime, free_layer_thickness_m) in [
+        ("lambda_asymmetry", f64::NAN, 0.0, Some(1.5e-9)),
+        ("epsilon_prime", 1.2, f64::INFINITY, Some(1.5e-9)),
+        ("free_layer_thickness_m", 1.2, 0.0, Some(f64::NAN)),
+    ] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp".to_string()),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            current_density: Some([0.0, 0.0, -5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry,
+            epsilon_prime,
+            free_layer_thickness_m,
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+            }),
+        }];
+
+        let errors = ir
+            .validate()
+            .expect_err("nonfinite canonical Slonczewski coefficient must fail validation");
+        assert!(
+            errors.iter().any(|error| error.contains(name)),
+            "missing {name} diagnostic in {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn canonical_slonczewski_interface_flux_does_not_require_bulk_thickness() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: Some("slonczewski_torque.v1".to_string()),
+        id: Some("cpp-interface".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "slonczewski.fullmag.v2".to_string(),
+        current_density: Some([0.0, 0.0, -5e10]),
+        current_source: None,
+        degree: 0.4,
+        spin_polarization: [0.0, 1.0, 0.0],
+        stack_normal: Some([0.0, 0.0, 1.0]),
+        lambda_asymmetry: 1.2,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: None,
+        fixed_layer_position: None,
+        realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
+            interface_id: "fixed-to-free".to_string(),
+            realization_version: "slonczewski_interface_flux.v1".to_string(),
+        }),
+    }];
+
+    ir.validate().unwrap_or_else(|errors| {
+        panic!("surface Slonczewski realization must not invent bulk thickness: {errors:?}")
+    });
+}
+
+#[test]
+fn canonical_zhang_li_identity_survives_problem_ir_roundtrip() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "zhang_li",
+        "schema_version": "zhang_li_torque.v1",
+        "id": "cip",
+        "target": {"object_id": "strip"},
+        "formula_version": "zhang_li.fullmag.v1",
+        "operator_version": "zl_central_reference_v1",
+        "current_density": [5e10, 0.0, 0.0],
+        "degree": 0.4,
+        "beta": 0.02,
+        "lande_g": 2.0
+    }]);
+
+    let ir: ProblemIR = serde_json::from_value(value).expect("canonical Zhang-Li wire shape");
+    ir.validate()
+        .unwrap_or_else(|errors| panic!("canonical Zhang-Li should validate: {errors:?}"));
+    let roundtrip = serde_json::to_value(ir).unwrap();
+    let torque = &roundtrip["spin_torque_modules"][0];
+    assert_eq!(torque["schema_version"], "zhang_li_torque.v1");
+    assert_eq!(torque["id"], "cip");
+    assert_eq!(torque["target"]["object_id"], "strip");
+    assert_eq!(torque["formula_version"], "zhang_li.fullmag.v1");
+    assert_eq!(torque["operator_version"], "zl_central_reference_v1");
+    assert_eq!(torque["lande_g"], 2.0);
+}
+
+#[test]
 fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
     for position in ["top", "bottom"] {
         let mut ir = ProblemIR::bootstrap_example();
         ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None,
+            id: None,
+            target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
             current_density: Some([0.0, 0.0, 5e10]),
             current_source: None,
             degree: 0.4,
             spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
             lambda_asymmetry: 1.2,
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.5e-9),
             fixed_layer_position: Some(position.to_string()),
+            realization: None,
         }];
 
         ir.validate()
@@ -4937,14 +5850,20 @@ fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
 fn slonczewski_rejects_invalid_fixed_layer_position() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: None,
+        id: None,
+        target: None,
+        formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
         current_density: Some([0.0, 0.0, 5e10]),
         current_source: None,
         degree: 0.4,
         spin_polarization: [0.0, 0.0, 1.0],
+        stack_normal: None,
         lambda_asymmetry: 1.2,
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: Some("side".to_string()),
+        realization: None,
     }];
 
     let errors = ir
@@ -4959,14 +5878,20 @@ fn slonczewski_rejects_invalid_fixed_layer_position() {
 fn slonczewski_rejects_non_positive_free_layer_thickness() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: None,
+        id: None,
+        target: None,
+        formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
         current_density: Some([0.0, 0.0, 5e10]),
         current_source: None,
         degree: 0.4,
         spin_polarization: [0.0, 0.0, 1.0],
+        stack_normal: None,
         lambda_asymmetry: 1.2,
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(0.0),
         fixed_layer_position: Some("top".to_string()),
+        realization: None,
     }];
 
     let errors = ir
@@ -4986,6 +5911,8 @@ fn excitation_analysis_source_must_reference_antenna_module() {
         current_density: Some([0.0, 0.0, 5e10]),
         solve_region: None,
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        definition: None,
     });
     ir.excitation_analysis = Some(ExcitationAnalysisIR {
         source: "drive".to_string(),
@@ -5084,6 +6011,8 @@ fn validation_rejects_multiple_oersted_terms() {
         current_density: Some([0.0, 0.0, 5e10]),
         solve_region: Some("box".to_string()),
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        definition: None,
     });
     ir.energy_terms = vec![
         EnergyTermIR::OerstedCylinder {

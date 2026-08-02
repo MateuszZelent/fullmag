@@ -9,6 +9,7 @@
 #define FULLMAG_FDM_CONTEXT_HPP
 
 #include "fullmag_fdm.h"
+#include "spin_torque.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -200,11 +201,15 @@ struct Context {
 
     // Spin-Orbit Torque (SOT) — Manchon-Zhang DL + FL model
     bool   has_sot        = false;
-    double sot_je         = 0.0;          // |Je| charge current density [A/m²]
+    fullmag_fdm_prescribed_sot_formula sot_formula =
+        FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0;
+    double sot_je         = 0.0;          // signed conventional current density [A/m²]
     double sot_xi_dl      = 0.0;          // ξ_DL damping-like efficiency
     double sot_xi_fl      = 0.0;          // ξ_FL field-like efficiency
     double sot_sigma[3]   = {0.0, 0.0, 1.0}; // σ̂ spin polarisation vector (normalised on use)
     double sot_thickness  = 1.0e-9;       // t_F FM layer thickness [m]
+    uint8_t *sot_active_mask = nullptr;    // device target mask, intersected with active_mask
+    bool has_sot_active_mask = false;
 
     // Oersted field (cylindrical conductor)
     bool has_oersted_field = false;
@@ -428,7 +433,7 @@ struct SttParams {
     double  stt_cpp_pf          = 0.0;
 };
 
-inline double oersted_field_scale(const Context &ctx) {
+inline double oersted_field_scale(const Context &ctx, double evaluation_time) {
     if (!ctx.has_oersted_field) {
         return 0.0;
     }
@@ -437,7 +442,7 @@ inline double oersted_field_scale(const Context &ctx) {
     }
 
     double scale = ctx.oersted_current;
-    const double t = ctx.current_time;
+    const double t = evaluation_time;
     switch (ctx.oersted_time_dep_kind) {
         case 1: {
             const double f = ctx.oersted_time_dep_freq;
@@ -557,22 +562,25 @@ inline void fullmag_fdm_fill_step_stats_metadata(
 /// Passed by value to CUDA kernels so they don't need host-side Context access.
 struct SotParams {
     int    has_sot = 0;
+    int    formula = FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0;
     double xi_dl   = 0.0;  // ξ_DL damping-like efficiency
     double xi_fl   = 0.0;  // ξ_FL field-like efficiency
     double sx      = 0.0;  // σ̂_x (normalised)
     double sy      = 0.0;  // σ̂_y
     double sz      = 1.0;  // σ̂_z
-    double amp     = 0.0;  // ℏ|Je|/(2e μ₀ Ms t_F)  [A/m]
+    double amp     = 0.0;  // gamma_e ℏ J_signed/(2e Ms t_F) [1/s]
+    const uint8_t *active_mask = nullptr;
+    int has_active_mask = 0;
+    const uint8_t *target_mask = nullptr;
+    int has_target_mask = 0;
 };
 
 /// Build a SotParams from a Context.
 inline SotParams sot_params_from_ctx(const Context &ctx) {
     SotParams p;
     if (!ctx.has_sot || ctx.Ms <= 0.0 || ctx.sot_thickness <= 0.0) return p;
-    constexpr double HBAR = 1.054571817e-34;
-    constexpr double E_CH = 1.60217662e-19;
-    constexpr double MU0  = 1.2566370614359173e-6;
     p.has_sot = 1;
+    p.formula = static_cast<int>(ctx.sot_formula);
     p.xi_dl   = ctx.sot_xi_dl;
     p.xi_fl   = ctx.sot_xi_fl;
     double len = sqrt(ctx.sot_sigma[0]*ctx.sot_sigma[0] +
@@ -582,7 +590,20 @@ inline SotParams sot_params_from_ctx(const Context &ctx) {
     p.sx = ctx.sot_sigma[0] * inv;
     p.sy = ctx.sot_sigma[1] * inv;
     p.sz = ctx.sot_sigma[2] * inv;
-    p.amp = (fabs(ctx.sot_je) * HBAR) / (2.0 * E_CH * MU0 * ctx.Ms * ctx.sot_thickness);
+    if (ctx.sot_formula == FULLMAG_FDM_PRESCRIBED_SOT_V1) {
+        p.amp = prescribed_sot_rate_prefactor(
+            ctx.gamma, ctx.sot_je, ctx.Ms, ctx.sot_thickness);
+    } else {
+        constexpr double hbar_legacy = 1.054571817e-34;
+        constexpr double elementary_charge_legacy = 1.60217662e-19;
+        constexpr double mu0_legacy = 1.2566370614359173e-6;
+        p.amp = fabs(ctx.sot_je) * hbar_legacy /
+                (2.0 * elementary_charge_legacy * mu0_legacy * ctx.Ms * ctx.sot_thickness);
+    }
+    p.active_mask = ctx.active_mask;
+    p.has_active_mask = ctx.has_active_mask ? 1 : 0;
+    p.target_mask = ctx.sot_active_mask;
+    p.has_target_mask = ctx.has_sot_active_mask ? 1 : 0;
     return p;
 }
 
@@ -654,6 +675,9 @@ bool context_upload_layer_magnetization_f32(
 
 /// Upload active cell mask (host u8 -> device u8).
 bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
+
+/// Upload prescribed-SOT target mask (host u8 -> device u8).
+bool context_upload_sot_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
 
 /// Upload region ids (host u32 -> device u32).
 bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len);

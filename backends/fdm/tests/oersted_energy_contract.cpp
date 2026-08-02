@@ -34,8 +34,9 @@ int main() {
 
     check(reductions.find("ctx.has_oersted_field") != std::string::npos,
           "external-energy reduction must recognize an Oersted source");
-    check(reductions.find("oersted_field_scale(ctx)") != std::string::npos,
-          "external-energy reduction must use the current Oersted envelope");
+    check(reductions.find("oersted_field_scale(ctx, ctx.current_time)") !=
+              std::string::npos,
+          "external-energy reduction must use the time-dependent Oersted envelope");
     check(reductions.find("ctx.h_oe_static.x") != std::string::npos &&
               reductions.find("ctx.h_oe_static.y") != std::string::npos &&
               reductions.find("ctx.h_oe_static.z") != std::string::npos,

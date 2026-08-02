@@ -42,6 +42,13 @@ struct SttRuntimeState {
     double epsilon_prime = 0.0;
     double free_layer_thickness = 0.0; // 0 = geometry-derived
     double current_sign = 1.0;
+    uint32_t formula_version = FULLMAG_FEM_STT_FORMULA_LEGACY_FULLMAG_V0;
+    uint32_t realization_version = FULLMAG_FEM_STT_REALIZATION_NONE;
+    uint32_t operator_version = FULLMAG_FEM_STT_OPERATOR_NONE;
+    std::array<double, 3> stack_normal{0.0, 0.0, 1.0};
+    double lande_g = 0.0;
+    std::vector<uint8_t> active_node_mask{};
+    std::vector<uint8_t> active_element_mask{};
 };
 
 /*

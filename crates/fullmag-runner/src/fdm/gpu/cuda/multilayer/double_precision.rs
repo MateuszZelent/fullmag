@@ -117,6 +117,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
 
         if let Some((grid, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                     fem_mesh_generation_id: None,
@@ -193,7 +194,12 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (final_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(values),
         })?;
     }
 

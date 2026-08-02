@@ -106,8 +106,14 @@ import {
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
-import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPanel";
 import { PlanarMonitorDraftInspectorPanel } from "./panels/PlanarMonitorDraftInspectorPanel";
+import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPanel";
+import {
+  CurrentTransportInspectorPanel,
+  SpinTransportInspectorPanel,
+} from "./panels/TransportAuthoringInspector";
+import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./panels/SpinAuthoringInspector";
+import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
@@ -550,9 +556,39 @@ const PANELS: InspectorPanelContribution[] = [
     component: CouplingInspectorPanel,
   },
   {
+    id: "physics-current-transport",
+    title: "Current Transport",
+    selectionKinds: ["physics.current-transports", "physics.current-transport"],
+    component: CurrentTransportInspectorPanel,
+  },
+  {
+    id: "physics-spin-transport",
+    title: "Spin Transport",
+    selectionKinds: ["physics.spin-transports", "physics.spin-transport"],
+    component: SpinTransportInspectorPanel,
+  },
+  {
+    id: "physics-spin-interface",
+    title: "Spin Interface",
+    selectionKinds: ["physics.spin-interfaces", "physics.spin-interface"],
+    component: SpinInterfaceInspectorPanel,
+  },
+  {
+    id: "physics-spin-torque",
+    title: "Spin Torque",
+    selectionKinds: ["physics.spin-torques", "physics.spin-torque"],
+    component: SpinTorqueInspectorPanel,
+  },
+  {
+    id: "physics-oersted-field",
+    title: "Oersted Field",
+    selectionKinds: ["physics.oersted-fields", "physics.oersted-field"],
+    component: OerstedFieldInspectorPanel,
+  },
+  {
     id: "physics-field-drive",
     title: "Field Drive",
-    selectionKinds: ["physics.field-drive"],
+    selectionKinds: ["physics.field-drives", "physics.field-drive"],
     component: RegionalFieldDrivePanel,
   },
   {

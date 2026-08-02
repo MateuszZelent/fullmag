@@ -27,8 +27,8 @@ extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_anisotropy_field_fp64(Context &ctx);
 extern void launch_anisotropy_field_fp32(Context &ctx);
-extern void launch_effective_field_fp64(Context &ctx);
-extern void launch_effective_field_fp32(Context &ctx);
+extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
+extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern void launch_newell_compute_spectra_fp64(Context &ctx);
 extern void launch_newell_compute_spectra_fp32(Context &ctx);
 extern bool launch_multilayer_dmi_field_fp64(Context &ctx);
@@ -660,6 +660,27 @@ static void free_active_mask(Context &ctx) {
     if (ctx.active_mask) {
         cudaFree(ctx.active_mask);
         ctx.active_mask = nullptr;
+    }
+}
+
+static bool alloc_sot_active_mask(Context &ctx) {
+    if (!ctx.has_sot_active_mask) {
+        return true;
+    }
+    const size_t bytes = ctx.cell_count * sizeof(uint8_t);
+    const cudaError_t err =
+        cudaMalloc(reinterpret_cast<void **>(&ctx.sot_active_mask), bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(sot_active_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+static void free_sot_active_mask(Context &ctx) {
+    if (ctx.sot_active_mask) {
+        cudaFree(ctx.sot_active_mask);
+        ctx.sot_active_mask = nullptr;
     }
 }
 
@@ -1303,6 +1324,7 @@ static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
 bool context_alloc_device(Context &ctx) {
     if (!context_create_compute_stream(ctx)) return false;
     if (!alloc_active_mask(ctx)) return false;
+    if (!alloc_sot_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
     if (!alloc_exchange_lut(ctx)) return false;
     if (!alloc_reduction_scratch(ctx)) return false;
@@ -1409,6 +1431,7 @@ void context_free_device(Context &ctx) {
     free_fft_workspace(ctx);
     free_demag_kernel(ctx);
     free_active_mask(ctx);
+    free_sot_active_mask(ctx);
     free_region_mask(ctx);
     free_exchange_lut(ctx);
     free_boundary_correction(ctx);
@@ -1433,6 +1456,26 @@ bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len)
         cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMemcpy(active_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+bool context_upload_sot_active_mask(Context &ctx, const uint8_t *mask, uint64_t len) {
+    if (!ctx.has_sot_active_mask) {
+        return true;
+    }
+    if (!mask || len != ctx.cell_count) {
+        ctx.last_error = "sot_active_mask length mismatch";
+        return false;
+    }
+    const cudaError_t err = cudaMemcpy(
+        ctx.sot_active_mask,
+        mask,
+        ctx.cell_count * sizeof(uint8_t),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpy(sot_active_mask)", err);
         return false;
     }
     return true;
@@ -2013,14 +2056,29 @@ bool context_precompute_oersted_field(Context &ctx) {
 
     uint64_t n = ctx.cell_count;
     double R = ctx.oersted_radius;
-    double cx = ctx.oersted_center[0];
-    double cy = ctx.oersted_center[1];
-    // cz = ctx.oersted_center[2]; // unused for z-axis cylinder
+    const double center[3] = {
+        ctx.oersted_center[0],
+        ctx.oersted_center[1],
+        ctx.oersted_center[2],
+    };
+    const double axis_norm = sqrt(
+        ctx.oersted_axis[0] * ctx.oersted_axis[0]
+        + ctx.oersted_axis[1] * ctx.oersted_axis[1]
+        + ctx.oersted_axis[2] * ctx.oersted_axis[2]);
 
     if (R <= 0.0) {
         ctx.last_error = "oersted_radius must be positive";
         return false;
     }
+    if (!isfinite(axis_norm) || axis_norm <= 1e-30) {
+        ctx.last_error = "oersted_axis must be finite and nonzero";
+        return false;
+    }
+    const double axis[3] = {
+        ctx.oersted_axis[0] / axis_norm,
+        ctx.oersted_axis[1] / axis_norm,
+        ctx.oersted_axis[2] / axis_norm,
+    };
 
     double inv_2pi = 1.0 / (2.0 * M_PI);
     double R2 = R * R;
@@ -2034,13 +2092,19 @@ bool context_precompute_oersted_field(Context &ctx) {
         uint64_t iy = rem / ctx.nx;
         uint64_t ix = rem - iy * ctx.nx;
 
-        // Cell center coordinates
-        double x = (ix + 0.5) * ctx.dx;
-        double y = (iy + 0.5) * ctx.dy;
-
-        double dx = x - cx;
-        double dy = y - cy;
-        double r = sqrt(dx * dx + dy * dy);
+        const double rel[3] = {
+            (ix + 0.5) * ctx.dx - center[0],
+            (iy + 0.5) * ctx.dy - center[1],
+            (iz + 0.5) * ctx.dz - center[2],
+        };
+        const double axial = rel[0] * axis[0] + rel[1] * axis[1] + rel[2] * axis[2];
+        const double radial[3] = {
+            rel[0] - axial * axis[0],
+            rel[1] - axial * axis[1],
+            rel[2] - axial * axis[2],
+        };
+        const double r = sqrt(
+            radial[0] * radial[0] + radial[1] * radial[1] + radial[2] * radial[2]);
 
         double H_phi;
         if (r < 1e-30) {
@@ -2054,17 +2118,21 @@ bool context_precompute_oersted_field(Context &ctx) {
             H_phi = inv_2pi / r;
         }
 
-        // Convert azimuthal to Cartesian (phi-hat = (-sin(phi), cos(phi)))
-        double sin_phi = dy / r;
-        double cos_phi = dx / r;
         if (r < 1e-30) {
-            sin_phi = 0.0;
-            cos_phi = 0.0;
+            hx[idx] = 0.0;
+            hy[idx] = 0.0;
+            hz[idx] = 0.0;
+            continue;
         }
-
-        hx[idx] = -H_phi * sin_phi;
-        hy[idx] =  H_phi * cos_phi;
-        hz[idx] =  0.0;
+        const double rhat[3] = {radial[0] / r, radial[1] / r, radial[2] / r};
+        const double phi_hat[3] = {
+            axis[1] * rhat[2] - axis[2] * rhat[1],
+            axis[2] * rhat[0] - axis[0] * rhat[2],
+            axis[0] * rhat[1] - axis[1] * rhat[0],
+        };
+        hx[idx] = H_phi * phi_hat[0];
+        hy[idx] = H_phi * phi_hat[1];
+        hz[idx] = H_phi * phi_hat[2];
     }
 
     // Upload to device
@@ -2272,7 +2340,7 @@ static bool context_download_field_impl(
         case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
-            const double scale = oersted_field_scale(ctx);
+            const double scale = oersted_field_scale(ctx, ctx.current_time);
             for (uint64_t i = 0; i < n; i++) {
                 const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                 out_xyz[3 * i + 0] = 0.0;
@@ -2748,7 +2816,7 @@ static bool context_download_field_preview_impl(
     }
 
     if (observable == FULLMAG_FDM_OBSERVABLE_H_OE) {
-        const double scale = oersted_field_scale(ctx);
+        const double scale = oersted_field_scale(ctx, ctx.current_time);
         for (uint64_t i = 0; i < preview_count * 3u; ++i) {
             out_xyz[i] = static_cast<HostScalar>(static_cast<double>(out_xyz[i]) * scale);
         }
@@ -2899,7 +2967,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
                 err = cudaMemcpy(hz.data(), ctx.h_oe_static.z, component_bytes, cudaMemcpyDeviceToHost);
                 if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_oe_z)", err);
                 auto *host = reinterpret_cast<double *>(snapshot->host_soa);
-                const double scale = oersted_field_scale(ctx);
+                const double scale = oersted_field_scale(ctx, ctx.current_time);
                 for (uint64_t i = 0; i < ctx.cell_count; ++i) {
                     const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                     host[i] = (ctx.has_oersted_field && is_active) ? hx[i] * scale : 0.0;
@@ -2923,7 +2991,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
                 err = cudaMemcpy(hz.data(), ctx.h_oe_static.z, component_bytes, cudaMemcpyDeviceToHost);
                 if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_oe_z)", err);
                 auto *host = reinterpret_cast<float *>(snapshot->host_soa);
-                const float scale = static_cast<float>(oersted_field_scale(ctx));
+                const float scale = static_cast<float>(oersted_field_scale(ctx, ctx.current_time));
                 for (uint64_t i = 0; i < ctx.cell_count; ++i) {
                     const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                     host[i] = (ctx.has_oersted_field && is_active) ? hx[i] * scale : 0.0f;
@@ -3461,7 +3529,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp64(ctx);
         }
-        launch_effective_field_fp64(ctx);
+        launch_effective_field_fp64(ctx, ctx.current_time);
     } else {
         if (ctx.enable_exchange) {
             launch_exchange_field_fp32(ctx);
@@ -3469,7 +3537,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp32(ctx);
         }
-        launch_effective_field_fp32(ctx);
+        launch_effective_field_fp32(ctx, ctx.current_time);
     }
 
     cudaError_t err = cudaGetLastError();

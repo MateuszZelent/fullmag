@@ -10,6 +10,7 @@ from fullmag.model.spin_torque import (
     SlonczewskiSTT,
     SpinOrbitTorque,
     SpinTorque,
+    RegionRef,
     ZhangLiSTT,
 )
 
@@ -138,6 +139,8 @@ class TestSemanticSpinTorquePlaceholders(unittest.TestCase):
 
     def test_spin_orbit_torque_to_ir_module(self) -> None:
         torque = SpinOrbitTorque(
+            name="compat_sot",
+            target=RegionRef("free_layer"),
             charge_current_density_a_per_m2=2e11,
             damping_like_efficiency=0.12,
             field_like_efficiency=0.01,
@@ -145,8 +148,9 @@ class TestSemanticSpinTorquePlaceholders(unittest.TestCase):
             ferromagnet_thickness_m=1.5e-9,
         )
         ir = torque.to_ir_module()
-        self.assertEqual(ir["kind"], "spin_orbit_torque")
-        self.assertAlmostEqual(float(ir["field_like_efficiency"]), 0.01)  # type: ignore[arg-type]
+        self.assertEqual(ir["kind"], "prescribed_sot")
+        self.assertEqual(ir["formula_version"], "prescribed_sot.fullmag.v1")
+        self.assertAlmostEqual(float(ir["xi_fl"]), 0.01)  # type: ignore[arg-type]
 
 
 class TestSpinTorqueUnion(unittest.TestCase):

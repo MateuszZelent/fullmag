@@ -185,6 +185,7 @@ fn requested_frequency_response_preconditioner_name(
 }
 
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 struct FrequencyResponseProgressMetadata<'a> {
     solver_method: Option<&'a str>,
     solver_preconditioner: Option<&'a str>,
@@ -477,6 +478,7 @@ fn dense_frequency_response_progress_update(
     );
 
     StepUpdate {
+        coupled_checkpoint: None,
         stats: StepStats {
             step: completed_frequency_count,
             time: 0.0,
@@ -572,6 +574,7 @@ fn native_frequency_response_progress_update(
     );
 
     StepUpdate {
+        coupled_checkpoint: None,
         stats: StepStats {
             step: progress.completed_frequency_count,
             time: 0.0,
@@ -2567,6 +2570,7 @@ fn frequency_response_demag_backend_plan(
         field_drive_geometry_masks: Vec::new(),
         time_stage: Default::default(),
         current_modules: Vec::new(),
+        spin_transport_plans: Vec::new(),
         gyromagnetic_ratio: plan.gyromagnetic_ratio,
         precision: plan.precision,
         exchange_bc: plan.exchange_bc,
@@ -2591,6 +2595,7 @@ fn frequency_response_demag_backend_plan(
         stt_epsilon_prime: None,
         stt_thickness: None,
         stt_fixed_layer_position: None,
+        spin_torque_contract: None,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

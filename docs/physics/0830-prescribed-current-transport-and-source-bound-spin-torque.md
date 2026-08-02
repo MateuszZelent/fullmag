@@ -6,6 +6,14 @@
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
+> **Normative reconciliation (2026-07-15).** This note remains the historical
+> contract for the implemented `prescribed_density` bridge. Canonical current
+> convention, closed-circuit requirements, time envelopes, conservative
+> current validation, and source sharing with Oersted are defined in 0980.
+> Canonical torque signs are defined in 0960. Solved one-way and reciprocal
+> charge/spin transport are defined in 0970 and are M1/M2 work; the presence of
+> this prescribed-current artifact does not claim those solvers.
+
 ## 1. Problem statement
 
 Fullmag needs a first-class current-transport module that can:
@@ -43,6 +51,10 @@ with the current public implementation restricted to a spatially uniform, time-i
 $$
 \mathbf{J}(\mathbf{x}, t) = \mathbf{J}_0.
 $$
+
+Here $\mathbf J$ is the **signed conventional-current density**. Source
+binding must preserve all vector components and sign; replacing it by a norm
+is forbidden.
 
 Torque models may consume `J` through a named source binding instead of embedding the vector directly in the torque payload. For the executable public subset, the resulting torque laws are still the prescribed Slonczewski and Zhang-Li forms:
 
@@ -88,7 +100,7 @@ That solver is not implemented by this change.
 
 1. `prescribed_density` is spatially uniform over the executable magnetic solve region.
 2. The current public executable path is time-independent; no waveform or contact solve is introduced here.
-3. The current-density artifact is recorded on the FDM grid as provenance data, not as a live preview quantity.
+3. The historical current-density artifact is recorded on the FDM grid as provenance data; canonical M0+ keeps the stable live quantity id `J_charge` when materialization exists.
 4. Source-bound torque resolves to the same legacy executable fields already used by the FDM runners.
 5. `ohmic_poisson` semantics are public, but contacts, conductivity tensors, and solved `J(x)` remain deferred.
 6. `OerstedField(model="from_current_solution")` is specified separately in `docs/physics/0840-oersted-from-current-solution-and-fem-prescribed-current-transport.md`; this note remains the canonical source for source-bound torque semantics.
@@ -278,7 +290,7 @@ Provenance must preserve:
 ## 8. Known limits and deferred work
 
 1. `ohmic_poisson` is semantic-only; there is no contact solve, no potential field, and no solved `J(x)` yet.
-2. `SpinOrbitTorque` current-source semantics remain public-only; no executable lowering is added here.
+2. Legacy `SpinOrbitTorque` current-source semantics remain public-only in this slice; canonical export uses `PrescribedSpinOrbitTorque`, distinct from `DriftDiffusionSpinTorque` fed by a solved spin transport.
 3. `OerstedField(model="from_current_solution")` moved to `docs/physics/0840-oersted-from-current-solution-and-fem-prescribed-current-transport.md`.
 4. Current-transport artifacts are auxiliary files, not control-room preview quantities.
 5. Source-bound current coupling is currently implemented only on the single-layer public FDM time-domain path.
