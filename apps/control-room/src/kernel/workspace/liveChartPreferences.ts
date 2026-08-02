@@ -42,6 +42,7 @@ function storedByteLength(value: string): number {
 }
 
 function fitsStoredBytes(value: string, maximum: number): boolean {
+  if (value.length > maximum) return false;
   return storedByteLength(value) <= maximum;
 }
 

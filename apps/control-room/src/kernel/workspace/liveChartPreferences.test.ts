@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createDefaultLiveChartPreferences,
@@ -6,6 +6,7 @@ import {
   MAX_LEGACY_STORED_BYTES,
   MAX_LIVE_CHART_DESCRIPTORS,
   MAX_NEW_STORED_BYTES,
+  migrateLegacyLiveChartPreferences,
   parseLiveChartPreferences,
   parseStoredLiveChartPreferences,
   serializeLiveChartPreferences,
@@ -101,6 +102,32 @@ describe("Live Chart preferences", () => {
     expect(parseStoredLiveChartPreferences(" ".repeat(MAX_NEW_STORED_BYTES + 1))).toEqual(
       createDefaultLiveChartPreferences(),
     );
+  });
+
+  it("rejects huge new and legacy values before allocating encoded copies", () => {
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    const oversized = " ".repeat(MAX_NEW_STORED_BYTES * 16);
+
+    try {
+      expect(parseStoredLiveChartPreferences(oversized)).toEqual(createDefaultLiveChartPreferences());
+      expect(migrateLegacyLiveChartPreferences(oversized)).toEqual(createDefaultLiveChartPreferences());
+      expect(encode).not.toHaveBeenCalled();
+    } finally {
+      encode.mockRestore();
+    }
+  });
+
+  it("uses exact UTF-8 byte accounting for Unicode inside the code-unit budget", () => {
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    const serialized = JSON.stringify("€".repeat(100_000));
+
+    try {
+      expect(serialized.length).toBeLessThanOrEqual(MAX_NEW_STORED_BYTES);
+      expect(parseStoredLiveChartPreferences(serialized)).toEqual(createDefaultLiveChartPreferences());
+      expect(encode).toHaveBeenCalledOnce();
+    } finally {
+      encode.mockRestore();
+    }
   });
 
   it("rejects a normalized schema that cannot be persisted compactly", () => {
