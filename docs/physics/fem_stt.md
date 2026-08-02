@@ -1,6 +1,6 @@
 # FEM Spin-Transfer Torque
 
-- Status: versioned native FEM CPU contract; canonical v1 GPU fail-closed
+- Status: versioned native FEM CPU contract; canonical v2 GPU fail-closed
 - Last updated: 2026-07-15
 - Implementation: `backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
   `backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
@@ -41,13 +41,13 @@ plan fields directly.
 
 ## Slonczewski CPP
 
-For `slonczewski.fullmag.v1` with realization
+For `slonczewski.fullmag.v2` with realization
 `slonczewski_thin_layer_homogenized.v1`, the local Gilbert source is
 
 ```text
 J_n = J dot n_stack
 epsilon(c) = P Lambda^2 / [(Lambda^2 + 1) + (Lambda^2 - 1)c]
-Omega_J = gamma_e hbar J_n / (2 e Ms t_F)
+Omega_J = gamma_e hbar J_n / (e Ms t_F)
 T_G = Omega_J [epsilon(c) m x (m x p) + epsilon_prime m x p]
 ```
 
@@ -164,9 +164,9 @@ this same map, SI units, and torque equation.
 
 - Only one executable STT family is accepted by native FEM plan validation at a
   time.
-- Canonical v1 FEM CPU execution is implemented but remains unvalidated pending
+- Canonical v2 FEM CPU execution is implemented but remains unvalidated pending
   the named macrospin/current-scaling and domain-wall convergence gates.
-- Canonical v1 FEM GPU plans fail closed before device execution and before GPU
+- Canonical v2 FEM GPU plans fail closed before device execution and before GPU
   provenance is created. Existing GPU kernels retain legacy semantics only.
 - `slonczewski_interface_flux.v1` is semantic-only until a distinct oriented
   surface functional is implemented; it is never bulk-lowered.

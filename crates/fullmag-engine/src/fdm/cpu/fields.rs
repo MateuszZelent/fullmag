@@ -34,11 +34,19 @@ fn slonczewski_prefactor(
     const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
     const MU0_CONST: f64 = 1.2566370614359173e-6;
     let charge = match formula {
-        SlonczewskiFormula::FullmagV1 => EXACT_E_CHARGE,
+        SlonczewskiFormula::FullmagV2 | SlonczewskiFormula::FullmagV1 => EXACT_E_CHARGE,
         SlonczewskiFormula::LegacyFullmagV0 => LEGACY_E_CHARGE,
     };
+    let omega_denominator_factor = match formula {
+        SlonczewskiFormula::FullmagV2 => 1.0,
+        SlonczewskiFormula::FullmagV1 | SlonczewskiFormula::LegacyFullmagV0 => 2.0,
+    };
     current_sign * (current_density_magnitude * HBAR * gamma0)
-        / (2.0 * charge * MU0_CONST * saturation_magnetisation * thickness)
+        / (omega_denominator_factor
+            * charge
+            * MU0_CONST
+            * saturation_magnetisation
+            * thickness)
 }
 
 fn gilbert_slonczewski_scales(
@@ -50,7 +58,7 @@ fn gilbert_slonczewski_scales(
 ) -> (f64, f64) {
     let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
     match formula {
-        SlonczewskiFormula::FullmagV1 => (
+        SlonczewskiFormula::FullmagV2 | SlonczewskiFormula::FullmagV1 => (
             omega_j * (epsilon + alpha * epsilon_prime) * inv_gilbert,
             omega_j * (epsilon_prime - alpha * epsilon) * inv_gilbert,
         ),
@@ -3826,8 +3834,7 @@ mod stt_tests {
         let signed_current = cfg.current_sign * cfg.current_density_magnitude;
         let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
         let omega = gamma_e * HBAR * signed_current
-            / (2.0
-                * EXACT_E_CHARGE
+            / (EXACT_E_CHARGE
                 * problem.material.saturation_magnetisation
                 * cfg.thickness);
         let lambda_sq = cfg.lambda * cfg.lambda;
@@ -3850,7 +3857,7 @@ mod stt_tests {
     fn canonical_slonczewski_matches_independent_signed_si_gilbert_oracle() {
         let problem = one_cell_problem(0.2);
         let cfg = SlonczewskiSttConfig {
-            formula: crate::SlonczewskiFormula::FullmagV1,
+            formula: crate::SlonczewskiFormula::FullmagV2,
             current_density_magnitude: 7.0e11,
             spin_polarization_axis: [0.0, 0.0, 1.0],
             lambda: 1.7,
@@ -3889,7 +3896,7 @@ mod stt_tests {
             LlgConfig::default(),
         );
         let cfg = SlonczewskiSttConfig {
-            formula: crate::SlonczewskiFormula::FullmagV1,
+            formula: crate::SlonczewskiFormula::FullmagV2,
             current_density_magnitude: 7.0e11,
             spin_polarization_axis: [0.0, 0.0, 1.0],
             lambda: 1.7,
@@ -3943,6 +3950,44 @@ mod stt_tests {
             thickness,
         );
         assert_eq!(versioned.to_bits(), historical.to_bits());
+    }
+
+    #[test]
+    fn slonczewski_v2_lambda_one_has_standard_hbar_over_two_e_prefactor() {
+        const HBAR: f64 = 1.054571817e-34;
+        const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+        const MU0_CONST: f64 = 1.2566370614359173e-6;
+        let current_sign = -1.0;
+        let current_density_magnitude = 7.0e11;
+        let gamma0 = 2.211e5;
+        let saturation_magnetisation = 8.0e5;
+        let thickness = 1.5e-9;
+        let omega_v2 = slonczewski_prefactor(
+            SlonczewskiFormula::FullmagV2,
+            current_sign,
+            current_density_magnitude,
+            gamma0,
+            saturation_magnetisation,
+            thickness,
+        );
+        let standard = current_sign * (current_density_magnitude * HBAR * gamma0)
+            / (2.0
+                * EXACT_E_CHARGE
+                * MU0_CONST
+                * saturation_magnetisation
+                * thickness);
+        check_close(omega_v2 * 0.5, standard, standard.abs() * 1.0e-15);
+
+        let omega_v1 = slonczewski_prefactor(
+            SlonczewskiFormula::FullmagV1,
+            current_sign,
+            current_density_magnitude,
+            gamma0,
+            saturation_magnetisation,
+            thickness,
+        );
+        check_close(omega_v1, standard, standard.abs() * 1.0e-15);
+        check_close(omega_v2, 2.0 * omega_v1, standard.abs() * 1.0e-15);
     }
 
     #[test]

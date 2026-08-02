@@ -86,9 +86,9 @@ void add_slonczewski_stt_rhs_aos(
         current_density[0],
         current_density[1],
         current_density[2]);
-    const bool canonical_v1 =
-        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
-    const double signed_current = canonical_v1
+    const bool canonical_v2 =
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
+    const double signed_current = canonical_v2
         ? dot3(current_density, ctx.stt.stack_normal)
         : ctx.stt.current_sign * j_mag;
     if (signed_current == 0.0) {
@@ -97,7 +97,7 @@ void add_slonczewski_stt_rhs_aos(
     const Vec3 axis = j_mag > 0.0
         ? scale3(current_density, 1.0 / j_mag)
         : ctx.stt.stack_normal;
-    const double thickness = canonical_v1
+    const double thickness = canonical_v2
         ? ctx.stt.free_layer_thickness
         : (ctx.stt.free_layer_thickness > 0.0
             ? ctx.stt.free_layer_thickness
@@ -128,18 +128,19 @@ void add_slonczewski_stt_rhs_aos(
             ctx.material_fields.alpha_field,
             i,
             ctx.material_fields.material.damping);
+        const double omega_denominator_factor = canonical_v2 ? 1.0 : 2.0;
         const double prefactor =
             (signed_current * HBAR *
              ctx.material_fields.material.gyromagnetic_ratio) /
-            (2.0 * (canonical_v1 ? E_CHARGE_EXACT : E_CHARGE_LEGACY) * kMu0 * ms * thickness);
+            (omega_denominator_factor * (canonical_v2 ? E_CHARGE_EXACT : E_CHARGE_LEGACY) * kMu0 * ms * thickness);
         const double m_dot_p = dot3(m, p);
         const double g = (degree * lambda_sq) /
             ((lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p);
         const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
-        const double damping_like = canonical_v1
+        const double damping_like = canonical_v2
             ? prefactor * (g + alpha * ctx.stt.epsilon_prime) * inv_gilbert
             : prefactor * g * (1.0 + alpha * ctx.stt.epsilon_prime) * inv_gilbert;
-        const double field_like = canonical_v1
+        const double field_like = canonical_v2
             ? prefactor * (ctx.stt.epsilon_prime - alpha * g) * inv_gilbert
             : prefactor * g * (ctx.stt.epsilon_prime - alpha) * inv_gilbert;
 

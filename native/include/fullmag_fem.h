@@ -28,8 +28,11 @@ typedef enum {
 
 typedef enum {
     FULLMAG_FEM_STT_FORMULA_LEGACY_FULLMAG_V0 = 0,
+    /* Historical canonical evaluator; read-only provenance only. */
     FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1 = 1,
     FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1 = 2,
+    /* Corrected canonical Slonczewski evaluator (Omega_J uses hbar/e). */
+    FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2 = 3,
 } fullmag_fem_stt_formula_version;
 
 typedef enum {

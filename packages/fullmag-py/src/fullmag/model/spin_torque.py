@@ -411,7 +411,7 @@ class SlonczewskiSTT:
         Secondary (field-like) spin-transfer coefficient ε'. Default: 0.0.
     free_layer_thickness_m : float, optional
         Free-layer thickness d [m]. Used in the β_STT prefactor
-        ``β = ℏ·J / (2·e·μ₀·Ms·d)``. When ``None`` the engine defaults to
+        ``Ω = γₑ·ℏ·J / (e·Ms·d)``. When ``None`` the engine defaults to
         the cell size along the current-flow direction (like amumax).
     fixed_layer_position : str, optional
         Stack ordering of fixed vs free layer along +z: ``"top"`` or ``"bottom"``.
@@ -491,7 +491,7 @@ class SlonczewskiSTT:
                 else None,
             )
             object.__setattr__(self, "fixed_layer_position", None)
-            object.__setattr__(self, "formula_version", "slonczewski.fullmag.v1")
+            object.__setattr__(self, "formula_version", "slonczewski.fullmag.v2")
             object.__setattr__(
                 self,
                 "realization_version",
@@ -526,7 +526,7 @@ class SlonczewskiSTT:
             "lambda_asymmetry": self.lambda_asymmetry,
             "epsilon_prime": self.epsilon_prime,
         }
-        if self.formula_version == "slonczewski.fullmag.v1":
+        if self.formula_version == "slonczewski.fullmag.v2":
             assert self.id is not None and self.target is not None
             assert self.stack_normal is not None and self.realization_version is not None
             realization: dict[str, object]

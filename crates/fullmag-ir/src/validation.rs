@@ -836,7 +836,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     }
                 }
                 match formula_version.as_str() {
-                    "slonczewski.fullmag.v1" => {
+                    "slonczewski.fullmag.v2" => {
                         if schema_version.as_deref() != Some("slonczewski_torque.v1") {
                             errors.push(format!("spin_torque_modules[{index}] canonical slonczewski schema_version must be slonczewski_torque.v1"));
                         }
@@ -876,6 +876,11 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                             }
                             _ => errors.push(format!("spin_torque_modules[{index}] canonical slonczewski requires a registered realization identity")),
                         }
+                    }
+                    "slonczewski.fullmag.v1" => {
+                        errors.push(format!(
+                            "spin_torque_modules[{index}] slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2"
+                        ));
                     }
                     "slonczewski.legacy_fullmag.v0" => {
                         if schema_version.is_some() || id.is_some() || target.is_some() || stack_normal.is_some() || realization.is_some() {

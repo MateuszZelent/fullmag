@@ -16959,7 +16959,7 @@
       },
       "SlonczewskiFormulaVersion": {
         "enum": [
-          "slonczewski.fullmag.v1",
+          "slonczewski.fullmag.v2",
           "slonczewski.legacy_fullmag.v0"
         ],
         "type": "string"

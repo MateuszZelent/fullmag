@@ -1796,7 +1796,7 @@ def _render_spin_torques(
             continue
         if isinstance(module, SlonczewskiSTT):
             kwargs = []
-            if module.formula_version == "slonczewski.fullmag.v1":
+            if module.formula_version == "slonczewski.fullmag.v2":
                 assert module.id is not None and module.target is not None
                 assert module.stack_normal is not None
                 kwargs.append(f"id={_py_repr(module.id)}")
@@ -2235,7 +2235,7 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             )
     if kind == "slonczewski":
         formula_version = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
-        if formula_version == "slonczewski.fullmag.v1":
+        if formula_version == "slonczewski.fullmag.v2":
             if _required_entry(entry, "schema_version", context=str(kind)) != "slonczewski_torque.v1":
                 raise ValueError("canonical slonczewski schema_version must be slonczewski_torque.v1")
             kwargs.append(f"id={_py_repr(_required_nonempty_string(entry, 'id', context=str(kind)))}")
@@ -2272,6 +2272,8 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
                 raise ValueError(f"unsupported canonical slonczewski realization {realization_kind!r}")
             if "fixed_layer_position" in entry:
                 raise ValueError("canonical slonczewski must not contain fixed_layer_position")
+        elif formula_version == "slonczewski.fullmag.v1":
+            raise ValueError("slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2")
         elif formula_version != "slonczewski.legacy_fullmag.v0":
             raise ValueError(f"unsupported slonczewski formula_version {formula_version!r}")
         if "free_layer_thickness_m" in entry:

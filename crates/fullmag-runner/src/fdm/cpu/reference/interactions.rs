@@ -92,7 +92,7 @@ pub(super) fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<Slonczews
         .as_deref()
         .unwrap_or("slonczewski.legacy_fullmag.v0")
     {
-        "slonczewski.fullmag.v1" => {
+        "slonczewski.fullmag.v2" => {
             let n = plan.slonczewski_stack_normal?;
             let active_mask = plan.slonczewski_active_mask.clone()?;
             let n_norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
@@ -118,7 +118,7 @@ pub(super) fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<Slonczews
     };
     Some(SlonczewskiSttConfig {
         formula: match plan.slonczewski_formula_version.as_deref() {
-            Some("slonczewski.fullmag.v1") => SlonczewskiFormula::FullmagV1,
+            Some("slonczewski.fullmag.v2") => SlonczewskiFormula::FullmagV2,
             _ => SlonczewskiFormula::LegacyFullmagV0,
         },
         current_density_magnitude,

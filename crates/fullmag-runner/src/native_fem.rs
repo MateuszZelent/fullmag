@@ -980,7 +980,7 @@ impl NativeFemBackend {
             .unwrap_or_default();
         let stt_formula_version = match stt_contract.map(|contract| contract.formula_version.as_str()) {
             None | Some("slonczewski.legacy_fullmag.v0") | Some("zhang_li.legacy_fullmag.v0") => 0,
-            Some("slonczewski.fullmag.v1") => 1,
+            Some("slonczewski.fullmag.v2") => 3,
             Some("zhang_li.fullmag.v1") => 2,
             Some(_) => u32::MAX,
         };

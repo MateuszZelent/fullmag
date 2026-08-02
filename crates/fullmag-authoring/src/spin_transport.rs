@@ -346,6 +346,10 @@ impl SceneCurrentTransport {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub enum SlonczewskiFormulaVersion {
+    #[serde(rename = "slonczewski.fullmag.v2")]
+    FullmagV2,
+    /// Historical canonical evaluator. It is accepted only when inspecting
+    /// read-only provenance, never when authoring a new scene.
     #[serde(rename = "slonczewski.fullmag.v1")]
     FullmagV1,
     #[serde(rename = "slonczewski.legacy_fullmag.v0")]

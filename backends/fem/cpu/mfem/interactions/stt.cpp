@@ -117,7 +117,7 @@ bool initialize_stt_plan_fields(
     }
 
     if (ctx.stt.slonczewski_enabled &&
-        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1) {
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2) {
         if (ctx.stt.realization_version ==
             FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_INTERFACE_FLUX_V1) {
             error = "slonczewski_interface_flux.v1 requires a dedicated FEM oriented surface functional and is fail-closed";
@@ -141,6 +141,10 @@ bool initialize_stt_plan_fields(
         for (double &component : ctx.stt.stack_normal) {
             component /= normal_len;
         }
+    } else if (ctx.stt.slonczewski_enabled &&
+               ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1) {
+        error = "slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2";
+        return false;
     } else if (ctx.stt.zhang_li_enabled &&
                ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1) {
         if (ctx.stt.operator_version != FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1) {

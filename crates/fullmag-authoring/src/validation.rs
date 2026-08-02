@@ -783,7 +783,10 @@ fn validate_spin_torque(
             finite_vec3(
                 *spin_polarization,
                 &format!("spin_torques[{index}].spin_polarization"),
-                matches!(formula_version, SlonczewskiFormulaVersion::FullmagV1),
+                matches!(
+                    formula_version,
+                    SlonczewskiFormulaVersion::FullmagV2 | SlonczewskiFormulaVersion::FullmagV1
+                ),
             )?;
             unit_interval_open(*degree, &format!("spin_torques[{index}].degree"))?;
             if !lambda_asymmetry.is_finite() || *lambda_asymmetry < 1.0 {
@@ -802,7 +805,7 @@ fn validate_spin_torque(
                 )?;
             }
             match formula_version {
-                SlonczewskiFormulaVersion::FullmagV1 => {
+                SlonczewskiFormulaVersion::FullmagV2 => {
                     if schema_version.as_deref() != Some("slonczewski_torque.v1")
                         || free_layer_thickness_m.is_none()
                         || fixed_layer_position.is_some()
@@ -822,6 +825,11 @@ fn validate_spin_torque(
                         &format!("spin_torques[{index}].stack_normal"),
                         true,
                     )?;
+                }
+                SlonczewskiFormulaVersion::FullmagV1 => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_torques[{index}] slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2"
+                    )));
                 }
                 SlonczewskiFormulaVersion::LegacyFullmagV0 => {
                     if target.is_some() || stack_normal.is_some() || realization.is_some() {

@@ -3945,7 +3945,7 @@ mod tests {
             schema_version: Some("slonczewski_torque.v1".to_string()),
             id: Some("cpp".to_string()),
             target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
-            formula_version: "slonczewski.fullmag.v1".to_string(),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
             current_density: Some([0.0, 0.0, -2.0e11]),
             current_source: None,
             degree: 0.55,
@@ -3968,7 +3968,7 @@ mod tests {
         fem.stt_epsilon_prime = Some(0.03);
         fem.stt_thickness = Some(1.5e-9);
         fem.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
-            formula_version: "slonczewski.fullmag.v1".to_string(),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
             operator_version: None,
             realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
             target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
@@ -4016,7 +4016,7 @@ mod tests {
         assert_eq!(provenance["schema_version"], "spin_torque_provenance.v1");
         assert_eq!(provenance["authored_class"], "SlonczewskiSTT");
         assert_eq!(provenance["canonical_class"], "SlonczewskiSTT");
-        assert_eq!(provenance["formula_version"], "slonczewski.fullmag.v1");
+        assert_eq!(provenance["formula_version"], "slonczewski.fullmag.v2");
         assert_eq!(provenance["realization_version"], "slonczewski_thin_layer_homogenized.v1");
         assert_eq!(provenance["current_convention"], "conventional_charge_current");
         assert_eq!(provenance["current_density_unit"], "A/m^2");

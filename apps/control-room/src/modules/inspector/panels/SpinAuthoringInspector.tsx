@@ -74,7 +74,7 @@ const DEFAULT_TORQUE: TorqueDraft = {
   drive: JSON.stringify({ kind: "signed_scalar", current_density_Apm2: 0, sigma_hat: [0, 1, 0] }, null, 2),
   epsilonPrime: "0",
   fixedLayerPosition: "",
-  formulaVersion: "slonczewski.fullmag.v1",
+  formulaVersion: "slonczewski.fullmag.v2",
   freeLayerThickness: "",
   id: "spin-torque",
   kind: "zhang_li",

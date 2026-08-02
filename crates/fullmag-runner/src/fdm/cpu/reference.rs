@@ -225,7 +225,7 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
         .as_deref()
         .unwrap_or("slonczewski.legacy_fullmag.v0")
     {
-        "slonczewski.fullmag.v1" => {
+        "slonczewski.fullmag.v2" => {
             let n = plan.slonczewski_stack_normal?;
             let active_mask = plan.slonczewski_active_mask.clone()?;
             let n_norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
@@ -251,7 +251,7 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
     };
     Some(SlonczewskiSttConfig {
         formula: match plan.slonczewski_formula_version.as_deref() {
-            Some("slonczewski.fullmag.v1") => fullmag_engine::SlonczewskiFormula::FullmagV1,
+            Some("slonczewski.fullmag.v2") => fullmag_engine::SlonczewskiFormula::FullmagV2,
             _ => fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
         },
         current_density_magnitude,
@@ -4696,7 +4696,7 @@ mod tests {
         plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
         plan.stt_lambda = Some(1.4);
         plan.stt_epsilon_prime = Some(0.0);
-        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v1".to_string());
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
         plan.slonczewski_stack_normal = Some([0.0, 2.0, 0.0]);
         plan.slonczewski_active_mask = Some(vec![true; plan.initial_magnetization.len()]);
 
@@ -4713,11 +4713,11 @@ mod tests {
         assert_eq!(reversed.current_sign, -1.0);
         assert_eq!(
             forward.formula,
-            fullmag_engine::SlonczewskiFormula::FullmagV1
+            fullmag_engine::SlonczewskiFormula::FullmagV2
         );
         assert_eq!(
             reversed.formula,
-            fullmag_engine::SlonczewskiFormula::FullmagV1
+            fullmag_engine::SlonczewskiFormula::FullmagV2
         );
         assert_eq!(forward.active_mask, plan.slonczewski_active_mask);
     }

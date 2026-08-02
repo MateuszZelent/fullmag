@@ -439,7 +439,7 @@ def _decode_spin_torque(value: object) -> object:
         formula = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
         common: dict[str, object] = {
             **binding,
-            "spin_polarization": _vec3(entry.get("spin_polarization"), "slonczewski.spin_polarization", nonzero=formula == "slonczewski.fullmag.v1"),
+            "spin_polarization": _vec3(entry.get("spin_polarization"), "slonczewski.spin_polarization", nonzero=formula in {"slonczewski.fullmag.v2", "slonczewski.fullmag.v1"}),
             "degree": _finite_number(entry.get("degree"), "slonczewski.degree"),
             "lambda_asymmetry": _finite_number(entry.get("lambda_asymmetry"), "slonczewski.lambda_asymmetry"),
             "epsilon_prime": _finite_number(entry.get("epsilon_prime"), "slonczewski.epsilon_prime"),
@@ -447,7 +447,7 @@ def _decode_spin_torque(value: object) -> object:
         thickness = entry.get("free_layer_thickness_m")
         if thickness is not None:
             common["free_layer_thickness_m"] = _finite_number(thickness, "slonczewski.free_layer_thickness_m")
-        if formula == "slonczewski.fullmag.v1":
+        if formula == "slonczewski.fullmag.v2":
             if entry.get("schema_version") != "slonczewski_torque.v1" or entry.get("realization") != {
                 "kind": "thin_layer_homogenized",
                 "realization_version": "slonczewski_thin_layer_homogenized.v1",
@@ -459,6 +459,8 @@ def _decode_spin_torque(value: object) -> object:
                 stack_normal=_vec3(entry.get("stack_normal"), "slonczewski.stack_normal", nonzero=True),
                 **common,  # type: ignore[arg-type]
             )
+        if formula == "slonczewski.fullmag.v1":
+            raise ValueError("slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2")
         if formula != "slonczewski.legacy_fullmag.v0":
             raise ValueError(f"unsupported Slonczewski formula_version {formula!r}")
         return SlonczewskiSTT(
@@ -543,7 +545,7 @@ def _canonical_spin_torques(values: object, *, scene_ids: bool) -> list[dict[str
         entry = _mapping(copy.deepcopy(value), f"spin_torques[{index}]")
         kind = entry.get("kind")
         formula = entry.get("formula_version")
-        if kind == "zhang_li" or (kind == "slonczewski" and formula != "slonczewski.fullmag.v1"):
+        if kind == "zhang_li" or (kind == "slonczewski" and formula not in {"slonczewski.fullmag.v2", "slonczewski.fullmag.v1"}):
             entry.pop("id", None)
         module = _decode_spin_torque(entry)
         canonical = module.to_ir_module()  # type: ignore[attr-defined]

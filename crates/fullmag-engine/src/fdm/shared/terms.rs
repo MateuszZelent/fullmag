@@ -92,6 +92,11 @@ pub struct SlonczewskiSttConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlonczewskiFormula {
+    /// Corrected canonical SI evaluator. With the MuMax efficiency
+    /// definition epsilon=P*Lambda^2/denominator, Omega_J uses hbar/e.
+    FullmagV2,
+    /// Historical canonical evaluator kept only for read-only provenance.
+    /// It contains the additional 1/2 and is not accepted for new runs.
     FullmagV1,
     LegacyFullmagV0,
 }

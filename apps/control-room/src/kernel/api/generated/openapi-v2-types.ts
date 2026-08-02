@@ -7278,7 +7278,7 @@ export interface components {
             thickness_percent?: number | null;
         };
         /** @enum {string} */
-        SlonczewskiFormulaVersion: "slonczewski.fullmag.v1" | "slonczewski.legacy_fullmag.v0";
+        SlonczewskiFormulaVersion: "slonczewski.fullmag.v2" | "slonczewski.legacy_fullmag.v0";
         SlonczewskiRealization: {
             kind: components["schemas"]["SlonczewskiRealizationKind"];
             realization_version: components["schemas"]["SlonczewskiRealizationVersion"];

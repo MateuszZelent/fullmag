@@ -191,7 +191,15 @@ pub(crate) fn resolve_legacy_spin_torque(
                     reasons: vec![reason.to_string()],
                 });
             }
-            let canonical = formula_version == "slonczewski.fullmag.v1";
+            if formula_version == "slonczewski.fullmag.v1" {
+                return Err(PlanError {
+                    reasons: vec![
+                        "slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2 for new runs"
+                            .to_string(),
+                    ],
+                });
+            }
+            let canonical = formula_version == "slonczewski.fullmag.v2";
             let normalized_polarization = if canonical {
                 normalized_axis(*spin_polarization).ok_or_else(|| PlanError {
                     reasons: vec![
@@ -724,7 +732,7 @@ mod tests {
             schema_version: Some("slonczewski_torque.v1".to_string()),
             id: Some("cpp".to_string()),
             target: Some(target.clone()),
-            formula_version: "slonczewski.fullmag.v1".to_string(),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
             current_density: Some([3.0e10, -4.0e10, 0.0]),
             current_source: None,
             degree: 0.4,
@@ -742,7 +750,7 @@ mod tests {
             .expect("canonical Slonczewski should resolve");
         assert_eq!(
             resolved.slonczewski_formula_version.as_deref(),
-            Some("slonczewski.fullmag.v1")
+            Some("slonczewski.fullmag.v2")
         );
         assert_eq!(resolved.slonczewski_target, Some(target));
         assert_eq!(resolved.slonczewski_stack_normal, Some([0.0, 1.0, 0.0]));
@@ -760,7 +768,7 @@ mod tests {
                 object_id: "strip".to_string(),
                 region_id: None,
             }),
-            formula_version: "slonczewski.fullmag.v1".to_string(),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
             current_density: Some([0.0, 0.0, 4.0e10]),
             current_source: None,
             degree: 0.4,
@@ -794,7 +802,7 @@ mod tests {
                 object_id: "strip".to_string(),
                 region_id: None,
             }),
-            formula_version: "slonczewski.fullmag.v1".to_string(),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
             current_density: Some([0.0, 0.0, 5e10]),
             current_source: None,
             degree: 0.4,

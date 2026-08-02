@@ -5,7 +5,7 @@
 - Last updated: 2026-07-15
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
-- Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v1`,
+- Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v2`,
   `prescribed_sot.fullmag.v1`, `transport_absorption.fullmag.v1`
 
 Formula, operator, realization, and engine identifiers are classified by the
@@ -100,7 +100,7 @@ free layer. Set `J_n=J_c dot n_stack`, `t_F>0`, `Lambda>=1`, `P in [0,1]`, and
 c = m dot p,
 epsilon(c) = P Lambda^2 /
   [(Lambda^2+1)+(Lambda^2-1)c],
-Omega_J = gamma_e hbar J_n/(2 e M_s t_F).     [1/s]
+Omega_J = gamma_e hbar J_n/(e M_s t_F).       [1/s]
 ```
 
 The homogenized Gilbert source is
@@ -120,9 +120,11 @@ T_SL,explicit = Omega_J [(epsilon(c)+alpha epsilon_prime) D
 ```
 
 `epsilon_prime` is independent of `epsilon(c)`: an implementation must not
-factor `epsilon(c)` across the field-like term. Canonical v1 uses the exact SI
+factor `epsilon(c)` across the field-like term. Canonical v2 uses the exact SI
 elementary charge `e=1.602176634e-19 C`; a rounded historical literal may only
-remain inside an explicitly versioned legacy evaluator.
+remain inside an explicitly versioned legacy evaluator. The former
+`slonczewski.fullmag.v1` evaluator is retained only as read-only provenance and
+is rejected for new planning.
 
 `fixed_layer_position` is only a migration input used to derive `n_stack`; it
 must not multiply the current sign a second time. The efficiency denominator is
@@ -285,7 +287,7 @@ mask, signed current, formula version, and stage time with persistent device
 buffers. FP64 parity precedes a separately bounded FP32 qualification.
 
 Until a CUDA descriptor carries that complete canonical data, a requested
-`slonczewski.fullmag.v1` CUDA execution fails before native construction. It
+`slonczewski.fullmag.v2` CUDA execution fails before native construction. It
 must not reuse the legacy current norm, fixed-layer sign, or global-only mask.
 Likewise, an FDM request for `slonczewski_interface_flux.v1` fails in planning;
 FDM may not replace the oriented interface functional with the homogenized

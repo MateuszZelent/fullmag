@@ -93,8 +93,8 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
 fn ensure_cuda_slonczewski_supported(plan: &fullmag_ir::FdmPlanIR) -> Result<(), RunError> {
     match plan.slonczewski_formula_version.as_deref() {
         None | Some("slonczewski.legacy_fullmag.v0") => Ok(()),
-        Some("slonczewski.fullmag.v1") => Err(RunError {
-            message: "slonczewski.fullmag.v1 is not executable on FDM CUDA until the native descriptor carries formula version, signed stack-normal current, and the separate target mask; use FDM CPU reference"
+        Some("slonczewski.fullmag.v2") => Err(RunError {
+            message: "slonczewski.fullmag.v2 is not executable on FDM CUDA until the native descriptor carries formula version, signed stack-normal current, and the separate target mask; use FDM CPU reference"
                 .to_string(),
         }),
         Some(other) => Err(RunError {
@@ -3498,7 +3498,7 @@ mod exact_metric_contract_tests {
     #[test]
     fn canonical_slonczewski_fails_before_native_cuda_construction() {
         let mut plan = fullmag_ir::FdmPlanIR::default();
-        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v1".to_string());
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
         plan.current_density = Some([0.0, 0.0, 7.0e11]);
         plan.stt_degree = Some(0.6);
         plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
@@ -3506,7 +3506,7 @@ mod exact_metric_contract_tests {
 
         let error = ensure_cuda_slonczewski_supported(&plan)
             .expect_err("canonical Slonczewski must not reach the legacy CUDA descriptor");
-        assert!(error.message.contains("slonczewski.fullmag.v1"));
+        assert!(error.message.contains("slonczewski.fullmag.v2"));
         assert!(error.message.contains("CUDA"));
         assert!(error.message.contains("target mask"));
     }

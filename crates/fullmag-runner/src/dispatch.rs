@@ -6380,13 +6380,13 @@ mod tests {
             formula_version: formula_version.to_string(),
             operator_version: (formula_version == "zhang_li.fullmag.v1")
                 .then(|| "zl_central_reference_v1".to_string()),
-            realization_version: (formula_version == "slonczewski.fullmag.v1")
+            realization_version: (formula_version == "slonczewski.fullmag.v2")
                 .then(|| "slonczewski_thin_layer_homogenized.v1".to_string()),
             target: Some(fullmag_ir::RegionRefIR {
                 object_id: "free".to_string(),
                 region_id: None,
             }),
-            stack_normal: (formula_version == "slonczewski.fullmag.v1").then_some([0.0, 0.0, 1.0]),
+            stack_normal: (formula_version == "slonczewski.fullmag.v2").then_some([0.0, 0.0, 1.0]),
             lande_g: (formula_version == "zhang_li.fullmag.v1").then_some(2.0),
             active_node_mask: Some(vec![true; 4]),
             active_element_mask: Some(vec![true]),
@@ -9542,7 +9542,7 @@ mod tests {
 
     #[test]
     fn auto_fem_canonical_stt_falls_back_to_cpu_with_versioned_reason() {
-        for formula_version in ["slonczewski.fullmag.v1", "zhang_li.fullmag.v1"] {
+        for formula_version in ["slonczewski.fullmag.v2", "zhang_li.fullmag.v1"] {
             let resolution = apply_fem_gpu_plan_constraints(
                 &canonical_stt_fem_plan(formula_version),
                 EngineResolution {
@@ -9597,7 +9597,7 @@ mod tests {
 
     #[test]
     fn strict_fem_canonical_stt_gpu_fails_before_provenance() {
-        for formula_version in ["slonczewski.fullmag.v1", "zhang_li.fullmag.v1"] {
+        for formula_version in ["slonczewski.fullmag.v2", "zhang_li.fullmag.v1"] {
             let err = apply_fem_gpu_plan_constraints(
                 &canonical_stt_fem_plan(formula_version),
                 EngineResolution {

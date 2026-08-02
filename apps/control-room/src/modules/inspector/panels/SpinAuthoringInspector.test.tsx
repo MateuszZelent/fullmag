@@ -69,7 +69,7 @@ describe("dedicated torque and Oersted inspectors", () => {
     const base = { beta: "0", compatibilityOrigin: "", currentDensity: "1, 0, 0", currentSource: "charge", degree: "0.4", drive: JSON.stringify({ kind: "signed_scalar", current_density_Apm2: 1, sigma_hat: [0, 1, 0] }), epsilonPrime: "0", fixedLayerPosition: "", formulaVersion: "prescribed_sot.fullmag.v1", freeLayerThickness: "1e-9", id: "sot", kind: "prescribed_sot" as const, lambdaAsymmetry: "1", rawSpinPolarization: "", realization: "", schemaVersion: "prescribed_sot.v1", spinPolarization: "0, 0, 1", stackNormal: "", target: "", xiDl: "0.12", xiFl: "-0.03" };
     const sot = buildTorque(base) as Record<string, unknown>;
     expect(sot).toMatchObject({ kind: "prescribed_sot", xi_dl: 0.12, xi_fl: -0.03 });
-    const slon = buildTorque({ ...base, kind: "slonczewski", formulaVersion: "slonczewski.fullmag.v1", schemaVersion: "" }) as Record<string, unknown>;
+    const slon = buildTorque({ ...base, kind: "slonczewski", formulaVersion: "slonczewski.fullmag.v2", schemaVersion: "" }) as Record<string, unknown>;
     expect(slon).not.toHaveProperty("xi_dl");
     expect(slon).not.toHaveProperty("xi_fl");
   });

@@ -506,7 +506,7 @@ void slonczewski_skips_nonmagnetic_nodes() {
 void canonical_slonczewski_uses_signed_stack_current_exact_constants_and_target_mask() {
     auto ctx = make_slonczewski_context();
     ctx.mesh.n_nodes = 2;
-    ctx.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    ctx.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
     ctx.stt.realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1;
     ctx.stt.current_density_am2 = {3.0e12, -4.0e12, 0.0};
     ctx.stt.stack_normal = {0.0, 1.0, 0.0};
@@ -521,7 +521,7 @@ void canonical_slonczewski_uses_signed_stack_current_exact_constants_and_target_
     const double jn = -4.0e12;
     const double gamma_e = kGammaMu0Test / kMu0Test;
     const double omega = gamma_e * kHbarTest * jn /
-        (2.0 * kExactElectronChargeTest * ctx.material_fields.material.saturation_magnetisation *
+        (kExactElectronChargeTest * ctx.material_fields.material.saturation_magnetisation *
          ctx.stt.free_layer_thickness);
     const double epsilon = ctx.stt.degree * 0.5;
     const double alpha = ctx.material_fields.material.damping;
@@ -862,7 +862,7 @@ void canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_dat
     fullmag::fem::Context ctx;
     fullmag_fem_plan_desc plan{};
     plan.has_slonczewski_stt = 1;
-    plan.stt_formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    plan.stt_formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
     plan.stt_realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_INTERFACE_FLUX_V1;
     plan.stt_current_density_am2[2] = 1.0e12;
     plan.stt_degree = 0.4;
@@ -878,9 +878,26 @@ void canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_dat
     check(error.find("explicit free-layer thickness") != std::string::npos, "thin-layer error identifies thickness");
 }
 
+void canonical_stt_plan_import_rejects_read_only_slonczewski_v1() {
+    fullmag::fem::Context ctx;
+    fullmag_fem_plan_desc plan{};
+    plan.has_slonczewski_stt = 1;
+    plan.stt_formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    plan.stt_realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1;
+    plan.stt_current_density_am2[2] = 1.0e12;
+    plan.stt_degree = 0.4;
+    plan.stt_spin_polarization[2] = 1.0;
+    plan.stt_stack_normal[2] = 1.0;
+    plan.stt_lambda = 1.0;
+    plan.stt_free_layer_thickness = 1.0e-9;
+    std::string error;
+    check(!fullmag::fem::initialize_stt_plan_fields(ctx, plan, error), "Slonczewski v1 must be read-only");
+    check(error.find("read-only provenance") != std::string::npos, "Slonczewski v1 error identifies read-only provenance");
+}
+
 void canonical_stt_gpu_plan_fails_closed_before_device_provenance() {
     auto slonczewski = make_slonczewski_context();
-    slonczewski.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    slonczewski.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
     std::string reason;
     const auto slonczewski_plan =
         fullmag::fem::gpu_rk_plan_device_resident(slonczewski, reason);
@@ -926,6 +943,7 @@ int main() {
     combined_stt_updates_max_rhs();
     stt_plan_import_copies_parameters_and_validates_family();
     canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_data();
+    canonical_stt_plan_import_rejects_read_only_slonczewski_v1();
     canonical_stt_gpu_plan_fails_closed_before_device_provenance();
     return 0;
 }

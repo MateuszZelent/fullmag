@@ -78,7 +78,7 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
             free_layer_thickness_m=1.5e-9,
         )
         entry = module.to_ir_module()
-        self.assertEqual(entry["formula_version"], "slonczewski.fullmag.v1")
+        self.assertEqual(entry["formula_version"], "slonczewski.fullmag.v2")
         self.assertEqual(entry["realization"]["realization_version"], "slonczewski_thin_layer_homogenized.v1")  # type: ignore[index]
         self.assertEqual(entry["stack_normal"], [0.0, 0.0, 1.0])
 
