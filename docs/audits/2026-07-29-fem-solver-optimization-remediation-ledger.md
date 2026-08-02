@@ -57,6 +57,23 @@ future task to refresh its scope before implementation.
 | `benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json` | `diagnostic_only` | Historical environment description; no current runtime-manifest binding. |
 | `benchmarks/fem-gpu/accepted/rtx4080-sm89/summary.json` | `diagnostic_only` | Historical summary; not a promotion input. |
 
+### Latest user-run diagnostic (2026-08-02, non-authoritative)
+
+The reported GPU PG-BB failure is quarantined because the run does not carry
+the current managed-runtime identity or the current PG-BB convergence fields.
+Its error string predates the `current_torque_apm`, `torque_tolerance_apm`, and
+`torque_confirmation_count` diagnostics introduced in the current source. The
+last visible sample was `max_torque_T=5.7349e-9`, while the dirty scenario used
+`tolT=5.8349e-9 T`; the corresponding A/m values are approximately
+`4.5636884e-3` and `4.6432659e-3`, respectively. The reported energy trial
+was exactly one binary64 ULP above the current energy
+(`9.62964972193618e-35 J`), not a macroscopic energy increase. Current source
+commits `81e973c1`/`102f9954`/`c262fa9d` handle this low-torque sample through
+the zero-dt confirmation path and publish the additional diagnostics. This
+run therefore proves neither a new solver defect nor a performance result;
+repeat it only after the managed runtime is rebuilt from the restored
+`/zfn2/.../fullmag-native.ext4` mount.
+
 ## Task ledger
 
 Evidence paths are repository-relative and separated by `;`. A non-pending
