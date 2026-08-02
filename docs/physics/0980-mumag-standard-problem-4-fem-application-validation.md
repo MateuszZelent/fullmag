@@ -1,8 +1,8 @@
-# µMAG Standard Problem 4 as an FEM application-validation contract
+# µMAG Standard Problem 4 as an FEM and FDM application-validation contract
 
-- Status: frozen pre-qualification contract; FEM mixed-P1 implementation exists, managed SP4 qualification is pending
-- Owners: Fullmag FEM validation
-- Last updated: 2026-07-30
+- Status: frozen application contract; FEM mixed-P1 qualification remains pending and FDM CPU dynamics scenarios are implemented for execution comparison
+- Owners: Fullmag SP4 validation
+- Last updated: 2026-08-02
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/superpowers/specs/2026-07-18-mumag-standard-problem-4-fem-validation-design.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -11,14 +11,17 @@
 
 Fullmag must reproduce µMAG Standard Problem 4 through the same public Python
 workflow used by an ordinary application user. Qualification therefore starts
-from plain scripts built from `fm.study`, geometry, material, mesh, solver,
-`tableautosave`, field autosave, `relax`, and `run`. A private test-only
-problem builder is not accepted as the primary execution surface.
+from plain scripts built from `fm.study`, geometry, material, mesh or cell
+discretization, solver, `tableautosave`, field autosave, `relax`, and `run`. A
+private test-only problem builder is not accepted as the primary execution
+surface.
 
-The suite is intended to validate strict production FEM CPU and FEM GPU in
+The FEM suite is intended to validate strict production FEM CPU and FEM GPU in
 `double`; that production-validation claim remains pending until the complete
-managed matrix below passes. Current source implements only a bounded,
-certificate-gated mixed-P1 relaxation scope. It
+managed matrix below passes. The FDM CPU lane now has two ordinary continuous
+dynamics scenarios for MuMax3 comparison, but that execution comparison does
+not promote the FDM lane to a NIST qualification claim. Current source
+implements only a bounded, certificate-gated mixed-P1 relaxation scope. It
 separates errors owned by spatial discretization, the open-boundary demag
 model, S-state preparation, time integration, runtime selection, and artifact
 publication. Tangent-plane integration is outside the present scope because
@@ -160,17 +163,27 @@ $10^{-5}\,\mathrm T$ threshold; this mixed qualification does not rewrite it.
 
 ### 3.1 FDM CPU
 
-OOMMF and MuMax3 use finite-difference cells and remain reference data and
-auxiliary implementation examples. Their cellwise demag and boundary
-discretization are not a direct FEM parity oracle. No FDM SP4 scenario
-directory exists in the current tree, so this page makes no Fullmag FDM CPU
-qualification claim. OOMMF data is reference-ensemble input only.
+OOMMF and MuMax3 use finite-difference cells. Fullmag's FDM CPU comparison
+lane uses the same Cartesian film dimensions and `128 x 32 x 1` cells as the
+MuMax3 input, with cellwise exchange and demagnetization. The public scenarios
+under `tests/standard_problems/mumag/sp4/fdm/scenarios/` execute one continuous
+zero-field relaxation followed by a constant-field physical-time run for each
+NIST field. They write accepted scalar samples every `10 ps` and `m` field
+samples every `50 ps`.
+
+This is a reproducible cross-application comparison lane, not a direct FEM
+parity oracle and not yet a complete NIST qualification. Its authoritative
+outputs are the Fullmag stage `scalars.csv` and field bundle, compared with
+MuMax3's `table.txt` and field outputs after unit normalization. The comparison
+must preserve the distinction between reduced magnetization (dimensionless),
+physical time (seconds), and energy (joules).
 
 ### 3.2 FDM GPU
 
-Not applicable to this mixed-P1 FEM contract. A future Fullmag FDM GPU SP4
+Not implemented by this SP4 scenario set. A future Fullmag FDM GPU SP4
 qualification requires its own Cartesian discretization, convergence matrix,
-artifacts, and executed-device evidence; FEM results cannot promote that lane.
+artifacts, and executed-device evidence; FDM CPU or FEM results cannot promote
+that lane.
 
 ### 3.3 FEM shared discretization
 
@@ -852,8 +865,12 @@ explicit promotion blocker rather than implied evidence.
 ### 7.2 Cross-backend checks
 
 CPU and GPU are compared inside FEM on identical scenario and mesh artifacts.
-FDM codes contribute the NIST reference envelope only. Cross-discretization
-differences are reported and are not relabelled as CPU/GPU parity.
+The FDM CPU lane compares Fullmag against MuMax3 on a common time grid for
+both fields. It reports component RMSE, endpoint deltas, and the interpolated
+first positive-to-nonpositive `mx=0` crossing. FDM-vs-FEM and Fullmag-vs-MuMax3
+differences are reported as discretization/application differences and are not
+relabeled as CPU/GPU parity. MuMax3 remains an executed comparison reference,
+not an exact oracle that can override the NIST reference ensemble.
 
 ### 7.3 NIST checks
 
@@ -866,6 +883,8 @@ insufficient.
 
 - exact relaxation and dynamics scenario manifests plus plain-Python AST
   constraints;
+- FDM CPU A+B scenario lowering, continuous stage ordering, table/field
+  cadence, and fail-closed MuMax3/Fullmag trajectory parsing;
 - direct minimizers reject RK/time controls by construction;
 - exported stage sequence, zero-field relaxation, shared S-state contract,
   fields, dynamics integrator, timestep policy, outputs, and runtime selection;
@@ -924,6 +943,9 @@ pending implementation, not silently deferred evidence. Promotion order is:
   the append-only ledger.
 - Tangent-plane integration is excluded until it is an executable public
   Fullmag path.
+- The FDM CPU A+B comparison uses the declared `128 x 32 x 1` grid and
+  `10 ps`/`50 ps` output cadences; FDM mesh and timestep convergence, FDM GPU,
+  and promotion to a standalone FDM qualification remain deferred.
 - The adaptive-RK23 state used by the plain dynamics scripts becomes a
   qualifying dynamics source only after it agrees with PG-BB and NCG and
   passes the official S-state map gate. The selected managed artifact hash is
