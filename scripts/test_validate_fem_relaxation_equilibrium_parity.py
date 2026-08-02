@@ -210,7 +210,10 @@ def test_immutable_qualification_suite_is_explicit() -> None:
     assert suite["demag_policy"]["rtol"] == 1.0e-12
     assert suite["torque_tolerance_apm"] == 8000.0
     assert suite["algorithms"] == ["projected_gradient_bb", "nonlinear_cg"]
-    assert suite["scenarios"] == ["exchange_only", "exchange_demag"]
+    assert suite["scenarios"] == [
+        "box500_airbox_exchange_only",
+        "box500_airbox_exchange_demag",
+    ]
     assert [fixture["resolution"] for fixture in suite["fixtures"]] == [
         "coarse",
         "medium",

@@ -90,6 +90,8 @@ RELAXATION_SCENARIO_ALIASES = {
 }
 BOX500_AIRBOX_SCENARIO_ALIASES = {
     BOX500_AIRBOX_SCENARIO: "exchange_only",
+    "box500_airbox_exchange_only": "exchange_only",
+    "box500_airbox_exchange_demag_multidomain": "exchange_demag",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
     "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
@@ -3024,7 +3026,7 @@ def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
     scenarios = payload.get("scenarios")
     if algorithms != ["projected_gradient_bb", "nonlinear_cg"]:
         raise ValueError("FEM equilibrium qualification algorithms differ from v1")
-    if scenarios != ["exchange_only", "exchange_demag"]:
+    if scenarios != ["box500_airbox_exchange_only", "box500_airbox_exchange_demag"]:
         raise ValueError("FEM equilibrium qualification scenarios differ from v1")
     fixtures = payload.get("fixtures")
     if not isinstance(fixtures, list) or [item.get("resolution") for item in fixtures] != ["coarse", "medium", "fine"]:
@@ -5544,10 +5546,10 @@ def resolve_integrators(integrators_arg: str) -> list[str]:
     integrators = [part.strip().lower() for part in integrators_arg.split(",") if part.strip()]
     if not integrators:
         raise ValueError("at least one benchmark integrator is required")
-    supported = set(DEFAULT_INTEGRATORS)
+    supported = set(DEFAULT_INTEGRATORS) | {"none"}
     unsupported = sorted(set(integrators) - supported)
     if unsupported:
-        supported_text = ", ".join(DEFAULT_INTEGRATORS)
+        supported_text = ", ".join((*DEFAULT_INTEGRATORS, "none"))
         raise ValueError(
             f"unsupported benchmark integrator(s): {', '.join(unsupported)}; "
             f"supported: {supported_text}"
@@ -5598,12 +5600,12 @@ def resolve_timestep_policies(policies_arg: str) -> list[str]:
     policies = [part.strip().lower() for part in policies_arg.split(",") if part.strip()]
     if not policies:
         raise ValueError("at least one benchmark timestep policy is required")
-    supported = {"fixed", "adaptive"}
+    supported = {"fixed", "adaptive", "budget"}
     unsupported = sorted(set(policies) - supported)
     if unsupported:
         raise ValueError(
             f"unsupported benchmark timestep policy/policies: {', '.join(unsupported)}; "
-            "supported: fixed, adaptive"
+            "supported: fixed, adaptive, budget"
         )
     return policies
 
@@ -6191,7 +6193,10 @@ def execution_plan_mesh_stats(
         file_signature = solver_mesh_signature(file_payload)
         if file_topology != solver_topology or file_signature != solver_signature:
             raise ValueError(
-                "solver mesh topology mismatch between execution plan payload and mesh file"
+                "solver mesh topology mismatch between execution plan payload and mesh file: "
+                f"solver_signature={solver_signature}, file_signature={file_signature}, "
+                f"solver_topology={solver_topology}, file_topology={file_topology}, "
+                f"solver_mesh_path={solver_mesh_path}"
             )
 
     stats: dict[str, object] = {}
@@ -7353,6 +7358,18 @@ def run_backend(
     ui_surface: str = "headless",
     canonical_mesh_output_path: Path | None = None,
 ) -> dict[str, object]:
+    runtime_identity = runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT)
+    runtime_manifest_payload = json.loads(
+        (MANAGED_FEM_RUNTIME_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    runtime_build_identity = runtime_manifest_payload.get("build_identity")
+    runtime_source_snapshot = (
+        runtime_build_identity.get("source_snapshot_sha256")
+        if isinstance(runtime_build_identity, Mapping)
+        else None
+    )
+    if not isinstance(runtime_source_snapshot, str) or not runtime_source_snapshot:
+        runtime_source_snapshot = None
     row = {
         "backend": backend_label,
         "scenario": scenario,
@@ -7365,7 +7382,12 @@ def run_backend(
         "requested_cpu_thread_spec": thread_spec.label,
         "case_timeout_s": timeout_s,
         "ui_surface": ui_surface,
-        **runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT),
+        **runtime_identity,
+        **(
+            {"runtime_source_snapshot_sha256": runtime_source_snapshot}
+            if runtime_source_snapshot is not None
+            else {}
+        ),
         # The benchmark input presets are historical v1 mesh assets. Their
         # legacy read is explicit; the final solver mesh is always validated as
         # typed by execution_plan_mesh_stats below.
@@ -7746,6 +7768,9 @@ def run_backend(
                     payload.get("scenario")
                     if require_reported_execution_identity
                     else first_present(payload.get("scenario"), scenario)
+                ),
+                "initial_state_identity": first_present(
+                    payload.get("initial_state_identity"),
                 ),
                 "reported_integrator": (
                     payload.get("integrator")
@@ -11794,8 +11819,16 @@ def main() -> None:
                 else [None]
             )
             for relaxation_algorithm in scenario_relaxation_algorithms:
-                for integrator in integrators:
-                    for timestep_policy in timestep_policies:
+                physical_time_algorithm = relaxation_algorithm in {
+                    None,
+                    "llg_overdamped",
+                }
+                case_integrators = integrators if physical_time_algorithm else ["none"]
+                case_timestep_policies = (
+                    timestep_policies if physical_time_algorithm else ["budget"]
+                )
+                for integrator in case_integrators:
+                    for timestep_policy in case_timestep_policies:
                         for thread_spec in thread_specs:
                             domain_mesh_env = generated_domain_mesh_env(
                                 cache=domain_mesh_cache,

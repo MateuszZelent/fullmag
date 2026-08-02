@@ -100,7 +100,10 @@ def main() -> int:
     assert suite["max_steps"] == 50000
     assert suite["torque_tolerance_apm"] == 8000.0
     assert suite["algorithms"] == ["projected_gradient_bb", "nonlinear_cg"]
-    assert suite["scenarios"] == ["exchange_only", "exchange_demag"]
+    assert suite["scenarios"] == [
+        "box500_airbox_exchange_only",
+        "box500_airbox_exchange_demag",
+    ]
     assert loaded_suite["fixture_signatures"]["coarse"] == (
         "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
     )

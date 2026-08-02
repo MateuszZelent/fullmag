@@ -2568,7 +2568,7 @@ verify-fem-relaxation-equilibrium-parity:
           python3 scripts/analysis/fem_gpu_benchmark.py \
             --equilibrium-suite examples/assets/fem_performance/equilibrium_qualification_suite_v1.json \
             --meshes '"$scope"' \
-            --scenarios exchange_only,exchange_demag \
+            --scenarios box500_airbox_exchange_only,box500_airbox_exchange_demag \
             --relax-algorithms projected_gradient_bb,nonlinear_cg \
             --backends cpu,gpu \
             --demag-solver CG \
@@ -2795,6 +2795,86 @@ calibrate-fem-relaxation-torque-default:
           $calibration_inputs \
           --summary "$report_dir/calibration_summary.json" \
           --plot "$report_dir/final_torque_vs_step_budget.png"'
+
+# Task 6: the v2 calibration is a full algorithm/physics/mesh/backend matrix.
+# The runtime is mounted explicitly so the CSV provenance cannot silently use
+# a host binary or a stale container copy. A partial scope is diagnostic only
+# and is never allowed to promote a default.
+calibrate-fem-relaxation-torque-default-v2:
+    just ensure-managed-fem-runtime
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    test -f "$runtime_root/manifest.json"; \
+    report_dir=.fullmag/reports/fem-relaxation-torque-calibration-v2; \
+    mkdir -p "$report_dir/mesh-cache"; \
+    docker compose --profile fem-gpu run --rm -T \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+      -e FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu \
+      -e FULLMAG_BENCH_CPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu \
+      -e FULLMAG_TORQUE_CALIBRATION_SCOPE="$FULLMAG_TORQUE_CALIBRATION_SCOPE" \
+      -e FULLMAG_TORQUE_CALIBRATION_REPEAT="$FULLMAG_TORQUE_CALIBRATION_REPEAT" \
+      -e FULLMAG_TORQUE_CALIBRATION_MESHES="$FULLMAG_TORQUE_CALIBRATION_MESHES" \
+      -e FULLMAG_TORQUE_CALIBRATION_SCENARIOS="$FULLMAG_TORQUE_CALIBRATION_SCENARIOS" \
+      -e FULLMAG_TORQUE_CALIBRATION_STEP_BUDGETS="$FULLMAG_TORQUE_CALIBRATION_STEP_BUDGETS" \
+      -e FULLMAG_TORQUE_CALIBRATION_THREAD_COUNTS="$FULLMAG_TORQUE_CALIBRATION_THREAD_COUNTS" \
+      -e FULLMAG_TORQUE_CALIBRATION_DT_S="$FULLMAG_TORQUE_CALIBRATION_DT_S" \
+      -e FULLMAG_TORQUE_CALIBRATION_TOLERANCE_APM="$FULLMAG_TORQUE_CALIBRATION_TOLERANCE_APM" \
+      -e FULLMAG_TORQUE_CALIBRATION_CASE_TIMEOUT_S="$FULLMAG_TORQUE_CALIBRATION_CASE_TIMEOUT_S" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        report_dir=.fullmag/reports/fem-relaxation-torque-calibration-v2; \
+        scope="$FULLMAG_TORQUE_CALIBRATION_SCOPE"; \
+        repeat_count="$FULLMAG_TORQUE_CALIBRATION_REPEAT"; \
+        meshes="$FULLMAG_TORQUE_CALIBRATION_MESHES"; \
+        scenarios="$FULLMAG_TORQUE_CALIBRATION_SCENARIOS"; \
+        steps_list="$FULLMAG_TORQUE_CALIBRATION_STEP_BUDGETS"; \
+        thread_counts="$FULLMAG_TORQUE_CALIBRATION_THREAD_COUNTS"; \
+        dt_s="$FULLMAG_TORQUE_CALIBRATION_DT_S"; \
+        tolerance_apm="$FULLMAG_TORQUE_CALIBRATION_TOLERANCE_APM"; \
+        timeout_s="$FULLMAG_TORQUE_CALIBRATION_CASE_TIMEOUT_S"; \
+        [ -n "$scope" ] || scope=full; \
+        [ -n "$repeat_count" ] || repeat_count=3; \
+        [ -n "$meshes" ] || meshes=coarse,medium,fine; \
+        [ -n "$scenarios" ] || scenarios=box500_airbox_exchange_only,box500_airbox_exchange_demag,box500_airbox_exchange_demag_anis_uniaxial,box500_airbox_exchange_demag_multidomain; \
+        [ -n "$steps_list" ] || steps_list="128 256 512"; \
+        [ -n "$thread_counts" ] || thread_counts=auto; \
+        [ -n "$dt_s" ] || dt_s=1e-14; \
+        [ -n "$tolerance_apm" ] || tolerance_apm=1e-12; \
+        [ -n "$timeout_s" ] || timeout_s=900; \
+        scope_args=""; \
+        if [ "$scope" != full ]; then scope_args="--allow-incomplete-matrix"; fi; \
+        calibration_inputs=""; \
+        for steps in $steps_list; do \
+          python3 scripts/analysis/fem_gpu_benchmark.py \
+            --meshes "$meshes" \
+            --scenarios "$scenarios" \
+            --integrators rk23,rk45 \
+            --relax-algorithms projected_gradient_bb,nonlinear_cg,llg_overdamped \
+            --timestep-policies fixed,adaptive \
+            --backends cpu,gpu \
+            --thread-counts "$thread_counts" \
+            --steps "$steps" \
+            --repeat "$repeat_count" \
+            --dt "$dt_s" \
+            --relax-torque-tolerance-apm "$tolerance_apm" \
+            --case-timeout-s "$timeout_s" \
+            --output "$report_dir/raw-$steps.csv" \
+            --generated-domain-mesh-cache-dir "$report_dir/mesh-cache" \
+            --reuse-generated-domain-mesh \
+            --require-stable-solver-mesh \
+            --capture-final-magnetization \
+            --require-demag-converged; \
+          calibration_inputs="$calibration_inputs $report_dir/raw-$steps.csv"; \
+        done; \
+        python3 scripts/analysis/calibrate_fem_relaxation_torque_default.py \
+          $calibration_inputs \
+          --suite examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json \
+          --summary "$report_dir/calibration_summary.json" \
+          --plot "$report_dir/final_torque_vs_step_budget.png" \
+          $scope_args; \
+        cp /workspace/.fullmag/runtime/manifest.json "$report_dir/runtime-manifest.json"'
 
 generate-fem-gpu-performance-fixtures:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime

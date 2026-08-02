@@ -10,8 +10,8 @@
     "nonlinear_cg"
   ],
   "scenarios": [
-    "exchange_only",
-    "exchange_demag"
+    "box500_airbox_exchange_only",
+    "box500_airbox_exchange_demag"
   ],
   "demag_policy": {
     "solver": "CG",

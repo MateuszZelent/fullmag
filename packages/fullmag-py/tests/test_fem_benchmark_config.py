@@ -1999,9 +1999,13 @@ def test_exchange_demag_build_uses_shared_domain_mesh_contract():
     assert problem.runtime_metadata["mesh_workflow"]["build_target"] == "domain"
 
 
-def test_exchange_only_box500_airbox_build_uses_requested_relaxation_contract():
+def test_exchange_only_box500_airbox_build_uses_requested_relaxation_contract(monkeypatch):
     bench = load_benchmark_module()
     mesh_path = REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json"
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
 
     problem = bench.build(
         mesh_path=mesh_path,
@@ -2229,6 +2233,10 @@ def test_benchmark_build_can_request_adaptive_timestep():
 def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
     bench = load_benchmark_module()
     monkeypatch.setenv("FULLMAG_BENCH_RELAX_ALGORITHM", algorithm)
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
     relaxation_kwargs = []
     relaxation = bench.fm.Relaxation
 
@@ -2242,7 +2250,8 @@ def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
         dt=1e-13,
         steps=4,
         scenario="box500_airbox_exchange_demag",
-        integrator="heun",
+        integrator="none",
+        timestep_policy="budget",
     )
 
     assert problem.study.algorithm == algorithm
@@ -2253,6 +2262,10 @@ def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
 def test_benchmark_llg_relaxation_keeps_dynamics(monkeypatch):
     bench = load_benchmark_module()
     monkeypatch.setenv("FULLMAG_BENCH_RELAX_ALGORITHM", "llg_overdamped")
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
 
     problem = bench.build(
         dt=1e-13,

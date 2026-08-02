@@ -23,7 +23,10 @@ BOX500_AIRBOX_BODY_SIZE = (500e-9, 100e-9, 10e-9)
 BOX500_AIRBOX_SIZE = (1e-6, 1e-6, 1e-6)
 BOX500_DOMAIN_HMAX = 20e-9
 BOX500_AIRBOX_HMAX = 100e-9
-DEFAULT_RELAX_TORQUE_TOLERANCE = 1e-6
+# Relaxation calibration owns the default.  This benchmark intentionally does
+# not provide an independent numeric fallback: an invocation must carry the
+# resolved stop policy explicitly (or fail closed).
+DEFAULT_RELAX_TORQUE_TOLERANCE = None
 MU0 = 4.0 * math.pi * 1e-7
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
@@ -31,6 +34,8 @@ FULL_RELAXATION_MAX_STEPS = 50_000
 BOX500_AIRBOX_SCENARIO_ALIASES = {
     BOX500_EXCHANGE_SCENARIO: "exchange_only",
     BOX500_AIRBOX_SCENARIO: "exchange_only",
+    "box500_airbox_exchange_only": "exchange_only",
+    "box500_airbox_exchange_demag_multidomain": "exchange_demag",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
     "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
@@ -58,10 +63,14 @@ SUPPORTED_INTEGRATORS = {
     "rk4",
     "rk23",
     "rk45",
+    # Direct minimizers have no physical-time integrator.  The calibration
+    # harness uses this explicit sentinel instead of relabelling them rk23.
+    "none",
 }
 SUPPORTED_TIMESTEP_POLICIES = {
     "fixed",
     "adaptive",
+    "budget",
 }
 SUPPORTED_RELAXATION_ALGORITHMS = {
     "llg_overdamped",
@@ -146,6 +155,26 @@ def env_relaxation_algorithm() -> str:
         supported = ", ".join(sorted(SUPPORTED_RELAXATION_ALGORITHMS))
         raise ValueError(f"FULLMAG_BENCH_RELAX_ALGORITHM must be one of: {supported}")
     return algorithm
+
+
+def env_relax_torque_tolerance() -> float:
+    raw = os.environ.get("FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE", "").strip()
+    if not raw:
+        raise ValueError(
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE must be supplied by the "
+            "resolved relaxation stop policy"
+        )
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE must be finite"
+        ) from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE must be finite and positive"
+        )
+    return value
 
 
 def env_demag_solver() -> str:
@@ -288,6 +317,15 @@ def scenario_initial_magnetization(scenario: str):
             e1=(inv_sqrt_two, 0.0, inv_sqrt_two),
             e2=(0.0, 1.0, 0.0),
         )
+    if "multidomain" in scenario:
+        # Deterministic two-domain texture; this is an explicit calibration
+        # state, not a random seed or a hidden solver initialization.
+        body_size = scenario_body_size(scenario)
+        return fm.init.texture.helical(
+            wavevector=(4.0 * math.pi / body_size[0], 0.0, 0.0),
+            e1=(1.0, 0.0, 0.0),
+            e2=(0.0, 1.0, 0.0),
+        )
     if scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES:
         body_size = scenario_body_size(scenario)
         return fm.init.texture.helical(
@@ -296,6 +334,16 @@ def scenario_initial_magnetization(scenario: str):
             e2=(0.0, 1.0, 0.0),
         )
     return fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+
+def scenario_initial_state_identity(scenario: str) -> str:
+    """Return the stable identity of the benchmark's authored initial state."""
+
+    if "multidomain" in scenario:
+        return "explicit_multidomain_v1"
+    if scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES:
+        return "explicit_helical_v1"
+    return "uniform_x"
 
 
 def scenario_requires_shared_domain(scenario: str) -> bool:
@@ -374,21 +422,25 @@ def build(
         timestep_policy = (
             default_timestep_policy if timestep_policy is None else timestep_policy
         )
+    if integrator == "none" and timestep_policy != "budget":
+        raise ValueError("integrator none requires timestep policy budget")
     if timestep_policy == "adaptive" and integrator not in {"rk23", "rk45"}:
         raise ValueError("adaptive timestep policy requires integrator rk23 or rk45")
-    dynamics = (
-        fm.LLG(
-            integrator=integrator,
-            adaptive_timestep=fm.AdaptiveTimestep(
-                atol=1e-6,
-                dt_initial=dt,
-                dt_min=dt * 1e-3,
-                dt_max=dt,
-            ),
+    dynamics = None
+    if integrator != "none":
+        dynamics = (
+            fm.LLG(
+                integrator=integrator,
+                adaptive_timestep=fm.AdaptiveTimestep(
+                    atol=1e-6,
+                    dt_initial=dt,
+                    dt_min=dt * 1e-3,
+                    dt_max=dt,
+                ),
+            )
+            if timestep_policy == "adaptive"
+            else fm.LLG(integrator=integrator, fixed_timestep=dt)
         )
-        if timestep_policy == "adaptive"
-        else fm.LLG(integrator=integrator, fixed_timestep=dt)
-    )
 
     body = fm.Box(size=scenario_body_size(scenario), name="body")
     material = fm.Material(
@@ -441,13 +493,11 @@ def build(
         relaxation_algorithm = env_relaxation_algorithm()
         relaxation_kwargs = {}
         if relaxation_algorithm == "llg_overdamped":
+            assert dynamics is not None
             relaxation_kwargs["dynamics"] = dynamics
         study = fm.Relaxation(
             algorithm=relaxation_algorithm,
-            torque_tolerance=env_float(
-                "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
-                DEFAULT_RELAX_TORQUE_TOLERANCE,
-            ),
+            torque_tolerance=env_relax_torque_tolerance(),
             max_steps=steps,
             outputs=[fm.SaveScalar("E_total", every=dt * steps)],
             **relaxation_kwargs,
@@ -529,9 +579,11 @@ def emit_summary(
     total_rhs_evals = sum(
         max(0, int(getattr(step, "rhs_evals", 0) or 0)) for step in result.steps
     )
-    torque_tolerance_apm = env_float(
-        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE", DEFAULT_RELAX_TORQUE_TOLERANCE
+    torque_tolerance_apm = env_relax_torque_tolerance()
+    relaxation_algorithm = (
+        env_relaxation_algorithm() if scenario_uses_relaxation(scenario) else None
     )
+    physical_time_run = relaxation_algorithm in {None, "llg_overdamped"}
     time_to_tolerance_seconds, accepted_steps_to_tolerance, demag_solve_count_total = (
         solver_time_to_tolerance_evidence(result.steps, torque_tolerance_apm)
     )
@@ -541,27 +593,32 @@ def emit_summary(
         "mode": result.mode.value,
         "precision": result.precision.value,
         "scenario": scenario,
+        "initial_state_identity": scenario_initial_state_identity(scenario),
         "integrator": integrator,
         "timestep_policy": timestep_policy,
         "executed_problem_ir_sha256": executed_problem_ir_sha256,
-        "relaxation_algorithm": (
-            env_relaxation_algorithm() if scenario_uses_relaxation(scenario) else None
-        ),
+        "relaxation_algorithm": relaxation_algorithm,
         "resolved_torque_tolerance_apm": torque_tolerance_apm,
         "time_to_tolerance_seconds": time_to_tolerance_seconds,
         "time_to_tolerance_source": "accepted_step_diagnostics_wall_time_ns",
         "accepted_steps_to_tolerance": accepted_steps_to_tolerance,
         "demag_solve_count_total": demag_solve_count_total,
         "requested_steps": steps,
-        "requested_dt_s": dt,
+        "requested_dt_s": dt if physical_time_run else None,
         "executed_steps": len(result.steps),
-        "final_time_s": final.time if final is not None else None,
-        "final_solver_dt_s": getattr(final, "dt", None) if final is not None else None,
+        "final_time_s": final.time if final is not None and physical_time_run else None,
+        "final_solver_dt_s": (
+            getattr(final, "dt", None)
+            if final is not None and physical_time_run
+            else None
+        ),
         "error_estimate": (
             getattr(final, "error_estimate", None) if final is not None else None
         ),
         "dt_suggested_s": (
-            getattr(final, "dt_suggested", None) if final is not None else None
+            getattr(final, "dt_suggested", None)
+            if final is not None and physical_time_run
+            else None
         ),
         "final_e_total_j": final.e_total if final is not None else None,
         "final_e_ex_j": final.e_ex if final is not None else None,
