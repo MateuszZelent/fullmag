@@ -6047,6 +6047,7 @@ def build_task8_qualification_case_identities(
     cache: dict[tuple[str, ...], Path] = {}
     identities: list[dict[str, object]] = []
     for scenario in scenarios:
+        scenario_algorithms = relaxation_algorithms_for_scenario(scenario, algorithms)
         domain_env = generated_domain_mesh_env(
             cache=cache,
             cache_dir=cache_dir,
@@ -6059,6 +6060,7 @@ def build_task8_qualification_case_identities(
             thread_spec=thread_specs[0],
             extra_env=mesh_env,
             timeout_s=args.case_timeout_s,
+            relaxation_algorithm=(scenario_algorithms[0] if scenario_algorithms else None),
         )
         solver_mesh_path = Path(domain_env.get("FULLMAG_BENCH_DOMAIN_MESH", mesh_path))
         for algorithm in relaxation_algorithms_for_scenario(scenario, algorithms):
@@ -6794,12 +6796,15 @@ def export_generated_domain_mesh(
     extra_env: dict[str, str],
     output_path: Path,
     timeout_s: float | None,
+    relaxation_algorithm: str | None = None,
 ) -> Path:
     env = os.environ.copy()
     env.update(extra_env)
     apply_bundled_openmpi_runtime_env(env)
     env["FULLMAG_BENCH_MESH"] = str(mesh_path)
     env["FULLMAG_BENCH_SCENARIO"] = scenario
+    if relaxation_algorithm is not None:
+        env["FULLMAG_BENCH_RELAX_ALGORITHM"] = relaxation_algorithm
     env["FULLMAG_BENCH_INTEGRATOR"] = integrator
     env["FULLMAG_BENCH_TIMESTEP_POLICY"] = timestep_policy
     env["FULLMAG_BENCH_STEPS"] = str(steps)
@@ -6850,6 +6855,7 @@ def generated_domain_mesh_env(
     thread_spec: ThreadCountSpec,
     extra_env: dict[str, str],
     timeout_s: float | None,
+    relaxation_algorithm: str | None = None,
 ) -> dict[str, str]:
     explicit_domain_mesh = extra_env.get("FULLMAG_BENCH_DOMAIN_MESH")
     if explicit_domain_mesh:
@@ -6881,6 +6887,7 @@ def generated_domain_mesh_env(
             cached = export_generated_domain_mesh(
                 mesh_path=mesh_path,
                 scenario=scenario,
+                relaxation_algorithm=relaxation_algorithm,
                 integrator=integrator,
                 steps=steps,
                 dt=dt,
@@ -7215,6 +7222,7 @@ def write_performance_fixture_files(
                 extra_env=fixture_env,
                 output_path=generated_mesh_path,
                 timeout_s=args.case_timeout_s,
+                relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
             )
             realization_row = run_backend(
                 backend_label="fem_cpu",
@@ -11753,6 +11761,7 @@ def main() -> None:
                         **relax_env,
                     },
                     timeout_s=args.case_timeout_s,
+                    relaxation_algorithm=warmup_relaxation_algorithm,
                 )
                 if fixture is not None:
                     warmup_domain_mesh_env = {
@@ -11835,6 +11844,7 @@ def main() -> None:
                                 cache_dir=domain_mesh_cache_dir,
                                 mesh_path=mesh_path,
                                 scenario=scenario,
+                                relaxation_algorithm=relaxation_algorithm,
                                 integrator=integrator,
                                 steps=args.steps,
                                 dt=args.dt,

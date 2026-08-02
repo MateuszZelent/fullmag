@@ -4495,13 +4495,18 @@ def test_task8_identity_capture_uses_materialized_policy_when_requested_print_le
         steps=2,
         dt=1e-13,
         timestep_policy="fixed",
-        extra_env=benchmark.demag_policy_env(
-            "CG",
-            "AMG",
-            1e-8,
-            (18, 8, 6, 1, None, None),
-            args,
-        ),
+        extra_env={
+            **benchmark.demag_policy_env(
+                "CG",
+                "AMG",
+                1e-8,
+                (18, 8, 6, 1, None, None),
+                args,
+            ),
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE": repr(
+                benchmark.PERFORMANCE_FIXTURE_TORQUE_TARGET_APM
+            ),
+        },
     )
 
     policy = benchmark.task8_expected_resolved_demag_policy(
@@ -5574,7 +5579,11 @@ def test_canonical_problem_ir_inlines_explicit_shared_domain_mesh(
         steps=64,
         dt=1.0e-13,
         timestep_policy="fixed",
-        extra_env={},
+        extra_env={
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE": repr(
+                benchmark.PERFORMANCE_FIXTURE_TORQUE_TARGET_APM
+            )
+        },
     )
 
     domain_asset = problem_ir["geometry_assets"]["fem_domain_mesh_asset"]
@@ -6293,8 +6302,10 @@ def test_generated_domain_mesh_env_materializes_box500_airbox_alias(
     tmp_path: Path,
 ) -> None:
     benchmark = load_benchmark_module()
+    captured: list[dict[str, object]] = []
 
     def fake_export_generated_domain_mesh(**kwargs):
+        captured.append(kwargs)
         output_path = kwargs["output_path"]
         output_path.write_text('{"mesh": true}\n', encoding="utf-8")
         return output_path
@@ -6316,9 +6327,11 @@ def test_generated_domain_mesh_env_materializes_box500_airbox_alias(
         thread_spec=benchmark.ThreadCountSpec(label="auto", env_value="auto"),
         extra_env={},
         timeout_s=10.0,
+        relaxation_algorithm="projected_gradient_bb",
     )
 
     assert Path(result["FULLMAG_BENCH_DOMAIN_MESH"]).is_file()
+    assert captured[0]["relaxation_algorithm"] == "projected_gradient_bb"
 
 
 def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch) -> None:
