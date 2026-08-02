@@ -36,6 +36,41 @@ describe("EChartsSurface", () => {
     expect(model.provenance?.descriptorId).toBe("analysis:data-table:default");
   });
 
+  it("labels one or many normalized magnetization components consistently", () => {
+    const single = tableSeriesRenderModel(series, series, "step");
+    const multiTable = {
+      columns: [
+        { column_id: "step", dimension: "count", label: "Step", unit: "1" },
+        { column_id: "mx", dimension: "magnetization", label: "mx", unit: "1" },
+        { column_id: "my", dimension: "magnetization", label: "my", unit: "1" },
+      ],
+      rows: [[0, 0.1, 0.2]],
+    };
+    const multiSeries = buildScalarChartSeries(multiTable, {
+      xAxisId: "step",
+      yAxisIds: ["mx", "my"],
+    });
+    const multi = tableSeriesRenderModel(multiSeries, multiSeries, "step");
+
+    expect(single.yAxes[0]).toMatchObject({ label: "Normalized magnetization m", unit: "1" });
+    expect(multi.yAxes[0]).toMatchObject({ label: "Normalized magnetization m", unit: "1" });
+  });
+
+  it("does not relabel physical magnetization as normalized", () => {
+    const physical = series.map((entry) => ({
+      ...entry,
+      id: "M_y",
+      label: "Magnetization M",
+      quantity: "M_y",
+      unit: "A/m",
+    }));
+
+    expect(tableSeriesRenderModel(physical, physical, "step").yAxes[0]).toMatchObject({
+      label: "Magnetization M",
+      unit: "A/m",
+    });
+  });
+
   it("keeps the ECharts mount element present before table samples arrive", () => {
     const html = renderToStaticMarkup(
       <EChartsSurface series={[]} xAxisLabel="step" />

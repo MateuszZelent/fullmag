@@ -58,8 +58,6 @@ export function chartExportProvenance(
 
 function resolvedDisplayUnits(model: ChartRenderModel): Record<string, string> {
   const supplied = model.provenance?.displayUnits;
-  if (supplied && Object.keys(supplied).length > 0) return supplied;
-
   const yTransforms = createChartYAxisDisplayTransforms(model.yAxes, model.series);
   return {
     x: createChartDisplayTransform(
@@ -71,6 +69,7 @@ function resolvedDisplayUnits(model: ChartRenderModel): Record<string, string> {
       (yTransforms[series.yAxis] ??
         createChartDisplayTransform(series.unit, null)).displayUnit,
     ])),
+    ...supplied,
   };
 }
 

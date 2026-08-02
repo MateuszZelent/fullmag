@@ -73,6 +73,18 @@ describe("chart export", () => {
     );
   });
 
+  it("fills deterministic display units around a partial caller override", () => {
+    const partialOverride: ChartRenderModel = {
+      ...model,
+      provenance: { ...model.provenance!, displayUnits: { "y:e,total": "fJ" } },
+    };
+
+    expect(chartExportProvenance(partialOverride).displayUnits).toEqual({
+      x: "ns",
+      "y:e,total": "fJ",
+    });
+  });
+
   it("revokes object URLs after initiating a download", async () => {
     const click = vi.fn();
     vi.stubGlobal("document", { createElement: () => ({ click, download: "", href: "" }) });

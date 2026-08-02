@@ -4,6 +4,11 @@ import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import {
+  createChartDisplayTransform,
+  createChartYAxisDisplayTransforms,
+  formatChartDisplayValue,
+} from "@/shared/analysis-charts/chartScalePolicy";
 
 import type { ChartSeries } from "../chartTableModel";
 import {
@@ -15,11 +20,6 @@ import {
 } from "../analysisWorkbenchModel";
 import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
-
-function formatFreqLatest(y: number | undefined): string {
-  if (y === undefined || !Number.isFinite(y)) return "—";
-  return y.toPrecision(4);
-}
 
 export function AnalysisFrequencySurface({
   hiddenSeriesIds = [],
@@ -50,8 +50,8 @@ export function AnalysisFrequencySurface({
     [series, status, title],
   );
   const selected = useMemo(
-    () => buildFrequencyDomainCursorSummary(selectedPoint, title),
-    [selectedPoint, title],
+    () => buildFrequencyDomainCursorSummary(selectedPoint, title, series),
+    [selectedPoint, series, title],
   );
 
   if (series.length === 0) {
@@ -74,16 +74,31 @@ export function AnalysisFrequencySurface({
       ? allIds.find((id) => !hidden.includes(id)) ?? null
       : null;
 
-  const legendItems = series.map((s, index) => ({
-    id: s.id,
-    label: s.label || s.quantity,
-    unit: s.unit,
-    latestValue: formatFreqLatest(s.points.at(-1)?.y),
-    colorName: chartColorNameForIndex(index),
-    colorIndex: index,
-    hidden: hidden.includes(s.id),
-    soloed: soloedId !== null && soloedId === s.id,
-  }));
+  const yUnits = [...new Set(series.map((entry) => entry.unit))];
+  const yTransforms = createChartYAxisDisplayTransforms(
+    yUnits.map((unit) => ({ unit })),
+    series.map((entry) => ({
+      points: entry.points,
+      yAxis: yUnits.indexOf(entry.unit),
+    })),
+  );
+  const legendItems = series.map((entry, index) => {
+    const transform = yTransforms[yUnits.indexOf(entry.unit)] ??
+      createChartDisplayTransform(entry.unit, null);
+    return {
+      id: entry.id,
+      label: entry.label || entry.quantity,
+      unit: transform.displayUnit,
+      latestValue: formatChartDisplayValue(
+        entry.points.at(-1)?.y ?? Number.NaN,
+        transform,
+      ),
+      colorName: chartColorNameForIndex(index),
+      colorIndex: index,
+      hidden: hidden.includes(entry.id),
+      soloed: soloedId !== null && soloedId === entry.id,
+    };
+  });
 
   const visibleSeries = hidden.length === 0
     ? series

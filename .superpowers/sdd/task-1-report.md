@@ -233,3 +233,80 @@ Generating route types...
 sandbox first returned npm DNS error `EAI_AGAIN`; the elevated retry downloaded
 the package but failed to load the optional native module
 `@oxc-parser/binding-linux-x64-gnu`. No project dependency files were changed.
+
+## Second re-review follow-up
+
+### Implementation
+
+- `m`, `mx`, `my`, and `mz` with unit `1` now use the exact y-axis label
+  `Normalized magnetization m` for both single- and multi-series charts.
+  Physical magnetization in `A/m` retains its physical quantity label.
+- The frequency and energy analysis surfaces now derive legend units and latest
+  readings from the shared chart display transforms. Frequency cursor and
+  workbench-range summaries use the same policy, including correct handling of
+  input data already expressed in a prefixed unit such as `GHz`.
+- Partial export display-unit overrides now merge over deterministic defaults,
+  retaining unspecified axis units in provenance.
+
+### Second re-review RED
+
+Command:
+
+```sh
+env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/analysis-plots/components/EChartsSurface.test.tsx src/modules/analysis-plots/components/AnalysisEnergySurface.test.tsx src/modules/analysis-plots/components/AnalysisFrequencySurface.test.tsx src/modules/analysis-plots/analysisWorkbenchModel.test.ts
+```
+
+Output (exit 1):
+
+```text
+Test Files  5 failed | 8 passed (13)
+Tests  5 failed | 135 passed (140)
+Start at  19:28:29
+Duration  1.74s
+```
+
+The failures captured the missing normalized-magnetization title, unscaled
+energy/frequency legends, raw `9500 GHz` frequency summaries instead of
+`9.5 THz`, and loss of default export units when a partial override was given.
+
+### Second re-review GREEN
+
+Command:
+
+```sh
+env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/analysis-plots/components/EChartsSurface.test.tsx src/modules/analysis-plots/components/AnalysisEnergySurface.test.tsx src/modules/analysis-plots/components/AnalysisFrequencySurface.test.tsx src/modules/analysis-plots/analysisWorkbenchModel.test.ts
+```
+
+Output (exit 0):
+
+```text
+RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
+
+Test Files  13 passed (13)
+Tests  140 passed (140)
+Start at  19:30:53
+Duration  1.56s (transform 3.37s, setup 0ms, import 4.58s, tests 445ms, environment 2ms)
+```
+
+### Second re-review typecheck
+
+Command:
+
+```sh
+corepack pnpm --dir apps/control-room typecheck
+```
+
+Output (exit 0):
+
+```text
+> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
+> node scripts/typecheck-control-room.mjs
+
+Generating route types...
+✓ Types generated successfully
+```
+
+### Second re-review concerns
+
+No new concerns. The prior React Doctor environment limitation remains recorded
+above and was not retried for this narrowly scoped follow-up.

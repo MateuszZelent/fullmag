@@ -204,13 +204,12 @@ function quantityLabelForUnit(unit: string, series: readonly ChartSeries[]): str
   // Find the first series with this unit and use its label as the axis name
   const match = series.find((s) => s.unit === unit);
   if (!match) return "Value";
-  // For single-quantity axes (one series with this unit), use the label directly
   const sameUnit = series.filter((s) => s.unit === unit);
-  if (sameUnit.length === 1) return match.label || match.quantity;
   const labels = sameUnit.map((entry) => entry.quantity.toLowerCase());
-  if (labels.every((label) => ["mx", "my", "mz", "m"].includes(label))) {
-    return "Magnetization";
+  if (unit === "1" && labels.every((label) => ["mx", "my", "mz", "m"].includes(label))) {
+    return "Normalized magnetization m";
   }
+  if (sameUnit.length === 1) return match.label || match.quantity;
   if (labels.every((label) => label.includes("torque"))) return "Torque";
   if (labels.every((label) => label.includes("residual"))) return "Residual";
   // For mixed quantities, retain a visible semantic caption instead of
