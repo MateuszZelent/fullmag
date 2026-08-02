@@ -68,8 +68,17 @@ export interface SolverProfilePanelModel {
   rows: SolverProfileRow[];
   sampleCount: number;
   state: string;
+  timingSemanticsTooltip: string;
+  timingSummary: SolverProfileTimingSummary;
   threadSummary: string;
   windowPhaseSummary: string;
+}
+
+export interface SolverProfileTimingSummary {
+  hypreGpuElapsed: string;
+  hypreHostApi: string;
+  rkCheckpoint: string;
+  rollback: string;
 }
 
 export interface TimestepQualificationPanelModel {
@@ -249,6 +258,40 @@ export function FooterDiagnostics() {
             <div className="fm-footer-diagnostics__threading">
               <Timer size={13} aria-hidden="true" />
               <span>{profileModel.overheadSummary}</span>
+            </div>
+            <div
+              className="fm-footer-diagnostics__threading"
+              title={profileModel.timingSemanticsTooltip}
+            >
+              <Timer size={13} aria-hidden="true" />
+              <span>
+                RK checkpoint: {profileModel.timingSummary.rkCheckpoint}
+              </span>
+            </div>
+            <div
+              className="fm-footer-diagnostics__threading"
+              title={profileModel.timingSemanticsTooltip}
+            >
+              <Timer size={13} aria-hidden="true" />
+              <span>
+                HYPRE host API: {profileModel.timingSummary.hypreHostApi}
+              </span>
+            </div>
+            <div
+              className="fm-footer-diagnostics__threading"
+              title={profileModel.timingSemanticsTooltip}
+            >
+              <Timer size={13} aria-hidden="true" />
+              <span>
+                HYPRE GPU elapsed: {profileModel.timingSummary.hypreGpuElapsed}
+              </span>
+            </div>
+            <div
+              className="fm-footer-diagnostics__threading"
+              title={profileModel.timingSemanticsTooltip}
+            >
+              <Timer size={13} aria-hidden="true" />
+              <span>Rollback: {profileModel.timingSummary.rollback}</span>
             </div>
             {profileModel.hasSingleThreadWarning ? (
               <div className="fm-footer-diagnostics__warning" role="status">
@@ -610,6 +653,7 @@ export function buildSolverProfilePanelModel(
   const threading =
     profile?.threading ??
     (rows.length > 0 ? profile?.latest_samples.at(-1)?.threading : null);
+  const latestTimingSample = profile?.latest_samples.at(-1);
 
   return {
     allRows,
@@ -623,9 +667,66 @@ export function buildSolverProfilePanelModel(
     rows,
     sampleCount: profile?.aggregates.sample_count ?? 0,
     state: profile?.state ?? "pending",
+    timingSemanticsTooltip: formatTimingSemanticsTooltip(latestTimingSample),
+    timingSummary: buildSolverProfileTimingSummary(latestTimingSample),
     threadSummary: threading ? formatThreadSummary(threading) : "Threading pending",
     windowPhaseSummary: formatWindowPhaseSummary(profile?.latest_samples.at(-1)),
   };
+}
+
+function buildSolverProfileTimingSummary(
+  sample: SolverProfileStepSampleResource | null | undefined,
+): SolverProfileTimingSummary {
+  const timingIds = new Set(
+    (sample?.timing_semantics ?? []).map((timing) => timing.id),
+  );
+  const hasTiming = (id: string) => timingIds.has(id);
+  const timingValue = (id: string, value: number | null | undefined) =>
+    hasTiming(id) ? formatNs(value ?? 0) : "Not sampled";
+  const hasRkTiming =
+    hasTiming("rk_transaction_capture_host_wall_time_ns") ||
+    hasTiming("rk_transaction_restore_host_wall_time_ns") ||
+    hasTiming("rk_transaction_capture_device_elapsed_time_ns") ||
+    hasTiming("rk_transaction_restore_device_elapsed_time_ns");
+  return {
+    hypreGpuElapsed: timingValue(
+      "demag_hypre_device_elapsed_time_ns",
+      sample?.demag_hypre_device_elapsed_time_ns,
+    ),
+    hypreHostApi: timingValue(
+      "demag_hypre_host_api_wall_time_ns",
+      sample?.demag_hypre_host_api_wall_time_ns,
+    ),
+    rkCheckpoint: hasRkTiming
+      ? [
+          `capture ${timingValue(
+            "rk_transaction_capture_host_wall_time_ns",
+            sample?.rk_transaction_capture_host_wall_time_ns,
+          )}`,
+          `restore ${timingValue(
+            "rk_transaction_restore_host_wall_time_ns",
+            sample?.rk_transaction_restore_host_wall_time_ns,
+          )}`,
+          `bytes ${formatBytes(
+            (sample?.rk_transaction_capture_bytes ?? 0) +
+              (sample?.rk_transaction_restore_bytes ?? 0),
+          )}`,
+        ].join(" / ")
+      : "Not sampled",
+    rollback: hasRkTiming
+      ? `rollback ${Math.round(sample?.rk_transaction_rollback_count ?? 0)} / commit ${Math.round(sample?.rk_transaction_commit_count ?? 0)}`
+      : "Not sampled",
+  };
+}
+
+function formatTimingSemanticsTooltip(
+  sample: SolverProfileStepSampleResource | null | undefined,
+) {
+  const semantics = sample?.timing_semantics ?? [];
+  if (semantics.length === 0) return "Timing semantics: Not sampled";
+  return `Timing semantics: ${semantics
+    .map((timing) => `${timing.id}=${timing.kind}`)
+    .join("; ")}`;
 }
 
 export function buildTimestepQualificationPanelModel(

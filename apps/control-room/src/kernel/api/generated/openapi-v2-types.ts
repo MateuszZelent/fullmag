@@ -7858,6 +7858,18 @@ export interface components {
             backend_create_wall_time_ns?: number;
             /** Format: int64 */
             delta_wall_time_ns?: number | null;
+            /** Format: int64 */
+            demag_hypre_device_elapsed_time_ns?: number;
+            /** Format: int64 */
+            demag_hypre_event_wait_count?: number;
+            /** Format: int64 */
+            demag_hypre_host_api_wall_time_ns?: number;
+            /** Format: int64 */
+            demag_hypre_timed_solve_count?: number;
+            /** Format: int64 */
+            demag_hypre_wait_in_enqueue_wall_time_ns?: number;
+            /** Format: int64 */
+            demag_hypre_wait_out_enqueue_wall_time_ns?: number;
             demag_preconditioner?: string | null;
             demag_solver?: string | null;
             demag_solver_setup_reused?: boolean;
@@ -7924,6 +7936,22 @@ export interface components {
             relaxation_update_wall_time_ns?: number;
             /** Format: int32 */
             rhs_evaluations: number;
+            /** Format: int64 */
+            rk_transaction_capture_bytes?: number;
+            /** Format: int64 */
+            rk_transaction_capture_device_elapsed_time_ns?: number;
+            /** Format: int64 */
+            rk_transaction_capture_host_wall_time_ns?: number;
+            /** Format: int64 */
+            rk_transaction_commit_count?: number;
+            /** Format: int64 */
+            rk_transaction_restore_bytes?: number;
+            /** Format: int64 */
+            rk_transaction_restore_device_elapsed_time_ns?: number;
+            /** Format: int64 */
+            rk_transaction_restore_host_wall_time_ns?: number;
+            /** Format: int64 */
+            rk_transaction_rollback_count?: number;
             sample_kinds?: components["schemas"]["SolverProfileSampleKindResource"][];
             /** Format: int64 */
             sample_time_unix_ms?: number;
@@ -7942,6 +7970,7 @@ export interface components {
             threading: components["schemas"]["SolverProfileThreadingResource"];
             /** Format: double */
             time: number;
+            timing_semantics?: components["schemas"]["SolverProfileTimingSemanticResource"][];
             /** Format: int64 */
             total_ns: number;
             /** Format: int64 */
@@ -7961,6 +7990,12 @@ export interface components {
             /** Format: int32 */
             requested_omp_threads: number;
             thread_mode: string;
+        };
+        /** @enum {string} */
+        SolverProfileTimingSemanticKindResource: "exclusive" | "inclusive" | "overlapped" | "enqueue_only" | "device_elapsed";
+        SolverProfileTimingSemanticResource: {
+            id: string;
+            kind: components["schemas"]["SolverProfileTimingSemanticKindResource"];
         };
         SolverRateDiagnosticsResource: {
             end_to_end_steps_per_second?: null | components["schemas"]["RateMetricResource"];

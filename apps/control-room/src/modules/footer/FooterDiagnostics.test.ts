@@ -430,6 +430,63 @@ describe("FooterDiagnostics", () => {
     });
   });
 
+  it("separates sampled RK and HYPRE timings and marks missing samples", () => {
+    const sampled = structuredClone(profile);
+    sampled.latest_samples[0] = {
+      ...sampled.latest_samples[0]!,
+      demag_hypre_device_elapsed_time_ns: 50_000,
+      demag_hypre_host_api_wall_time_ns: 40_000,
+      demag_hypre_timed_solve_count: 4,
+      rk_transaction_capture_bytes: 1_024,
+      rk_transaction_capture_device_elapsed_time_ns: 20_000,
+      rk_transaction_capture_host_wall_time_ns: 10_000,
+      rk_transaction_commit_count: 4,
+      rk_transaction_restore_device_elapsed_time_ns: 30_000,
+      rk_transaction_restore_host_wall_time_ns: 20_000,
+      rk_transaction_rollback_count: 2,
+      timing_semantics: [
+        {
+          id: "rk_transaction_capture_host_wall_time_ns",
+          kind: "exclusive",
+        },
+        {
+          id: "rk_transaction_capture_device_elapsed_time_ns",
+          kind: "device_elapsed",
+        },
+        {
+          id: "rk_transaction_restore_host_wall_time_ns",
+          kind: "exclusive",
+        },
+        {
+          id: "demag_hypre_host_api_wall_time_ns",
+          kind: "inclusive",
+        },
+        {
+          id: "demag_hypre_device_elapsed_time_ns",
+          kind: "device_elapsed",
+        },
+      ],
+    };
+
+    const sampledModel = buildSolverProfilePanelModel(sampled);
+    expect(sampledModel.timingSummary).toEqual({
+      hypreGpuElapsed: "50.0 us",
+      hypreHostApi: "40.0 us",
+      rkCheckpoint: "capture 10.0 us / restore 20.0 us / bytes 1.0 KiB",
+      rollback: "rollback 2 / commit 4",
+    });
+    expect(sampledModel.timingSemanticsTooltip).toContain("exclusive");
+    expect(sampledModel.timingSemanticsTooltip).toContain("device_elapsed");
+
+    const missingModel = buildSolverProfilePanelModel(profile);
+    expect(missingModel.timingSummary).toEqual({
+      hypreGpuElapsed: "Not sampled",
+      hypreHostApi: "Not sampled",
+      rkCheckpoint: "Not sampled",
+      rollback: "Not sampled",
+    });
+  });
+
   it("uses unique row identities when profiler samples share the same step", () => {
     const duplicateStepProfile: SolverProfileResource = {
       ...profile,

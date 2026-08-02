@@ -72,6 +72,22 @@ pub struct SolverProfilePhaseWindowResource {
     pub max_wall_time_ns: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverProfileTimingSemanticKindResource {
+    Exclusive,
+    Inclusive,
+    Overlapped,
+    EnqueueOnly,
+    DeviceElapsed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct SolverProfileTimingSemanticResource {
+    pub id: String,
+    pub kind: SolverProfileTimingSemanticKindResource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileStepSampleResource {
     pub step: u64,
@@ -101,6 +117,8 @@ pub struct SolverProfileStepSampleResource {
     pub sample_kinds: Vec<SolverProfileSampleKindResource>,
     #[serde(default)]
     pub phase_windows: Vec<SolverProfilePhaseWindowResource>,
+    #[serde(default)]
+    pub timing_semantics: Vec<SolverProfileTimingSemanticResource>,
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,
@@ -118,6 +136,34 @@ pub struct SolverProfileStepSampleResource {
     pub poisson_final_residual: f64,
     #[serde(default)]
     pub demag_solver_setup_reused: bool,
+    #[serde(default)]
+    pub rk_transaction_capture_host_wall_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_capture_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_capture_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_host_wall_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_rollback_count: u64,
+    #[serde(default)]
+    pub rk_transaction_commit_count: u64,
+    #[serde(default)]
+    pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_host_api_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_wait_out_enqueue_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_event_wait_count: u64,
+    #[serde(default)]
+    pub demag_hypre_timed_solve_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_solver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -433,6 +479,21 @@ mod compatibility_tests {
             "unprofiled_gap_per_step_ns",
             "sample_kinds",
             "phase_windows",
+            "timing_semantics",
+            "rk_transaction_capture_host_wall_time_ns",
+            "rk_transaction_capture_device_elapsed_time_ns",
+            "rk_transaction_capture_bytes",
+            "rk_transaction_restore_host_wall_time_ns",
+            "rk_transaction_restore_device_elapsed_time_ns",
+            "rk_transaction_restore_bytes",
+            "rk_transaction_rollback_count",
+            "rk_transaction_commit_count",
+            "demag_hypre_wait_in_enqueue_wall_time_ns",
+            "demag_hypre_host_api_wall_time_ns",
+            "demag_hypre_device_elapsed_time_ns",
+            "demag_hypre_wait_out_enqueue_wall_time_ns",
+            "demag_hypre_event_wait_count",
+            "demag_hypre_timed_solve_count",
             "step_update_deep_clone_count",
             "backend_create_wall_time_ns",
         ] {
@@ -441,8 +502,58 @@ mod compatibility_tests {
         let decoded: SolverProfileStepSampleResource = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.span_step_count, 0);
         assert!(decoded.phase_windows.is_empty());
+        assert!(decoded.timing_semantics.is_empty());
+        assert_eq!(decoded.rk_transaction_capture_bytes, 0);
+        assert_eq!(decoded.demag_hypre_timed_solve_count, 0);
         assert_eq!(decoded.step_update_deep_clone_count, 0);
         assert_eq!(decoded.backend_create_wall_time_ns, 0);
+    }
+
+    #[test]
+    fn solver_profile_preserves_rk_and_hypre_timing_counters() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.rk_transaction_capture_host_wall_time_ns = 11;
+        stats.rk_transaction_capture_device_elapsed_time_ns = 12;
+        stats.rk_transaction_capture_bytes = 13;
+        stats.rk_transaction_restore_host_wall_time_ns = 14;
+        stats.rk_transaction_restore_device_elapsed_time_ns = 15;
+        stats.rk_transaction_restore_bytes = 16;
+        stats.rk_transaction_rollback_count = 17;
+        stats.rk_transaction_commit_count = 18;
+        stats.demag_hypre_wait_in_enqueue_wall_time_ns = 21;
+        stats.demag_hypre_host_api_wall_time_ns = 22;
+        stats.demag_hypre_device_elapsed_time_ns = 23;
+        stats.demag_hypre_wait_out_enqueue_wall_time_ns = 24;
+        stats.demag_hypre_event_wait_count = 25;
+        stats.demag_hypre_timed_solve_count = 26;
+
+        let runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(&stats);
+        let value = serde_json::to_value(runner_sample).unwrap();
+        let decoded: SolverProfileStepSampleResource = serde_json::from_value(value).unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+
+        for (key, expected) in [
+            ("rk_transaction_capture_host_wall_time_ns", 11),
+            ("rk_transaction_capture_device_elapsed_time_ns", 12),
+            ("rk_transaction_capture_bytes", 13),
+            ("rk_transaction_restore_host_wall_time_ns", 14),
+            ("rk_transaction_restore_device_elapsed_time_ns", 15),
+            ("rk_transaction_restore_bytes", 16),
+            ("rk_transaction_rollback_count", 17),
+            ("rk_transaction_commit_count", 18),
+            ("demag_hypre_wait_in_enqueue_wall_time_ns", 21),
+            ("demag_hypre_host_api_wall_time_ns", 22),
+            ("demag_hypre_device_elapsed_time_ns", 23),
+            ("demag_hypre_wait_out_enqueue_wall_time_ns", 24),
+            ("demag_hypre_event_wait_count", 25),
+            ("demag_hypre_timed_solve_count", 26),
+        ] {
+            assert_eq!(encoded[key], expected);
+        }
+        assert!(encoded["timing_semantics"].as_array().unwrap().iter().any(|entry| {
+            entry["id"] == "demag_hypre_device_elapsed_time_ns"
+                && entry["kind"] == "device_elapsed"
+        }));
     }
 }
 

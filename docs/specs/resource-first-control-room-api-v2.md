@@ -205,6 +205,18 @@ The simulation resources expose one algorithm-specific relaxation contract:
   alias. Without a closed monotonic profiler span it is null; status never
   carries the full rate objects.
 
+The named `diagnostics/solver-profile` resource also preserves the native
+transaction and demag timing counters for each sampled step. RK transaction
+fields distinguish host enqueue/capture/restore wall time, device elapsed time,
+captured bytes, and rollback/commit counts. HYPRE fields distinguish host API
+wall time, dependency-event enqueue time, device elapsed solve time, event-wait
+count, and timed-solve count. `timing_semantics` labels each counter as
+`exclusive`, `inclusive`, `overlapped`, `enqueue_only`, or `device_elapsed`;
+clients must not add counters with different semantics to reconstruct a wall
+time. The profile resource is opt-in and bounded; missing timing samples are
+represented by zero counters plus an empty semantic list and are not evidence
+that a zero-time operation was measured.
+
 The Study Explorer node and its Inspector consume these typed v2 resources
 through the generated transport, handwritten facade, and resource hooks. They
 do not construct endpoints or reinterpret torque units. HTTP v2 remains the
