@@ -158,6 +158,8 @@ void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
     const std::string publication_source = read_text_file(
         root / "gpu" / "cuda" / "integrators" / "rk" /
             "rk_step_stats_publication.cpp");
+    const std::string step_metrics_source = read_text_file(
+        root / "cpu" / "mfem" / "runtime" / "step_metrics.cpp");
     const std::string nonlinear_cg_source = read_text_file(
         root / "gpu" / "cuda" / "relaxation" / "nonlinear_cg.cpp");
     const std::string runtime_header = read_text_file(
@@ -229,11 +231,19 @@ void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
                 stats_source.find("gpu_rk_publish_final_step_stats(ctx, scalars, stats)"),
         "GPU transaction events must be collected after the existing scalar readback and before publication");
     check(
-        publication_source.find("capture_device_elapsed_ns") != std::string::npos &&
-            publication_source.find("restore_device_elapsed_ns") != std::string::npos &&
-            publication_source.find("device_transaction.capture_bytes") !=
+        publication_source.find("fill_step_profiler_timing_stats(ctx, stats)") !=
+                std::string::npos &&
+            step_metrics_source.find(
+                "rk_transaction_capture_device_elapsed_time_ns") !=
+                std::string::npos &&
+            step_metrics_source.find("rk_transaction_capture_bytes") !=
+                std::string::npos &&
+            step_metrics_source.find(
+                "rk_transaction_restore_device_elapsed_time_ns") !=
+                std::string::npos &&
+            step_metrics_source.find("rk_transaction_restore_bytes") !=
                 std::string::npos,
-        "GPU stats publication must expose device transaction elapsed time and bytes");
+        "GPU stats publication must route device transaction elapsed time and bytes through the shared step-profiler publisher");
 }
 
 
@@ -1856,7 +1866,7 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
     check(
         demag_kernels.find("fullmag_cuda_lift_periodic_reduced_scalar_to_full(") !=
                 std::string::npos &&
-            operators.find("const uint32_t scalar_col = periodic_scalar_column(ctx, col);") !=
+            operators.find("const uint32_t reduced_col = periodic_scalar_column(ctx, col);") !=
                 std::string::npos &&
             stage_compute.find("poisson_solution_for_recovery") ==
                 std::string::npos &&

@@ -74,8 +74,6 @@ void initialize_transaction_context(
 void source_inventory_covers_every_production_failure_boundary()
 {
     const auto root = fem_source_root();
-    const std::string injection = read_text_file(
-        root / "cpu" / "mfem" / "integrators" / "rk_step_failure_injection.hpp");
     const std::string step = read_text_file(
         root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
     const std::string backend = read_text_file(
@@ -91,7 +89,7 @@ void source_inventory_covers_every_production_failure_boundary()
              "DuringFinalStatistics",
          }) {
         check(
-            injection.find(field) != std::string::npos,
+            runtime_state.find(field) != std::string::npos,
             "failure-injection enum must expose every production boundary");
     }
     check(
