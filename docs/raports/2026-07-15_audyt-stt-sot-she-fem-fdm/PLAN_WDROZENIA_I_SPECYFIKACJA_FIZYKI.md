@@ -3170,3 +3170,33 @@ wiersza do `production_executable` ani `validated`.
    niepowiązaną z celem i uzyskać odrębne, zielone gates dla całego łańcucha.
 7. Dopiero po tych punktach przygotować końcowy raport porównawczy z external
    solvers i oznaczyć zakresy jako `validated`.
+
+## 30. Addendum — lokalny merge do `master` i świeże bramy (2026-08-02)
+
+Replay został włączony do lokalnego `master` bez naruszenia istniejącej zmiany
+użytkownika w `external_solvers/3`.
+
+| Pole | Wartość |
+|---|---|
+| `master` po merge | `211b56dad960ef8ee7ebf774d230b6dfa7ff684a` |
+| merge parent 1 | `ada50ce635c114b838a97b885a738f002805fd4d` |
+| merge parent 2 | `e740cf90df91c4933186dcfeb9cf1c56de3b8d4d` |
+| stan roboczy | tylko `external_solvers/3` pozostaje zmieniony i niestaged; zmiana została zachowana |
+| relacja do `origin/master` | lokalny `master` jest `131` commitów do przodu; nie wykonywano pushu z tej sesji |
+
+Świeże bramy na dokładnym drzewie `master`:
+
+- `just verify-fdm-prescribed-sot-native-contract` — **PASS**: algebra,
+  CUDA fp64/fp32 runtime i runner CUDA check;
+- `just verify-fdm-oersted-native-contract` — **PASS**: stage-time, rollback,
+  adaptive, FSAL, ABM3 i axis oracle;
+- `just verify-fem-stt-native-contract` — **PASS**: pełna biblioteka FEM,
+  `fem_stt_contract` oraz append-only FFI test; zarządzany obraz zawiera
+  `libboost-dev`;
+- Control Room `pnpm ... typecheck` — **PASS**;
+- focused Control Room — **8 plików, 103 testy PASS**.
+
+Nie wykonano jeszcze pushu do `origin/master`, browser/CDP smoke, pełnej suity
+Pythona ani device-residency/parity qualification GPU. Dlatego ocena celu
+pozostaje **82% implementacji / 58% gotowości produkcyjnej**; merge do lokalnego
+`master` nie zmienia granic kwalifikacji fizycznej.
