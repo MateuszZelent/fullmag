@@ -7,7 +7,7 @@ same typed mesh, tolerance, source commit, runtime manifest, and decision.
 - `audit_base_commit`: `17a7e341477e9b64493b8da0ed3179fd6233ee49`
 - `implementation_base_commit`: `eee245ac200bf138d880b793791848106b7386ba`
 - `origin_master_at_start`: `eee245ac200bf138d880b793791848106b7386ba`
-- `source_drift_reviewed_at`: `2026-08-01T22:58:43+02:00`
+- `source_drift_reviewed_at`: `2026-08-02T03:35:11+02:00`
 - `overlapping_owner_changes`: recorded per task below; no historical finding is
   classified `finding_already_fixed` without a new regression test and runtime
   evidence.
@@ -32,7 +32,7 @@ future task to refresh its scope before implementation.
 | T6 | CPU MFEM runtime build identity and managed-runtime scripts | task_update_required |
 | T7 | `crates/fullmag-runner/src/fem/relax/*`, `backends/fem` tests | task_update_required |
 | T8 | GPU relaxation source contracts and transfer audit | task_update_required |
-| T9 | GPU Poisson policy, runner dispatch, capability matrix | task_update_required |
+| T9 | LLG qualification registry, exact artifact/runtime binding, runner identity, API/UI diagnostics | scope_refreshed |
 | T10 | managed runtime manifest and export scripts | task_update_required |
 | T11 | GPU relaxation/preconditioner owner and FEM contracts | task_update_required |
 | T12 | runtime selection, runner runtime info, managed scripts | task_update_required |
@@ -74,7 +74,7 @@ at least one existing evidence path and cannot be blocked by measurement.
 | T6 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T7 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T8 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
-| T9 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
+| T9 | blocked | aa0e686a93b8e33c5dd79df1ede33c80193657e2 |  | benchmarks/fem-llg/qualification-registry-v1.json; scripts/validate_llg_qualification_registry.py; scripts/test_validate_llg_qualification_registry.py; crates/fullmag-runner/src/timestep_qualification.rs; crates/fullmag-runner/src/lib.rs; crates/fullmag-runner/src/artifacts.rs; crates/fullmag-api/src/schemas/diagnostics.rs; apps/control-room/src/modules/footer/FooterDiagnostics.tsx; docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md | blocked_by_measurement | aa0e686a93b8e33c5dd79df1ede33c80193657e2 | Fail-closed eight-lane registry, exact artifact/source binding, runner/API/UI provenance, and validators are implemented. Focused Python tests (`15`), Rust qualification tests (`6`), registry validation, and diff checks pass. All lanes remain intentionally `unvalidated`; the managed FEM runtime manifest is unavailable because the active alias is broken and `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4` is absent, so no device qualification or promotion is claimed. |
 | T10 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T11 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T12 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
