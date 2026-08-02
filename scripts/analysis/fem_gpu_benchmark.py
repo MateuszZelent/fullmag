@@ -6442,11 +6442,28 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
     if as_int(executed_steps) is None:
         return None
 
+    demag_runtime = metadata.get("demag_runtime")
+    if not isinstance(demag_runtime, Mapping):
+        demag_runtime = {}
+    demag_timings = demag_runtime.get("timings_ns")
+    if not isinstance(demag_timings, Mapping):
+        demag_timings = {}
+
     payload: dict[str, object] = {
         "status": "completed",
         "executed_steps": executed_steps,
         "artifact_dir": str(artifact_dir),
     }
+    for source, target in (
+        ("hypre_wait_in_enqueue", "demag_hypre_wait_in_enqueue_wall_time_ns"),
+        ("hypre_host_api", "demag_hypre_host_api_wall_time_ns"),
+        ("hypre_device_elapsed", "demag_hypre_device_elapsed_time_ns"),
+        ("hypre_wait_out_enqueue", "demag_hypre_wait_out_enqueue_wall_time_ns"),
+        ("hypre_event_wait_count", "demag_hypre_event_wait_count"),
+        ("hypre_timed_solve_count", "demag_hypre_timed_solve_count"),
+    ):
+        if demag_timings.get(source) is not None:
+            payload[target] = demag_timings[source]
     provenance = metadata.get("execution_provenance")
     if not isinstance(provenance, Mapping):
         provenance = {}
@@ -7837,6 +7854,38 @@ def run_backend(
                     )
                 ),
                 "demag_solver_apply_wall_time_scope": "last_step",
+                "demag_hypre_wait_in_enqueue_wall_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_wait_in_enqueue_wall_time_ns"),
+                        demag_timings.get("hypre_wait_in_enqueue"),
+                    )
+                ),
+                "demag_hypre_host_api_wall_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_host_api_wall_time_ns"),
+                        demag_timings.get("hypre_host_api"),
+                    )
+                ),
+                "demag_hypre_device_elapsed_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_device_elapsed_time_ns"),
+                        demag_timings.get("hypre_device_elapsed"),
+                    )
+                ),
+                "demag_hypre_wait_out_enqueue_wall_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_wait_out_enqueue_wall_time_ns"),
+                        demag_timings.get("hypre_wait_out_enqueue"),
+                    )
+                ),
+                "demag_hypre_event_wait_count": first_present(
+                    payload.get("demag_hypre_event_wait_count"),
+                    demag_timings.get("hypre_event_wait_count"),
+                ),
+                "demag_hypre_timed_solve_count": first_present(
+                    payload.get("demag_hypre_timed_solve_count"),
+                    demag_timings.get("hypre_timed_solve_count"),
+                ),
                 "demag_solver_setup_reused": first_present(
                     payload.get("demag_solver_setup_reused"),
                     demag_runtime.get("solver_setup_reused"),

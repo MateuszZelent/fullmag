@@ -234,6 +234,27 @@ verify-fem-relaxation-source-contract:
 
 verify-fem-solver-optimization-ledger:
     python3 scripts/validate_fem_solver_optimization_ledger.py docs/audits/2026-07-29-fem-solver-optimization-remediation-ledger.md
+
+# T14 source/API trace contract.  The managed browser smoke remains a separate
+# measurement gate; this recipe proves the bounded server model, API mapping,
+# publisher propagation and browser observer units without inventing a runtime
+# or GPU performance result when browser dependencies are unavailable.
+verify-fem-solver-trace-contract:
+    PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q scripts/test_validate_fem_solver_trace.py --capture=sys
+    CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-solver-trace-contract CARGO_INCREMENTAL=0 cargo test -q -p fullmag-runner solver_trace --lib
+    CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-solver-trace-contract CARGO_INCREMENTAL=0 cargo test -q -p fullmag-cli --bin fullmag trace --
+    CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-solver-trace-contract CARGO_INCREMENTAL=0 cargo test -q -p fullmag-api --bin fullmag-api trace --
+    if [ -d apps/control-room/node_modules ]; then \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      $PNPM_CMD --dir apps/control-room exec vitest run \
+        src/kernel/diagnostics/solverTrace.test.ts \
+        src/kernel/resources/studyRuntimeResources.test.ts; \
+    else \
+      echo "browser observer tests not run: apps/control-room/node_modules is unavailable" >&2; \
+    fi
+
 verify-fem-demag-amg-policy-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_demag_amg_policy_has_one_owner_and_effective_abi_provenance -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu artifacts::tests::demag_profile_metadata_includes_timing_breakdown -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-fem-sys --features build-native tests::regional_field_drive_ffi_layout_matches_native_runtime -- --exact --nocapture'

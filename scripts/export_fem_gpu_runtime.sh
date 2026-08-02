@@ -611,6 +611,10 @@ validate_nvtx_artifact "${runtime_root}/lib/libfullmag_fem.so.0" \
   fem.relax.armijo \
   fem.demag.rhs \
   fem.demag.hypre.apply \
+  fullmag.demag.wait_in_enqueue \
+  fullmag.demag.hypre_mult_host \
+  fullmag.demag.hypre_device \
+  fullmag.demag.wait_out_enqueue \
   fem.demag.recovery
 validate_nvtx_artifact "${runtime_root}/bin/fullmag-fem-gpu-bin" \
   fem.preview.snapshot \

@@ -371,6 +371,53 @@ impl LocalLiveWorkspace {
         self.record_solver_profile_step_inner(stats, false)
     }
 
+    /// Attach a server-side trace identity to the sampled step that just
+    /// passed the profiler gate.  Trace state is created only while profiling
+    /// is enabled and only after the caller knows the step was sampled.
+    pub fn attach_solver_profile_trace(&self, step: u64) -> bool {
+        if !self.solver_profile_enabled() {
+            return false;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let run_generation = state.run.run_id.clone();
+        if run_generation.is_empty() {
+            return false;
+        }
+        let stage_sequence = state
+            .stage_execution
+            .as_ref()
+            .and_then(|execution| execution.active_stage_index)
+            .unwrap_or(0) as u64;
+        let sample_sequence = state.solver_profile.next_trace_sample_sequence();
+        let Ok(trace_id) = fullmag_runner::SolverTraceId::new(
+            run_generation,
+            stage_sequence,
+            step,
+            sample_sequence,
+        ) else {
+            return false;
+        };
+        state
+            .solver_profile
+            .attach_trace(step, fullmag_runner::SolverTrace::server_only(trace_id))
+    }
+
+    pub fn attach_solver_profile_trace_segment(
+        &self,
+        step: u64,
+        segment: fullmag_runner::SolverTraceSegment,
+    ) -> bool {
+        if !self.solver_profile_enabled() {
+            return false;
+        }
+        self.state
+            .lock()
+            .map(|mut state| state.solver_profile.attach_trace_segment(step, segment))
+            .unwrap_or(false)
+    }
+
     pub fn force_record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
         if !self.solver_profile_enabled() {
             return;
@@ -495,13 +542,25 @@ impl LocalLiveWorkspace {
         }
         self.report_solver_profile_persistence_failure();
         let persist_wall_time_ns = persisted.then(|| elapsed_ns(persist_start)).unwrap_or(0);
-        let publisher_wall_time_ns = sampled
-            .then(|| {
-                let start = Instant::now();
+        let mut publisher_wall_time_ns = 0;
+        if sampled {
+            let enqueue_start = Instant::now();
+            self.publisher.request_publish();
+            publisher_wall_time_ns = elapsed_ns(enqueue_start);
+
+            // The first wake may race the state mutation.  Attach the
+            // measured runner→enqueue segment and issue one coalesced wake so
+            // the publisher observes the same trace ID and segment.
+            if self.attach_solver_profile_trace_segment(
+                step,
+                fullmag_runner::SolverTraceSegment::new(
+                    fullmag_runner::SolverTraceSegmentKind::RunnerCallbackToPublisherEnqueue,
+                    publisher_wall_time_ns,
+                ),
+            ) {
                 self.publisher.request_publish();
-                elapsed_ns(start)
-            })
-            .unwrap_or(0);
+            }
+        }
         let record_wall_time_ns = elapsed_ns(record_start);
         if let Ok(mut state) = self.state.lock() {
             state.solver_profile.record_overhead(
@@ -651,6 +710,44 @@ fn attach_live_publisher_diagnostics(
             .published_steps_per_second;
         profile.live_publisher = Some(diagnostics);
     }
+}
+
+fn attach_solver_trace_segment_to_payload(
+    payload: &mut CurrentLiveSnapshotPayload,
+    kind: fullmag_runner::SolverTraceSegmentKind,
+    duration_ns: u64,
+) {
+    let Some(step) = payload
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.step)
+    else {
+        return;
+    };
+    let Some(profile) = payload.solver_profile.as_mut() else {
+        return;
+    };
+    let Some(sample) = profile
+        .latest_samples
+        .iter_mut()
+        .rev()
+        .find(|sample| {
+            sample.step == step
+                && sample
+                    .trace
+                    .as_ref()
+                    .is_some_and(|trace| trace.trace_id.accepted_step == step)
+        })
+    else {
+        return;
+    };
+    let Some(trace) = sample.trace.as_mut() else {
+        return;
+    };
+    let _ = trace.insert_segment(fullmag_runner::SolverTraceSegment::new(
+        kind,
+        duration_ns,
+    ));
 }
 
 fn record_live_publish_diagnostics(
@@ -1677,6 +1774,75 @@ mod tests {
             },
             no_op_publisher(),
         )
+    }
+
+    #[test]
+    fn workspace_attaches_trace_with_run_and_stage_context() {
+        let workspace = workspace_with_domain_mesh();
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            ..fullmag_runner::SolverProfileConfig::default()
+        });
+
+        assert!(workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 3,
+            ..fullmag_runner::StepStats::default()
+        }));
+        assert!(workspace.attach_solver_profile_trace(3));
+        assert!(workspace.attach_solver_profile_trace_segment(
+            3,
+            fullmag_runner::SolverTraceSegment::new(
+                fullmag_runner::SolverTraceSegmentKind::RunnerCallbackToPublisherEnqueue,
+                19,
+            ),
+        ));
+
+        let sample = workspace
+            .snapshot()
+            .solver_profile
+            .snapshot()
+            .latest_samples
+            .into_iter()
+            .find(|sample| sample.step == 3)
+            .expect("sample should remain available");
+        let trace = sample.trace.expect("trace should be attached");
+        assert_eq!(trace.trace_id.run_generation, "test-run");
+        assert_eq!(trace.trace_id.stage_sequence, 0);
+        assert_eq!(trace.trace_id.accepted_step, 3);
+        assert_eq!(trace.trace_id.sample_sequence, 0);
+        assert_eq!(
+            trace
+                .segments
+                .get("runner_callback_to_publisher_enqueue_ns")
+                .expect("runner enqueue segment")
+                .duration_ns,
+            19
+        );
+
+        let state = workspace.snapshot();
+        let mut payload = state.build_publish_payload(false, None, false);
+        payload
+            .live_state
+            .as_mut()
+            .expect("live state")
+            .latest_step
+            .step = 3;
+        super::attach_solver_trace_segment_to_payload(
+            &mut payload,
+            fullmag_runner::SolverTraceSegmentKind::PublisherQueue,
+            27,
+        );
+        assert_eq!(
+            payload
+                .solver_profile
+                .as_ref()
+                .and_then(|profile| profile.latest_samples.first())
+                .and_then(|sample| sample.trace.as_ref())
+                .and_then(|trace| trace.segments.get("publisher_queue_ns"))
+                .map(|segment| segment.duration_ns),
+            Some(27)
+        );
     }
 
     #[test]
@@ -3381,6 +3547,11 @@ fn current_live_publisher_loop(
                 .and_then(|mut value| value.take())
                 .map(elapsed_ns)
                 .unwrap_or(0);
+            attach_solver_trace_segment_to_payload(
+                &mut snapshot,
+                fullmag_runner::SolverTraceSegmentKind::PublisherQueue,
+                publish_lag_wall_time_ns,
+            );
             attach_live_publisher_diagnostics(&mut snapshot, &diagnostics);
             sending.store(true, Ordering::Release);
             let cycle_start = Instant::now();
@@ -3466,6 +3637,11 @@ fn current_live_publisher_loop(
             .and_then(|mut value| value.take())
             .map(elapsed_ns)
             .unwrap_or(0);
+        attach_solver_trace_segment_to_payload(
+            &mut snapshot,
+            fullmag_runner::SolverTraceSegmentKind::PublisherQueue,
+            publish_lag_wall_time_ns,
+        );
         sending.store(true, Ordering::Release);
         let cycle_start = Instant::now();
         let fallback_allowed = enable_api_fallback && api_is_ready(api_port());

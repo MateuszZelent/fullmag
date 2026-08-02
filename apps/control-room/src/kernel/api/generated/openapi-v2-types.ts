@@ -7973,6 +7973,7 @@ export interface components {
             timing_semantics?: components["schemas"]["SolverProfileTimingSemanticResource"][];
             /** Format: int64 */
             total_ns: number;
+            trace?: null | components["schemas"]["SolverTraceResource"];
             /** Format: int64 */
             unprofiled_gap_per_step_ns?: number;
             /** Format: int64 */
@@ -8077,6 +8078,42 @@ export interface components {
             relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** @description idle | running | paused | finished | error */
             state: string;
+        };
+        /** @enum {string} */
+        SolverTraceClockDomainResource: "server_monotonic" | "browser_performance";
+        /** @enum {string} */
+        SolverTraceCompletenessResource: "server_only" | "complete" | "partial";
+        SolverTraceIdResource: {
+            /** Format: int64 */
+            accepted_step: number;
+            run_generation: string;
+            /** Format: int64 */
+            sample_sequence: number;
+            /** Format: int64 */
+            stage_sequence: number;
+            value: string;
+        };
+        SolverTraceResource: {
+            /** Format: int64 */
+            api_revision?: number | null;
+            completeness: components["schemas"]["SolverTraceCompletenessResource"];
+            format: string;
+            segments: {
+                [key: string]: components["schemas"]["SolverTraceSegmentResource"];
+            };
+            trace_id: components["schemas"]["SolverTraceIdResource"];
+            /** Format: int64 */
+            unaccounted_browser_ns: number;
+            /** Format: int64 */
+            unaccounted_server_ns: number;
+        };
+        /** @enum {string} */
+        SolverTraceSegmentKindResource: "native_to_runner_callback" | "runner_callback_to_publisher_enqueue" | "publisher_queue" | "publisher_apply" | "api_revision_visibility" | "browser_fetch" | "browser_decode_to_commit" | "commit_to_animation_frame";
+        SolverTraceSegmentResource: {
+            clock_domain: components["schemas"]["SolverTraceClockDomainResource"];
+            /** Format: int64 */
+            duration_ns: number;
+            kind: components["schemas"]["SolverTraceSegmentKindResource"];
         };
         SpinWaveGammaResource: {
             detrend: string;

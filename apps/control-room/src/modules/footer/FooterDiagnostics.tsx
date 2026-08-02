@@ -81,6 +81,26 @@ export interface SolverProfileTimingSummary {
   rollback: string;
 }
 
+export interface SolverTracePanelSegment {
+  clockDomain: "browser" | "server";
+  duration: string;
+  durationNs: number;
+  id: string;
+  label: string;
+  percent: number;
+}
+
+export interface SolverTracePanelModel {
+  completeness: "complete" | "not_sampled" | "partial" | "server_only";
+  completenessLabel: string;
+  segments: SolverTracePanelSegment[];
+  step: number | null;
+  traceId: string | null;
+  totalNs: number;
+  unaccountedBrowser: string;
+  unaccountedServer: string;
+}
+
 export interface TimestepQualificationPanelModel {
   detail: string;
   label: string;
@@ -115,6 +135,7 @@ export function FooterDiagnostics() {
   const gpuDevices = gpu.data?.devices ?? [];
   const gpuStatus = gpu.data?.status ?? "pending";
   const profileModel = buildSolverProfilePanelModel(solverProfile.data);
+  const traceModel = buildSolverTracePanelModel(solverProfile.data);
   const timestepQualificationModel = buildTimestepQualificationPanelModel(
     solverProfile.data,
   );
@@ -293,6 +314,7 @@ export function FooterDiagnostics() {
               <Timer size={13} aria-hidden="true" />
               <span>Rollback: {profileModel.timingSummary.rollback}</span>
             </div>
+            <SolverTracePanel model={traceModel} />
             {profileModel.hasSingleThreadWarning ? (
               <div className="fm-footer-diagnostics__warning" role="status">
                 <AlertTriangle size={13} aria-hidden="true" />
@@ -717,6 +739,199 @@ function buildSolverProfileTimingSummary(
       ? `rollback ${Math.round(sample?.rk_transaction_rollback_count ?? 0)} / commit ${Math.round(sample?.rk_transaction_commit_count ?? 0)}`
       : "Not sampled",
   };
+}
+
+const SOLVER_TRACE_SEGMENT_DEFINITIONS = [
+  {
+    clockDomain: "server" as const,
+    id: "native_to_runner_callback_ns",
+    label: "Native → runner",
+  },
+  {
+    clockDomain: "server" as const,
+    id: "runner_callback_to_publisher_enqueue_ns",
+    label: "Runner → publisher",
+  },
+  {
+    clockDomain: "server" as const,
+    id: "publisher_queue_ns",
+    label: "Publisher queue",
+  },
+  {
+    clockDomain: "server" as const,
+    id: "publisher_apply_ns",
+    label: "Publisher apply",
+  },
+  {
+    clockDomain: "server" as const,
+    id: "api_revision_visibility_ns",
+    label: "API revision",
+  },
+  {
+    clockDomain: "browser" as const,
+    id: "browser_fetch_ns",
+    label: "Browser fetch",
+  },
+  {
+    clockDomain: "browser" as const,
+    id: "browser_decode_to_commit_ns",
+    label: "Decode → commit",
+  },
+  {
+    clockDomain: "browser" as const,
+    id: "commit_to_animation_frame_ns",
+    label: "Commit → frame",
+  },
+] as const;
+
+export function buildSolverTracePanelModel(
+  profile: SolverProfileResource | null | undefined,
+): SolverTracePanelModel {
+  const sample = profile?.latest_samples.at(-1);
+  const trace = sample?.trace;
+  if (!trace) {
+    return {
+      completeness: "not_sampled",
+      completenessLabel: "Not sampled",
+      segments: [],
+      step: null,
+      traceId: null,
+      totalNs: 0,
+      unaccountedBrowser: "Not sampled",
+      unaccountedServer: "Not sampled",
+    };
+  }
+
+  const segments = SOLVER_TRACE_SEGMENT_DEFINITIONS.flatMap((definition) => {
+    const segment = trace.segments[definition.id];
+    if (!segment) return [];
+    const durationNs = Math.max(0, segment.duration_ns);
+    return [
+      {
+        clockDomain: definition.clockDomain,
+        duration: formatNs(durationNs),
+        durationNs,
+        id: definition.id,
+        label: definition.label,
+        percent: 0,
+      },
+    ];
+  });
+  const totalNs = segments.reduce(
+    (total, segment) => total + segment.durationNs,
+    0,
+  );
+  const normalizedSegments = segments.map((segment) => ({
+    ...segment,
+    percent: totalNs > 0 ? (segment.durationNs / totalNs) * 100 : 0,
+  }));
+
+  return {
+    completeness: trace.completeness,
+    completenessLabel: solverTraceCompletenessLabel(trace.completeness),
+    segments: normalizedSegments,
+    step: trace.trace_id.accepted_step,
+    traceId: trace.trace_id.value,
+    totalNs,
+    unaccountedBrowser: formatNs(trace.unaccounted_browser_ns),
+    unaccountedServer: formatNs(trace.unaccounted_server_ns),
+  };
+}
+
+function SolverTracePanel({ model }: { model: SolverTracePanelModel }) {
+  const statusIcon =
+    model.completeness === "partial" ? (
+      <AlertTriangle size={13} aria-hidden="true" />
+    ) : (
+      <Timer size={13} aria-hidden="true" />
+    );
+
+  return (
+    <div
+      className="fm-footer-diagnostics__trace"
+      data-completeness={model.completeness}
+      aria-label="Solver to render trace"
+    >
+      <div className="fm-footer-diagnostics__trace-heading">
+        <span>Solver → render trace</span>
+        <span
+          className="fm-footer-diagnostics__trace-status"
+          data-completeness={model.completeness}
+        >
+          {statusIcon}
+          {model.completenessLabel}
+        </span>
+      </div>
+      {model.traceId ? (
+        <>
+          <div className="fm-footer-diagnostics__trace-meta" title={model.traceId}>
+            Sampled step {model.step} · {model.traceId}
+          </div>
+          {model.segments.length > 0 ? (
+            <>
+              <div
+                className="fm-footer-diagnostics__trace-waterfall"
+                role="img"
+                aria-label={`Trace waterfall, ${formatNs(model.totalNs)} accounted`}
+              >
+                {model.segments.map((segment) => (
+                  <span
+                    className="fm-footer-diagnostics__trace-bar"
+                    data-domain={segment.clockDomain}
+                    key={segment.id}
+                    style={{ width: `${segment.percent}%` }}
+                    title={`${segment.label}: ${segment.duration}`}
+                  />
+                ))}
+              </div>
+              <div className="fm-footer-diagnostics__trace-rows" role="list">
+                {model.segments.map((segment) => (
+                  <div
+                    className="fm-footer-diagnostics__trace-row"
+                    key={segment.id}
+                    role="listitem"
+                  >
+                    <span>{segment.label}</span>
+                    <span data-domain={segment.clockDomain}>
+                      {segment.clockDomain}
+                    </span>
+                    <span>{segment.duration}</span>
+                    <span>{segment.percent.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+              <div className="fm-footer-diagnostics__trace-unaccounted">
+                Unaccounted: server {model.unaccountedServer} · browser {model.unaccountedBrowser}
+              </div>
+            </>
+          ) : (
+            <div className="fm-footer-diagnostics__trace-empty" role="status">
+              Server trace identity is present; no timing segments were published.
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="fm-footer-diagnostics__trace-empty" role="status">
+          No sampled solver trace in the latest profile response.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function solverTraceCompletenessLabel(
+  completeness: SolverTracePanelModel["completeness"],
+): string {
+  switch (completeness) {
+    case "complete":
+      return "Complete (server + browser)";
+    case "partial":
+      return "Partial (missing segments)";
+    case "server_only":
+      return "Server-only (browser not observed)";
+    default:
+      return "Not sampled";
+  }
 }
 
 function formatTimingSemanticsTooltip(

@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::solver_trace::{SolverTrace, SolverTraceSegment};
 use crate::types::StepStats;
 
 const DEFAULT_SAMPLE_EVERY: u64 = 1;
@@ -188,6 +189,11 @@ pub struct SolverProfileTimingSemantic {
 pub struct SolverProfileStepSample {
     pub step: u64,
     pub sample_time_unix_ms: u64,
+    /// Optional sampled solver-to-render trace.  The trace is attached only
+    /// after a sample has passed the profiler's sampling gate, so disabled or
+    /// unsampled steps do not allocate trace state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<SolverTrace>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_wall_time_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -320,6 +326,7 @@ impl SolverProfileStepSample {
         Self {
             step: stats.step,
             sample_time_unix_ms: unix_time_millis(),
+            trace: None,
             delta_wall_time_ns: None,
             unprofiled_gap_wall_time_ns: None,
             span_first_step: stats.step,
@@ -958,6 +965,7 @@ pub struct SolverProfileState {
     config: SolverProfileConfig,
     revision: u64,
     samples: VecDeque<SolverProfileStepSample>,
+    trace_sample_sequence: u64,
     artifact_refs: Vec<String>,
     last_sampled_instant: Option<Instant>,
     pending_window: PendingProfileWindow,
@@ -985,6 +993,7 @@ impl SolverProfileState {
             config: config.normalized(),
             revision: 0,
             samples: VecDeque::new(),
+            trace_sample_sequence: 0,
             artifact_refs: Vec::new(),
             last_sampled_instant: None,
             pending_window: PendingProfileWindow::default(),
@@ -995,6 +1004,15 @@ impl SolverProfileState {
 
     pub fn config(&self) -> &SolverProfileConfig {
         &self.config
+    }
+
+    /// Allocate the next bounded trace sample sequence.  The sequence is
+    /// intentionally separate from the profile revision because revisions
+    /// also advance for publisher and persistence diagnostics.
+    pub fn next_trace_sample_sequence(&mut self) -> u64 {
+        let sequence = self.trace_sample_sequence;
+        self.trace_sample_sequence = self.trace_sample_sequence.wrapping_add(1);
+        sequence
     }
 
     pub fn set_config(&mut self, config: SolverProfileConfig) {
@@ -1413,6 +1431,57 @@ impl SolverProfileState {
             .cloned()
     }
 
+    /// Attach a validated trace to the sampled interval closing at `step`.
+    ///
+    /// Sparse sampling closes a window whose `sample.step` is the last step,
+    /// so matching `span_last_step` is intentional.  A trace is never
+    /// attached to a finalization-only sample (`span_step_count == 0`).
+    pub fn attach_trace(&mut self, step: u64, trace: SolverTrace) -> bool {
+        if !self.config.enabled
+            || trace.trace_id.accepted_step != step
+            || trace.validate().is_err()
+        {
+            return false;
+        }
+        let Some(sample) = self
+            .samples
+            .iter_mut()
+            .rev()
+            .find(|sample| sample.span_step_count > 0 && sample.span_last_step == step)
+        else {
+            return false;
+        };
+        sample.trace = Some(trace);
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+
+    /// Add one server-clock segment to an already attached sampled trace.
+    /// Duplicate segments and invalid clock-domain mappings are rejected by
+    /// the trace model and leave the sample unchanged.
+    pub fn attach_trace_segment(
+        &mut self,
+        step: u64,
+        segment: SolverTraceSegment,
+    ) -> bool {
+        let Some(sample) = self
+            .samples
+            .iter_mut()
+            .rev()
+            .find(|sample| sample.span_step_count > 0 && sample.span_last_step == step)
+        else {
+            return false;
+        };
+        let Some(trace) = sample.trace.as_mut() else {
+            return false;
+        };
+        if trace.insert_segment(segment).is_err() {
+            return false;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+
     fn trim_samples(&mut self) {
         while self.samples.len() > self.config.max_samples {
             self.samples.pop_front();
@@ -1502,6 +1571,7 @@ mod tests {
         SolverProfileStepSample, SolverProfileThreading,
     };
     use crate::types::StepStats;
+    use crate::solver_trace::{SolverTrace, SolverTraceId};
 
     fn enabled_profile(sample_every: u64) -> SolverProfileState {
         SolverProfileState::new(SolverProfileConfig {
@@ -1638,6 +1708,27 @@ mod tests {
         assert_eq!(sample.span_step_count, 1);
         assert_eq!(sample.span_monotonic_wall_time_ns, 7_000_000);
         assert_eq!(sample.unprofiled_gap_total_ns, 0);
+    }
+
+    #[test]
+    fn sampled_step_can_attach_a_server_trace_after_sampling() {
+        let mut profile = enabled_profile(1);
+        profile
+            .record_step_at(
+                &StepStats {
+                    step: 7,
+                    wall_time_ns: 11,
+                    ..StepStats::default()
+                },
+                Instant::now(),
+            )
+            .expect("step 7 should be sampled");
+
+        let trace = SolverTrace::server_only(SolverTraceId::new("run-1", 2, 7, 1).unwrap());
+        assert!(profile.attach_trace(7, trace.clone()));
+
+        let sample = profile.latest_step_sample(7).expect("sample remains available");
+        assert_eq!(sample.trace, Some(trace));
     }
 
     #[test]

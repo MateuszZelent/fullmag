@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -89,10 +90,67 @@ pub struct SolverProfileTimingSemanticResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverTraceIdResource {
+    pub value: String,
+    pub run_generation: String,
+    pub stage_sequence: u64,
+    pub accepted_step: u64,
+    pub sample_sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverTraceClockDomainResource {
+    ServerMonotonic,
+    BrowserPerformance,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverTraceSegmentKindResource {
+    NativeToRunnerCallback,
+    RunnerCallbackToPublisherEnqueue,
+    PublisherQueue,
+    PublisherApply,
+    ApiRevisionVisibility,
+    BrowserFetch,
+    BrowserDecodeToCommit,
+    CommitToAnimationFrame,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverTraceSegmentResource {
+    pub kind: SolverTraceSegmentKindResource,
+    pub duration_ns: u64,
+    pub clock_domain: SolverTraceClockDomainResource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverTraceCompletenessResource {
+    ServerOnly,
+    Complete,
+    Partial,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverTraceResource {
+    pub format: String,
+    pub trace_id: SolverTraceIdResource,
+    pub segments: BTreeMap<String, SolverTraceSegmentResource>,
+    pub api_revision: Option<u64>,
+    pub completeness: SolverTraceCompletenessResource,
+    pub unaccounted_server_ns: u64,
+    pub unaccounted_browser_ns: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileStepSampleResource {
     pub step: u64,
     #[serde(default)]
     pub sample_time_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<SolverTraceResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_wall_time_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -417,7 +475,7 @@ impl Default for SolverProfileResource {
 mod compatibility_tests {
     use super::{
         SolverProfileResource, SolverProfileStepSampleResource,
-        TimestepValidationStateResource,
+        SolverTraceCompletenessResource, TimestepValidationStateResource,
     };
 
     #[test]
@@ -554,6 +612,26 @@ mod compatibility_tests {
             entry["id"] == "demag_hypre_device_elapsed_time_ns"
                 && entry["kind"] == "device_elapsed"
         }));
+    }
+
+    #[test]
+    fn solver_trace_round_trips_through_the_profile_resource() {
+        let mut runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
+            &fullmag_runner::StepStats {
+                step: 7,
+                ..fullmag_runner::StepStats::default()
+            },
+        );
+        runner_sample.trace = Some(fullmag_runner::SolverTrace::server_only(
+            fullmag_runner::SolverTraceId::new("run-1", 2, 7, 1).unwrap(),
+        ));
+        let decoded: SolverProfileStepSampleResource =
+            serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap();
+
+        let trace = decoded.trace.expect("trace should be exposed by the API resource");
+        assert_eq!(trace.trace_id.value, "run-1:2:7:1");
+        assert_eq!(trace.completeness, SolverTraceCompletenessResource::ServerOnly);
+        assert!(trace.segments.is_empty());
     }
 }
 

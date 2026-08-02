@@ -1314,6 +1314,12 @@ fn begin_solver_profile_step_with_orchestration(
         .saturating_add(orchestration_wall_time_ns);
     let record_start = Instant::now();
     let sampled = live_workspace.record_solver_profile_step(stats);
+    if sampled {
+        // Allocate the trace identity only after the sampling gate accepted
+        // this step.  The later callback finalization/publisher path can then
+        // enrich the same bounded sample without adding profiler-off work.
+        let _ = live_workspace.attach_solver_profile_trace(stats.step);
+    }
     Some(SolverProfileCallbackRecord {
         step: stats.step,
         recorded_callback_wall_time_ns: orchestration_wall_time_ns,
@@ -1335,6 +1341,15 @@ fn finish_solver_profile_step_with_orchestration(
     let callback_wall_time_ns = saturating_nanos_u64(callback_start.elapsed());
     let callback_thread_cpu_time_ns =
         fullmag_runner::elapsed_current_thread_cpu_ns(record.callback_thread_cpu_started_ns);
+    if record.sampled {
+        let _ = live_workspace.attach_solver_profile_trace_segment(
+            record.step,
+            fullmag_runner::SolverTraceSegment::new(
+                fullmag_runner::SolverTraceSegmentKind::NativeToRunnerCallback,
+                record.recorded_callback_wall_time_ns,
+            ),
+        );
+    }
     live_workspace.finish_solver_profile_callback(
         record.step,
         record.recorded_callback_wall_time_ns,

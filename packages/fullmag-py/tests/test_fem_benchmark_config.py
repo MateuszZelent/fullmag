@@ -2497,6 +2497,12 @@ def test_emit_summary_includes_demag_phase_timing_fields(capsys):
         demag_wall_time_ns = 29
         demag_assemble_wall_time_ns = 3
         demag_solve_wall_time_ns = 5
+        demag_hypre_wait_in_enqueue_wall_time_ns = 2
+        demag_hypre_host_api_wall_time_ns = 3
+        demag_hypre_device_elapsed_time_ns = 4
+        demag_hypre_wait_out_enqueue_wall_time_ns = 5
+        demag_hypre_event_wait_count = 6
+        demag_hypre_timed_solve_count = 1
         demag_recover_wall_time_ns = 7
         demag_energy_wall_time_ns = 11
         rhs_wall_time_ns = 13
@@ -2531,6 +2537,12 @@ def test_emit_summary_includes_demag_phase_timing_fields(capsys):
     assert payload["demag_solve_wall_time_ns"] == 5
     assert payload["demag_recover_wall_time_ns"] == 7
     assert payload["demag_energy_wall_time_ns"] == 11
+    assert payload["demag_hypre_wait_in_enqueue_wall_time_ns"] == 2
+    assert payload["demag_hypre_host_api_wall_time_ns"] == 3
+    assert payload["demag_hypre_device_elapsed_time_ns"] == 4
+    assert payload["demag_hypre_wait_out_enqueue_wall_time_ns"] == 5
+    assert payload["demag_hypre_event_wait_count"] == 6
+    assert payload["demag_hypre_timed_solve_count"] == 1
 
 
 def test_preflight_finds_mfem_config_from_mfem_dir(tmp_path):
@@ -2721,6 +2733,12 @@ def test_run_backend_carries_demag_phase_timing_from_payload(monkeypatch, tmp_pa
                     "final_time_s": 2e-13,
                     "demag_assemble_wall_time_ns": 3_000_000,
                     "demag_solve_wall_time_ns": 5_000_000,
+                    "demag_hypre_wait_in_enqueue_wall_time_ns": 2_000_000,
+                    "demag_hypre_host_api_wall_time_ns": 3_000_000,
+                    "demag_hypre_device_elapsed_time_ns": 4_000_000,
+                    "demag_hypre_wait_out_enqueue_wall_time_ns": 5_000_000,
+                    "demag_hypre_event_wait_count": 6,
+                    "demag_hypre_timed_solve_count": 1,
                     "demag_recover_wall_time_ns": 7_000_000,
                     "demag_energy_wall_time_ns": 11_000_000,
                 }
@@ -2745,6 +2763,12 @@ def test_run_backend_carries_demag_phase_timing_from_payload(monkeypatch, tmp_pa
     assert row["demag_solve_wall_time_ms"] == 5.0
     assert row["demag_recover_wall_time_ms"] == 7.0
     assert row["demag_energy_wall_time_ms"] == 11.0
+    assert row["demag_hypre_wait_in_enqueue_wall_time_ms"] == 2.0
+    assert row["demag_hypre_host_api_wall_time_ms"] == 3.0
+    assert row["demag_hypre_device_elapsed_time_ms"] == 4.0
+    assert row["demag_hypre_wait_out_enqueue_wall_time_ms"] == 5.0
+    assert row["demag_hypre_event_wait_count"] == 6
+    assert row["demag_hypre_timed_solve_count"] == 1
 
 
 def test_run_backend_propagates_requested_gmsh_threads(monkeypatch, tmp_path):
