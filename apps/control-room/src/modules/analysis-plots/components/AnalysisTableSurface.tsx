@@ -110,7 +110,9 @@ export function AnalysisTableSurface({
     data: table,
     error: tableRowsRefresh?.error ?? (status === "error" ? new Error("Table samples unavailable") : null),
     requestedRevision: tableRowsRefresh?.revision ?? table?.revision ?? null,
-    status: tableRowsRefresh?.status ?? resourceStatus(status),
+    status: status === "unsupported"
+      ? "unsupported"
+      : tableRowsRefresh?.status ?? resourceStatus(status),
     unsupportedReason: status === "unsupported"
       ? unsupportedReason ?? "Table samples are unsupported by the current runtime."
       : null,

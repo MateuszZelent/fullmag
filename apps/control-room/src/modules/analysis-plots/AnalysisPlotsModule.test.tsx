@@ -1207,6 +1207,30 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("mx");
   });
 
+  it("prefers semantic table unsupported status over a ready raw refresh", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsRefresh={{ error: null, revision: 2, status: "ready" }}
+        tableRowsStatus="unsupported"
+        tableRowsUnsupportedReason="The active runtime does not publish scalar table samples."
+        visibleTable={chartWindow(table)}
+        xAxisId="step"
+        selectedSeriesIds={["data.table:default:step:mx"]}
+      />,
+    );
+
+    expect(html).toContain("The active runtime does not publish scalar table samples.");
+  });
+
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView

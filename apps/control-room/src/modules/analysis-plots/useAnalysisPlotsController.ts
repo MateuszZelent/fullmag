@@ -333,12 +333,15 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       tableData.setXAxisId(columnId);
     },
     availableColumns: tableData.availableColumns,
-    tableRowsStatus: tableRowsStatusForDisplay(
-      tableData.tableRows.status,
-      liveMode,
-      Boolean(tableData.visibleTable && tableData.visibleTable.rowCount > 0),
-    ),
+    tableRowsStatus: tableData.tableRowsUnsupportedReason
+      ? "unsupported"
+      : tableRowsStatusForDisplay(
+        tableData.tableRows.status,
+        liveMode,
+        Boolean(tableData.visibleTable && tableData.visibleTable.rowCount > 0),
+      ),
     tableRowsRefresh: tableData.tableRows,
+    tableRowsUnsupportedReason: tableData.tableRowsUnsupportedReason,
     visibleTable: tableData.visibleTable,
     xAxisId: tableData.xAxisId,
     selectedSeriesIds: tableData.selectedSeriesIds,

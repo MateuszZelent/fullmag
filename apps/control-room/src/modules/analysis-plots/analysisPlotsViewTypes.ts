@@ -39,6 +39,7 @@ export interface AnalysisPlotsViewProps {
   solverEnergyStatus: string;
   tableRowsStatus: string;
   tableRowsRefresh?: Pick<ResourceResult<unknown>, "error" | "revision" | "status">;
+  tableRowsUnsupportedReason?: string | null;
   targetPoints?: 160 | 400 | 800 | 1600 | 3200 | 5000;
   visibleTable: ChartTableWindow | null;
   xAxisId: string;

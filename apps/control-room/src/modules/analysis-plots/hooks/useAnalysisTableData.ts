@@ -64,6 +64,8 @@ export interface AnalysisTableDataResult {
   availableColumns: readonly AxisColumnDescriptor[];
   /** Binary rows resource (raw; prefer visibleTable below) */
   tableRows: ReturnType<typeof useTableRowsBinaryResource>;
+  /** Semantic availability of table samples, derived from the published schema. */
+  tableRowsUnsupportedReason: string | null;
   /** Accumulated visible table window (cursor-tracked, range-aware) */
   visibleTable: AnalysisTableState["visibleTable"];
   /** Selected chart-series IDs from workspace */
@@ -114,6 +116,16 @@ export function tableRowsStatusForDisplay(
   return liveMode === "paused" && hasVisibleRows && resourceStatus !== "error"
     ? "paused"
     : resourceStatus;
+}
+
+/** A published empty schema means the active runtime has no scalar table capability. */
+export function tableRowsUnsupportedReasonForColumns(
+  columns: readonly { column_id: string }[] | null | undefined,
+  status: string,
+): string | null {
+  return status === "ready" && columns?.length === 0
+    ? "The active runtime does not publish scalar table samples."
+    : null;
 }
 
 /**
@@ -180,6 +192,10 @@ export function useAnalysisTableData(
     [tableColumns.data],
   );
   const hasPublishedTableSchema = queryColumns.length > 0;
+  const tableRowsUnsupportedReason = tableRowsUnsupportedReasonForColumns(
+    tableColumns.data,
+    tableColumns.status,
+  );
 
   const latestX = visibleTable && visibleTable.rowCount > 0
     ? chartTableWindowValue(
@@ -346,6 +362,7 @@ export function useAnalysisTableData(
     tableColumns,
     availableColumns: tableColumns.data ?? [],
     tableRows,
+    tableRowsUnsupportedReason,
     visibleTable,
     xAxisId,
     selectedSeriesIds,

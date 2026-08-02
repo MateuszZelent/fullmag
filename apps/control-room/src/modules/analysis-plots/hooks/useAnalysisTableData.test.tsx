@@ -5,6 +5,7 @@ import {
   shouldLoadPublishedTableRows,
   shouldPausePublishedTableRows,
   tableColumnIdsForQuery,
+  tableRowsUnsupportedReasonForColumns,
   tableRowsStatusForDisplay,
 } from "./useAnalysisTableData";
 
@@ -64,6 +65,14 @@ describe("useAnalysisTableData unit logic", () => {
     expect(tableRowsStatusForDisplay("stale", "paused", true)).toBe("paused");
     expect(tableRowsStatusForDisplay("error", "paused", true)).toBe("error");
     expect(tableRowsStatusForDisplay("stale", "following", true)).toBe("stale");
+  });
+
+  it("marks a published empty table schema as semantically unsupported", () => {
+    expect(tableRowsUnsupportedReasonForColumns([], "ready")).toBe(
+      "The active runtime does not publish scalar table samples.",
+    );
+    expect(tableRowsUnsupportedReasonForColumns(null, "ready")).toBeNull();
+    expect(tableRowsUnsupportedReasonForColumns([], "loading")).toBeNull();
   });
 
   it("determines whether to fetch table rows based on loadScalars and liveMode", () => {

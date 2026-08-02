@@ -509,3 +509,28 @@ The state-matrix tests cover both explicit states and the surface tests assert
 the visible empty and unsupported messages. The Control Room typecheck and
 `git diff --check` both passed. No resource hook, endpoint, polling policy, or
 resource ownership changed.
+
+## Follow-up — semantic unsupported precedence
+
+The semantic table state now crosses the actual control-room path:
+
+`published table schema -> useAnalysisTableData -> controller -> module -> view -> AnalysisTableSurface`.
+
+An explicitly published empty schema means scalar table samples are not
+available from the active runtime, so the hook supplies a semantic
+`unsupported` reason. The controller publishes that semantic status and reason
+separately from the raw `tableRowsRefresh` resource result. The surface gives
+the semantic `unsupported` state precedence over a raw `ready`/`loading`/
+`stale` resource status; all other states keep using the raw refresh metadata.
+
+### RED and GREEN
+
+The real view-path regression mounted `AnalysisPlotsView` with semantic
+`tableRowsStatus="unsupported"`, its explicit reason, and
+`tableRowsRefresh.status="ready"`. Before the change it showed the retained
+ready chart and omitted the reason. It now shows the semantic unsupported
+message.
+
+Focused verification passed: 8 files, 92 tests, including the raw-refresh
+precedence regression and the empty-schema reason owner test. Control Room
+typecheck and `git diff --check` also passed.

@@ -38,6 +38,7 @@ export function AnalysisPlotsView({
   solverEnergyStatus,
   tableRowsStatus,
   tableRowsRefresh,
+  tableRowsUnsupportedReason = null,
   visibleTable,
   xAxisId,
   selectedSeriesIds,
@@ -94,6 +95,7 @@ export function AnalysisPlotsView({
             selectedPoint={selectedPoint}
             status={tableRowsStatus}
             tableRowsRefresh={tableRowsRefresh}
+            unsupportedReason={tableRowsUnsupportedReason}
             table={visibleTable}
             xAxisId={xAxisId}
             xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)}
