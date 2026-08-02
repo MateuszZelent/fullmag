@@ -125,6 +125,21 @@ describe("validateDescriptorPreferences", () => {
     expect(new Set(migrated).size).toBe(migrated.length);
     expect(migrated.every((id) => id.length <= 160)).toBe(true);
   });
+
+  it("omits only the legacy frequency default so first-use initialization remains possible", () => {
+    const legacy = validateAnalysisChartPreferences({
+      schemaVersion: 1, activeSurface: "frequency",
+      descriptorPreferences: { "analysis:frequency-domain": { yAxisIds: ["mx", "my", "mz", "e_total"] } },
+      _lruAccessAt: {},
+    });
+    expect(legacy.descriptorPreferences["analysis:frequency-domain"]).toBeUndefined();
+    const explicitEmpty = validateAnalysisChartPreferences({
+      schemaVersion: 1, activeSurface: "frequency",
+      descriptorPreferences: { "analysis:frequency-domain": { selectedSeriesIds: [] } },
+      _lruAccessAt: {},
+    });
+    expect(explicitEmpty.descriptorPreferences["analysis:frequency-domain"]?.selectedSeriesIds).toEqual([]);
+  });
 });
 
 describe("validateAnalysisChartPreferences", () => {

@@ -186,6 +186,7 @@ export function validateAnalysisChartPreferences(
   if (rawDescriptors && typeof rawDescriptors === "object" && !Array.isArray(rawDescriptors)) {
     for (const [key, value] of Object.entries(rawDescriptors as Record<string, unknown>)) {
       if (key.length === 0 || key.length > MAX_DESCRIPTOR_ID_LENGTH) continue;
+      if (isLegacyFrequencyDefault(key, value)) continue;
       descriptorPreferences[key] = validateDescriptorPreferences(value, key);
       const access = (rawLru as Record<string, unknown>)?.[key];
       lruAccessAt[key] =
@@ -210,6 +211,14 @@ export function validateAnalysisChartPreferences(
     descriptorPreferences: trimmedDescriptors,
     _lruAccessAt: trimmedLru,
   };
+}
+
+function isLegacyFrequencyDefault(descriptorId: string, value: unknown): boolean {
+  if (descriptorId !== "analysis:frequency-domain" || !value || typeof value !== "object") return false;
+  const raw = value as Record<string, unknown>;
+  return !Array.isArray(raw["selectedSeriesIds"]) &&
+    Array.isArray(raw["yAxisIds"]) &&
+    normalizeSelectedSeriesIds(raw["yAxisIds"]).join(",") === "mx,my,mz,e_total";
 }
 
 function legacySelectedSeriesIds(
