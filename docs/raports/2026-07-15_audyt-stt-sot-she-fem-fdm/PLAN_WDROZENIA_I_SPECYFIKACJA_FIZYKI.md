@@ -4009,3 +4009,84 @@ parametru transportu. Nie dowodzi ona kompletności pełnej suity Python ani
 wykonalności wszystkich kombinacji backendu; nadal obowiązują otwarte bramy
 SP5, GPU/device proof, BORIS CPU/CUDA, inverse SHE, SML production i browser
 qualification wszystkich parametrów.
+
+## 32.19. Wykonawcza brama dynamicznego pola Oersteda i wszystkich RK FEM (2026-08-02)
+
+Po pierwszym uruchomieniu bramy wykryto błąd harnessu, a nie solvera: wszystkie
+24 przypadki zapisywały domyślne `fem_oersted_rk_time_convergence.zarr`, więc
+ostatni przebieg nadpisywał `metadata.json` używany przez walidator. Recepta
+`verify-fem-oersted-rk-time-convergence` została poprawiona tak, aby każdy
+przypadek dostawał własny katalog `cpu|gpu_<integrator>_dt<level>` i własny
+`--output-dir`. Nie zmieniono równań, tolerancji ani ścieżki wykonawczej.
+
+### 32.19.1. Dowód zarządzanego runtime i źródła
+
+Pełna recepta została wykonana przez zarządzany `just`/container FEM, z
+przypiętym obrazem zawierającym Boost/MFEM/CUDA. Eksport zakończył się poprawnym
+bundle'em schema-3 i dokładnym dopasowaniem archiwum:
+
+```text
+git_commit=6c52dd533b4a772c8541457a580e3c25b337f585
+source_snapshot_sha256=02312a29e9c6356f810e886adac46a49e8749a08189d991a2a4ef1e98c17fdd6
+worktree_state=dirty
+compute_capability=8.9
+HYPRE=3.1.0
+bundle=valid; bundle=exact-match; entry_count=3996
+```
+
+`dirty` wynika z obecnych, niepowiązanych z tym zadaniem plików MuMax3 w
+worktree; przebieg jest zatem dowodem wykonania kontrolowanego testu, lecz nie
+czystego artefaktu release. W logach GPU runtime jawnie podał
+`resolved_engine_id=fem_native_gpu`, RTX 4080 SUPER i `mfem_device=cuda`, ale
+również `demag_residency=none` oraz `host_source_of_truth` z zerowym rozmiarem
+buforów urządzenia. To potwierdza wejście na CUDA, nie zamyka bramy produkcyjnej
+device-residency/FP64.
+
+### 32.19.2. Wynik 24 przebiegów i zbieżności czasowej
+
+Wykonano wszystkie kombinacje:
+
+- CPU i GPU;
+- Heun, RK4, RK23 i RK45;
+- `dt`/liczba kroków: `(2.842170943040401e-14, 8)`,
+  `(1.4210854715202004e-14, 16)` oraz
+  `(7.105427357601002e-15, 32)` przy wspólnym czasie końcowym;
+- czasowo zmienne źródło `OerstedCylinder` z sinusoidalną zależnością od czasu,
+  przy zachowaniu tego samego problemu FEM H1/P1.
+
+Walidator `scripts/validate_fem_oersted_rk_time_convergence.py` zwrócił
+`status: pass` dla wszystkich ośmiu relacji urządzenie–integrator:
+
+```text
+CPU Heun  observed_order=2.012837999762397
+CPU RK4   observed_order=4.0232986137119084
+CPU RK23  observed_order=2.919542106247722
+CPU RK45  observed_order=6.641226145201781
+GPU Heun  observed_order=2.0128379997624646
+GPU RK4   observed_order=4.023298613736691
+GPU RK23  observed_order=2.9195421062591116
+GPU RK45  observed_order=6.641221661238818
+```
+
+Weryfikacja obejmuje 24 niezależne `metadata.json`; każdy zapis zachowuje
+żądany integrator (`heun`, `rk4`, `rk23`, `rk45`) i odpowiedni
+`fem_cpu_native`/`fem_native_gpu`. Dodatkowo wcześniejsza brama
+`just verify-fdm-oersted-native-contract` zakończyła się:
+
+```text
+PASS: CUDA Oersted stage-time, rollback, adaptive, FSAL, ABM3, and axis oracle contract
+```
+
+### 32.19.3. Wniosek i granice promocji
+
+Zamknięto bramę `FEM-TD-NUM-RK-001`: implementacja czasowo zmiennego pola
+Oersteda przechodzi wykonawczą weryfikację rzędu dla wszystkich wspieranych
+jawnych tablic RK na obu natywnych torach, a harness nie miesza już artefaktów
+między przypadkami. Jest to istotny dowód dynamicznego pola i integratorów,
+lecz nie dowód pełnej fizyki STT/SOT/SHE. Capability matrix pozostaje bez
+zmian: GPU i inverse/M2 nadal `semantic_only`, `validated_workloads` pozostaje
+puste, a status nie promuje się do produkcji z powodu dirty provenance,
+`host_source_of_truth`, braku executable BORIS parity, braku Onsager/inverse
+SHE, interfejsów N/F/T mixing/SML, wspólnego continuum FDM↔FEM i browserowego
+end-to-end dla wszystkich parametrów. Ocena pozostaje konserwatywnie
+**84% implementacji / 58% gotowości produkcyjnej**.

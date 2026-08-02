@@ -573,7 +573,8 @@ verify-fem-oersted-rk-time-convergence:
               1) steps=16; dt=1.4210854715202004e-14 ;; \
               2) steps=32; dt=7.105427357601002e-15 ;; \
             esac; \
-            set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR="$integrator" FULLMAG_OERSTED_RK_STEPS="$steps" FULLMAG_OERSTED_RK_DT_S="$dt" just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py \
+            run_dir="$root/${device}_${integrator}_dt${level}"; mkdir -p "$run_dir"; \
+            set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR="$integrator" FULLMAG_OERSTED_RK_STEPS="$steps" FULLMAG_OERSTED_RK_DT_S="$dt" just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py "$run_dir" \
               | tee "$root/${device}_${integrator}_dt${level}.log"; \
           done; \
         done; \
