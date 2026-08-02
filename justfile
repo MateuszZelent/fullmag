@@ -3303,8 +3303,6 @@ verify-fem-hypre-device-timing:
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
         report_dir=.fullmag/reports/task-12-hypre-device-timing; \
-        mesh_cache="$report_dir/mesh-cache"; \
-        rm -rf "$mesh_cache"; mkdir -p "$mesh_cache"; \
         for profiler in off on; do \
           if [ "$profiler" = on ]; then profile=1; profile_args=(--require-gpu-phase-timings); else profile=0; profile_args=(); fi; \
           FULLMAG_FEM_STEP_PROFILE="$profile" python3 scripts/analysis/fem_gpu_benchmark.py \
@@ -3326,8 +3324,7 @@ verify-fem-hypre-device-timing:
             --repeat 1 \
             --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
             --gpu-warmup \
-            --reuse-generated-domain-mesh \
-            --generated-domain-mesh-cache-dir "$mesh_cache" \
+            --relaxation-torque-calibration-suite examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json \
             --require-demag-converged \
             --require-zero-strict-gpu-global-sync \
             --require-gpu-strict-residency \
