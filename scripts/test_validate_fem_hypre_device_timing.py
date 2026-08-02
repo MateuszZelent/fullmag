@@ -75,3 +75,14 @@ def test_profiled_row_rejects_compute_synchronization():
     )
     assert summary["status"] == "fail"
     assert any("synchronization count" in failure for failure in summary["failures"])
+
+
+def test_hypre_timing_recipe_supplies_resolved_relaxation_torque_policy():
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = justfile.split("verify-fem-hypre-device-timing:", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert (
+        'FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE="${'
+        'FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE:-8000.0}"'
+    ) in recipe

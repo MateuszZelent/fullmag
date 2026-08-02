@@ -3293,6 +3293,7 @@ verify-fem-hypre-device-timing:
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
+      -e FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE:-8000.0}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
         report_dir=.fullmag/reports/task-12-hypre-device-timing; \
