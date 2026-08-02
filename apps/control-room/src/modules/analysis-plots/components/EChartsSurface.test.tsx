@@ -6,7 +6,8 @@ import { buildScalarChartSeries } from "../chartTableModel";
 import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
 
 const sourceUrl = new URL("./EChartsSurface.tsx", import.meta.url);
-const sharedSurfaceUrl = new URL("../../../shared/analysis-charts/EChartsCanvasSurface.tsx", import.meta.url);
+const sharedSurfaceUrl = new URL("../../../shared/analysis-charts/InteractiveChartSurface.tsx", import.meta.url);
+const canvasSurfaceUrl = new URL("../../../shared/analysis-charts/EChartsCanvasSurface.tsx", import.meta.url);
 const rendererUrl = new URL("../../../shared/analysis-charts/chartRenderer.ts", import.meta.url);
 const analysisStylesUrl = new URL("../../../design/styles/analysis-plots.css", import.meta.url);
 const table = {
@@ -135,13 +136,15 @@ describe("EChartsSurface", () => {
     const localSource = readFileSync(sourceUrl, "utf8");
     const sharedSource = [
       readFileSync(sharedSurfaceUrl, "utf8"),
+      readFileSync(canvasSurfaceUrl, "utf8"),
       readFileSync(rendererUrl, "utf8"),
     ].join("\n");
-    expect(localSource).toContain("EChartsCanvasSurface");
+    expect(localSource).toContain("InteractiveChartSurface");
     expect(localSource).toContain("chartCursorPointFromEChartsClick");
     expect(localSource).toContain("recordChartDispatchDataZoom");
     expect(localSource).toContain("if (onRangeChange) recordChartDispatchDataZoom");
     expect(localSource).toContain("scheduleRangeCommit");
+    expect(sharedSource).toContain("EChartsCanvasSurface");
     expect(localSource).not.toContain("echarts.init");
     expect(sharedSource).toContain('renderer: "canvas"');
     expect(sharedSource).toContain("requestAnimationFrame");

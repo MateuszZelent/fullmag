@@ -2,7 +2,7 @@ import { SIMULATION_SOLVER_ENERGIES_HISTORY_PATH } from "@/kernel/api/apiPaths";
 import type { SolverEnergyHistoryResource } from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
-import type { ChartSeries } from "./chartTableModel";
+import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
 const ENERGY_TERMS = Object.freeze([
   { id: "exchange", label: "E exchange" },

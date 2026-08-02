@@ -1,11 +1,12 @@
-import { DATA_TABLE_ROWS_PATH } from "@/kernel/api/apiPaths";
-import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type {
   AnalysisChartCursorPoint,
-  AnalysisChartResourceRef,
 } from "@/shared/domain/analysis/chartCursorPoint";
+import type { ChartPoint, ChartSeries } from "@/shared/domain/analysis/chartSeries";
+import {
+  buildScalarChartSeries,
+  type TableRowsLike,
+} from "@/shared/domain/analysis/scalarTableChart";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
-import { tableChartSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
 
 export const DEFAULT_TABLE_CHART_COLUMNS = Object.freeze([
   "step",
@@ -49,19 +50,13 @@ export function isTableTimeAxisId(columnId: string): boolean {
   return columnId === "t" || columnId === "time";
 }
 
-interface TableColumnMeta {
-  column_id: string;
-  dimension?: string;
-  label: string;
-  unit: string;
-}
-
-export interface TableRowsLike {
-  columns: readonly TableColumnMeta[];
-  rowCount?: number;
-  rows?: readonly (readonly number[])[];
-  valueAt?: (rowIndex: number, columnIndex: number) => number | undefined;
-}
+export type { ChartPoint, ChartSeries } from "@/shared/domain/analysis/chartSeries";
+export {
+  buildScalarChartSeries,
+  buildScalarTableSeries,
+  type ScalarTableChartInput,
+  type TableRowsLike,
+} from "@/shared/domain/analysis/scalarTableChart";
 
 export interface AxisUnitGroup {
   axisIndex: number;
@@ -84,28 +79,6 @@ export interface EChartsDatasetModel {
   }[];
   xAxisId: string;
   yAxis: { name: string }[];
-}
-
-interface ChartPoint {
-  label?: string | null;
-  linewidthHz?: number | null;
-  rowIndex: number;
-  x: number;
-  y: number;
-}
-
-type ChartResourceRef = AnalysisChartResourceRef;
-
-export interface ChartSeries {
-  dataRevision?: string | number | null;
-  id: string;
-  label: string;
-  points: readonly ChartPoint[];
-  quantity: string;
-  source: ChartResourceRef;
-  status: ResourceStatus;
-  unit: string;
-  xUnit: string;
 }
 
 export type ChartCursorPoint = AnalysisChartCursorPoint;
@@ -278,87 +251,6 @@ export function buildChartSeriesModel(
   };
 }
 
-export function buildScalarChartSeries(
-  table: TableRowsLike,
-  {
-    dataRevision = null,
-    status = "ready",
-    tableId = "default",
-    xAxisId = DEFAULT_X_AXIS_COLUMN_ID,
-    yAxisIds,
-  }: {
-    dataRevision?: string | number | null;
-    status?: ResourceStatus;
-    tableId?: string;
-    xAxisId?: string;
-    yAxisIds?: readonly string[];
-  } = {},
-): ChartSeries[] {
-  const columnIds = table.columns.map((column) => column.column_id);
-  const resolvedXAxisId = resolveXAxisId(columnIds, xAxisId);
-  const xColumnIndex = columnIds.indexOf(resolvedXAxisId);
-  const xColumn = table.columns[xColumnIndex];
-  const yAxisIdSet = new Set(
-    yAxisIds ?? columnIds.filter((columnId) => columnId !== resolvedXAxisId),
-  );
-  yAxisIdSet.delete(resolvedXAxisId);
-  const yColumns = table.columns.filter((column) =>
-    yAxisIdSet.has(column.column_id),
-  );
-  const axisGroups = groupSeriesByAxisUnit(
-    yColumns.map((column) => ({
-      columnId: column.column_id,
-      unit: column.unit,
-    })),
-  );
-  const allowedColumnIds = new Set(
-    axisGroups.flatMap((group) => group.columnIds),
-  );
-  const source: ChartResourceRef = {
-    kind: "data.table.rows",
-    resourceKey: tableRowsSourceKey(tableId),
-    tableId,
-  };
-
-  return yColumns.flatMap((column) => {
-    if (!allowedColumnIds.has(column.column_id)) return [];
-    const yColumnIndex = columnIds.indexOf(column.column_id);
-    return [
-      {
-        ...(dataRevision == null ? {} : { dataRevision }),
-        id: tableChartSeriesId(tableId, resolvedXAxisId, column.column_id),
-        label: column.label || column.column_id,
-        points: chartPointsForColumns(
-          table,
-          xColumnIndex,
-          yColumnIndex,
-        ),
-        quantity: column.column_id,
-        source,
-        status,
-        unit: column.unit,
-        xUnit: xColumn?.unit ?? "",
-      },
-    ];
-  });
-}
-
-function chartPointsForColumns(
-  table: TableRowsLike,
-  xColumnIndex: number,
-  yColumnIndex: number,
-): ChartPoint[] {
-  const points: ChartPoint[] = [];
-  const count = tableRowCount(table);
-  for (let rowIndex = 0; rowIndex < count; rowIndex += 1) {
-    const x = Number(tableValueAt(table, rowIndex, xColumnIndex));
-    const y = Number(tableValueAt(table, rowIndex, yColumnIndex));
-    if (Number.isFinite(x) && Number.isFinite(y)) {
-      points.push({ rowIndex, x, y });
-    }
-  }
-  return points;
-}
 
 function materializeTableRows(table: TableRowsLike): number[][] {
   const rows: number[][] = [];
@@ -436,13 +328,6 @@ function resolveXAxisId(columnIds: readonly string[], xAxisId: string): string {
     : columnIds.includes(DEFAULT_X_AXIS_COLUMN_ID)
       ? DEFAULT_X_AXIS_COLUMN_ID
       : (columnIds[0] ?? DEFAULT_X_AXIS_COLUMN_ID);
-}
-
-function tableRowsSourceKey(tableId: string): string {
-  return DATA_TABLE_ROWS_PATH.replace(
-    "{table_id}",
-    encodeURIComponent(tableId),
-  );
 }
 
 export { yAxisIdsAfterXAxisSelection };

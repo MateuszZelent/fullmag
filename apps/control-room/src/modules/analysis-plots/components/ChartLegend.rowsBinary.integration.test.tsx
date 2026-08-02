@@ -5,16 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import { KernelContext } from "@/kernel/KernelContext";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
-import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
-import { useTableRowsBinaryResource } from "@/kernel/resources/studyRuntimeResources";
-import type { KernelApi } from "@/kernel/types";
 import {
   findElement,
   installSimulationPreparationTestDom,
   TestElement,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
-import { AnalysisTableSurface } from "@/modules/analysis-plots/components/AnalysisTableSurface";
+import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { useTableRowsBinaryResource } from "@/kernel/resources/studyRuntimeResources";
+import type { KernelApi } from "@/kernel/types";
+
+import { AnalysisTableSurface } from "./AnalysisTableSurface";
 
 describe("chart legend local selection", () => {
   it("does not refetch rowsBinary when a mounted legend click changes the rendered subset", async () => {

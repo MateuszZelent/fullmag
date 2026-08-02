@@ -1,7 +1,7 @@
 import type { SpinWaveGammaResource } from "@/kernel/api/apiTypes";
 import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "@/kernel/api/apiPaths";
 
-import type { ChartSeries } from "./chartTableModel";
+import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
 function gammaSource() {
   return {
