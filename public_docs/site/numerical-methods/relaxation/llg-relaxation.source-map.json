@@ -9,7 +9,9 @@
   "equations": [
     {"id": "eq-relax-llg-damping", "symbols": ["m", "gamma0", "alpha", "H_eff"], "sources": ["physics-llg", "runner-mode"]},
     {"id": "eq-relax-llg-effective-field", "symbols": ["H_eff", "mu0", "Ms", "E", "tau"], "sources": ["physics-llg", "python-relaxation"]},
-    {"id": "eq-relax-llg-stop-metric", "symbols": ["tau", "tau_max", "epsilon_tau"], "sources": ["runner-completion"]}
+    {"id": "eq-relax-llg-stop-metric", "symbols": ["tau", "tau_max", "epsilon_tau"], "sources": ["runner-completion"]},
+    {"id": "eq-relax-llg-adaptive-error-norm", "symbols": ["e", "k_stage", "b_hi", "b_lo", "dt", "m_old", "m_high", "atol", "rtol", "sigma", "rho", "active_set"], "sources": ["fem-adaptive-native", "fem-adaptive-gpu", "fdm-adaptive"]},
+    {"id": "eq-relax-llg-adaptive-controller", "symbols": ["dt", "safety", "rho", "rho_previous", "p", "dt_min", "dt_max", "shrink_limit", "growth_limit", "q_raw", "q_clamped"], "sources": ["adaptive-policy", "fem-adaptive-native", "fdm-adaptive"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
@@ -23,7 +25,29 @@
     {"id": "tau", "latex": "\\boldsymbol\\tau_i", "meaning": "local effective-field torque residual", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "tau_max", "latex": "\\tau_{\\max}", "meaning": "maximum accepted-state torque", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "torque stopping threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"}
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "dt", "latex": "\\Delta t_k", "meaning": "attempted or proposed adaptive integration step", "si_unit": "\\mathrm{s}"},
+    {"id": "safety", "latex": "s", "meaning": "adaptive controller safety factor", "si_unit": "1"},
+    {"id": "rho", "latex": "\\rho_k", "meaning": "normalized local-error ratio", "si_unit": "1"},
+    {"id": "p", "latex": "p", "meaning": "order of the embedded error estimate", "si_unit": "1"},
+    {"id": "dt_min", "latex": "\\Delta t_{\\min}", "meaning": "adaptive lower timestep bound", "si_unit": "\\mathrm{s}"},
+    {"id": "dt_max", "latex": "\\Delta t_{\\max}", "meaning": "adaptive upper timestep bound", "si_unit": "\\mathrm{s}"},
+    {"id": "shrink_limit", "latex": "q_{\\min}", "meaning": "minimum adaptive step-size factor", "si_unit": "1"},
+    {"id": "growth_limit", "latex": "q_{\\max}", "meaning": "maximum adaptive step-size factor", "si_unit": "1"}
+    ,{"id": "e", "latex": "\\mathbf e_i", "meaning": "embedded high-minus-low vector error", "si_unit": "1"}
+    ,{"id": "k_stage", "latex": "\\mathbf k_{s,i}", "meaning": "stage right-hand side", "si_unit": "\\mathrm{s^{-1}}"}
+    ,{"id": "b_hi", "latex": "b_s^{\\mathrm{hi}}", "meaning": "high-order tableau weight", "si_unit": "1"}
+    ,{"id": "b_lo", "latex": "b_s^{\\mathrm{lo}}", "meaning": "low-order tableau weight", "si_unit": "1"}
+    ,{"id": "S", "latex": "S", "meaning": "number of stages in the embedded tableau", "si_unit": "1"}
+    ,{"id": "m_old", "latex": "\\mathbf m_i^{\\mathrm{old}}", "meaning": "state at the beginning of the attempted step", "si_unit": "1"}
+    ,{"id": "m_high", "latex": "\\mathbf m_i^{\\mathrm{high}}", "meaning": "high-order candidate state", "si_unit": "1"}
+    ,{"id": "atol", "latex": "\\mathrm{atol}", "meaning": "absolute normalized-state error scale", "si_unit": "1"}
+    ,{"id": "rtol", "latex": "\\mathrm{rtol}", "meaning": "relative normalized-state error scale", "si_unit": "1"}
+    ,{"id": "sigma", "latex": "\\sigma_i", "meaning": "mixed absolute/relative local error scale", "si_unit": "1"}
+    ,{"id": "active_set", "latex": "\\mathcal A", "meaning": "active magnetic cell/node index set", "si_unit": "1"}
+    ,{"id": "rho_previous", "latex": "\\rho_{k-1}", "meaning": "previous accepted non-zero error ratio", "si_unit": "1"}
+    ,{"id": "q_raw", "latex": "q_k", "meaning": "raw adaptive step-size factor", "si_unit": "1"}
+    ,{"id": "q_clamped", "latex": "\\widehat q_k", "meaning": "clamped adaptive step-size factor", "si_unit": "1"}
   ],
   "sources": [
     {"id": "physics-llg", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Canonical relaxation equilibrium payload and algorithm semantics."},
@@ -32,7 +56,15 @@
     {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first Python lowering and adaptive LLG policy."},
     {"id": "runner-mode", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "llg_overdamped_uses_pure_damping", "responsibility": "Resolves precession-disabled relaxation mode."},
     {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Evaluates accepted-state relaxation completion."},
-    {"id": "runner-confirmation", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "observe", "responsibility": "Requires three consecutive accepted-state samples."},
+    {"id": "runner-confirmation", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "observe", "responsibility": "Requires at least three consecutive accepted-state samples satisfying the combined predicate."},
+    {"id": "fem-adaptive", "path": "crates/fullmag-runner/src/fem/integrators/adaptive.rs", "symbol": "pi_controller_dt", "responsibility": "Stateless FEM reference helper for a single-history-free proposal."},
+    {"id": "adaptive-policy", "path": "native/include/fullmag_adaptive_step_decision.hpp", "symbol": "decide_adaptive_step", "responsibility": "Backend-neutral history-aware scalar accept/retry/dt-min policy."},
+    {"id": "fem-adaptive-native", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "compute_adaptive_error_norm", "responsibility": "Native FEM nodewise mixed error norm and fail-closed guards."},
+    {"id": "fem-adaptive-native-controller", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "adaptive_pi_step", "responsibility": "Native FEM history-aware scalar controller and rejection accounting."},
+    {"id": "fem-adaptive-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu", "symbol": "adaptive_error_norm_blocks_kernel", "responsibility": "Native FEM GPU device reduction of the nodewise error norm."},
+    {"id": "fdm-adaptive", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_buf", "responsibility": "FDM CPU cell error norm, absolute/mixed tolerance mode, and reduction."},
+    {"id": "fdm-adaptive-controller", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "decide_adaptive_step", "responsibility": "FDM CPU history-aware bounded proposal and dt-min decision."},
+    {"id": "fdm-adaptive-gpu", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU reduction and typed dt-min failure."},
     {"id": "fem-llg", "path": "crates/fullmag-runner/src/fem/relax/llg_overdamped.rs", "symbol": "execute_llg_overdamped", "responsibility": "Runs native FEM overdamped LLG and records resolved policy."},
     {"id": "fdm-cpu-llg", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_reference_fdm_with_coupled_checkpoint", "responsibility": "Dispatches the Cartesian FDM reference relaxation path."}
   ],

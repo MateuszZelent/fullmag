@@ -39,11 +39,12 @@ window $W_E$:
 \Delta E_{W_E}^{(k)}\leq\varepsilon_E.
 ```
 
-In the shared runner, $W_E$ is exactly 50 accepted energy samples. The torque predicate is then
-observed on fresh accepted states and must be true for exactly three consecutive samples before
-`torque_confirmed` becomes true. A failed sample resets that consecutive counter to zero. This
-confirmation is independent of output cadence: sparse saved output cannot change the authoritative
-completion record.
+In the shared runner, $W_E$ is exactly 50 accepted energy samples. The combined torque predicate
+(and, when configured, the energy-window predicate) is then observed on fresh accepted states.
+`torque_confirmed` becomes true after at least three consecutive accepted samples satisfy that
+combined predicate; the counter is not capped at three. A failed sample resets the consecutive
+counter to zero. This confirmation is independent of output cadence: sparse saved output cannot
+change the authoritative completion record.
 
 The logical completion rule is conjunction, not disjunction:
 
@@ -132,12 +133,20 @@ study.stages.add_relax(
 | `fm.RelaxStop.energy_tolerance_j` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | optional accepted-energy range threshold | FDM/FEM lanes | `study.stop.energy_tolerance_j` |
 | `fm.RelaxStop.max_steps` | `int \| None` | $50,000$ | $1$ | positive integer when set | work budget | FDM/FEM lanes | `study.stop.max_steps` |
 | `fm.RelaxStop.max_relaxation_time_s` | `float \| None` | `None` | $\mathrm{s}$ | positive when set; LLG only | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `fm.RelaxStop(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must numerically agree with every other time alias; LLG only | same relaxation-coordinate ceiling, never a direct-minimizer time | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `fm.RelaxStop(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must numerically agree with every other time alias; LLG only | compatibility name for the same relaxation coordinate; not a physical experiment clock | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
 | `add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | exclusive with `tolA` | user-facing torque threshold | FDM/FEM lanes | normalized A/m stop field |
 | `add_relax(tolA=...)` | `float` | canonical default equivalent | $\mathrm{A\,m^{-1}}$ | exclusive with `tolT` | canonical field threshold | FDM/FEM lanes | normalized A/m stop field |
 
 The `stop=` object is the canonical grouped form. Scalar aliases are accepted on
 `study.stages.add_relax`, but mixing a scalar with a conflicting field in `RelaxStop` is rejected.
 The legacy `tol` parameter is removed and must not be documented as usable.
+
+`RelaxStop` accepts at least one criterion. Its default object contains both the canonical torque
+threshold and the default accepted-step budget, so an otherwise empty `add_relax` call is still
+bounded. `max_pseudotime_s` and `max_physical_time_s` are constructor aliases only; serialization
+always emits the single canonical `max_relaxation_time_s` key. Supplying two aliases with different
+values is a validation error rather than a precedence rule.
 
 (numerical-methods-relaxation-stopping-problem-ir)=
 ## ProblemIR
@@ -168,7 +177,7 @@ minimizers. Unsupported combinations are rejected instead of weakening the compl
 The result must identify requested intent, `converged`, `stop_reason`, `stop_metric`, `stop_value`, and
 `stop_threshold`; a budget-exhausted result is not a converged result.
 
-The authoritative completion reasons include `torque` (three-sample torque confirmation, plus any
+The authoritative completion reasons include `torque` (at-least-three-sample torque confirmation, plus any
 configured energy plateau), `max_steps`, `max_physical_time`, `gradient` for numerical stagnation,
 `backend_error`, `user_cancelled`, and an unset reason while a stage remains incomplete. The
 `energy` metric alone never produces convergence because torque is mandatory in the canonical stop
@@ -191,6 +200,13 @@ For direct minimizers, `max_steps` counts accepted minimizer steps; rejected Arm
 advance it. For LLG, `max_steps` counts accepted integration steps and the relaxation-time ceiling
 is checked against the stage relaxation coordinate. A failure or cancellation is mapped before any
 budget predicate, so it cannot be reclassified as converged.
+
+The FDM reference direct-minimizer loops contain an early torque-only exit before the first
+accepted step. When an energy tolerance is also requested, that internal `converged` flag does not
+constitute canonical completion because no 50-sample energy window exists yet; the shared
+`resolve_stage_completion` record remains authoritative and leaves the stage non-converged until
+the conjunction is actually evaluable. This distinction is intentional provenance: backend-local
+loop flags are not interchangeable with the public completion result.
 
 (numerical-methods-relaxation-stopping-implementation-mapping)=
 ## Implementation mapping
@@ -231,5 +247,5 @@ that the continuous functional has reached its global minimum.
 | Accepted-state completion | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_converged` | torque/energy conjunction and budget semantics | FDM/FEM orchestration | Rust tests |
 | Pure-damping mode selection | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | distinguishes overdamped LLG from full dynamics | FDM/FEM orchestration | runner tests |
 | Energy plateau window | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationEnergyPlateauWindow::record` | fixed 50-sample accepted-energy range | shared orchestration | runner tests |
-| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | three consecutive valid samples | shared orchestration | runner tests |
+| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | at least three consecutive accepted samples satisfying the combined predicate | shared orchestration | runner tests |
 | Final reason mapping | `crates/fullmag-runner/src/relaxation/convergence.rs` | `resolve_stage_completion` | maps torque, budgets, stagnation and backend status | shared orchestration | runner tests |

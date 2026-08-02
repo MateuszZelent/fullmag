@@ -106,7 +106,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
     }
 )
 PHYSICS_REFERENCE_STATUSES = {
-    "physics/interactions/drift-diffusion-spin-torque/index.md": "semantic-only",
+    "physics/interactions/drift-diffusion-spin-torque/index.md": "partial",
 }
 DMI_SUBPAGES = (
     "interfacial",
@@ -209,7 +209,7 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/magnetoelastic/index.md": "Magnetoelastic interaction",
     "physics/interactions/spin-transfer-torque/index.md": "Spin-transfer torque",
     "physics/interactions/spin-orbit-torque/index.md": "Spin-orbit torque",
-    "physics/interactions/drift-diffusion-spin-torque/index.md": "Drift-diffusion spin torque",
+    "physics/interactions/drift-diffusion-spin-torque/index.md": "Spin Hall drift-diffusion transport",
     "physics/interactions/inter-region-couplings/index.md": "Inter-region couplings",
     "physics/interactions/anisotropy/uniaxial.md": "Uniaxial anisotropy",
     "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",

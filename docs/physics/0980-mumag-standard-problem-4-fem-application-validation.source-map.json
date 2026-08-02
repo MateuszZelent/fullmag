@@ -16,14 +16,14 @@
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "unsupported",
-      "reason": "The current tree has no Fullmag FDM SP4 scenario lane; OOMMF data is reference input only."
+      "status": "documented",
+      "reason": "Fullmag FDM CPU A+B continuous dynamics comparison scenarios exist; standalone FDM qualification remains deferred."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "not-applicable",
-      "reason": "The mixed-P1 FEM topology and its qualification matrix do not apply to Cartesian FDM execution."
+      "status": "unsupported",
+      "reason": "No FDM GPU SP4 scenario or executed-device qualification exists in this scope."
     }
   ],
   "equations": [

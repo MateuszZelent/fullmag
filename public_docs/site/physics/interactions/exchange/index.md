@@ -217,6 +217,13 @@ constructing a second simulation workflow:
 # %% Inspect exchange and its material coefficients
 import fullmag as fm
 
+study = fm.study("exchange_object_inspection")
+study.engine("fdm")
+inspection_body = study.geometry(fm.Box(1.0e-9, 1.0e-9, 1.0e-9), name="inspection")
+inspection_body.Ms = 800.0e3
+inspection_body.Aex = 13.0e-12
+study.stages.add_run(stage_id="inspection", until=1.0e-12)
+
 exchange = fm.Exchange()
 material = fm.Material(
     name="Permalloy",

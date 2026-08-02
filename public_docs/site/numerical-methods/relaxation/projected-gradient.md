@@ -82,6 +82,29 @@ alternation with the fallback above. A trial is retracted as $\mathcal R_m(-\lam
 and energy are recomputed, and $\lambda$ is halved after each rejection. At most 20 backtracks
 are attempted; exhaustion leaves the accepted state unchanged.
 
+(numerical-methods-relaxation-pgbb-iteration)=
+## One projected-gradient iteration
+
+The reference/shared loop performs these operations in order:
+
+1. Evaluate $\mathbf H_{\mathrm{eff}}(\mathbf m_k)$, the tangent gradient $\mathbf g_k$, the
+   current energy and the maximum accepted-state torque. A torque threshold hit can terminate
+   before an accepted minimizer step is attempted.
+2. Set $D_k=-\langle\mathbf g_k,\mathbf g_k\rangle_E$. A non-finite or negative metric product
+   is a numerical error; an exactly zero product is numerical stagnation.
+3. Retract $\mathcal R_{\mathbf m}(-\lambda\mathbf g_k)$ and evaluate its full energy. Accept it
+   only when the Armijo inequality is true. Rejected trials halve $\lambda$; after 20 rejections
+   the accepted state and its field remain unchanged.
+4. On acceptance, evaluate the trial field and gradient, form $\mathbf s_k$ and $\mathbf y_k$,
+   update alternating BB1/BB2, then commit the trial state and increment the accepted-step
+   counter. The BB value is not a user-visible timestep.
+5. Record accepted energy and torque in the shared completion controller. A successful Armijo
+   step is not itself convergence.
+
+Native FEM additionally retains direct-energy difference and roundoff-proof telemetry for the
+accepted Armijo inequality. That proof instrumentation does not change the public stop rule, but
+it is required evidence when qualifying CPU/GPU parity.
+
 (numerical-methods-relaxation-pgbb-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -97,7 +120,7 @@ are attempted; exhaustion leaves the accepted state unchanged.
 | $\mathbf p_i$ | tangent search direction | $\mathrm{A\,m^{-1}}$ |
 | $\lambda_k$ | minimizer step size | $\mathrm{m\,A^{-1}}$ |
 | $\mathcal R_{\mathbf m_i}$ | sphere retraction | $1$ |
-| $D_k$ | energy directional derivative | $\mathrm{J}$ |
+| $D_k$ | energy directional derivative with respect to $\lambda$ | $\mathrm{J\,A\,m^{-1}}$ |
 | $c_1$ | Armijo sufficient-decrease constant | $1$ |
 | $N$ | number of active cells or finite-element nodes | $1$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
@@ -112,9 +135,17 @@ The energy metric used by the FDM/shared policy is
 :label: eq-pgbb-energy-metric
 \langle a,b\rangle_E
 =\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
-\qquad [\langle a,b\rangle_E]=\mathrm{J}
-\quad\text{for }[a]=[b]=\mathrm{A\,m^{-1}}.
+\qquad
+[\langle a,b\rangle_E]
+=\mathrm{J\,A^{-1}}[a][b].
 ```
+
+The weight $\mu_0M_{s,i}V_i$ has units $\mathrm{J\,A^{-1}}$. Therefore
+$\langle g,p\rangle_E$ has units $\mathrm{J\,A\,m^{-1}}$ when both operands are fields in
+$\mathrm{A\,m^{-1}}$, while $\langle s,s\rangle_E$ has units $\mathrm{J\,A^{-1}}$ because
+$s$ is dimensionless. This is why $\lambda$ has units $\mathrm{m\,A^{-1}}$ and why
+$\lambda D_k$ is an energy. Treating the metric as joules for every operand type is dimensionally
+incorrect.
 
 For FEM, $V_i$ is replaced by the backend's mass/lumped-mass realization; the public equation is
 the same metric contract, but assembled weights and node ownership are backend-specific.

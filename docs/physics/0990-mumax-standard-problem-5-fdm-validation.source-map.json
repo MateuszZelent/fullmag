@@ -1,0 +1,64 @@
+{
+  "document": {"path": "docs/physics/0990-mumax-standard-problem-5-fdm-validation.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "The source workload is a regular-grid FDM contract; no FEM realization is claimed."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No FEM SP5 mesh, demagnetization, or executed-device qualification exists."},
+    {"solver": "FDM", "device": "CPU", "status": "reference-executable", "reason": "The Python/IR path is executable; the full adaptive trajectory and scalar artifact gate remain open."},
+    {"solver": "FDM", "device": "GPU", "status": "diagnostic-unqualified", "reason": "Only fixed-step CUDA diagnostics exist; adaptive capability identity and parity are open."}
+  ],
+  "equations": [
+    {"id": "sp5-llg-gilbert", "symbols": ["m", "gamma0", "Heff", "alpha", "t", "TZL"], "sources": ["sp5-python-study", "sp5-python-zhangli"]},
+    {"id": "sp5-zhang-li", "symbols": ["u", "g", "muB", "P", "e", "Ms", "Jc", "beta", "m"], "sources": ["sp5-source-file-run", "sp5-python-zhangli"]},
+    {"id": "sp5-effective-field", "symbols": ["Aex", "mu0", "Ms", "m", "Hdemag"], "sources": ["sp5-python-study", "sp5-source-file-cellsize"]},
+    {"id": "sp5-mean-observable", "symbols": ["mbar", "Nx", "Ny", "Nz", "m"], "sources": ["sp5-source-file-run", "sp5-python-loader"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "gyromagnetic coefficient", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "Heff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "1"},
+    {"id": "t", "latex": "t", "meaning": "physical time", "si_unit": "\\mathrm{s}"},
+    {"id": "TZL", "latex": "\\mathbf T_{\\mathrm{ZL},G}", "meaning": "Gilbert-source Zhang--Li torque", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "u", "latex": "\\mathbf u", "meaning": "Zhang--Li advection velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
+    {"id": "g", "latex": "g", "meaning": "electron g factor", "si_unit": "1"},
+    {"id": "muB", "latex": "\\mu_B", "meaning": "Bohr magneton", "si_unit": "\\mathrm{J\\,T^{-1}}"},
+    {"id": "P", "latex": "P", "meaning": "current spin polarization", "si_unit": "1"},
+    {"id": "e", "latex": "e", "meaning": "elementary charge magnitude", "si_unit": "\\mathrm C"},
+    {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Jc", "latex": "\\mathbf J_c", "meaning": "signed charge-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "beta", "latex": "\\beta", "meaning": "Zhang--Li non-adiabaticity", "si_unit": "1"},
+    {"id": "Aex", "latex": "A_{\\mathrm{ex}}", "meaning": "exchange stiffness", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "Hdemag", "latex": "\\mathbf H_{\\mathrm{demag}}", "meaning": "demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "mbar", "latex": "\\bar m_i", "meaning": "mean reduced-magnetization component", "si_unit": "1"},
+    {"id": "Nx", "latex": "N_x", "meaning": "grid counts", "si_unit": "1"},
+    {"id": "Ny", "latex": "N_y", "meaning": "grid counts", "si_unit": "1"},
+    {"id": "Nz", "latex": "N_z", "meaning": "grid counts", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "sp5-source-file-gridsize", "path": "external_solvers/3/test/standardproblem5.mx3", "symbol": "setgridsize", "responsibility": "Define the external grid counts."},
+    {"id": "sp5-source-file-cellsize", "path": "external_solvers/3/test/standardproblem5.mx3", "symbol": "setcellsize", "responsibility": "Define the external cell sizes and total thickness."},
+    {"id": "sp5-source-file-vortex", "path": "packages/fullmag-py/src/fullmag/init/textures.py", "symbol": "vortex", "responsibility": "Define the Fullmag vortex initializer corresponding to the external preset."},
+    {"id": "sp5-source-file-relax", "path": "external_solvers/3/test/standardproblem5.mx3", "symbol": "relax", "responsibility": "Define the external equilibrium stage."},
+    {"id": "sp5-source-file-run", "path": "external_solvers/3/test/standardproblem5.mx3", "symbol": "run", "responsibility": "Define the external physical-time horizon and scalar oracle."},
+    {"id": "sp5-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Create the canonical stage-first study builder."},
+    {"id": "sp5-python-add-relax", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_relax", "responsibility": "Lower the equilibrium stage."},
+    {"id": "sp5-python-add-run", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_run", "responsibility": "Lower the physical-time stage."},
+    {"id": "sp5-python-zhangli", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class ZhangLiSTT", "responsibility": "Define the public Zhang--Li torque and canonical IR fields."},
+    {"id": "sp5-python-loader", "path": "packages/fullmag-py/src/fullmag/runtime/loader.py", "symbol": "load_problem_from_script", "responsibility": "Capture the script and expose per-stage normalized IR."}
+  ],
+  "public_api": {"parameters": [
+    {"python": "study.engine", "type": "str", "default": "required", "si_unit": "1", "validation": "`fdm` for this contract", "meaning": "requested solver family", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_selection.backend"},
+    {"python": "study.device", "type": "str", "default": "cpu", "si_unit": "1", "validation": "`cpu` or explicit `gpu`", "meaning": "requested execution device", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_selection.device"},
+    {"python": "study.universe.size", "type": "tuple[float,float,float]", "default": "required", "si_unit": "\\mathrm m", "validation": "three positive finite lengths", "meaning": "physical domain extent", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_metadata.study_universe.size"},
+    {"python": "study.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "\\mathrm m", "validation": "three positive finite cell sizes", "meaning": "Cartesian FDM spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "discretization.fdm.cell"},
+    {"python": "plate.Ms", "type": "float", "default": "required", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "positive finite", "meaning": "saturation magnetization", "backend_support": "FDM CPU/GPU", "problem_ir": "materials[].saturation_magnetisation"},
+    {"python": "plate.Aex", "type": "float", "default": "required", "si_unit": "\\mathrm{J\\,m^{-1}}", "validation": "positive finite", "meaning": "exchange stiffness", "backend_support": "FDM CPU/GPU", "problem_ir": "materials[].exchange_stiffness"},
+    {"python": "plate.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "non-negative finite", "meaning": "physical Gilbert damping", "backend_support": "FDM CPU/GPU", "problem_ir": "materials[].damping"},
+    {"python": "ZhangLiSTT.current_density", "type": "vec3", "default": "required", "si_unit": "\\mathrm{A\\,m^{-2}}", "validation": "finite signed vector", "meaning": "CIP charge current", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].current_density"},
+    {"python": "ZhangLiSTT.degree", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite polarization degree", "meaning": "current polarization", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].degree"},
+    {"python": "ZhangLiSTT.xi", "type": "float", "default": "required", "si_unit": "1", "validation": "finite; alias of beta", "meaning": "non-adiabaticity", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].beta"},
+    {"python": "add_relax.tolT", "type": "float", "default": "1e-6", "si_unit": "\\mathrm T", "validation": "positive finite; exclusive with `tolA`", "meaning": "maximum relaxation torque", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "study.stop.torque_tolerance_apm"},
+    {"python": "add_run.until", "type": "float", "default": "required", "si_unit": "\\mathrm s", "validation": "positive finite", "meaning": "physical observation horizon", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "stage.default_until_seconds"}
+  ]}
+}
