@@ -205,8 +205,8 @@ interfejsowy i inverse SHE.
 
 ## 7. Stan implementacji i blokady
 
-- BORIS: **source-visible executable reference**, bez twierdzenia o wersji
-  release ani o kwalifikacji w tym checkoutcie.
+- BORIS: **source-visible implementation reference**, bez uruchomionego
+  `BorisLin`, twierdzenia o wersji release ani o kwalifikacji w tym checkoutcie.
 - Fullmag M1 FEM CPU: **wąski reference executable** dla conforming H1/P1,
   transparent interface; signed analytic SHE i cross-backend convergence są
   nadal otwarte.
@@ -219,6 +219,50 @@ interfejsowy i inverse SHE.
 Nie zmieniono capability matrix na podstawie samego porównania. Źródłowa
 obecność funkcji w BORIS nie jest dowodem implementacji Fullmag ani powodem do
 awansu capability.
+
+## 7.1. Wykonany zredukowany gate 1D (2026-08-02)
+
+Ponieważ snapshot nie zawiera binarium `BorisLin`, a lokalne środowisko nie ma
+`nvcc`, wykonano jawnie oznaczony **source-derived reduced oracle**, a nie
+parity executable. Implementacja znajduje się w
+`scripts/verify_boris_fullmag_she_1d.py`; testy w
+`scripts/test_verify_boris_fullmag_she_1d.py`.
+
+Workload to jednorodny film N, `E=E_x e_x`, przepływ spinu w osi `z`,
+`iSHA=0`, zero normalnego spin fluxu i relaksacja `lambda_sf`. Z kodu BORIS:
+
+```text
+d_n S_y = SHA * sigma * MUB_E * E_x / De
+V_s = De * S / (sigma * MUB_E)
+d_n V_s = SHA * E_x
+```
+
+Po stronie Fullmag użyto `sigma_s=sigma`, `theta_SH=SHA` oraz jawnego
+przeliczenia `mu_s=2 V_s` (Fullmag przechowuje pełne rozszczepienie kanałów):
+
+```text
+Q_zy = -sigma_s * d_z(mu_s)/2 + theta_SH * sigma * E_x
+d_n Q_zy = 0
+```
+
+Dla `L=8 nm`, `lambda_sf=1.5 nm`, `E_x=2e5 V/m`, `sigma=6.7e6 S/m` i
+`SHA=theta_SH=0.19` wynik skryptu jest:
+
+| Obserwabla | Wynik |
+|---|---:|
+| `V_s` BORIS: top − bottom | `1.1290451634172762e-4 V` |
+| `mu_s` Fullmag: top − bottom | `2.2580903268345525e-4 V` |
+| maks. względny błąd profilu po mapowaniu `mu_s=2V_s` | `0.0` |
+| maks. błąd znormalizowanego fluxu | `0.0` |
+
+`4 passed` obejmuje również negatywny test `theta_SH != SHA` oraz walidację
+geometrii. Skrypt zapisuje SHA-256 siedmiu kluczowych plików snapshotu (w tym
+`STransport_Spin.cpp`, `Transport_Spin.cpp`, CUDA kernel i `makefile`), dzięki
+czemu wynik można powiązać z konkretnym stanem ignorowanego katalogu.
+
+To zamyka tylko **reduced direct-SHE normalization gate**. Nie jest to jeszcze
+`SHE-BORIS-001`: nie ma wykonania BORIS CPU/CUDA, testu `iSHA=SHA`, profilu z
+niejednorodnym materiałem, interfejsu N/F/T ani porównania FDM/FEM.
 
 ## 8. Źródła i mapowanie symboli
 

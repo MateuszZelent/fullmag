@@ -3707,3 +3707,50 @@ limitem. Dopiero wtedy można policzyć: liczbę accepted/rejected attempts,
 Zhang–Li/demag/stanu relaksacji i ewentualnie wypełnić `qualification.json`.
 Ocena celu pozostaje **84% implementacji / 58% gotowości produkcyjnej** —
 telemetryka zamyka defekt artefaktu, lecz nie zwiększa kwalifikacji fizycznej.
+
+## 32.13. Zredukowana brama BORIS–Fullmag dla direct SHE (2026-08-02)
+
+Źródłowy audyt BORIS wykazał, że `external_solvers/BORIS` jest lokalnym
+snapshotem kodu (w `makefile` występuje `BVERSION := 380`), ale checkout nie
+zawiera zbudowanego `BorisLin`. Próba wykonania pełnego porównania binarnego
+nie może więc być przedstawiona jako dowód; środowisko nie ma również `nvcc`,
+którego wymaga linuxowy makefile BORIS. Nie zmieniono capability na podstawie
+samej obecności kodu CUDA.
+
+### 32.13.1. Oracle źródłowy
+
+Dodano `scripts/verify_boris_fullmag_she_1d.py` oraz
+`scripts/test_verify_boris_fullmag_she_1d.py`. Workload jest celowo
+ograniczony do jednorodnego filmu N, `E=E_x e_x`, przepływu spinu w osi `z`,
+`iSHA=0`, stałego `lambda_sf` i zerowego normalnego spin fluxu. Z BORIS
+wyprowadzono:
+
+```text
+d_n S_y = SHA * sigma * MUB_E * E_x / De
+V_s = De*S/(sigma*MUB_E)
+d_n V_s = SHA*E_x
+```
+
+Po stronie Fullmag zastosowano M1 z `sigma_s=sigma`, `theta_SH=SHA` i
+`mu_s=2 V_s`, ponieważ publiczne `mu_s` oznacza pełne `V_+ - V_-`. Wtedy
+`Q_zy=-sigma_s*d_z(mu_s)/2+theta_SH*sigma*E_x` ma ten sam profil i ten sam
+znormalizowany flux co BORIS.
+
+### 32.13.2. Dowód
+
+| Gate | Wynik | Granica |
+|---|---|---|
+| `PYTHONPATH=scripts python3 -m pytest -q scripts/test_verify_boris_fullmag_she_1d.py` | **PASS, 4 tests** | reduced oracle; bez uruchomienia BORIS |
+| `python3 scripts/verify_boris_fullmag_she_1d.py --json` | **PASS** | profil i flux po konwersji mają błąd `0.0` dla parametrów referencyjnych |
+| negatywny test `theta_SH != SHA` | **PASS** | wykrywa zmianę normalizacji zamiast ją maskować |
+| SHA-256 źródeł BORIS | **zapisane w wyniku skryptu** | identyfikuje lokalny snapshot, nie release zewnętrzny |
+
+Brama zamknięta przez ten slice to wyłącznie
+`SHE-BORIS-REDUCED-1D-DIRECT`. Brama `SHE-BORIS-001` pozostaje otwarta: trzeba
+zbudować lub dostarczyć reprodukowalny executable BORIS, wykonać CPU/CUDA,
+ustawić osobno `iSHA=SHA`, porównać inverse SHE, profile materiałowe,
+interfejsy N/F/T oraz Fullmag FDM/FEM.
+
+Ocena pozostaje **84% implementacji / 58% gotowości produkcyjnej**. Test
+analityczny potwierdza konwersję zmiennych i znaku w prostym limicie, ale nie
+jest dowodem wykonawczej zgodności solverów.
