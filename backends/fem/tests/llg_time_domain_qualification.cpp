@@ -998,6 +998,7 @@ void write_partial_artifact(
          << "  \"device\": \"" << (g_use_gpu ? "gpu" : "cpu") << "\",\n"
          << "  \"precision\": \"fp64\",\n"
          << "  \"integrator\": \"rk45\",\n"
+         << "  \"timestep_policies\": [\"adaptive\", \"fixed\"],\n"
          << "  \"energy_balance\": {\n"
          << "    \"energy_balance_kind\": \"undriven_dissipative\",\n"
          << "    \"energy_balance_validator\": \"undriven_dissipative_energy_balance.v1\",\n"
