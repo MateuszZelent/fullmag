@@ -2946,11 +2946,12 @@ semantycznego.
 |---|---|
 | worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-final` |
 | branch | `codex/spin-transport-final` |
-| HEAD przed bieżącym slice'em v2 | `678eeb1f20b2a0dcbcfa8fc2fc681478bbc5e3f7` |
+| HEAD przed bieżącym DOS/SML slice'em | `678eeb1f20b2a0dcbcfa8fc2fc681478bbc5e3f7` |
 | v2 slice commit | `bb0031df5ca05766b379e27f569f8945f515674c` |
 | bieżący slice DOS/SML FDM reference | `f6e9060fac5b0bad36c7e3cf91a716544469be36` |
+| bieżący test-gate fix | `6c865437e073a9841fe03c0de3e9b38603ad1ff0` |
 | aktualny `master` | `f57c34d1ce9cbcf50f651bdc7a28f4e43bba716d` |
-| rozjazd po bieżącym slice | `120` commitów tylko na gałęzi, `572` tylko na `master` |
+| rozjazd po bieżącym slice | `121` commitów tylko na gałęzi, `572` tylko na `master` |
 | integracja | nie wykonana; wymagany nowy worktree od aktualnego `master` i replay konfliktów semantycznych |
 | ciężkie artefakty | kanoniczny root `/zfn2/mateuszz/git/fullmag`; kompilacje FEM wykonywane przez repozytoryjne receptury `just` w zarządzanych kontenerach; brak twierdzenia o zapisie bezpośrednim do root-owned CIFS/WSL |
 
@@ -2981,7 +2982,7 @@ wszystkich warstwach nowego runu:
 | `PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-pytest python3 -m pytest -q packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `21 pass, 45 subtests pass` | Python canonical v2 export/decode round-trip |
 | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-runner` | `pass` | Rust runner compiles; no execution/device proof |
 | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-ir -p fullmag-authoring -p fullmag-plan -p fullmag-runner -p fullmag-engine -p fullmag-api` | `pass` | C_s whitelist, SML v2 schema and bounded engine algebra compile; no native weak-form proof |
-| `cargo test -p fullmag-plan sml_reservoir_v2_remains_fail_closed_until_surface_weak_form_is_ready` | `pass` | planner preserves fail-closed boundary; SML is not promoted to executable capability |
+| `cargo test -p fullmag-plan sml_reservoir_v2_lowers_to_the_fdm_m2_reference_descriptor` | `pass` | nested SML v2 lowers only to the bounded FDM CPU M2 reference lane; native production lanes remain fail-closed |
 | `cargo test -p fullmag-engine mixing_flux_balance` | `pass` | v2 interface balance algebra; reference lane only |
 | `cargo test -p fullmag-engine sml_reservoir_closes_surface_balance_and_has_nonnegative_entropy` | `pass` | local reservoir elimination, trace balance and nonnegative surface power; not a discretized weak form |
 | `cargo test -p fullmag-engine m2_mixing_interface` | `pass` | reciprocal reference observations retain backflow/absorption/SML channels |
@@ -2989,20 +2990,21 @@ wszystkich warstwach nowego runu:
 | `cargo test -p fullmag-authoring` | `46 pass` (fresh) | authoring C_s/SML v2 validation; browser/UI remains unverified |
 | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-ir -p fullmag-authoring -p fullmag-plan -p fullmag-runner -p fullmag-engine -p fullmag-api` | `pass` (fresh) | DOS adapter, SML v2 lowering, reciprocal checkpoint identity and runner artifact path compile; no native weak-form/device proof |
 | `PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-pytest python3 -m pytest -q packages/fullmag-py/tests/test_spin_drift_diffusion.py packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `30 pass, 45 subtests pass` | Python C_s/DOS validation and canonical v2 round-trip; browser/UI remains unverified |
-| `cargo test -p fullmag-plan sml_reservoir_v2_lowers_to_the_fdm_m2_reference_descriptor` | `pass` | nested SML v2 lowers only to the bounded FDM CPU M2 reference lane and requires bidirectional coupling |
 | `cargo test -p fullmag-runner reference_runner_executes_reciprocal_m2_through_corrected_stage_lte_gate` | `pass` | reciprocal descriptor checkpoint identity and stage LTE gate; reference runner only |
 | `cargo test -p fullmag-runner reference_runner_publishes_sml_reservoir_balance_and_power` | `pass` | runner publishes reservoir potential, trace/lattice flux and non-negative surface power artifact; bounded FDM CPU only |
+| `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo test -p fullmag-plan` | `241 pass, 0 fail` (fresh) | planner suite is green after aligning the certified Gamma_out/periodic-marker fixture and canonical prescribed-SOT relaxation rejection; this closes a verification gate, not a production backend gate |
 | `just verify-fem-stt-native-contract` | `pass` | managed CUDA/MFEM build, native FEM STT contract and append-only ABI test; GPU STT remains fail-closed |
 | `just verify-fem-oersted-oet0-cpu-contract` | `pass` (earlier evidence) | managed CPU/MPI weighted RT0/KKT contract; TSAN runtime remains WSL-blocked |
 | `just verify-fem-oersted-oef1-cpu-contract` | `pass` (bounded) | direct tetra far/reference workload only; singular/on-face convergence is open |
 | `just verify-fem-oersted-oef2-cpu-contract` | `pass` (bounded prerequisite) | dense mixed exact-sequence reference; no scalable AMS/BoomerAMG/airbox qualification |
 
-The full `fullmag-plan` suite still reports two failures unrelated to this
-slice (`fem_eigen_floquet_dynamic_demag_is_rejected` and
-`relaxation_rejects_zhang_li_slonczewski_sot_and_thermal`); they are recorded as
-pre-existing branch/master drift and must be resolved or explicitly waived
-before final integration. The dedicated OE-T0 TSAN recipe compiles and
-instruments the target but cannot start under the current WSL2 mapping
+The full `fullmag-plan` suite now passes 241/241. The two earlier failures were
+fixture/schema drift: the airbox test used one marker for both a periodic seam
+and `Gamma_out`, while the relaxation test instantiated the IR-only legacy
+`spin_orbit_torque` variant instead of canonical `prescribed_sot.fullmag.v1`.
+Both are now fail-closed and covered by the passing suite. The dedicated OE-T0
+TSAN recipe compiles and instruments the target but cannot start under the
+current WSL2 mapping
 (`ThreadSanitizer: unexpected memory mapping`); this is an environment blocker,
 not a passing race proof.
 
@@ -3011,11 +3013,13 @@ not a passing race proof.
 The previous ledger value was **69% implementation / 41% production readiness**.
 After the DOS-backed `C_s` adapter, executable bounded FDM M2 SML lowering,
 reciprocal checkpoint identity repair, and runner balance/power artifact proof,
-the current estimate is **72% implementation / 44% production readiness**.
+the current estimate is **72% implementation / 45% production readiness**.
 The increase is deliberately bounded: SML is executable only in the reference
 FDM CPU lane, `C_s=e^2N_0` is still a scalar nonmagnetic reduction, and no
-native weak-form, FEM/GPU, device-residency, or browser proof is implied. These
-percentages do not count source stubs or semantic-only capability rows as
+native weak-form, FEM/GPU, device-residency, or browser proof is implied. The
+planner-suite closure adds verification confidence but no new executable
+backend lane. These percentages do not count source stubs or semantic-only
+capability rows as
 production work. The following independent gates remain open:
 
 1. production SML reservoir weak form, spatially coupled DOS/susceptibility
