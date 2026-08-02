@@ -3043,3 +3043,67 @@ production work. The following independent gates remain open:
 These percentages are progress indicators, not capability labels. No row may
 be promoted to `production_executable` or `validated` solely because the
 percentage increased or a bounded contract test passed.
+
+## 28. Addendum — bounded OE-F1 target-space projection (2026-08-02)
+
+This addendum records the next OE-F1 implementation slice after the
+cutoff-free singular/near quadrature gate. It is deliberately narrower than a
+production field publication: the code now demonstrates a consistent target
+space projection contract, but it does not promote FEM Oersted to a runtime
+capability.
+
+### 28.1. Reproducible identity
+
+| Pole | Wartość |
+|---|---|
+| worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-final` |
+| branch | `codex/spin-transport-final` |
+| implementation HEAD | `e3f178192eafb2e638ca231c343263d3881778e6` |
+| prior singular/near implementation checkpoint | `7f9b2ade4cfb086bc9c264805ae335dd329ace9f` |
+| prior plan checkpoint | `acece2bb0f675c3d3a85b7cad97994cf134dc781` |
+| current local `master` | `c262fa9d1ba660d70ed3d0849e6fe3469c9e5f32` |
+| merge-base (`HEAD`, `master`) | `0612941f3b99137cbb171c183452368cc0f71029` |
+| divergence at this checkpoint | `128` commitów tylko na gałęzi, `574` tylko na `master` |
+| integration | nie wykonana; wymagany semantic replay na nowym worktree od aktualnego `master` |
+| build storage | `/zfn2/mateuszz/git/fullmag`; native FEM proof wyłącznie przez repozytoryjne receptury `just` i zarządzany kontener |
+
+### 28.2. Zrealizowany slice OE-F1
+
+`DirectTetraQuadrature::ProjectField` dodaje bounded CPU/FP64 consistent
+`L2` projection do docelowego pola H1. Kontrakt waliduje trójwymiarową siatkę
+tetraedryczną, `vdim=3`, `Ordering::byVDIM` i kolekcję `H1_3D_*`; odrzuca
+inne przestrzenie zamiast wykonywać niejawny fallback. Dla każdego komponentu
+montowany jest scalar consistent mass system na tej samej kolekcji H1, RHS
+próbkuje cutoff-free direct Biot--Savart na targetowych punktach całkowania,
+a rozwiązanie przechodzi jawny residual check układu masowego. Diagnostyka
+sumuje source-target pairs, near refinement, błędy i fail-closed
+unconverged-pair count dla wszystkich trzech komponentów.
+
+Ważna granica: to jest reference-only API. Nie ma jeszcze materializacji
+`H_oe` w runtime/session/ProblemIR, nie ma publicznej capability, nie ma
+target-quadrature error estimatora ani dowodu zachowania dla nakładających się
+siatek źródła i celu przy produkcyjnym limicie kosztu. Dla bliskich par
+wyczerpanie budżetu głębokości nadal kończy się błędem, a nie przybliżeniem.
+
+### 28.3. Świeży dowód managed
+
+| Gate | Wynik | Zakres i ograniczenia |
+|---|---|---|
+| `just verify-fem-oersted-oef1-cpu-contract` | `pass` (fresh, managed, `e3f17819`) | CPU-only CMake (`FULLMAG_ENABLE_CUDA=OFF`, `FULLMAG_ENABLE_FEM_GPU=OFF`, `FULLMAG_USE_MFEM_STACK=ON`); cztery testy conservative-current CTest przeszły; direct contract obejmuje signed far, interior/face/edge singular/near, default h+p convergence, depth fail-closed oraz bounded H1 projection na rozdzielonych siatkach; brak device/GPU/production-scaling proof |
+| `python3 scripts/check_physics_docs_gate.py --base HEAD~1 --head HEAD` | `pass` | zmiana fizyki i implementacji ma odpowiadającą aktualizację `docs/physics/0980...`; nie jest to runtime qualification |
+
+### 28.4. Aktualizacja oceny
+
+Ocena pozostaje **73% implementacji / 45% gotowości produkcyjnej**. Projekcja
+H1 zamyka następny bounded reference sub-gate, ale nie dostarcza jeszcze
+niezależnego target-space convergence, porównania FEM/FDM ani integracji z
+runtime. Podniesienie procentu byłoby mylące bez tych dowodów.
+
+Następne wymagane bramki OE-F1 są rozłączne:
+
+1. target-rule refinement/error estimator oraz test projekcji na nakładających
+   się siatkach z certyfikowaną tolerancją near-pair;
+2. niezależny high-depth/reference oracle i tabela zbieżności FEM/FDM;
+3. cross-layer materializacja `H_oe` (ProblemIR/planner/runtime/API/UI) z
+   requested/resolved provenance;
+4. dopiero potem kwalifikacja OE-F2 na airboxie i porównanie obu realizacji.
