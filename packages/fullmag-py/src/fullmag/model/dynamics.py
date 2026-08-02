@@ -41,7 +41,7 @@ class _AdaptiveTimestepType(type):
 
 
 @dataclass(frozen=True, slots=True)
-class AdaptiveTimestep:
+class AdaptiveTimestep(metaclass=_AdaptiveTimestepType):
     """Controls for RK23/RK45 embedded error or coupled ARS step doubling.
 
     ``coupled_imex_ark2`` compares one full coupled step with two half steps,

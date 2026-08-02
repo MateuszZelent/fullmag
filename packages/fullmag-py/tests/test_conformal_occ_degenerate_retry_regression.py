@@ -24,7 +24,7 @@ def _mesh(*, partial_degenerate: bool) -> MeshData:
         ],
         dtype=np.float64,
     )
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=nodes,
         elements=np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32),
         element_markers=np.asarray([7, 7], dtype=np.int32),

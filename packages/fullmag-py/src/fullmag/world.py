@@ -8106,6 +8106,26 @@ def run_while(
         1.0 if relax_algorithm == "llg_overdamped" else None,
     )
 
+    def _relax_chunk_kwargs(chunk_steps: int) -> dict[str, object]:
+        call_kwargs: dict[str, object] = {
+            "max_steps": chunk_steps,
+            "algorithm": relax_algorithm,
+            "energy_tolerance": relax_kwargs.get("energy_tolerance"),
+            "relax_alpha": relax_alpha,
+        }
+        for key in (
+            "tolA",
+            "tolT",
+            "solver",
+            "dt",
+            "max_error",
+            "dt_min",
+            "dt_max",
+        ):
+            if key in relax_kwargs:
+                call_kwargs[key] = relax_kwargs[key]
+        return call_kwargs
+
     if _capture_enabled:
         if cfg.relax:
             initial_dt = _safe_step_value(_state._last_step, "dt", 1e-13)
@@ -8113,19 +8133,7 @@ def run_while(
             chunk_steps = max(1, int(math.ceil(cfg.chunk_time / dt_ref)))
             if cfg.max_steps is not None:
                 chunk_steps = min(chunk_steps, cfg.max_steps)
-            return relax_fn(
-                tolA=relax_kwargs.get("tolA", _RELAX_UNSET),
-                tolT=relax_kwargs.get("tolT", _RELAX_UNSET),
-                max_steps=chunk_steps,
-                algorithm=relax_algorithm,
-                energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
-                relax_alpha=relax_alpha,  # type: ignore[arg-type]
-                solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
-                dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
-                max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
-                dt_min=relax_kwargs.get("dt_min"),  # type: ignore[arg-type]
-                dt_max=relax_kwargs.get("dt_max"),  # type: ignore[arg-type]
-            )
+            return relax_fn(**_relax_chunk_kwargs(chunk_steps))
         until = cfg.max_time if cfg.max_time is not None else cfg.chunk_time * float(cfg.max_steps)
         return run(until)
 
@@ -8158,17 +8166,7 @@ def run_while(
                 if remaining <= 0:
                     break
                 chunk_steps = min(chunk_steps, remaining)
-            last_result = relax_fn(
-                tolA=relax_kwargs.get("tolA", _RELAX_UNSET),
-                tolT=relax_kwargs.get("tolT", _RELAX_UNSET),
-                max_steps=chunk_steps,
-                algorithm=relax_algorithm,
-                energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
-                relax_alpha=relax_alpha,  # type: ignore[arg-type]
-                solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
-                dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
-                max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
-            )
+            last_result = relax_fn(**_relax_chunk_kwargs(chunk_steps))
         else:
             last_result = run(chunk)
         _set_magnetization_continuation_from_result(last_result)

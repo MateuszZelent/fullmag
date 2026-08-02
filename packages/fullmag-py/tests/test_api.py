@@ -9324,7 +9324,7 @@ class ProblemApiTests(unittest.TestCase):
             base_metadata["runtime_device_override"],
             {"device": "cpu", "source": "managed_launcher"},
         )
-        self.assertEqual(len(payload["stages"]), 1)
+        self.assertEqual(len(payload["stages"]), 2)
         stage_ir = payload["stages"][0]["ir"]
         self.assertEqual(stage_ir["study"]["kind"], "relaxation")
         stage_metadata = stage_ir["problem_meta"]["runtime_metadata"]
@@ -9338,6 +9338,9 @@ class ProblemApiTests(unittest.TestCase):
             {"device": "cpu", "source": "managed_launcher"},
         )
         self.assertIsNone(stage_ir["geometry_assets"])
+        self.assertEqual(payload["stages"][1]["entrypoint_kind"], "flat_save_state")
+        self.assertEqual(payload["stages"][1]["ir"]["study"]["kind"], "relaxation")
+        self.assertIsNone(payload["stages"][1]["ir"]["geometry_assets"])
 
     @unittest.skipUnless(
         os.environ.get("FULLMAG_RUN_SLOW_REAL_ASSET_TESTS") == "1",
