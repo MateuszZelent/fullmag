@@ -120,7 +120,9 @@ void source_inventory_covers_every_production_failure_boundary()
             "transaction telemetry field must have a runtime owner and publication update");
     }
     check(
-        transaction.find("saturating_add") != std::string::npos,
+        transaction.find("add_payload_bytes") != std::string::npos &&
+            transaction.find("std::numeric_limits<uint64_t>::max()") !=
+                std::string::npos,
         "transaction byte accounting must use saturating addition");
 }
 
