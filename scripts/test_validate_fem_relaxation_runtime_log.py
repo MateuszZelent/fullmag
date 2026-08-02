@@ -2159,6 +2159,10 @@ def test_typed_fixture_v2_recipes_are_managed_and_strict() -> None:
     assert "--target fem_mixed_p1_contract" in verification
     assert "FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu" in verification
     assert "--list-amg-qualification-fixture-suite" in verification
+    assert "while IFS=$'\\''\\t'\\'' read -r" in verification
+    assert 'runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"' in verification
+    assert '"$runtime_root:/workspace/.fullmag/runtime:ro"' in verification
+    assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in verification
 
 
 def test_runtime_restore_manifest_rejects_library_hash_drift(tmp_path) -> None:

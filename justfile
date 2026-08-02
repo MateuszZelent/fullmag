@@ -2837,14 +2837,18 @@ verify-fem-performance-fixture-v2:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
     test -f examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json
     test -f examples/assets/fem_performance/amg_qualification_suite_v2.json
-    target_slug="$(basename "$PWD" | sed 's/[^A-Za-z0-9._-]/-/g')"; \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu" && test -f "$runtime_root/manifest.json"; \
+      target_slug="$(basename "$PWD" | sed 's/[^A-Za-z0-9._-]/-/g')"; \
       target_digest="$(printf '%s' "$PWD" | sha256sum | cut -c1-64)"; \
       target_dir="/mnt/fullmag-zfn2-native/managed-fem-runtime/${target_slug}-${target_digest}"; \
       test -d "$target_dir" && test -w "$target_dir"; \
       COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -v "$target_dir:/workspace/target" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
         -e FULLMAG_FEM_EXECUTION=cpu \
         fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
           build_dir=/workspace/target/task1-performance-fixture-v2/native; \
@@ -2852,7 +2856,7 @@ verify-fem-performance-fixture-v2:
           cmake --build "$build_dir" --target fem_mixed_p1_contract; \
           LD_LIBRARY_PATH="$build_dir/backends/fem:${LD_LIBRARY_PATH:-}" FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu "$build_dir/backends/fem/fem_mixed_p1_contract"; \
           report_dir=.fullmag/reports/fem-performance-fixture-v2; mkdir -p "$report_dir"; \
-          while IFS=$'\t' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
+          while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
             FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax" \
               python3 scripts/analysis/fem_gpu_benchmark.py \
                 --meshes coarse --scenarios box500_airbox_exchange_demag \
