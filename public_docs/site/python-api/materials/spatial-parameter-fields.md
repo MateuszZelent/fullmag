@@ -34,6 +34,20 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 ## Python API
 No constructor parameters are owned by this conceptual page.
 
+### Spatial field authoring
+
+```python
+# %% Define a spatially varying material parameter in SI units
+import fullmag as fm
+
+ms_profile = fm.MaterialParameterField.linear(
+    base=8.0e5,
+    gradient=(0.0, 0.0, 1.0e12),
+    frame="object",
+    unit="A/m",
+)
+```
+
 
 (python-api-materials-spatial-parameter-fields-problem-ir)=
 <!-- (problem-ir)= -->

@@ -3969,3 +3969,43 @@ materiały, interfejsy N/F/T mixing/SML, GPU FP64/device residency oraz
 browser/managed end-to-end proof. Ocena pozostaje konserwatywnie **84%
 implementacji / 58% gotowości produkcyjnej**; sama zbieżność referencyjna nie
 awansuje kodu do produkcji.
+
+## 32.18. Domknięcie własności dokumentacji Python dla transportu (2026-08-02)
+
+Audyt po bramie FEM wykazał trzy rzeczywiste niespójności w publicznym
+kontrakcie dokumentacji, niezależne od solvera numerycznego:
+
+- `Problem.spin_transports` istniał w sygnaturze i loweringu, ale brakowało go
+  w tabeli `Problem` i w sąsiednim source-map;
+- workflow dokumentacji nie uruchamiał
+  `test_public_python_api_documentation.py`;
+- trzy strony objęte walidacją (`Problem`, `Problem IR` i spatial material
+  fields) nie miały kopiowalnych przykładów w komórkach `# %%`.
+
+Dodano wpis parametru z jednostką, walidacją, zakresem backendów i miejscem w
+`ProblemIR`, włączono test do `.github/workflows/documentation.yml` oraz
+uzupełniono przykłady stage-first/field-authoring. Wszystkie przykłady pozostają
+zgodne z zasadą, że publiczny użytkownik zaczyna od `fm.study(...)`, a nie od
+bezpośredniego konstruowania wewnętrznego `Problem`.
+
+Dowody:
+
+```text
+TMPDIR=/tmp/fullmag-py-tmp PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest -q \
+  packages/fullmag-py/tests/test_public_python_api_documentation.py \
+  scripts/test_validate_mixed_p1_capability_contract.py
+13 passed
+
+TMPDIR=/tmp/fullmag-py-tmp python3 -m pytest -q \
+  scripts/test_public_docs_information_architecture.py \
+  scripts/test_check_public_doc_examples.py \
+  scripts/test_workflow_node24_contract.py
+29 passed
+```
+
+Ta brama zamyka rozjazd dokumentacja/source-map/workflow dla publicznego
+parametru transportu. Nie dowodzi ona kompletności pełnej suity Python ani
+wykonalności wszystkich kombinacji backendu; nadal obowiązują otwarte bramy
+SP5, GPU/device proof, BORIS CPU/CUDA, inverse SHE, SML production i browser
+qualification wszystkich parametrów.
