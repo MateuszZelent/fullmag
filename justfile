@@ -3289,9 +3289,15 @@ verify-fem-gpu-demag-performance-benchmark:
 verify-fem-hypre-device-timing:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/task-12-hypre-device-timing
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
+      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+      -e FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu \
       -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
       -e FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE:-8000.0}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \

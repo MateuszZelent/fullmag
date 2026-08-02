@@ -86,3 +86,14 @@ def test_hypre_timing_recipe_supplies_resolved_relaxation_torque_policy():
         'FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE="${'
         'FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE:-8000.0}"'
     ) in recipe
+
+
+def test_hypre_timing_recipe_mounts_the_resolved_runtime_bundle():
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = justfile.split("verify-fem-hypre-device-timing:", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert 'runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"' in recipe
+    assert '-v "$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
+    assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in recipe
+    assert "FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu" in recipe
