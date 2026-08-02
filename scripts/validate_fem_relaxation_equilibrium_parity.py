@@ -298,12 +298,12 @@ def stop_state_failures(
             f"{label} time_to_tolerance_source must be {SOLVER_TIME_SOURCE!r}"
         )
     steps = _int(_first(row, "executed_steps", "total_steps"))
-    if steps is None or steps <= 0:
-        failures.append(f"{label} executed_steps must be a positive integer")
+    if steps is None or steps < 0:
+        failures.append(f"{label} executed_steps must be a non-negative integer")
     accepted_steps = _int(row.get("accepted_steps_to_tolerance"))
-    if accepted_steps is None or accepted_steps <= 0:
+    if accepted_steps is None or accepted_steps < 0:
         failures.append(
-            f"{label} accepted_steps_to_tolerance must be a positive integer"
+            f"{label} accepted_steps_to_tolerance must be a non-negative integer"
         )
     elif steps is not None and accepted_steps > steps:
         failures.append(
@@ -349,7 +349,7 @@ def stop_state_failures(
     if values is not None and node_count is not None and node_count != len(values):
         failures.append(f"{label} m_final vector count does not match solver mesh node count")
     final_step = _int(row.get("final_magnetization_step"))
-    if final_step is None or final_step <= 0:
+    if final_step is None or final_step < 0:
         failures.append(f"{label} final_magnetization_step is missing or invalid")
     elif steps is not None and final_step != steps:
         failures.append(f"{label} m_final step does not match executed_steps")

@@ -23,6 +23,7 @@ use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
     pub(crate) latest_stats: Option<StepStats>,
+    pub(crate) terminal_stats: Option<StepStats>,
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
@@ -43,6 +44,7 @@ pub(crate) fn execute_direct_minimizer(
     mut last_preview_revision: Option<u64>,
 ) -> Result<DirectMinimizerExecution, RunError> {
     let mut latest_stats: Option<StepStats> = None;
+    let mut terminal_stats: Option<StepStats> = None;
     let mut backend_completion: Option<StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
@@ -199,7 +201,24 @@ pub(crate) fn execute_direct_minimizer(
         accepted_stats.wall_time_ns = accepted_stats
             .wall_time_ns
             .saturating_add(preview_schedule_fence_wall_time_ns);
+
+        // Native PG-BB/NCG may return a torque-confirmation observation at
+        // the current state without accepting a new line-search step.  Keep
+        // that terminal state for final artifacts, but do not count it or
+        // publish it as an accepted solver step.
+        if accepted_stats.step <= current_stats.step {
+            latest_stats = Some(accepted_stats.clone());
+            terminal_stats = Some(accepted_stats.clone());
+            current_stats = accepted_stats;
+            if let Some(completion) = backend.stage_completion()? {
+                backend_completion = Some(completion);
+                break;
+            }
+            continue;
+        }
+
         accepted_steps += 1;
+        terminal_stats = None;
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
         let artifact_metrics = artifacts.record_scalar(&accepted_stats)?;
@@ -392,6 +411,7 @@ pub(crate) fn execute_direct_minimizer(
 
     Ok(DirectMinimizerExecution {
         latest_stats,
+        terminal_stats,
         backend_completion,
         cancelled,
         paused,
@@ -446,5 +466,7 @@ mod tests {
             !source[no_step_branch..accepted_step_increment].contains("artifacts.record_scalar")
         );
         assert!(!source[no_step_branch..accepted_step_increment].contains("steps.push"));
+        assert!(source.contains("accepted_stats.step <= current_stats.step"));
+        assert!(source.contains("continue;"));
     }
 }

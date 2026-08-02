@@ -111,6 +111,35 @@ def test_stop_state_requires_torque_and_convergence() -> None:
     assert any("converged" in failure for failure in failures)
 
 
+def test_equilibrium_rows_expose_backend_direction_realizations() -> None:
+    benchmark = load_benchmark()
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_cpu", "nonlinear_cg"
+    ) == "exchange_plus_mass_tangent_gradient"
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_gpu", "projected_gradient_bb"
+    ) == "device_tangent_gradient"
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_cpu", "tangent_plane_implicit"
+    ) is None
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fdm_cpu", "nonlinear_cg"
+    ) is None
+
+
+def test_equilibrium_backend_env_cannot_leak_gpu_strategy_into_cpu() -> None:
+    benchmark = load_benchmark()
+    inherited = {
+        "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": "lumped_exchange_mass_cg8"
+    }
+    cpu_env = benchmark.sanitize_relaxation_backend_env("fem_cpu", inherited)
+    gpu_env = benchmark.sanitize_relaxation_backend_env("fem_gpu", inherited)
+    assert "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY" not in cpu_env
+    assert gpu_env["FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY"] == (
+        "lumped_exchange_mass_cg8"
+    )
+
+
 def test_comparator_accepts_different_step_counts_and_reports_metrics() -> None:
     validator = load_validator()
     cpu = state_row(backend="fem_cpu", steps=11)
@@ -305,3 +334,81 @@ def test_solver_time_to_tolerance_stops_at_first_accepted_state() -> None:
         2,
         5,
     )
+
+
+def test_authoritative_payload_derives_solver_time_from_step_diagnostics(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 2,
+                "fem_gpu_relaxation_qualification": {
+                    "executed_steps": 2,
+                    "stop_threshold": 8000.0,
+                    "final_torque_apm": 7000.0,
+                },
+                "demag_runtime": {"timings_ns": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "time,E_ex,E_demag,E_ext,E_ani,E_dmi,E_total,max_torque_Apm,max_torque_T\n"
+        "0.0,-1.0e-18,0.0,0.0,0.0,0.0,-1.0e-18,7000.0,0.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "solver_steps.csv").write_text(
+        "step,wall_time_ns,demag_solves,max_torque_apm\n"
+        "1,1000000,2,9000.0\n"
+        "2,2000000,3,7000.0\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["time_to_tolerance_seconds"] == pytest.approx(0.003)
+    assert payload["time_to_tolerance_source"] == (
+        "accepted_step_diagnostics_wall_time_ns"
+    )
+    assert payload["accepted_steps_to_tolerance"] == 2
+    assert payload["demag_solve_count_total"] == 5
+
+
+def test_execution_plan_mesh_stats_publishes_signature_schema() -> None:
+    benchmark = load_benchmark()
+    mesh_path = (
+        SUITE_PATH.parent / "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json"
+    )
+    mesh = json.loads(mesh_path.read_text(encoding="utf-8"))
+    stats = benchmark.execution_plan_mesh_stats(
+        {"execution_plan": {"backend_plan": {"kind": "fem", "mesh": mesh}}}
+    )
+    assert stats["solver_mesh_signature_schema"] == (
+        "fullmag.fem.solver_mesh_signature.v2"
+    )
+
+
+def test_equilibrium_scope_expectations_follow_selected_meshes() -> None:
+    benchmark = load_benchmark()
+    suite = benchmark.load_equilibrium_qualification_suite(SUITE_PATH)
+    resolutions, signatures = benchmark.equilibrium_scope_expectations(
+        [benchmark.PRESET_MESHES["coarse"]], suite["fixtures"]
+    )
+    assert resolutions == ("coarse",)
+    assert signatures == {
+        "coarse": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
+    }
+
+
+def test_stop_state_allows_initial_state_already_at_torque_target() -> None:
+    validator = load_validator()
+    row = state_row(backend="fem_cpu", steps=0)
+    row["accepted_steps_to_tolerance"] = 0
+    row["time_to_tolerance_seconds"] = 0.0
+    row["final_magnetization_step"] = 0
+    failures = validator.stop_state_failures(row, label="initial-equilibrium")
+    assert failures == []

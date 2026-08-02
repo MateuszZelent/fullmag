@@ -57,6 +57,7 @@ mod tests {
 
 pub(crate) struct NativeFemRelaxationFinalization {
     pub(crate) latest_stats: Option<StepStats>,
+    pub(crate) terminal_stats: Option<StepStats>,
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
@@ -104,6 +105,14 @@ pub(crate) fn finalize_native_fem_relaxation(
         wall_time_ns: 0,
         ..StepStats::default()
     });
+    if let Some(mut terminal_stats) = finalization.terminal_stats {
+        // Retain a terminal torque-confirmation observation for final-state
+        // provenance. The artifact writer marks same-step observations as
+        // non-accepted, so this cannot inflate accepted-step telemetry.
+        ensure_fem_object_scalars(&mut terminal_stats, plan);
+        artifacts.record_scalar(&terminal_stats)?;
+        steps.push(terminal_stats);
+    }
     ensure_fem_object_scalars(&mut final_stats, plan);
     let finalization_start = std::time::Instant::now();
     let mut finalization_field_copy_wall_time_ns = 0_u64;

@@ -345,6 +345,39 @@ TASK11_QUALIFICATION_FIXTURE_SUITE_SHA256 = (
 TASK11_QUALIFICATION_ENVIRONMENT_SHA256 = (
     "8346f0ddd3d85df294a672d132d9508c01eb3256c0a5c6fc6ab1e2a3d2cd17ef"
 )
+
+
+def relaxation_direction_policy_for_backend(
+    backend_label: str,
+    relaxation_algorithm: str | None,
+) -> str | None:
+    """Return the native direct-minimizer direction realization for a lane.
+
+    The GPU preconditioner strategy is an experiment scoped to the CUDA
+    direct-minimizer kernels.  It must not be interpreted as a shared CPU/GPU
+    direction policy: production FEM CPU uses the exchange-plus-mass tangent
+    gradient, while the current CUDA kernels use the raw device tangent
+    gradient.
+    """
+    if relaxation_algorithm not in {"projected_gradient_bb", "nonlinear_cg"}:
+        return None
+    return {
+        "fem_cpu": "exchange_plus_mass_tangent_gradient",
+        "fem_gpu": "device_tangent_gradient",
+    }.get(backend_label)
+
+
+def sanitize_relaxation_backend_env(
+    backend_label: str,
+    env: Mapping[str, str],
+) -> dict[str, str]:
+    """Prevent a GPU-only experiment variable from leaking into CPU rows."""
+    sanitized = dict(env)
+    if backend_label == "fem_cpu":
+        sanitized.pop("FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY", None)
+    return sanitized
+
+
 PERFORMANCE_FIXTURE_SCENARIO = "box500_airbox_exchange_demag"
 PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM = "nonlinear_cg"
 PERFORMANCE_FIXTURE_STEPS = 64
@@ -3150,6 +3183,30 @@ def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
         "scenarios": tuple(scenarios),
         "fixtures": resolved,
     }
+
+
+def equilibrium_scope_expectations(
+    meshes: Sequence[Path], fixtures: Mapping[str, Mapping[str, object]]
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Return only the immutable fixture identities selected by this run."""
+
+    resolutions: list[str] = []
+    signatures: dict[str, str] = {}
+    for mesh_path in meshes:
+        resolution = qualification_mesh_size(mesh_path)
+        if resolution is None:
+            raise ValueError(
+                "equilibrium parity scope requires a named coarse, medium, or fine mesh"
+            )
+        fixture = fixtures.get(resolution)
+        if not isinstance(fixture, Mapping):
+            raise ValueError(f"equilibrium suite has no fixture for {resolution}")
+        signature = fixture.get("solver_mesh_signature")
+        if not isinstance(signature, str) or not signature:
+            raise ValueError(f"equilibrium suite fixture {resolution} has no signature")
+        resolutions.append(resolution)
+        signatures[resolution] = signature
+    return tuple(resolutions), signatures
 
 
 def print_amg_qualification_fixture_suite(path: Path) -> None:
@@ -6359,6 +6416,7 @@ def execution_plan_mesh_stats(
             "solver_mesh_exterior_facet_count": solver_topology.exterior_facet_count,
             "solver_mesh_interface_facet_count": solver_topology.interface_facet_count,
             "solver_mesh_schema_kind": solver_topology.schema_kind,
+            "solver_mesh_signature_schema": "fullmag.fem.solver_mesh_signature.v2",
             "solver_mesh_signature": solver_signature,
         }
     )
@@ -6557,6 +6615,88 @@ def merge_missing_payload_fields(
     return merged
 
 
+def _accepted_solver_step_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    """Filter accepted native steps from terminal confirmation observations."""
+
+    accepted: list[Mapping[str, object]] = []
+    previous_step: int | None = None
+    for row in rows:
+        raw_accepted = row.get("accepted")
+        if raw_accepted not in (None, ""):
+            is_accepted = as_bool(raw_accepted)
+        else:
+            step = as_int(row.get("step"))
+            is_accepted = step is not None and (
+                previous_step is None or step > previous_step
+            )
+        step = as_int(row.get("step"))
+        if step is not None:
+            previous_step = step
+        if is_accepted:
+            accepted.append(row)
+    return accepted
+
+
+def solver_time_to_tolerance_from_diagnostics(
+    rows: Sequence[Mapping[str, object]], torque_tolerance_apm: float
+) -> tuple[float | None, int, int]:
+    """Derive solver-owned time-to-tolerance from accepted-step diagnostics."""
+
+    elapsed_ns = 0
+    demag_solves = 0
+    accepted_steps = 0
+    previous_step: int | None = None
+    for row in rows:
+        raw_accepted = row.get("accepted")
+        if raw_accepted not in (None, ""):
+            is_accepted = as_bool(raw_accepted)
+        else:
+            step = as_int(row.get("step"))
+            is_accepted = step is not None and (
+                previous_step is None or step > previous_step
+            )
+        step = as_int(row.get("step"))
+        if step is not None:
+            previous_step = step
+        torque = as_float(row.get("max_torque_apm"))
+        if is_accepted:
+            wall_time_ns = as_int(row.get("wall_time_ns"))
+            demag_solves_value = as_int(row.get("demag_solves"))
+            if wall_time_ns is None or wall_time_ns < 0:
+                return None, accepted_steps, demag_solves
+            elapsed_ns += wall_time_ns
+            accepted_steps += 1
+            if demag_solves_value is not None and demag_solves_value >= 0:
+                demag_solves += demag_solves_value
+            if torque is not None and math.isfinite(torque) and torque <= torque_tolerance_apm:
+                return elapsed_ns / 1_000_000_000.0, accepted_steps, demag_solves
+        elif (
+            accepted_steps > 0
+            and torque is not None
+            and math.isfinite(torque)
+            and torque <= torque_tolerance_apm
+        ):
+            confirmation_wall_time_ns = as_int(row.get("wall_time_ns"))
+            if confirmation_wall_time_ns is None or confirmation_wall_time_ns < 0:
+                return None, accepted_steps, demag_solves
+            return (
+                (elapsed_ns + confirmation_wall_time_ns) / 1_000_000_000.0,
+                accepted_steps,
+                demag_solves,
+            )
+
+    # A direct minimizer can certify an already-equilibrated initial state
+    # without accepting a move.  The terminal observation is explicit, while
+    # the solver-owned elapsed time and accepted-step count are both zero.
+    if accepted_steps == 0 and rows:
+        terminal_torque = as_float(rows[-1].get("max_torque_apm"))
+        if terminal_torque is not None and terminal_torque <= torque_tolerance_apm:
+            return 0.0, 0, demag_solves
+    return None, accepted_steps, demag_solves
+
+
 def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, object] | None:
     artifact_dir = Path(run_dir)
     metadata = load_run_metadata(str(artifact_dir))
@@ -6632,19 +6772,35 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
         with step_files[-1].open(newline="", encoding="utf-8") as handle:
             step_rows = list(csv.DictReader(handle))
         if step_rows:
-            payload["accepted_steps"] = len(step_rows)
-            payload["rhs_evals"] = as_int(step_rows[-1].get("rhs_evals"))
+            accepted_rows = _accepted_solver_step_rows(step_rows)
+            payload["accepted_steps"] = len(accepted_rows)
+            last_accepted_row = accepted_rows[-1] if accepted_rows else step_rows[-1]
+            payload["rhs_evals"] = as_int(last_accepted_row.get("rhs_evals"))
             for source, target in (
                 ("rhs_evals", "total_rhs_evals"),
                 ("demag_solves", "cumulative_demag_solves"),
                 ("rejected_attempts", "rejected_attempts"),
             ):
-                values = [as_int(row.get(source)) for row in step_rows]
+                values = [as_int(row.get(source)) for row in accepted_rows]
                 if all(value is not None for value in values):
                     payload[target] = sum(value for value in values if value is not None)
             if "cumulative_demag_solves" in payload:
                 payload["demag_solves"] = payload["cumulative_demag_solves"]
-            accepted_row = step_rows[-1]
+            accepted_row = last_accepted_row
+            tolerance = as_float(qualification.get("stop_threshold"))
+            if tolerance is not None:
+                (
+                    time_to_tolerance,
+                    accepted_steps_to_tolerance,
+                    demag_solve_count_total,
+                ) = solver_time_to_tolerance_from_diagnostics(step_rows, tolerance)
+                if time_to_tolerance is not None:
+                    payload["time_to_tolerance_seconds"] = time_to_tolerance
+                    payload["time_to_tolerance_source"] = (
+                        "accepted_step_diagnostics_wall_time_ns"
+                    )
+                payload["accepted_steps_to_tolerance"] = accepted_steps_to_tolerance
+                payload["demag_solve_count_total"] = demag_solve_count_total
             proof_available_raw = accepted_row.get(
                 "accepted_energy_proof_available"
             )
@@ -6669,7 +6825,7 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
             if "accepted_energy_proof_available" in accepted_row:
                 proof_count = 0
                 invalid_details: list[str] = []
-                for row_index, row in enumerate(step_rows, start=1):
+                for row_index, row in enumerate(accepted_rows, start=1):
                     step = as_int(row.get("step"))
                     step_label = step if step is not None else row_index
                     available = str(
@@ -7529,6 +7685,17 @@ def run_backend(
     }
     if backend_label == "fem_gpu" and observed_gpu_identity is not None:
         attach_observed_gpu_identity(row, observed_gpu_identity)
+    direction_policy = relaxation_direction_policy_for_backend(
+        backend_label, relaxation_algorithm
+    )
+    if direction_policy is not None:
+        row["resolved_relaxation_direction_policy"] = direction_policy
+        row["relaxation_direction_policy_source"] = "native_backend_contract"
+        row["relaxation_preconditioner_strategy_scope"] = (
+            "gpu_direct_minimizer_only"
+            if backend_label == "fem_gpu"
+            else "cpu_production_default"
+        )
     if qualification_case_manifest is not None:
         if problem_ir is None:
             raise ValueError("Task 8 qualification requires canonical ProblemIR")
@@ -7544,6 +7711,7 @@ def run_backend(
         )
     env = os.environ.copy()
     env.update(extra_env)
+    env = sanitize_relaxation_backend_env(backend_label, env)
     row["step_profiler_enabled"] = env_flag_enabled(
         env_text(env, "FULLMAG_FEM_STEP_PROFILE")
     )
@@ -12263,16 +12431,17 @@ def main() -> None:
             )
         fixtures = equilibrium_suite["fixtures"]
         assert isinstance(fixtures, Mapping)
-        expected_signatures = {
-            str(resolution): str(fixture["solver_mesh_signature"])
-            for resolution, fixture in fixtures.items()
-            if isinstance(fixture, Mapping)
-        }
+        try:
+            expected_resolutions, expected_signatures = equilibrium_scope_expectations(
+                meshes, fixtures
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         equilibrium_summary = equilibrium_parity_summary(
             results,
             require_parity=args.require_equilibrium_parity,
             output_path=args.equilibrium_parity_output,
-            expected_resolutions=tuple(str(mesh_size) for mesh_size in fixtures),
+            expected_resolutions=expected_resolutions,
             expected_scenarios=tuple(
                 str(value) for value in equilibrium_suite["scenarios"]
             ),

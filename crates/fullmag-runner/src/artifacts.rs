@@ -1347,11 +1347,16 @@ fn write_solver_diagnostics_artifacts(
     }
 
     let mut accepted = fs::File::create(output_dir.join("solver_steps.csv"))?;
-    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j")?;
+    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j,wall_time_ns,accepted")?;
+    let mut previous_step = None;
     for step in steps {
+        let accepted_step = previous_step
+            .map(|previous| step.step > previous)
+            .unwrap_or(step.step > 0);
+        previous_step = Some(step.step);
         writeln!(
             accepted,
-            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{}",
+            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{},{},{}",
             step.step,
             step.time,
             step.dt,
@@ -1377,6 +1382,8 @@ fn write_solver_diagnostics_artifacts(
             step.accepted_energy_roundoff_bound_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
             step.accepted_energy_delta_upper_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
             step.armijo_increment_rhs_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.wall_time_ns,
+            accepted_step,
         )?;
     }
 
