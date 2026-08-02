@@ -2,6 +2,7 @@ import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { quickChartWorkspaceStore } from "@/kernel/workspace/quickChartWorkspace";
+import { tableColumnIdFromSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
 
 export const analysisPlotsManifest: ModuleManifest = {
   id: "analysis-plots",
@@ -26,7 +27,7 @@ export const analysisPlotsManifest: ModuleManifest = {
         scope: "workspace",
         isEnabled: (context: CommandContext) =>
           context.layout?.get().activeViewportMainModuleId === "viewport-3d" &&
-          analysisPlotsWorkspaceStore.getSnapshot().yAxisIds.length > 0,
+          analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds.length > 0,
         run: (context: CommandContext) => {
           const chart = analysisPlotsWorkspaceStore.getSnapshot();
           const chartId = "default";
@@ -36,7 +37,7 @@ export const analysisPlotsManifest: ModuleManifest = {
             chartId,
             tableId,
             xAxisId: chart.xAxisId,
-            yAxisIds: chart.yAxisIds,
+            yAxisIds: chart.selectedSeriesIds.map(tableColumnIdFromSeriesId),
           });
           context.bus?.emit("explorer:tab-requested", {
             source: "analysis-plots",
@@ -54,7 +55,7 @@ export const analysisPlotsManifest: ModuleManifest = {
               tableId,
               type: "quick-chart",
               xAxisId: chart.xAxisId,
-              yAxisIds: chart.yAxisIds,
+              yAxisIds: chart.selectedSeriesIds.map(tableColumnIdFromSeriesId),
             },
           }, "analysis-plots");
           context.layout?.setFocusedSlot("panel-right");

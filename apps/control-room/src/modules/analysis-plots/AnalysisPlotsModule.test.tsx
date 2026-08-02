@@ -1196,7 +1196,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1241,7 +1241,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1284,7 +1284,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1335,7 +1335,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1396,7 +1396,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1455,7 +1455,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1516,7 +1516,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1573,7 +1573,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1602,7 +1602,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1629,7 +1629,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1656,7 +1656,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="idle"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1969,7 +1969,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1992,7 +1992,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2031,7 +2031,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2056,7 +2056,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="loading"
         visibleTable={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2079,7 +2079,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2091,6 +2091,29 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain('aria-label="mx, unit dimensionless, latest 0.2');
     expect(html).toContain('class="fm-chart-legend__swatch');
     expect(html).toContain('class="fm-chart-legend__latest"');
+  });
+
+  it("renders an empty selected-series state without restoring chart data", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="ready"
+        visibleTable={chartWindow(table)}
+        xAxisId="step"
+        selectedSeriesIds={[]}
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
+    expect(html).not.toContain("Loading chart renderer");
   });
 
   it("keeps normalized legend readings dimensionless", () => {
@@ -2124,7 +2147,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(normalizedTable)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2179,7 +2202,7 @@ describe("AnalysisPlotsView", () => {
         tableRowsStatus="ready"
         visibleTable={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2266,7 +2289,7 @@ describe("AnalysisPlotsView", () => {
     ).toEqual(["t", "mx", "my"]);
   });
 
-  it("falls back to production Y columns when persisted Y selection has no visible series", () => {
+  it("keeps persisted empty selection empty when no selected series is available", () => {
     expect(
       resolveAnalysisPlotsYAxisIds(
         ["deleted-column"],
@@ -2281,7 +2304,7 @@ describe("AnalysisPlotsView", () => {
         ],
         "step",
       ),
-    ).toEqual(["mx", "my", "mz", "e_total"]);
+    ).toEqual([]);
   });
 
   it("declares the add-series event path in the module manifest", () => {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ChartLegend, chartColorNameForIndex, type ChartLegendItem } from "./ChartLegend";
+import { toggleSelectedSeriesId } from "./chartSeriesSelection";
 
 describe("ChartLegend", () => {
   const dummyItems: ChartLegendItem[] = [
@@ -12,8 +13,6 @@ describe("ChartLegend", () => {
       latestValue: "0.25",
       colorName: "blue",
       colorIndex: 0,
-      hidden: false,
-      soloed: false,
     },
     {
       id: "s2",
@@ -22,8 +21,6 @@ describe("ChartLegend", () => {
       latestValue: "0.50",
       colorName: "green",
       colorIndex: 1,
-      hidden: false,
-      soloed: false,
     },
   ];
 
@@ -37,8 +34,8 @@ describe("ChartLegend", () => {
     const html = renderToStaticMarkup(
       <ChartLegend
         items={dummyItems}
-        onToggleVisibility={vi.fn()}
-        onSolo={vi.fn()}
+        onSelectedSeriesIdsChange={vi.fn()}
+        selectedSeriesIds={["s1", "s2"]}
       />,
     );
 
@@ -55,8 +52,24 @@ describe("ChartLegend", () => {
 
   it("returns null when items array is empty", () => {
     const html = renderToStaticMarkup(
-      <ChartLegend items={[]} onToggleVisibility={vi.fn()} onSolo={vi.fn()} />,
+      <ChartLegend items={[]} onSelectedSeriesIdsChange={vi.fn()} selectedSeriesIds={[]} />,
     );
     expect(html).toBe("");
+  });
+
+  it("renders the exact selected-series state after a legend toggle without an API call", () => {
+    const rowsBinary = vi.fn();
+    const selectedAfterToggle = toggleSelectedSeriesId(["s1"], "s1", false);
+    const callsBeforeToggle = rowsBinary.mock.calls.length;
+    const html = renderToStaticMarkup(
+      <ChartLegend
+        items={dummyItems}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedSeriesIds={selectedAfterToggle}
+      />,
+    );
+
+    expect(html).toContain('aria-pressed="false"');
+    expect(rowsBinary).toHaveBeenCalledTimes(callsBeforeToggle);
   });
 });

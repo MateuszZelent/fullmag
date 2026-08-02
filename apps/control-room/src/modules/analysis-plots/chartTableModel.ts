@@ -5,6 +5,7 @@ import type {
   AnalysisChartResourceRef,
 } from "@/shared/domain/analysis/chartCursorPoint";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
+import { tableChartSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
 
 export const DEFAULT_TABLE_CHART_COLUMNS = Object.freeze([
   "step",
@@ -325,7 +326,7 @@ export function buildScalarChartSeries(
     return [
       {
         ...(dataRevision == null ? {} : { dataRevision }),
-        id: `data.table:${tableId}:${resolvedXAxisId}:${column.column_id}`,
+        id: tableChartSeriesId(tableId, resolvedXAxisId, column.column_id),
         label: column.label || column.column_id,
         points: chartPointsForColumns(
           table,

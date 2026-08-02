@@ -85,9 +85,7 @@ export function useAnalysisChartPreferencesHydration(descriptorId?: string): {
   setDescriptorLiveMode: (id: string, liveMode: ChartLiveMode) => void;
   setDescriptorRange: (id: string, range: ChartRangePreference) => void;
   setDescriptorTargetPoints: (id: string, targetPoints: ChartTargetPoints) => void;
-  setDescriptorHiddenSeries: (id: string, hiddenSeriesIds: string[]) => void;
-  setDescriptorSoloSeries: (id: string, soloSeriesId: string | null) => void;
-  setDescriptorYAxisIds: (id: string, yAxisIds: string[]) => void;
+  setDescriptorSelectedSeriesIds: (id: string, selectedSeriesIds: string[]) => void;
   setDescriptorXAxisId: (id: string, xAxisId: string) => void;
   resetDescriptor: (id: string) => void;
 } {
@@ -135,21 +133,9 @@ export function useAnalysisChartPreferencesHydration(descriptorId?: string): {
     [updateDescriptor],
   );
 
-  const setDescriptorHiddenSeries = useCallback(
-    (id: string, hiddenSeriesIds: string[]) =>
-      updateDescriptor(id, () => ({ hiddenSeriesIds })),
-    [updateDescriptor],
-  );
-
-  const setDescriptorSoloSeries = useCallback(
-    (id: string, soloSeriesId: string | null) =>
-      updateDescriptor(id, () => ({ soloSeriesId })),
-    [updateDescriptor],
-  );
-
-  const setDescriptorYAxisIds = useCallback(
-    (id: string, yAxisIds: string[]) =>
-      updateDescriptor(id, () => ({ yAxisIds })),
+  const setDescriptorSelectedSeriesIds = useCallback(
+    (id: string, selectedSeriesIds: string[]) =>
+      updateDescriptor(id, () => ({ selectedSeriesIds })),
     [updateDescriptor],
   );
 
@@ -180,9 +166,7 @@ export function useAnalysisChartPreferencesHydration(descriptorId?: string): {
     setDescriptorLiveMode,
     setDescriptorRange,
     setDescriptorTargetPoints,
-    setDescriptorHiddenSeries,
-    setDescriptorSoloSeries,
-    setDescriptorYAxisIds,
+    setDescriptorSelectedSeriesIds,
     setDescriptorXAxisId,
     resetDescriptor,
   };

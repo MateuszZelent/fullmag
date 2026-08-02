@@ -25,14 +25,12 @@ export function AnalysisPlotsView({
   frequencyDomainStatus = "idle",
   frequencyDomainTitle = "Frequency-domain analysis",
   frequencyDomainUnavailableReason = null,
-  hiddenSeriesIds,
   kernel,
   liveMode = "following",
   onPointSelect,
   onRangeChange,
-  onSolo,
   onSurfaceChange = () => {},
-  onToggleVisibility,
+  onSelectedSeriesIdsChange = () => undefined,
   range,
   selectedPoint,
   selectedStageId,
@@ -41,7 +39,7 @@ export function AnalysisPlotsView({
   tableRowsStatus,
   visibleTable,
   xAxisId,
-  yAxisIds,
+  selectedSeriesIds = [],
 }: AnalysisPlotsViewProps) {
   const tableSurfaceActive =
     activeSurface === "overview" ||
@@ -57,12 +55,14 @@ export function AnalysisPlotsView({
               status: resourceStatusFromString(tableRowsStatus),
               tableId: tableWindowTableId(visibleTable),
               xAxisId,
-              yAxisIds,
+              yAxisIds: table.columns
+                .filter((column) => column.column_id !== xAxisId)
+                .map((column) => column.column_id),
             }),
             activeSurface,
           )
         : [],
-    [activeSurface, table, tableRowsStatus, tableSurfaceActive, visibleTable, xAxisId, yAxisIds],
+    [activeSurface, selectedSeriesIds, table, tableRowsStatus, tableSurfaceActive, visibleTable, xAxisId],
   );
   const showFrequency =
     activeSurface === "frequency" ||
@@ -82,13 +82,13 @@ export function AnalysisPlotsView({
         {!selectedStageId && tableSurfaceActive ? (
           <AnalysisTableSurface
             chartSeries={chartSeries}
-            hiddenSeriesIds={hiddenSeriesIds}
             kernel={kernel}
             liveMode={liveMode}
             onPointSelect={onPointSelect}
             onRangeChange={onRangeChange}
-            onToggleVisibility={onToggleVisibility}
+            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
             range={range}
+            selectedSeriesIds={selectedSeriesIds}
             selectedPoint={selectedPoint}
             status={tableRowsStatus}
             table={visibleTable}
@@ -98,22 +98,20 @@ export function AnalysisPlotsView({
         ) : null}
         {!selectedStageId && activeSurface === "energy" ? (
           <AnalysisEnergySurface
-            hiddenSeriesIds={hiddenSeriesIds}
             kernel={kernel}
             onPointSelect={onPointSelect}
-            onSolo={onSolo}
-            onToggleVisibility={onToggleVisibility}
+            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+            selectedSeriesIds={selectedSeriesIds}
             series={solverEnergySeries}
             status={solverEnergyStatus}
           />
         ) : null}
         {!selectedStageId && showFrequency ? (
           <AnalysisFrequencySurface
-            hiddenSeriesIds={hiddenSeriesIds}
             kernel={kernel}
             onPointSelect={onPointSelect}
-            onSolo={onSolo}
-            onToggleVisibility={onToggleVisibility}
+            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+            selectedSeriesIds={selectedSeriesIds}
             selectedPoint={selectedPoint}
             series={frequencyDomainSeries}
             status={frequencyDomainStatus}

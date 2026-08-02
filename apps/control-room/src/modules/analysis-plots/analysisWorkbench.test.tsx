@@ -51,7 +51,7 @@ function render(surface: "overview" | "energy" | "dynamics" | "convergence" | "f
       onPointSelect={vi.fn()}
       onRangeChange={vi.fn()}
       onSelectXAxis={vi.fn()}
-      onToggleYAxis={vi.fn()}
+      onSelectedSeriesIdsChange={vi.fn()}
       onSeriesSelect={vi.fn()}
       range={null}
       selectedPoint={null}
@@ -60,7 +60,10 @@ function render(surface: "overview" | "energy" | "dynamics" | "convergence" | "f
       tableRowsStatus="ready"
       visibleTable={tableWindow}
       xAxisId="step"
-      yAxisIds={["mx", "max_torque"]}
+      selectedSeriesIds={[
+        "data.table:default:step:mx",
+        "data.table:default:step:max_torque",
+      ]}
     />,
   );
 }
@@ -90,8 +93,8 @@ describe("Analysis workbench surfaces", () => {
 
   it("mounts only the selected dedicated heavy surface", () => {
     const overviewHtml = render("overview");
-    // ChartLegend aria-label: "mx, unit 1, latest ..."
-    expect(overviewHtml).toContain("mx, unit 1");
+    // ChartLegend aria-label: "mx, unit dimensionless, latest ..."
+    expect(overviewHtml).toContain("mx, unit dimensionless");
     expect(overviewHtml).not.toContain("Available quantities");
     expect(overviewHtml).toContain("Scientific trust: Unknown");
     // Heavy energy/frequency surfaces are mounted only after selecting their tab.
@@ -105,14 +108,14 @@ describe("Analysis workbench surfaces", () => {
 
     const dynamicsHtml = render("dynamics");
     expect(dynamicsHtml).toContain("Magnetization dynamics");
-    expect(dynamicsHtml).toContain("mx, unit 1");
+    expect(dynamicsHtml).toContain("mx, unit dimensionless");
     expect(dynamicsHtml).not.toContain("Energy history");
 
     const convergenceHtml = render("convergence");
     expect(convergenceHtml).toContain("Solver convergence");
     expect(convergenceHtml).toContain("max torque");
     // mx series must NOT appear on convergence surface
-    expect(convergenceHtml).not.toContain("mx, unit 1");
+    expect(convergenceHtml).not.toContain("mx, unit dimensionless");
   });
 
   it("gates resource families by active surface in the controller and hooks", () => {
@@ -140,7 +143,7 @@ describe("Analysis workbench surfaces", () => {
   it("uses cached primitive workspace snapshots for table axes", () => {
     const tableSource = readFileSync(new URL("./hooks/useAnalysisTableData.ts", import.meta.url), "utf8");
     expect(tableSource).toContain("useAnalysisPlotsWorkspaceSelector((state) => state.xAxisId)");
-    expect(tableSource).toContain("useAnalysisPlotsWorkspaceSelector((state) => state.yAxisIds)");
-    expect(tableSource).not.toContain("(state) => ({ xAxisId: state.xAxisId, yAxisIds: state.yAxisIds })");
+    expect(tableSource).toContain("useAnalysisPlotsWorkspaceSelector((state) => state.selectedSeriesIds)");
+    expect(tableSource).not.toContain("(state) => ({ xAxisId: state.xAxisId, selectedSeriesIds: state.selectedSeriesIds })");
   });
 });

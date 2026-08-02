@@ -20,7 +20,6 @@ function AnalysisWorkbenchModule({ kernel }: ModuleProps) {
       frequencyDomainStatus={controller.frequencyDomainStatus}
       frequencyDomainTitle={controller.frequencyDomainTitle}
       frequencyDomainUnavailableReason={controller.frequencyDomainUnavailableReason}
-      hiddenSeriesIds={controller.hiddenSeriesIds}
       kernel={kernel}
       liveMode={controller.liveMode}
       onClearRange={controller.clearRange}
@@ -33,10 +32,8 @@ function AnalysisWorkbenchModule({ kernel }: ModuleProps) {
       onRangeModeChange={controller.setRangeMode}
       onTargetPointsChange={controller.setTargetPoints}
       onSeriesSelect={controller.selectSeries}
-      onSolo={(seriesId, allSeriesIds) => controller.setSoloSeries(seriesId, allSeriesIds)}
+      onSelectedSeriesIdsChange={controller.setSelectedSeriesIds}
       onSurfaceChange={controller.setActiveSurface}
-      onToggleVisibility={controller.toggleSeriesVisibility}
-      onToggleYAxis={controller.toggleYAxis}
       range={controller.range}
       rangeMode={controller.rangeMode}
       selectedPoint={controller.selectedPoint}
@@ -47,7 +44,7 @@ function AnalysisWorkbenchModule({ kernel }: ModuleProps) {
       targetPoints={controller.targetPoints}
       visibleTable={controller.visibleTable}
       xAxisId={controller.xAxisId}
-      yAxisIds={controller.yAxisIds}
+      selectedSeriesIds={controller.selectedSeriesIds}
     />
   );
 }

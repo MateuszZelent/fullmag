@@ -1,6 +1,7 @@
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import {
   createChartDisplayTransform,
@@ -13,20 +14,18 @@ import { formatSeriesCount } from "../analysisWorkbenchModel";
 import { EChartsSurface } from "./EChartsSurface";
 
 export function AnalysisEnergySurface({
-  hiddenSeriesIds = [],
   kernel,
   onPointSelect,
-  onSolo,
-  onToggleVisibility,
+  onSelectedSeriesIdsChange,
+  selectedSeriesIds,
   series,
   showLegend = true,
   status,
 }: {
-  hiddenSeriesIds?: readonly string[];
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
-  onSolo?: (seriesId: string | null, allSeriesIds?: readonly string[]) => void;
-  onToggleVisibility?: (seriesId: string) => void;
+  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
+  selectedSeriesIds?: readonly string[];
   series: readonly ChartSeries[];
   showLegend?: boolean;
   status: string;
@@ -36,11 +35,8 @@ export function AnalysisEnergySurface({
   }
 
   const allIds = series.map((s) => s.id);
-  const hidden = hiddenSeriesIds.filter((id) => allIds.includes(id));
-  const soloedId =
-    hidden.length > 0 && hidden.length === allIds.length - 1
-      ? allIds.find((id) => !hidden.includes(id)) ?? null
-      : null;
+  const effectiveSelectedSeriesIds = selectedSeriesIds ?? allIds;
+  const selected = new Set(sanitizeSelectedSeriesIds(effectiveSelectedSeriesIds, allIds));
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
   const yTransforms = createChartYAxisDisplayTransforms(
@@ -63,21 +59,17 @@ export function AnalysisEnergySurface({
       ),
       colorName: chartColorNameForIndex(index),
       colorIndex: index,
-      hidden: hidden.includes(entry.id),
-      soloed: soloedId !== null && soloedId === entry.id,
     };
   });
 
-  const visibleSeries = hidden.length === 0
-    ? series
-    : series.filter((s) => !hidden.includes(s.id));
+  const visibleSeries = series.filter(({ id }) => selected.has(id));
 
   const legend = showLegend ? (
     <ChartLegend
       ariaLabel="Energy series"
       items={legendItems}
-      onToggleVisibility={onToggleVisibility ?? (() => {})}
-      onSolo={(id) => onSolo?.(id, allIds)}
+      onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+      selectedSeriesIds={effectiveSelectedSeriesIds}
     />
   ) : null;
 
@@ -95,14 +87,18 @@ export function AnalysisEnergySurface({
       title="Energy history"
       subtitle="time [s]"
     >
-      <EChartsSurface
-        allSeries={series}
-        bus={kernel.bus}
-        dataStatus={status}
-        onPointSelect={onPointSelect}
-        series={visibleSeries}
-        xAxisLabel="time [s]"
-      />
+      {visibleSeries.length === 0 ? (
+        <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>
+      ) : (
+        <EChartsSurface
+          allSeries={series}
+          bus={kernel.bus}
+          dataStatus={status}
+          onPointSelect={onPointSelect}
+          series={visibleSeries}
+          xAxisLabel="time [s]"
+        />
+      )}
     </ChartSection>
   );
 }

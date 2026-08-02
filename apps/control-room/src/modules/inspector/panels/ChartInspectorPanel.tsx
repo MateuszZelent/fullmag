@@ -5,13 +5,10 @@ import { chartRangePreferenceFromWorkspace } from "@/kernel/workspace/analysisCh
 import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { useAnalysisChartPreferencesHydration } from "@/kernel/workspace/useAnalysisChartPreferencesHydration";
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
-import {
-  nextYAxisIdsForToggle,
-  sanitizeYAxisIdsForUnitLimit,
-  TableColumnList,
-} from "@/shared/domain/analysis/TableColumnList";
+import { sanitizeYAxisIdsForUnitLimit, TableColumnList } from "@/shared/domain/analysis/TableColumnList";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
 import { ChartControlBar } from "@/shared/analysis-charts/ChartControlBar";
+import { tableChartSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -35,38 +32,60 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
   const preferences = useAnalysisChartPreferencesHydration(descriptorId);
   const table = useTableResource(tableId);
 
-  const { availableColumns, liveMode, range, rangeMode, targetPoints, xAxisId, yAxisIds } =
+  const { availableColumns, liveMode, range, rangeMode, targetPoints, xAxisId, selectedSeriesIds } =
     useAnalysisPlotsWorkspaceSelector((state) => state);
 
-  const toggleYAxis = useCallback(
-    (columnId: string, enabled: boolean) => {
+  const seriesIdForColumn = useCallback(
+    (columnId: string) => tableChartSeriesId(tableId, xAxisId, columnId),
+    [tableId, xAxisId],
+  );
+
+  const setSelectedSeriesIds = useCallback(
+    (nextSelectedSeriesIds: string[]) => {
       const current = analysisPlotsWorkspaceStore.getSnapshot();
-      const nextYAxisIds = nextYAxisIdsForToggle(
-        current.yAxisIds,
-        columnId,
-        enabled,
-        {
-          columns: current.availableColumns,
-          xAxisId: current.xAxisId,
-        },
+      const selectedColumnIds = current.availableColumns.flatMap((column) =>
+        nextSelectedSeriesIds.includes(
+          tableChartSeriesId(tableId, current.xAxisId, column.column_id),
+        )
+          ? [column.column_id]
+          : [],
       );
-      analysisPlotsWorkspaceStore.setAxes(current.xAxisId, nextYAxisIds);
-      preferences.setDescriptorYAxisIds(descriptorId, nextYAxisIds);
+      const sanitizedColumns = sanitizeYAxisIdsForUnitLimit(
+        selectedColumnIds,
+        current.availableColumns,
+        current.xAxisId,
+      );
+      const sanitized = sanitizedColumns.map((columnId) =>
+        tableChartSeriesId(tableId, current.xAxisId, columnId),
+      );
+      analysisPlotsWorkspaceStore.setSelectedSeriesIds(sanitized);
+      preferences.setDescriptorSelectedSeriesIds(descriptorId, sanitized);
     },
-    [descriptorId, preferences],
+    [descriptorId, preferences, tableId],
   );
 
   const setXAxisId = useCallback((columnId: string) => {
     const current = analysisPlotsWorkspaceStore.getSnapshot();
-    const nextYAxisIds = sanitizeYAxisIdsForUnitLimit(
-      yAxisIdsAfterXAxisSelection(current.yAxisIds, columnId),
+    const selectedColumnIds = current.availableColumns.flatMap((column) =>
+      current.selectedSeriesIds.includes(
+        tableChartSeriesId(tableId, current.xAxisId, column.column_id),
+      )
+        ? [column.column_id]
+        : [],
+    );
+    const nextSelectedColumnIds = sanitizeYAxisIdsForUnitLimit(
+      yAxisIdsAfterXAxisSelection(selectedColumnIds, columnId),
       current.availableColumns,
       columnId,
     );
-    analysisPlotsWorkspaceStore.setAxes(columnId, nextYAxisIds);
+    const nextSelectedSeriesIds = nextSelectedColumnIds.map((selectedColumnId) =>
+      tableChartSeriesId(tableId, columnId, selectedColumnId),
+    );
+    analysisPlotsWorkspaceStore.setXAxisId(columnId);
+    analysisPlotsWorkspaceStore.setSelectedSeriesIds(nextSelectedSeriesIds);
     preferences.setDescriptorXAxisId(descriptorId, columnId);
-    preferences.setDescriptorYAxisIds(descriptorId, nextYAxisIds);
-  }, [descriptorId, preferences]);
+    preferences.setDescriptorSelectedSeriesIds(descriptorId, nextSelectedSeriesIds);
+  }, [descriptorId, preferences, tableId]);
 
   return (
     <div className="fm-inspector-panel">
@@ -90,10 +109,11 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
         <TableColumnList
           columns={availableColumns.length > 0 ? availableColumns : null}
           onSelectXAxis={setXAxisId}
-          onToggleYAxis={toggleYAxis}
+          onSelectedSeriesIdsChange={setSelectedSeriesIds}
+          seriesIdForColumn={seriesIdForColumn}
           xAxisId={xAxisId}
           xAxisRadioName="fm-inspector-analysis-x-axis"
-          yAxisIds={yAxisIds}
+          selectedSeriesIds={selectedSeriesIds}
         />
       </InspectorGroup>
       <InspectorGroup title="Chart controls">

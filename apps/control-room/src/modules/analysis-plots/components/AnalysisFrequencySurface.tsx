@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import {
   createChartDisplayTransform,
@@ -22,22 +23,20 @@ import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
 
 export function AnalysisFrequencySurface({
-  hiddenSeriesIds = [],
   kernel,
   onPointSelect,
-  onSolo,
-  onToggleVisibility,
+  onSelectedSeriesIdsChange,
+  selectedSeriesIds,
   selectedPoint,
   series,
   status,
   title,
   unavailableReason,
 }: {
-  hiddenSeriesIds?: readonly string[];
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
-  onSolo?: (seriesId: string | null, allSeriesIds?: readonly string[]) => void;
-  onToggleVisibility?: (seriesId: string) => void;
+  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
+  selectedSeriesIds?: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   series: readonly ChartSeries[];
   status: string;
@@ -49,7 +48,7 @@ export function AnalysisFrequencySurface({
     () => buildFrequencyDomainWorkbenchSummary(series, title, status),
     [series, status, title],
   );
-  const selected = useMemo(
+  const selectedPointSummary = useMemo(
     () => buildFrequencyDomainCursorSummary(selectedPoint, title, series),
     [selectedPoint, series, title],
   );
@@ -68,11 +67,8 @@ export function AnalysisFrequencySurface({
   }
 
   const allIds = series.map((s) => s.id);
-  const hidden = hiddenSeriesIds.filter((id) => allIds.includes(id));
-  const soloedId =
-    hidden.length > 0 && hidden.length === allIds.length - 1
-      ? allIds.find((id) => !hidden.includes(id)) ?? null
-      : null;
+  const effectiveSelectedSeriesIds = selectedSeriesIds ?? allIds;
+  const selected = new Set(sanitizeSelectedSeriesIds(effectiveSelectedSeriesIds, allIds));
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
   const yTransforms = createChartYAxisDisplayTransforms(
@@ -95,21 +91,17 @@ export function AnalysisFrequencySurface({
       ),
       colorName: chartColorNameForIndex(index),
       colorIndex: index,
-      hidden: hidden.includes(entry.id),
-      soloed: soloedId !== null && soloedId === entry.id,
     };
   });
 
-  const visibleSeries = hidden.length === 0
-    ? series
-    : series.filter((s) => !hidden.includes(s.id));
+  const visibleSeries = series.filter(({ id }) => selected.has(id));
 
   const legend = (
     <ChartLegend
       ariaLabel="Frequency-domain series"
       items={legendItems}
-      onToggleVisibility={onToggleVisibility ?? (() => {})}
-      onSolo={(id) => onSolo?.(id, allIds)}
+      onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+      selectedSeriesIds={effectiveSelectedSeriesIds}
     />
   );
 
@@ -122,18 +114,18 @@ export function AnalysisFrequencySurface({
   const workbenchSubtitle = workbenchParts.join(" · ");
 
   // Cursor footer spans (mirrors AnalysisStatusPill content for backward compat)
-  const footerContent = selected ? (
+  const footerContent = selectedPointSummary ? (
     <div
       aria-label="Selected frequency-domain point"
       className="fm-chart-section__footer-row fm-analysis-plots__status--frequency-domain-selection"
     >
       <span className="fm-analysis-plots__range-cursor">
-        {selected.title}&ensp;{selected.xLabel}: {selected.xValue}&ensp;
-        {selected.yLabel}: {selected.yValue}
-        {"linewidthValue" in selected && selected.linewidthValue
-          ? `  Linewidth: ${selected.linewidthValue}`
+        {selectedPointSummary.title}&ensp;{selectedPointSummary.xLabel}: {selectedPointSummary.xValue}&ensp;
+        {selectedPointSummary.yLabel}: {selectedPointSummary.yValue}
+        {"linewidthValue" in selectedPointSummary && selectedPointSummary.linewidthValue
+          ? `  Linewidth: ${selectedPointSummary.linewidthValue}`
           : null}
-        &ensp;{selected.inspectorTarget}
+        &ensp;{selectedPointSummary.inspectorTarget}
       </span>
     </div>
   ) : undefined;
@@ -182,14 +174,18 @@ export function AnalysisFrequencySurface({
         className="fm-analysis-plots__chart-frame"
         data-resource-key={series[0]?.source.resourceKey}
       >
-        <EChartsSurface
-          allSeries={series}
-          bus={kernel.bus}
-          dataStatus={status}
-          onPointSelect={onPointSelect}
-          series={visibleSeries}
-          xAxisLabel={frequencyDomainXAxisLabel(series)}
-        />
+        {visibleSeries.length === 0 ? (
+          <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>
+        ) : (
+          <EChartsSurface
+            allSeries={series}
+            bus={kernel.bus}
+            dataStatus={status}
+            onPointSelect={onPointSelect}
+            series={visibleSeries}
+            xAxisLabel={frequencyDomainXAxisLabel(series)}
+          />
+        )}
       </div>
     </ChartSection>
   );

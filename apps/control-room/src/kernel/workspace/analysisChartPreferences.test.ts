@@ -82,20 +82,19 @@ describe("validateDescriptorPreferences", () => {
   it("validates and clamps all fields", () => {
     const result = validateDescriptorPreferences({
       displayUnits: { energy: "eV" },
-      hiddenSeriesIds: ["mx", 42, "my"], // 42 should be stripped
+      selectedSeriesIds: ["data.table:default:step:mx", 42, "data.table:default:step:my"], // 42 should be stripped
       liveMode: "paused",
       range: { mode: "tailRows", rows: 200 },
-      soloSeriesId: "mz",
       targetPoints: 3200,
       xAxisId: "t",
-      yAxisIds: ["mz", "mz", "mx"],
     });
-    expect(result.hiddenSeriesIds).toEqual(["mx", "my"]);
+    expect(result.selectedSeriesIds).toEqual([
+      "data.table:default:step:mx",
+      "data.table:default:step:my",
+    ]);
     expect(result.liveMode).toBe("paused");
     expect(result.range).toEqual({ mode: "tailRows", rows: 200 });
-    expect(result.soloSeriesId).toBe("mz");
     expect(result.targetPoints).toBe(3200);
-    expect(result.yAxisIds).toEqual(["mz", "mx"]);
   });
 
   it("resets invalid liveMode to following", () => {
@@ -103,10 +102,10 @@ describe("validateDescriptorPreferences", () => {
     expect(result.liveMode).toBe("following");
   });
 
-  it("limits yAxisIds to 20 entries", () => {
+  it("limits selectedSeriesIds to 100 entries", () => {
     const many = Array.from({ length: 30 }, (_, i) => `col${i}`);
-    const result = validateDescriptorPreferences({ yAxisIds: many });
-    expect(result.yAxisIds.length).toBe(20);
+    const result = validateDescriptorPreferences({ selectedSeriesIds: many });
+    expect(result.selectedSeriesIds.length).toBe(30);
   });
 });
 

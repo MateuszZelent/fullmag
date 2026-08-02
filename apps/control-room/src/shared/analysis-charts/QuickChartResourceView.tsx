@@ -14,6 +14,7 @@ import {
   chartTableWindowFromBinary,
 } from "@/shared/domain/analysis/chartDataPlan";
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
+import { tableColumnIdFromSeriesId } from "./chartSeriesSelection";
 
 import { QuickChartView } from "./QuickChartView";
 import {
@@ -24,8 +25,9 @@ import {
 
 export function QuickChartResourceView({ selection }: { selection: Selection }) {
   const kernel = useKernel();
-  const { xAxisId, yAxisIds } =
+  const { xAxisId, selectedSeriesIds } =
     useAnalysisPlotsWorkspaceSelector((state) => state);
+  const yAxisIds = selectedSeriesIds.map(tableColumnIdFromSeriesId);
   const descriptor = useMemo(
     () => quickChartDescriptorFromSelection({ selection, xAxisId, yAxisIds }),
     [selection, xAxisId, yAxisIds],

@@ -32,18 +32,14 @@ export interface AnalysisPlotsWorkspaceState {
   availableColumns: AxisColumnDescriptor[];
   /** Monotonic local command consumed by the mounted ECharts owner only. */
   fitRequest: number;
-  /**
-   * Series IDs hidden from chart rendering. Local UI preference only;
-   * does NOT trigger a resource fetch.
-   */
-  hiddenSeriesIds: readonly string[];
+  /** Series IDs selected for chart rendering; local UI state only. */
+  selectedSeriesIds: readonly string[];
   liveMode: ChartLiveMode;
   range: AnalysisChartRange | null;
   rangeMode: AnalysisChartRangeMode;
   targetPoints: 160 | 400 | 800 | 1600 | 3200 | 5000;
   selectedPoint: AnalysisChartCursorPoint | null;
   xAxisId: string;
-  yAxisIds: string[];
 }
 
 type AnalysisPlotsWorkspaceListener = () => void;
@@ -52,14 +48,18 @@ const INITIAL_STATE: AnalysisPlotsWorkspaceState = {
   activeSurface: "overview",
   availableColumns: [],
   fitRequest: 0,
-  hiddenSeriesIds: [],
+  selectedSeriesIds: [
+    "data.table:default:step:mx",
+    "data.table:default:step:my",
+    "data.table:default:step:mz",
+    "data.table:default:step:e_total",
+  ],
   liveMode: "following",
   range: null,
   rangeMode: { mode: "follow" },
   targetPoints: 1600,
   selectedPoint: null,
   xAxisId: "step",
-  yAxisIds: ["mx", "my", "mz", "e_total"],
 };
 
 class AnalysisPlotsWorkspaceStore {
@@ -94,18 +94,18 @@ class AnalysisPlotsWorkspaceStore {
     });
   }
 
-  setAxes(xAxisId: string, yAxisIds: string[]): void {
-    if (
-      this.state.xAxisId === xAxisId &&
-      stringArraysEqual(this.state.yAxisIds, yAxisIds)
-    ) {
-      return;
-    }
+  setXAxisId(xAxisId: string): void {
+    if (this.state.xAxisId === xAxisId) return;
     this.setState({
       ...this.state,
       xAxisId,
-      yAxisIds,
     });
+  }
+
+  setSelectedSeriesIds(selectedSeriesIds: readonly string[]): void {
+    const next = [...new Set(selectedSeriesIds)];
+    if (stringArraysEqual(this.state.selectedSeriesIds, next)) return;
+    this.setState({ ...this.state, selectedSeriesIds: next });
   }
 
   setRange(range: AnalysisChartRange): void {
@@ -159,37 +159,6 @@ class AnalysisPlotsWorkspaceStore {
         ? 1
         : this.state.fitRequest + 1;
     this.setState({ ...this.state, fitRequest });
-  }
-
-  toggleSeriesVisibility(seriesId: string): void {
-    const hidden = this.state.hiddenSeriesIds;
-    const next = hidden.includes(seriesId)
-      ? hidden.filter((id) => id !== seriesId)
-      : [...hidden, seriesId];
-    if (next.length === hidden.length && next.every((id, i) => id === hidden[i])) return;
-    this.setState({ ...this.state, hiddenSeriesIds: next });
-  }
-
-  setHiddenSeriesIds(hiddenSeriesIds: readonly string[]): void {
-    const next = [...new Set(hiddenSeriesIds)];
-    if (stringArraysEqual(this.state.hiddenSeriesIds, next)) return;
-    this.setState({ ...this.state, hiddenSeriesIds: next });
-  }
-
-  setSoloSeries(seriesId: string | null, allSeriesIds?: readonly string[]): void {
-    if (seriesId === null) {
-      this.setState({ ...this.state, hiddenSeriesIds: [] });
-      return;
-    }
-    if (allSeriesIds && allSeriesIds.length > 0) {
-      const next = allSeriesIds.filter((id) => id !== seriesId);
-      this.setState({ ...this.state, hiddenSeriesIds: next });
-    }
-  }
-
-  clearHiddenSeries(): void {
-    if (this.state.hiddenSeriesIds.length === 0) return;
-    this.setState({ ...this.state, hiddenSeriesIds: [] });
   }
 
   setSelectedPoint(selectedPoint: AnalysisChartCursorPoint | null): void {

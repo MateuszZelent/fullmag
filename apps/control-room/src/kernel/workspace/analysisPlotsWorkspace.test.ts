@@ -15,14 +15,19 @@ describe("analysisPlotsWorkspaceStore", () => {
     resetAnalysisPlotsWorkspaceForTests();
   });
 
-  it("starts with production chart axes and no server payload", () => {
+  it("starts with production chart selection and no server payload", () => {
     const snapshot = analysisPlotsWorkspaceStore.getSnapshot();
 
     expect(snapshot).toMatchObject({
       activeSurface: "overview",
       availableColumns: [],
       xAxisId: "step",
-      yAxisIds: ["mx", "my", "mz", "e_total"],
+      selectedSeriesIds: [
+        "data.table:default:step:mx",
+        "data.table:default:step:my",
+        "data.table:default:step:mz",
+        "data.table:default:step:e_total",
+      ],
     });
     expect("tableState" in snapshot).toBe(false);
     expect("visibleTable" in snapshot).toBe(false);
@@ -61,17 +66,17 @@ describe("analysisPlotsWorkspaceStore", () => {
     expect(notifications).toBe(0);
   });
 
-  it("does not notify subscribers when axes are unchanged", () => {
+  it("does not notify subscribers when selected series are unchanged", () => {
     let notifications = 0;
     const unsubscribe = analysisPlotsWorkspaceStore.subscribe(() => {
       notifications += 1;
     });
 
-    analysisPlotsWorkspaceStore.setAxes("step", [
-      "mx",
-      "my",
-      "mz",
-      "e_total",
+    analysisPlotsWorkspaceStore.setSelectedSeriesIds([
+      "data.table:default:step:mx",
+      "data.table:default:step:my",
+      "data.table:default:step:mz",
+      "data.table:default:step:e_total",
     ]);
 
     unsubscribe();

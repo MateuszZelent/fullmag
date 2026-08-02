@@ -6,6 +6,7 @@ import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysi
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import {
   createChartDisplayTransform,
@@ -41,13 +42,13 @@ function statusPrimary(status: string, liveMode: ChartLiveMode): string {
  */
 export function AnalysisTableSurface({
   chartSeries,
-  hiddenSeriesIds = [],
   kernel,
   liveMode = "following",
   onPointSelect,
   onRangeChange,
-  onToggleVisibility,
+  onSelectedSeriesIdsChange,
   range,
+  selectedSeriesIds,
   selectedPoint,
   status,
   table,
@@ -55,13 +56,13 @@ export function AnalysisTableSurface({
   xAxisLabel,
 }: {
   chartSeries: readonly ChartSeries[];
-  hiddenSeriesIds?: readonly string[];
   kernel: KernelApi;
   liveMode?: ChartLiveMode;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
-  onToggleVisibility?: (seriesId: string) => void;
+  onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
   range: ChartValueRange | null;
+  selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   status: string;
   table: ChartTableWindow | null;
@@ -70,10 +71,8 @@ export function AnalysisTableSurface({
 }) {
   const fitRequest = useAnalysisPlotsWorkspaceSelector((state) => state.fitRequest);
   const allIds = chartSeries.map((series) => series.id);
-  const hidden = hiddenSeriesIds.filter((id) => allIds.includes(id));
-  const visibleSeries = hidden.length === 0
-    ? chartSeries
-    : chartSeries.filter((series) => !hidden.includes(series.id));
+  const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
+  const visibleSeries = chartSeries.filter(({ id }) => selected.has(id));
   const yUnits = [...new Set(chartSeries.map((series) => series.unit))];
   const yTransforms = createChartYAxisDisplayTransforms(
     yUnits.map((unit) => ({ unit })),
@@ -92,14 +91,12 @@ export function AnalysisTableSurface({
     return {
       colorIndex: index,
       colorName: chartColorNameForIndex(index),
-      hidden: hidden.includes(series.id),
       id: series.id,
       label: series.label || series.quantity,
       latestValue: formatChartDisplayValue(
         series.points.at(-1)?.y ?? Number.NaN,
         transform,
       ),
-      soloed: false,
       unit: transform.displayUnit,
     };
   });
@@ -130,7 +127,8 @@ export function AnalysisTableSurface({
           <ChartLegend
             ariaLabel="Chart series"
             items={legendItems}
-            onToggleVisibility={onToggleVisibility}
+            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+            selectedSeriesIds={selectedSeriesIds}
           />
         ) : null
       }
@@ -145,16 +143,20 @@ export function AnalysisTableSurface({
       }}
       title={xAxisId}
     >
-      <EChartsSurface
-        allSeries={chartSeries}
-        bus={kernel.bus}
-        dataStatus={status}
-        fitRequest={fitRequest}
-        onPointSelect={onPointSelect}
-        onRangeChange={onRangeChange}
-        series={visibleSeries}
-        xAxisLabel={xAxisLabel}
-      />
+      {chartSeries.length > 0 && visibleSeries.length === 0 ? (
+        <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>
+      ) : (
+        <EChartsSurface
+          allSeries={chartSeries}
+          bus={kernel.bus}
+          dataStatus={status}
+          fitRequest={fitRequest}
+          onPointSelect={onPointSelect}
+          onRangeChange={onRangeChange}
+          series={visibleSeries}
+          xAxisLabel={xAxisLabel}
+        />
+      )}
     </ChartSection>
   );
 }

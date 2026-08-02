@@ -6,6 +6,7 @@ import {
   resetAnalysisPlotsWorkspaceForTests,
 } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { KernelProvider } from "@/kernel/KernelProvider";
+import { nextYAxisIdsForToggle } from "@/shared/domain/analysis/TableColumnList";
 
 import { ChartInspectorPanel } from "./ChartInspectorPanel";
 
@@ -73,5 +74,9 @@ describe("ChartInspectorPanel", () => {
     );
 
     expect(html).toContain("Clear zoom");
+  });
+
+  it("allows the inspector to remove its final selected signal", () => {
+    expect(nextYAxisIdsForToggle(["mx"], "mx", false)).toEqual([]);
   });
 });

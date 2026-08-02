@@ -47,16 +47,13 @@ const MAX_DISPLAY_UNIT_LENGTH = 24;
 export interface DescriptorPreferences {
   /** Units display overrides: quantity ID → display unit symbol */
   displayUnits: Record<string, string>;
-  /** Series IDs hidden by the user */
-  hiddenSeriesIds: string[];
+  /** Series IDs selected by the user */
+  selectedSeriesIds: string[];
   liveMode: ChartLiveMode;
   range: ChartRangePreference;
-  /** Currently soloed series ID, or null (= all visible) */
-  soloSeriesId: string | null;
   /** Server decimation target — one of the allowed bucket values */
   targetPoints: ChartTargetPoints;
   xAxisId: string;
-  yAxisIds: string[];
 }
 
 export interface AnalysisChartPreferencesV1 {
@@ -91,13 +88,16 @@ export function chartRangePreferenceFromWorkspace(
 export function defaultDescriptorPreferences(): DescriptorPreferences {
   return {
     displayUnits: {},
-    hiddenSeriesIds: [],
+    selectedSeriesIds: [
+      "data.table:default:step:mx",
+      "data.table:default:step:my",
+      "data.table:default:step:mz",
+      "data.table:default:step:e_total",
+    ],
     liveMode: "following",
     range: { mode: "follow" },
-    soloSeriesId: null,
     targetPoints: DEFAULT_TARGET_POINTS,
     xAxisId: "step",
-    yAxisIds: ["mx", "my", "mz", "e_total"],
   };
 }
 
@@ -163,27 +163,20 @@ export function validateDescriptorPreferences(
   const v = raw as Record<string, unknown>;
   return {
     displayUnits: validatedDisplayUnits(v["displayUnits"]),
-    hiddenSeriesIds: Array.isArray(v["hiddenSeriesIds"])
-      ? (v["hiddenSeriesIds"] as unknown[])
+    selectedSeriesIds: Array.isArray(v["selectedSeriesIds"])
+      ? (v["selectedSeriesIds"] as unknown[])
           .filter((id): id is string => typeof id === "string")
+          .map((id) => id.slice(0, MAX_DESCRIPTOR_ID_LENGTH))
+          .filter((id, index, ids) => ids.indexOf(id) === index)
           .slice(0, 100)
-      : [],
+      : defaults.selectedSeriesIds,
     liveMode:
       v["liveMode"] === "following" || v["liveMode"] === "paused"
         ? v["liveMode"]
         : "following",
     range: clampRangePreference(v["range"]),
-    soloSeriesId:
-      typeof v["soloSeriesId"] === "string" ? v["soloSeriesId"].slice(0, MAX_DESCRIPTOR_ID_LENGTH) : null,
     targetPoints: clampTargetPoints(v["targetPoints"]),
     xAxisId: typeof v["xAxisId"] === "string" ? v["xAxisId"].slice(0, MAX_DESCRIPTOR_ID_LENGTH) : "step",
-    yAxisIds: Array.isArray(v["yAxisIds"])
-      ? [...new Set(
-          (v["yAxisIds"] as unknown[])
-            .filter((id): id is string => typeof id === "string")
-            .map((id) => id.slice(0, MAX_DESCRIPTOR_ID_LENGTH)),
-        )].slice(0, 20)
-      : defaults.yAxisIds,
   };
 }
 

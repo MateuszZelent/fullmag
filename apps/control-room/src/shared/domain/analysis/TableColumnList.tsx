@@ -13,19 +13,21 @@ const THIRD_UNIT_DISABLED_REASON = "Select at most two Y-axis unit groups";
 export function TableColumnList({
   columns,
   onSelectXAxis,
-  onToggleYAxis,
+  onSelectedSeriesIdsChange,
+  seriesIdForColumn,
   xAxisId,
   xAxisRadioName,
   showQuantityId = false,
-  yAxisIds,
+  selectedSeriesIds,
 }: {
   columns: readonly AxisColumnDescriptor[] | null;
   onSelectXAxis: (id: string) => void;
-  onToggleYAxis: (id: string, enabled: boolean) => void;
+  onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
+  seriesIdForColumn: (columnId: string) => string;
   xAxisId: string;
   xAxisRadioName: string;
   showQuantityId?: boolean;
-  yAxisIds: string[];
+  selectedSeriesIds: readonly string[];
 }) {
   if (!columns) {
     return <div className="fm-analysis-plots__empty">No table schema</div>;
@@ -39,9 +41,15 @@ export function TableColumnList({
         <span>Unit</span>
       </div>
       {columns.map((column) => {
-        const yAxisChecked = yAxisIds.includes(column.column_id);
+        const seriesId = seriesIdForColumn(column.column_id);
+        const yAxisChecked = selectedSeriesIds.includes(seriesId);
+        const selectedColumnIds = columns.flatMap((candidate) =>
+          selectedSeriesIds.includes(seriesIdForColumn(candidate.column_id))
+            ? [candidate.column_id]
+            : [],
+        );
         const nextCheckedIds = nextYAxisIdsForToggle(
-          yAxisIds,
+          selectedColumnIds,
           column.column_id,
           true,
           { columns, xAxisId },
@@ -50,7 +58,6 @@ export function TableColumnList({
           !yAxisChecked && !nextCheckedIds.includes(column.column_id);
         const yAxisDisabled =
           xAxisId === column.column_id ||
-          (yAxisChecked && yAxisIds.length <= 1) ||
           exceedsUnitLimit;
         const checkboxTitle = exceedsUnitLimit
           ? THIRD_UNIT_DISABLED_REASON
@@ -74,7 +81,13 @@ export function TableColumnList({
               title={checkboxTitle}
               type="checkbox"
               onChange={(event) =>
-                onToggleYAxis(column.column_id, event.target.checked)
+                onSelectedSeriesIdsChange(
+                  toggleSelectedSeriesId(
+                    selectedSeriesIds,
+                    seriesId,
+                    event.target.checked,
+                  ),
+                )
               }
             />
             <span className="fm-analysis-plots__column-label">
@@ -113,7 +126,6 @@ export function nextYAxisIdsForToggle(
       : nextIds;
   }
   if (!yAxisIds.includes(columnId)) return [...yAxisIds];
-  if (yAxisIds.length <= 1) return [...yAxisIds];
   return yAxisIds.filter((id) => id !== columnId);
 }
 
@@ -142,3 +154,4 @@ export function sanitizeYAxisIdsForUnitLimit(
   }
   return sanitized;
 }
+import { toggleSelectedSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";

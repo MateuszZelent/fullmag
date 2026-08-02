@@ -18,10 +18,11 @@ describe("TableColumnList", () => {
       <TableColumnList
         columns={columns}
         onSelectXAxis={() => undefined}
-        onToggleYAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
-        yAxisIds={[]}
+        selectedSeriesIds={[]}
       />,
     );
 
@@ -29,8 +30,8 @@ describe("TableColumnList", () => {
     expect(html).toContain("mx");
   });
 
-  it("does not allow disabling the last selected Y axis", () => {
-    expect(nextYAxisIdsForToggle(["mx"], "mx", false)).toEqual(["mx"]);
+  it("allows disabling the last selected Y axis", () => {
+    expect(nextYAxisIdsForToggle(["mx"], "mx", false)).toEqual([]);
     expect(nextYAxisIdsForToggle(["mx", "my"], "mx", false)).toEqual(["my"]);
     expect(nextYAxisIdsForToggle(["mx"], "my", true)).toEqual(["mx", "my"]);
   });
@@ -66,19 +67,20 @@ describe("TableColumnList", () => {
     ).toEqual(["t", "mx", "my"]);
   });
 
-  it("disables the last selected Y-axis checkbox", () => {
+  it("keeps the final selected checkbox enabled", () => {
     const html = renderToStaticMarkup(
       <TableColumnList
-        columns={columns}
+        columns={[columns[1]!]}
         onSelectXAxis={() => undefined}
-        onToggleYAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).toContain('class="fm-analysis-plots__checkbox" disabled=""');
+    expect(html).not.toContain('class="fm-analysis-plots__checkbox" disabled=""');
   });
 
   it("disables third-unit Y-axis checkboxes", () => {
@@ -90,10 +92,14 @@ describe("TableColumnList", () => {
           { column_id: "max_torque", label: "max torque", unit: "A/m" },
         ]}
         onSelectXAxis={() => undefined}
-        onToggleYAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
-        yAxisIds={["mx", "e_total"]}
+        selectedSeriesIds={[
+          "data.table:default:step:mx",
+          "data.table:default:step:e_total",
+        ]}
       />,
     );
 

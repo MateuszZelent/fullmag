@@ -13,7 +13,7 @@ export interface AnalysisPlotsViewProps {
   frequencyDomainStatus?: string;
   frequencyDomainTitle?: string;
   frequencyDomainUnavailableReason?: string | null;
-  hiddenSeriesIds?: readonly string[];
+  selectedSeriesIds?: readonly string[];
   kernel: KernelApi;
   liveMode?: ChartLiveMode;
   onClearRange: () => void;
@@ -21,13 +21,11 @@ export interface AnalysisPlotsViewProps {
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
   onSelectXAxis?: (columnId: string) => void;
-  onToggleYAxis?: (columnId: string, enabled: boolean) => void;
   onRangeModeChange?: (mode: AnalysisChartRangeMode) => void;
   onTargetPointsChange?: (targetPoints: 160 | 400 | 800 | 1600 | 3200 | 5000) => void;
   onSeriesSelect: (series: ChartSeries) => void;
-  onSolo?: (seriesId: string | null, allSeriesIds?: readonly string[]) => void;
   onSurfaceChange?: (surface: AnalysisWorkbenchSurface) => void;
-  onToggleVisibility?: (seriesId: string) => void;
+  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
   range: ChartValueRange | null;
   rangeMode?: AnalysisChartRangeMode;
   selectedPoint: AnalysisChartCursorPoint | null;
@@ -38,5 +36,4 @@ export interface AnalysisPlotsViewProps {
   targetPoints?: 160 | 400 | 800 | 1600 | 3200 | 5000;
   visibleTable: ChartTableWindow | null;
   xAxisId: string;
-  yAxisIds: readonly string[];
 }

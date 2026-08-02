@@ -29,7 +29,10 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
-import { nextYAxisIdsForToggle } from "@/shared/domain/analysis/TableColumnList";
+import {
+  sanitizeSelectedSeriesIds,
+  tableChartSeriesId,
+} from "@/shared/analysis-charts/chartSeriesSelection";
 import type { AxisColumnDescriptor } from "@/shared/domain/analysis/TableColumnList";
 import { chartTableWindowValue } from "@/shared/domain/analysis/chartDataPlan";
 import type { AnalysisChartRangeMode } from "@/kernel/workspace/analysisPlotsWorkspace";
@@ -61,13 +64,12 @@ export interface AnalysisTableDataResult {
   tableRows: ReturnType<typeof useTableRowsBinaryResource>;
   /** Accumulated visible table window (cursor-tracked, range-aware) */
   visibleTable: AnalysisTableState["visibleTable"];
-  /** Resolved y-axis column IDs from workspace */
+  /** Selected chart-series IDs from workspace */
   xAxisId: string;
-  yAxisIds: readonly string[];
+  selectedSeriesIds: readonly string[];
   /** Set which column is the x-axis (also resets y-axis selection) */
   setXAxisId: (columnId: string) => void;
-  /** Toggle a y-axis column on/off */
-  toggleYAxis: (columnId: string, enabled: boolean) => void;
+  setSelectedSeriesIds: (selectedSeriesIds: readonly string[]) => void;
 }
 
 /**
@@ -138,7 +140,7 @@ export function useAnalysisTableData(
   // Keep each selector result referentially stable. Returning a fresh object
   // from getSnapshot makes useSyncExternalStore re-render forever.
   const xAxisId = useAnalysisPlotsWorkspaceSelector((state) => state.xAxisId);
-  const yAxisIds = useAnalysisPlotsWorkspaceSelector((state) => state.yAxisIds);
+  const selectedSeriesIds = useAnalysisPlotsWorkspaceSelector((state) => state.selectedSeriesIds);
 
   const [tableState, dispatchTableState] = useReducer(tableResourceReducer, {
     cursor: undefined,
@@ -224,14 +226,21 @@ export function useAnalysisTableData(
     );
   }, [tableColumns.data]);
 
-  // Side-effect: sanitize y-axis IDs when columns load
+  // Side-effect: remove unavailable series IDs without restoring defaults.
   useEffect(() => {
     const columns = tableColumns.data;
     if (!columns) return;
-    const sanitized = resolveAnalysisPlotsYAxisIds(yAxisIds, columns, xAxisId);
-    if (stringArraysEqual(sanitized, yAxisIds)) return;
-    analysisPlotsWorkspaceStore.setAxes(xAxisId, sanitized);
-  }, [tableColumns.data, xAxisId, yAxisIds]);
+    const sanitized = tableSeriesIdsForColumnIds(
+      resolveAnalysisPlotsYAxisIds(
+        selectedColumnIds(selectedSeriesIds, columns, xAxisId),
+        columns,
+        xAxisId,
+      ),
+      xAxisId,
+    );
+    if (stringArraysEqual(sanitized, selectedSeriesIds)) return;
+    analysisPlotsWorkspaceStore.setSelectedSeriesIds(sanitized);
+  }, [selectedSeriesIds, tableColumns.data, xAxisId]);
 
   // Side-effect: append decoded binary rows into visibleTable
   useEffect(() => {
@@ -272,35 +281,41 @@ export function useAnalysisTableData(
       const columns = tableColumns.data;
       if (!columns) return;
       const current = analysisPlotsWorkspaceStore.getSnapshot();
-      const nextYAxisIds = resolveAnalysisPlotsRequestedSeriesYAxisIds({
+      const nextColumnIds = resolveAnalysisPlotsRequestedSeriesYAxisIds({
         columnId: request.columnId,
         columns,
         xAxisId: current.xAxisId,
-        yAxisIds: current.yAxisIds,
+        yAxisIds: selectedColumnIds(current.selectedSeriesIds, columns, current.xAxisId),
       });
-      if (stringArraysEqual(nextYAxisIds, current.yAxisIds)) return;
-      analysisPlotsWorkspaceStore.setAxes(current.xAxisId, nextYAxisIds);
+      const nextSelectedSeriesIds = tableSeriesIdsForColumnIds(nextColumnIds, current.xAxisId);
+      if (stringArraysEqual(nextSelectedSeriesIds, current.selectedSeriesIds)) return;
+      analysisPlotsWorkspaceStore.setSelectedSeriesIds(nextSelectedSeriesIds);
     });
   }, [bus, tableColumns.data]);
 
   const setXAxisId = (columnId: string) => {
-    analysisPlotsWorkspaceStore.setAxes(
-      columnId,
-      resolveAnalysisPlotsYAxisIds(
-        yAxisIdsAfterXAxisSelection(yAxisIds, columnId),
+    analysisPlotsWorkspaceStore.setXAxisId(columnId);
+    analysisPlotsWorkspaceStore.setSelectedSeriesIds(
+      tableSeriesIdsForColumnIds(resolveAnalysisPlotsYAxisIds(
+        yAxisIdsAfterXAxisSelection(
+          selectedColumnIds(selectedSeriesIds, tableColumns.data ?? [], xAxisId),
+          columnId,
+        ),
         tableColumns.data,
         columnId,
-      ),
+      ), columnId),
     );
   };
 
-  const toggleYAxis = (columnId: string, enabled: boolean) => {
-    analysisPlotsWorkspaceStore.setAxes(
-      xAxisId,
-      nextYAxisIdsForToggle(yAxisIds, columnId, enabled, {
-        columns: tableColumns.data ?? undefined,
-        xAxisId,
-      }),
+  const setSelectedSeriesIds = (nextSelectedSeriesIds: readonly string[]) => {
+    const columns = tableColumns.data;
+    analysisPlotsWorkspaceStore.setSelectedSeriesIds(
+      columns
+        ? sanitizeSelectedSeriesIds(
+            nextSelectedSeriesIds,
+            tableSeriesIdsForColumns(columns, xAxisId),
+          )
+        : nextSelectedSeriesIds,
     );
   };
 
@@ -310,8 +325,36 @@ export function useAnalysisTableData(
     tableRows,
     visibleTable,
     xAxisId,
-    yAxisIds,
+    selectedSeriesIds,
     setXAxisId,
-    toggleYAxis,
+    setSelectedSeriesIds,
   };
+}
+
+function tableSeriesIdsForColumns(
+  columns: readonly { column_id: string }[],
+  xAxisId: string,
+): string[] {
+  return columns
+    .filter((column) => column.column_id !== xAxisId)
+    .map((column) => tableChartSeriesId("default", xAxisId, column.column_id));
+}
+
+function tableSeriesIdsForColumnIds(
+  columnIds: readonly string[],
+  xAxisId: string,
+): string[] {
+  return columnIds.map((columnId) => tableChartSeriesId("default", xAxisId, columnId));
+}
+
+function selectedColumnIds(
+  selectedSeriesIds: readonly string[],
+  columns: readonly { column_id: string }[],
+  xAxisId: string,
+): string[] {
+  return columns.flatMap((column) =>
+    selectedSeriesIds.includes(tableChartSeriesId("default", xAxisId, column.column_id))
+      ? [column.column_id]
+      : [],
+  );
 }

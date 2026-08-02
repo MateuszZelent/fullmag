@@ -46,7 +46,7 @@ import { useAnalysisFrequencyData } from "./hooks/useAnalysisFrequencyData";
 
 export function useAnalysisPlotsController(kernel: KernelApi) {
   const { bus, selection } = kernel;
-  const { activeSurface, range, rangeMode, targetPoints, liveMode, hiddenSeriesIds } =
+  const { activeSurface, range, rangeMode, targetPoints, liveMode, selectedSeriesIds } =
     useAnalysisPlotsWorkspaceSelector((state) => state);
   const selectedPoint = useAnalysisPlotsWorkspaceSelector(
     (state) => state.selectedPoint,
@@ -68,8 +68,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     if (!descriptor || appliedDescriptorRef.current === descriptor) return;
     appliedDescriptorRef.current = descriptor;
     analysisPlotsWorkspaceStore.setLiveMode(descriptor.liveMode);
-    analysisPlotsWorkspaceStore.setHiddenSeriesIds(descriptor.hiddenSeriesIds);
-    analysisPlotsWorkspaceStore.setAxes(descriptor.xAxisId, descriptor.yAxisIds);
+    analysisPlotsWorkspaceStore.setSelectedSeriesIds(descriptor.selectedSeriesIds);
+    analysisPlotsWorkspaceStore.setXAxisId(descriptor.xAxisId);
     analysisPlotsWorkspaceStore.setTargetPoints(descriptor.targetPoints);
     if (descriptor.range.mode === "fixed") {
       analysisPlotsWorkspaceStore.setRange({
@@ -195,7 +195,6 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   return {
     activeSurface,
     clearRange,
-    hiddenSeriesIds,
     liveMode,
     range,
     rangeMode,
@@ -230,23 +229,12 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       preferences.setDescriptorTargetPoints(descriptorId, points);
       analysisPlotsWorkspaceStore.setTargetPoints(points);
     },
-    toggleSeriesVisibility: (seriesId: string) => {
-      analysisPlotsWorkspaceStore.toggleSeriesVisibility(seriesId);
-      const next = analysisPlotsWorkspaceStore.getSnapshot().hiddenSeriesIds;
-      preferences.setDescriptorHiddenSeries(descriptorId, [...next]);
-    },
-    setSoloSeries: (seriesId: string | null, allSeriesIds?: readonly string[]) => {
-      analysisPlotsWorkspaceStore.setSoloSeries(seriesId, allSeriesIds);
-      preferences.setDescriptorSoloSeries(descriptorId, seriesId);
-      preferences.setDescriptorHiddenSeries(
+    setSelectedSeriesIds: (nextSelectedSeriesIds: readonly string[]) => {
+      analysisPlotsWorkspaceStore.setSelectedSeriesIds(nextSelectedSeriesIds);
+      preferences.setDescriptorSelectedSeriesIds(
         descriptorId,
-        [...analysisPlotsWorkspaceStore.getSnapshot().hiddenSeriesIds],
+        [...analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds],
       );
-    },
-    clearHiddenSeries: () => {
-      analysisPlotsWorkspaceStore.clearHiddenSeries();
-      preferences.setDescriptorHiddenSeries(descriptorId, []);
-      preferences.setDescriptorSoloSeries(descriptorId, null);
     },
     solverEnergySeries: energyData.solverEnergySeries,
     solverEnergyStatus: energyData.solverEnergyStatus,
@@ -254,7 +242,6 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       tableData.setXAxisId(columnId);
       const next = analysisPlotsWorkspaceStore.getSnapshot();
       preferences.setDescriptorXAxisId(descriptorId, next.xAxisId);
-      preferences.setDescriptorYAxisIds(descriptorId, next.yAxisIds);
     },
     availableColumns: tableData.availableColumns,
     tableRowsStatus: tableRowsStatusForDisplay(
@@ -262,16 +249,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       liveMode,
       Boolean(tableData.visibleTable && tableData.visibleTable.rowCount > 0),
     ),
-    toggleYAxis: (columnId: string, enabled: boolean) => {
-      tableData.toggleYAxis(columnId, enabled);
-      preferences.setDescriptorYAxisIds(
-        descriptorId,
-        analysisPlotsWorkspaceStore.getSnapshot().yAxisIds,
-      );
-    },
     visibleTable: tableData.visibleTable,
     xAxisId: tableData.xAxisId,
-    yAxisIds: tableData.yAxisIds,
+    selectedSeriesIds: tableData.selectedSeriesIds,
     selectedStageId,
   };
 }
