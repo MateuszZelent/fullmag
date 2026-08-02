@@ -2153,6 +2153,9 @@ def test_typed_fixture_v2_recipes_are_managed_and_strict() -> None:
     assert "--demag-amg-relax-types 6" in generation
     assert "box500_airbox_exchange_demag_v2.fixture.json" in generation
     assert "amg_qualification_suite_v2.json" in generation
+    assert 'runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"' in generation
+    assert '"$runtime_root:/workspace/.fullmag/runtime:ro"' in generation
+    assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in generation
     assert "--target fem_mixed_p1_contract" in verification
     assert "FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu" in verification
     assert "--list-amg-qualification-fixture-suite" in verification

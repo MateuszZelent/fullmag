@@ -2812,7 +2812,12 @@ generate-fem-gpu-performance-fixtures:
 # the managed runtime can be regenerated and the strict builder gate passes.
 generate-fem-performance-fixture-v2:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
+      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_GMSH_THREADS=1 \
