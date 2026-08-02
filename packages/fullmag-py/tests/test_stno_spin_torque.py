@@ -113,6 +113,29 @@ class TestZhangLiSTT(unittest.TestCase):
         with self.assertRaises(ValueError):
             ZhangLiSTT([1e11, 0, 0], current_source="drive")
 
+    def test_mumax3_central_operator_is_explicitly_versioned(self) -> None:
+        stt = ZhangLiSTT(
+            [1e11, 0, 0],
+            beta=0.05,
+            id="cip",
+            target=RegionRef("free"),
+            lande_g=2.0,
+            operator_version="zl_mumax3_central_v1",
+        )
+        self.assertEqual(stt.formula_version, "zhang_li.mumax3.v1")
+        self.assertEqual(stt.operator_version, "zl_mumax3_central_v1")
+        self.assertEqual(stt.to_ir_module()["schema_version"], "zhang_li_torque.v1")
+
+    def test_mumax3_central_operator_rejects_non_source_g_factor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lande_g=2.0"):
+            ZhangLiSTT(
+                [1e11, 0, 0],
+                id="cip",
+                target=RegionRef("free"),
+                lande_g=1.9,
+                operator_version="zl_mumax3_central_v1",
+            )
+
 
 class TestSemanticSpinTorquePlaceholders(unittest.TestCase):
     def test_interface_cpp_to_ir_module(self) -> None:

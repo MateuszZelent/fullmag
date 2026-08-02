@@ -15,7 +15,7 @@ use crate::{
     EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig,
     RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula, Vector3,
     VectorFieldSoA,
-    ZhangLiSttConfig, MU0,
+    ZhangLiFormula, ZhangLiSttConfig, MU0,
 };
 
 #[cfg(feature = "parallel")]
@@ -2364,12 +2364,124 @@ impl ExchangeLlgProblem {
     // Torques
     // ===================================================================
 
+    /// Evaluate the MuMax3 `addzhanglitorque2` realization at one cell.
+    ///
+    /// MuMax3 stores this contribution as a field-like torque divided by the
+    /// electron gyromagnetic ratio.  The FDM engine stores direct RHS rates,
+    /// so the shared `gamma_e` factor cancels from the source prefactor here.
+    /// Non-periodic neighbours are clamped exactly as `hclampx/lclampx` in the
+    /// vendored CUDA kernel; periodic axes wrap.
+    fn zhang_li_mumax3_torque_at_with<F>(
+        &self,
+        cfg: &ZhangLiSttConfig,
+        flat: usize,
+        sample: F,
+    ) -> Vector3
+    where
+        F: Fn(usize) -> Vector3,
+    {
+        if !self.is_active(flat) {
+            return [0.0, 0.0, 0.0];
+        }
+        const MU_B: f64 = 9.2740091523e-24;
+        const E_CHARGE: f64 = 1.60217646e-19;
+
+        let ms = self.material.saturation_magnetisation.max(1e-30);
+        let beta = cfg.non_adiabaticity;
+        let alpha = self.material.damping;
+        let b = (cfg.spin_polarization * MU_B) / (2.0 * E_CHARGE * ms * (1.0 + beta * beta));
+        let ux = b * cfg.current_density[0];
+        let uy = b * cfg.current_density[1];
+        let uz = b * cfg.current_density[2];
+
+        let nx = self.grid.nx;
+        let ny = self.grid.ny;
+        let nz = self.grid.nz;
+        let x = flat % nx;
+        let y = (flat / nx) % ny;
+        let z = flat / (nx * ny);
+        let pbc_x = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
+        let pbc_y = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
+        let pbc_z = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
+        let xm = neighbor_index(x, nx, -1, pbc_x);
+        let xp = neighbor_index(x, nx, 1, pbc_x);
+        let ym = neighbor_index(y, ny, -1, pbc_y);
+        let yp = neighbor_index(y, ny, 1, pbc_y);
+        let zm = neighbor_index(z, nz, -1, pbc_z);
+        let zp = neighbor_index(z, nz, 1, pbc_z);
+
+        // `neighbor_index` clamps for open boundaries and wraps for PBC,
+        // matching MuMax3's hclamp/lclamp helpers.
+        let x_minus = sample(self.grid.index(xm, y, z));
+        let x_plus = sample(self.grid.index(xp, y, z));
+        let y_minus = sample(self.grid.index(x, ym, z));
+        let y_plus = sample(self.grid.index(x, yp, z));
+        let z_minus = sample(self.grid.index(x, y, zm));
+        let z_plus = sample(self.grid.index(x, y, zp));
+        let [m0, m1, m2] = sample(flat);
+
+        let inv_2dx = 0.5 / self.cell_size.dx;
+        let inv_2dy = 0.5 / self.cell_size.dy;
+        let inv_2dz = 0.5 / self.cell_size.dz;
+        let dm0 = ux * (x_plus[0] - x_minus[0]) * inv_2dx
+            + uy * (y_plus[0] - y_minus[0]) * inv_2dy
+            + uz * (z_plus[0] - z_minus[0]) * inv_2dz;
+        let dm1 = ux * (x_plus[1] - x_minus[1]) * inv_2dx
+            + uy * (y_plus[1] - y_minus[1]) * inv_2dy
+            + uz * (z_plus[1] - z_minus[1]) * inv_2dz;
+        let dm2 = ux * (x_plus[2] - x_minus[2]) * inv_2dx
+            + uy * (y_plus[2] - y_minus[2]) * inv_2dy
+            + uz * (z_plus[2] - z_minus[2]) * inv_2dz;
+
+        let cx = m1 * dm2 - m2 * dm1;
+        let cy = m2 * dm0 - m0 * dm2;
+        let cz = m0 * dm1 - m1 * dm0;
+        let dcx = m1 * cz - m2 * cy;
+        let dcy = m2 * cx - m0 * cz;
+        let dcz = m0 * cy - m1 * cx;
+        let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        [
+            -(1.0 + beta * alpha) * dcx * inv_gilbert + (alpha - beta) * cx * inv_gilbert,
+            -(1.0 + beta * alpha) * dcy * inv_gilbert + (alpha - beta) * cy * inv_gilbert,
+            -(1.0 + beta * alpha) * dcz * inv_gilbert + (alpha - beta) * cz * inv_gilbert,
+        ]
+    }
+
+    fn zhang_li_mumax3_torque_at(
+        &self,
+        magnetization: &[Vector3],
+        cfg: &ZhangLiSttConfig,
+        flat: usize,
+    ) -> Vector3 {
+        self.zhang_li_mumax3_torque_at_with(cfg, flat, |index| magnetization[index])
+    }
+
+    fn zhang_li_mumax3_torque_at_soa(
+        &self,
+        magnetization: &VectorFieldSoA,
+        cfg: &ZhangLiSttConfig,
+        flat: usize,
+    ) -> Vector3 {
+        self.zhang_li_mumax3_torque_at_with(cfg, flat, |index| {
+            [
+                magnetization.x[index],
+                magnetization.y[index],
+                magnetization.z[index],
+            ]
+        })
+    }
+
     #[allow(dead_code)]
     pub(crate) fn zhang_li_stt_torque(
         &self,
         magnetization: &[Vector3],
         cfg: &ZhangLiSttConfig,
     ) -> Vec<Vector3> {
+        if cfg.formula == ZhangLiFormula::Mumax3V1 {
+            return (0..self.grid.cell_count())
+                .map(|flat| self.zhang_li_mumax3_torque_at(magnetization, cfg, flat))
+                .collect();
+        }
         const MU_B: f64 = 9.274009994e-24;
         // Zhang-Li remains an unversioned legacy evaluator. Preserve its
         // historical literal until a canonical formula version is introduced.
@@ -2590,6 +2702,15 @@ impl ExchangeLlgProblem {
         cfg: &ZhangLiSttConfig,
         out: &mut [Vector3],
     ) {
+        if cfg.formula == ZhangLiFormula::Mumax3V1 {
+            for flat in 0..self.grid.cell_count() {
+                let torque = self.zhang_li_mumax3_torque_at(magnetization, cfg, flat);
+                out[flat][0] += torque[0];
+                out[flat][1] += torque[1];
+                out[flat][2] += torque[2];
+            }
+            return;
+        }
         const MU_B: f64 = 9.274009994e-24;
         const E_CHARGE: f64 = 1.60217662e-19;
 
@@ -2703,6 +2824,15 @@ impl ExchangeLlgProblem {
         cfg: &ZhangLiSttConfig,
         out: &mut VectorFieldSoA,
     ) {
+        if cfg.formula == ZhangLiFormula::Mumax3V1 {
+            for flat in 0..self.grid.cell_count() {
+                let torque = self.zhang_li_mumax3_torque_at_soa(magnetization, cfg, flat);
+                out.x[flat] += torque[0];
+                out.y[flat] += torque[1];
+                out.z[flat] += torque[2];
+            }
+            return;
+        }
         const MU_B: f64 = 9.274009994e-24;
         const E_CHARGE: f64 = 1.60217662e-19;
 
@@ -4504,6 +4634,7 @@ mod stt_tests {
             LlgConfig::default(),
         );
         let cfg = ZhangLiSttConfig {
+            formula: ZhangLiFormula::LegacyFullmagV0,
             current_density: [1.0e12, 0.0, 0.0],
             spin_polarization: 1.0,
             non_adiabaticity: 0.2,
@@ -4526,5 +4657,71 @@ mod stt_tests {
         check_close(torque[1][0], -adiabatic, adiabatic.abs() * 1e-12);
         check_close(torque[1][1], cross_y, cross_y.abs() * 1e-12);
         check_close(torque[1][2], adiabatic, adiabatic.abs() * 1e-12);
+    }
+
+    #[test]
+    fn mumax3_zhang_li_uses_central_clamped_stencil_and_source_prefactor() {
+        let problem = ExchangeLlgProblem::new(
+            GridShape::new(3, 1, 1).unwrap(),
+            CellSize::new(2.0, 1.0, 1.0).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+        );
+        let cfg = ZhangLiSttConfig {
+            formula: ZhangLiFormula::Mumax3V1,
+            current_density: [1.0e12, 0.0, 0.0],
+            spin_polarization: 1.0,
+            non_adiabaticity: 0.05,
+        };
+        let m = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let torque = problem.zhang_li_stt_torque(&m, &cfg);
+
+        let b =
+            1.0 * 9.2740091523e-24 / (2.0 * 1.60217646e-19 * 800.0e3 * (1.0 + 0.05_f64.powi(2)));
+        let alpha = 0.1;
+        let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        let expected_for = |flat: usize| {
+            let xm = if flat == 0 { 0 } else { flat - 1 };
+            let xp = if flat == 2 { 2 } else { flat + 1 };
+            let v = [
+                b * 1.0e12 * (m[xp][0] - m[xm][0]) / 4.0,
+                b * 1.0e12 * (m[xp][1] - m[xm][1]) / 4.0,
+                b * 1.0e12 * (m[xp][2] - m[xm][2]) / 4.0,
+            ];
+            let [m0, m1, m2] = m[flat];
+            let c = [
+                m1 * v[2] - m2 * v[1],
+                m2 * v[0] - m0 * v[2],
+                m0 * v[1] - m1 * v[0],
+            ];
+            let dc = [
+                m1 * c[2] - m2 * c[1],
+                m2 * c[0] - m0 * c[2],
+                m0 * c[1] - m1 * c[0],
+            ];
+            [
+                -(1.0 + 0.05 * alpha) * dc[0] * inv_gilbert + (alpha - 0.05) * c[0] * inv_gilbert,
+                -(1.0 + 0.05 * alpha) * dc[1] * inv_gilbert + (alpha - 0.05) * c[1] * inv_gilbert,
+                -(1.0 + 0.05 * alpha) * dc[2] * inv_gilbert + (alpha - 0.05) * c[2] * inv_gilbert,
+            ]
+        };
+
+        for flat in 0..3 {
+            let expected = expected_for(flat);
+            for component in 0..3 {
+                let scale = expected[component].abs().max(1.0);
+                assert!((torque[flat][component] - expected[component]).abs() < 1e-12 * scale);
+            }
+        }
+        assert!(torque[0].iter().any(|value| value.abs() > 0.0));
+
+        let mut aos_add = vec![[0.0; 3]; 3];
+        problem.zhang_li_stt_torque_add_into(&m, &cfg, &mut aos_add);
+        let soa_m = VectorFieldSoA::from_aos(&m);
+        let mut soa_add = VectorFieldSoA::zeros(3);
+        problem.zhang_li_stt_torque_add_into_soa(&soa_m, &cfg, &mut soa_add);
+        let soa_add = soa_add.gather_to_aos();
+        assert_eq!(aos_add, torque);
+        assert_eq!(soa_add, torque);
     }
 }

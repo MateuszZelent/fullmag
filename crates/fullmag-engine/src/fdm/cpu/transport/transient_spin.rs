@@ -978,9 +978,8 @@ mod tests {
         let row_one = integrator(&row_one_problem, 1.0e-13);
         let row_two = integrator(&row_two_problem, 1.0e-13);
         let initial = initial_state().spin_potential_v;
-        let (stage_one, row_one_residual, _) = row_one
-            .ars232_implicit_stage_one(&initial, 0.1)
-            .unwrap();
+        let (stage_one, row_one_residual, _) =
+            row_one.ars232_implicit_stage_one(&initial, 0.1).unwrap();
         let (correct, _) = row_two
             .ars232_implicit_stage_two(&initial, &row_one_residual, 0.1)
             .unwrap();

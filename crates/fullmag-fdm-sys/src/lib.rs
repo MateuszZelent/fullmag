@@ -84,6 +84,13 @@ pub enum fullmag_fdm_prescribed_sot_formula {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_zhang_li_formula {
+    FULLMAG_FDM_ZHANG_LI_LEGACY_FULLMAG_V0 = 0,
+    FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1 = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fdm_boundary_correction {
     FULLMAG_FDM_BOUNDARY_NONE = 0,
     FULLMAG_FDM_BOUNDARY_VOLUME = 1,
@@ -294,6 +301,7 @@ pub struct fullmag_fdm_plan_desc {
     pub current_density_z: f64,
     pub stt_degree: f64,
     pub stt_beta: f64,
+    pub zhang_li_formula: fullmag_fdm_zhang_li_formula,
 
     pub stt_p_x: f64,
     pub stt_p_y: f64,

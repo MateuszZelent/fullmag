@@ -208,14 +208,13 @@ prepare_source_provenance() {
 }
 
 verify_source_snapshot_identity() {
-  # The container builds the immutable snapshot. The live worktree may drift
-  # while another agent edits docs; report that drift without invalidating the
-  # already captured build input.
+  # The container builds the immutable snapshot. Do not recapture the live
+  # worktree here: another agent may edit it while the managed build runs.
   python3 "${SOURCE_ROOT}/scripts/capture_source_snapshot_identity.py" \
     --repo-root "${REPO_ROOT}" \
     --compare "${source_identity_file}" \
     --allow-source-drift \
-    --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"
+    --verify-materialized-snapshot "${SOURCE_SNAPSHOT_ROOT}"
 }
 
 validate_bootstrapped_source_snapshot() {
@@ -240,7 +239,9 @@ bootstrap_new_source_snapshot() {
   source_identity_file="$(mktemp "${FULLMAG_CONTAINER_TARGET_DIR}/source-identity.XXXXXXXXXX.json")"
   source_identity_owned=1
   python3 scripts/capture_source_snapshot_identity.py \
-    --repo-root "${REPO_ROOT}" --output "${source_identity_file}"
+    --repo-root "${REPO_ROOT}" \
+    --ignore-non-runtime-dirty \
+    --output "${source_identity_file}"
   prepare_source_provenance
   source_snapshot_sha256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' "${source_identity_file}")"
   SOURCE_SNAPSHOT_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/source-cache.${source_snapshot_sha256}"
@@ -249,7 +250,7 @@ bootstrap_new_source_snapshot() {
        ! python3 scripts/capture_source_snapshot_identity.py \
          --repo-root "${REPO_ROOT}" \
          --compare "${source_identity_file}" \
-         --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"; then
+         --verify-materialized-snapshot "${SOURCE_SNAPSHOT_ROOT}"; then
       echo "[export_fem_gpu_runtime] source snapshot cache is stale; rebuilding the cache" >&2
       chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
       rm -rf -- "${SOURCE_SNAPSHOT_ROOT}"
@@ -262,6 +263,7 @@ bootstrap_new_source_snapshot() {
     source_snapshot_materialize_root="${materialize_root}"
     python3 scripts/capture_source_snapshot_identity.py \
       --repo-root "${REPO_ROOT}" \
+      --ignore-non-runtime-dirty \
       --compare "${source_identity_file}" \
       --materialize "${materialize_root}" \
       --materialize-existing-empty
@@ -271,7 +273,7 @@ bootstrap_new_source_snapshot() {
   python3 scripts/capture_source_snapshot_identity.py \
     --repo-root "${REPO_ROOT}" \
     --compare "${source_identity_file}" \
-    --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"
+    --verify-materialized-snapshot "${SOURCE_SNAPSHOT_ROOT}"
   export FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE="${source_identity_file}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT="${SOURCE_SNAPSHOT_ROOT}"

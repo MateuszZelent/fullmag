@@ -274,28 +274,50 @@ pub(crate) fn resolve_legacy_spin_torque(
             beta,
             lande_g,
             ..
-        } => LegacySpinTorqueFields {
-            slonczewski_formula_version: None,
-            slonczewski_target: None,
-            slonczewski_stack_normal: None,
-            slonczewski_realization_version: None,
-            zhang_li_formula_version: Some(formula_version.clone()),
-            zhang_li_operator_version: operator_version.clone(),
-            zhang_li_target: target.clone(),
-            zhang_li_lande_g: *lande_g,
-            current_density: Some(match (current_density, current_source.as_deref()) {
-                (Some(current_density), None) => *current_density,
-                (None, Some(source)) => resolve_current_density_source(current_transports, source)?,
-                _ => unreachable!("ProblemIR validation should enforce exclusive current binding"),
-            }),
-            stt_degree: Some(*degree),
-            stt_beta: Some(*beta),
-            stt_spin_polarization: None,
-            stt_lambda: None,
-            stt_epsilon_prime: None,
-            stt_thickness: None,
-            stt_fixed_layer_position: None,
-        },
+        } => {
+            if formula_version == "zhang_li.mumax3.v1" && lane != SpinTorqueExecutableLane::Fdm {
+                return Err(PlanError {
+                    reasons: vec![
+                        "zhang_li.mumax3.v1 is an FDM MuMax3-compatibility realization; FEM must use zhang_li.fullmag.v1"
+                            .to_string(),
+                    ],
+                });
+            }
+            if formula_version == "zhang_li.fullmag.v1" && lane == SpinTorqueExecutableLane::Fdm {
+                return Err(PlanError {
+                    reasons: vec![
+                        "zhang_li.fullmag.v1 is the canonical FEM realization and is not executable on FDM; select zhang_li.mumax3.v1 for MuMax3-compatible FDM or use FEM CPU"
+                            .to_string(),
+                    ],
+                });
+            }
+            LegacySpinTorqueFields {
+                slonczewski_formula_version: None,
+                slonczewski_target: None,
+                slonczewski_stack_normal: None,
+                slonczewski_realization_version: None,
+                zhang_li_formula_version: Some(formula_version.clone()),
+                zhang_li_operator_version: operator_version.clone(),
+                zhang_li_target: target.clone(),
+                zhang_li_lande_g: *lande_g,
+                current_density: Some(match (current_density, current_source.as_deref()) {
+                    (Some(current_density), None) => *current_density,
+                    (None, Some(source)) => {
+                        resolve_current_density_source(current_transports, source)?
+                    }
+                    _ => unreachable!(
+                        "ProblemIR validation should enforce exclusive current binding"
+                    ),
+                }),
+                stt_degree: Some(*degree),
+                stt_beta: Some(*beta),
+                stt_spin_polarization: None,
+                stt_lambda: None,
+                stt_epsilon_prime: None,
+                stt_thickness: None,
+                stt_fixed_layer_position: None,
+            }
+        }
         SpinTorqueModuleIR::InterfaceCpp { .. } => {
             return Err(PlanError {
                 reasons: vec![format!(

@@ -175,7 +175,29 @@
       "validated_at": null,
       "validator_schema": null,
       "completed_gates": [],
-      "reason": "No exact adaptive FDM qualification artifact is registered."
+      "reason": "No exact adaptive FDM CPU qualification artifact is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_adaptive_fdm_cuda_double",
+        "backend": "fdm",
+        "device": "cuda",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "adaptive"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "Native v2 adaptive controller is executable; no exact adaptive FDM CUDA qualification artifact is registered."
     }
   ]
 }

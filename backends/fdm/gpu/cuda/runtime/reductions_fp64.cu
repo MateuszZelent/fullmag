@@ -840,7 +840,7 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         src,
         ctx.adaptive_policy_scratch,
         dt,
-        ctx.adaptive_atol > 0.0 ? ctx.adaptive_atol : 1.0,
+        1.0,
         ctx.adaptive_dt_min,
         ctx.adaptive_dt_max,
         ctx.adaptive_safety,

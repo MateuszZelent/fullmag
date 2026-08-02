@@ -162,6 +162,9 @@ class FEMMagnetizationState:
     source_fingerprint: str
     run_bundle_path: str | None = None
     run_bundle_fingerprint: str | None = None
+    node_order: str = "mesh_artifact"
+    execution_mesh_path: str | None = None
+    execution_mesh_topology_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         values = np.asanyarray(self.values, dtype=np.float64)
@@ -186,6 +189,9 @@ class FEMMagnetizationState:
             "source_fingerprint": self.source_fingerprint,
             "run_bundle_path": self.run_bundle_path,
             "run_bundle_fingerprint": self.run_bundle_fingerprint,
+            "node_order": self.node_order,
+            "execution_mesh_path": self.execution_mesh_path,
+            "execution_mesh_topology_fingerprint": self.execution_mesh_topology_fingerprint,
         }
 
 
@@ -369,6 +375,54 @@ def load_mumax_magnetization(
     return texture
 
 
+def _load_native_planner_mesh(
+    run_bundle: Path,
+    *,
+    expected_node_count: int,
+) -> tuple[Any, Path] | None:
+    """Load the exact FEM mesh ordering used by the native planner, if present."""
+
+    from fullmag.meshing.persistence import mesh_data_from_ir
+
+    candidates: list[tuple[Any, Path, str]] = []
+    for metadata_path in sorted(run_bundle.rglob("metadata.json")):
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        execution_plan = payload.get("execution_plan")
+        if not isinstance(execution_plan, Mapping):
+            continue
+        backend_plan = execution_plan.get("backend_plan")
+        if not isinstance(backend_plan, Mapping):
+            continue
+        planner_mesh = backend_plan.get("mesh")
+        if not isinstance(planner_mesh, Mapping):
+            continue
+        nodes = planner_mesh.get("nodes")
+        if not isinstance(nodes, list) or len(nodes) != expected_node_count:
+            continue
+        try:
+            mesh = mesh_data_from_ir(planner_mesh)
+            fingerprint = mesh.topology_fingerprint_v3()
+        except Exception as exc:
+            raise MagnetizationComparisonError(
+                f"native planner mesh in {metadata_path} is invalid: {exc}"
+            ) from exc
+        candidates.append((mesh, metadata_path, fingerprint))
+
+    if not candidates:
+        return None
+    fingerprints = {fingerprint for _, _, fingerprint in candidates}
+    if len(fingerprints) != 1:
+        paths = ", ".join(str(path) for _, path, _ in candidates)
+        raise MagnetizationComparisonError(
+            "run bundle contains multiple incompatible native planner meshes: " + paths
+        )
+    mesh, metadata_path, _ = candidates[-1]
+    return mesh, metadata_path
+
+
 def load_fullmag_fem_magnetization(
     state_path: str | Path,
     *,
@@ -386,6 +440,10 @@ def load_fullmag_fem_magnetization(
     sampled = load_magnetization(state_source, format="zarr", dataset=dataset)
     values = np.asarray(sampled.values, dtype=np.float64)
     mesh_artifact = load_mesh_artifact(mesh_source)
+    mesh = mesh_artifact.mesh
+    node_order = "mesh_artifact"
+    execution_mesh_path = None
+    execution_mesh_topology_fingerprint = None
     run_bundle_path = None
     run_bundle_fingerprint = None
     if run_bundle is not None:
@@ -394,9 +452,22 @@ def load_fullmag_fem_magnetization(
             raise FileNotFoundError(run_bundle)
         run_bundle_path = str(run_bundle_source)
         run_bundle_fingerprint = _source_fingerprint(run_bundle_source)
+        planner_mesh = _load_native_planner_mesh(
+            run_bundle_source,
+            expected_node_count=values.shape[0],
+        )
+        if planner_mesh is None:
+            raise MagnetizationComparisonError(
+                "run bundle does not contain an execution_plan.backend_plan.mesh "
+                "with the Fullmag native node ordering"
+            )
+        mesh, planner_mesh_path = planner_mesh
+        node_order = "native_planner_mesh"
+        execution_mesh_path = str(planner_mesh_path)
+        execution_mesh_topology_fingerprint = mesh.topology_fingerprint_v3()
     return FEMMagnetizationState(
         values=values,
-        mesh=mesh_artifact.mesh,
+        mesh=mesh,
         source_path=str(state_source),
         mesh_path=str(mesh_source),
         dataset=dataset,
@@ -404,6 +475,9 @@ def load_fullmag_fem_magnetization(
         source_fingerprint=_source_fingerprint(state_source),
         run_bundle_path=run_bundle_path,
         run_bundle_fingerprint=run_bundle_fingerprint,
+        node_order=node_order,
+        execution_mesh_path=execution_mesh_path,
+        execution_mesh_topology_fingerprint=execution_mesh_topology_fingerprint,
     )
 
 

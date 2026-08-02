@@ -8,10 +8,9 @@ use crate::{
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
     IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RelaxStopIR, RelaxationAlgorithmIR,
-    RegionalFieldDriveIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR,
-    ThermalSeedConfig, TimeDependenceIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RegionalFieldDriveIR, RelaxStopIR,
+    RelaxationAlgorithmIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy,
+    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -519,6 +518,18 @@ pub struct FdmPlanIR {
     /// Non-adiabaticity parameter for Zhang-Li STT (beta)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_beta: Option<f64>,
+    /// Versioned Zhang-Li formula selected by the planner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zhang_li_formula_version: Option<String>,
+    /// Versioned Zhang-Li spatial/operator realization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zhang_li_operator_version: Option<String>,
+    /// Authored Zhang-Li target retained for execution provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zhang_li_target: Option<RegionRefIR>,
+    /// Explicit Landé factor for canonical Zhang-Li formulas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zhang_li_lande_g: Option<f64>,
 
     /// Fixed spin polarization vector for Slonczewski STT (p)
     #[serde(default, skip_serializing_if = "Option::is_none")]

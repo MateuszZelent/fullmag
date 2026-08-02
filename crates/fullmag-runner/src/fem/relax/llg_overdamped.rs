@@ -585,7 +585,12 @@ pub(crate) fn execute_llg_overdamped(
                     step: stats.step,
                     time: stats.time,
                     solver_dt: stats.dt,
-                    values,
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: stats.step.saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(values),
                 })?
             };
             apply_artifact_enqueue_metrics(&mut stats, metrics);

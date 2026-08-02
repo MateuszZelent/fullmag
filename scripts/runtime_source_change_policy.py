@@ -30,6 +30,7 @@ NON_RUNTIME_EXACT_PATHS = {
     "apps/control-room/next-env.d.ts",
     "justfile",
     "scripts/export_fem_gpu_runtime.sh",
+    "scripts/capture_source_snapshot_identity.py",
     "scripts/lib/managed_fem_image_identity.sh",
     "scripts/prune_managed_fem_runtimes.sh",
     "scripts/public_docs_information_architecture.py",

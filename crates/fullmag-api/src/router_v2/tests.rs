@@ -861,22 +861,22 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
         fem_mesh_assets: vec![],
         fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
             mesh_source: None,
-            mesh: Some(MeshIR {
-                mesh_name: "transport_tet".into(),
-                nodes: vec![
+            mesh: Some(MeshIR::from_legacy_tet4(
+                "transport_tet".into(),
+                vec![
                     [0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
-                boundary_markers: vec![1, 1, 1, 1],
-                periodic_boundary_pairs: vec![],
-                periodic_node_pairs: vec![],
-                per_domain_quality: HashMap::new(),
-            }),
+                vec![[0, 1, 2, 3]],
+                vec![1],
+                vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                vec![1, 1, 1, 1],
+                vec![],
+                vec![],
+                HashMap::new(),
+            )),
             region_markers: vec![FemDomainRegionMarkerIR {
                 geometry_name: "strip".into(),
                 marker: 1,
@@ -1201,13 +1201,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_torque_Apm: 13.0,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
                 per_object_scalars: HashMap::new(),
-                table_expressions: Vec::new(),
                 wall_time_ns: 100,
                 grid: [4, 4, 1],
                 fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
-                per_object_scalars: Default::default(),
                 field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
@@ -1265,6 +1263,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
+                per_object_scalars: HashMap::new(),
+                table_expressions: Vec::new(),
             },
         ];
         snapshot.stage_execution = Some(StageExecutionState {

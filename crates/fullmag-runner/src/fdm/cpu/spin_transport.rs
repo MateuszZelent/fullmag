@@ -3399,6 +3399,125 @@ mod tests {
     }
 
     #[test]
+    fn analytical_direct_she_film_materializes_signed_profile_and_flux() {
+        let nz = 48usize;
+        let nx = 3usize;
+        let thickness_m = 4.0;
+        let lambda_sf_m = 1.1;
+        let sigma_spm = 5.0;
+        let sigma_s_spm = 4.0;
+        let theta_sh = 0.2;
+        let cell_count = nx * nz;
+        let mut plan = plan();
+        plan.grid.cells = [nx as u32, 1, nz as u32];
+        plan.cell_size = [1.0, 1.0, thickness_m / nz as f64];
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]; cell_count];
+
+        let resolved = &mut plan.spin_transport_plans[0];
+        resolved.capabilities = vec!["transport.spin.direct_she".into()];
+        let descriptor = resolved
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way FDM descriptor");
+        descriptor.charge_active_cells = vec![true; cell_count];
+        descriptor.charge_conductivity_spm = vec![sigma_spm; cell_count];
+        descriptor.charge_boundaries = vec![
+            boundary_face(
+                StructuredBoundaryFaceIR::XMin,
+                ResolvedChargeBoundaryConditionIR::Voltage { potential_v: 1.5 },
+            ),
+            boundary_face(
+                StructuredBoundaryFaceIR::XMax,
+                ResolvedChargeBoundaryConditionIR::Voltage { potential_v: -1.5 },
+            ),
+            boundary_face(
+                StructuredBoundaryFaceIR::YMin,
+                ResolvedChargeBoundaryConditionIR::Insulating,
+            ),
+            boundary_face(
+                StructuredBoundaryFaceIR::YMax,
+                ResolvedChargeBoundaryConditionIR::Insulating,
+            ),
+            boundary_face(
+                StructuredBoundaryFaceIR::ZMin,
+                ResolvedChargeBoundaryConditionIR::Insulating,
+            ),
+            boundary_face(
+                StructuredBoundaryFaceIR::ZMax,
+                ResolvedChargeBoundaryConditionIR::Insulating,
+            ),
+        ];
+        descriptor.spin_active_cells = vec![true; cell_count];
+        descriptor.spin_conductivity_spm = vec![sigma_s_spm; cell_count];
+        descriptor.polarization_p = vec![0.0; cell_count];
+        descriptor.theta_sh = vec![theta_sh; cell_count];
+        descriptor.reactions = vec![
+            ResolvedSpinReactionLengthsIR {
+                spin_flip_m: Some(lambda_sf_m),
+                exchange_m: None,
+                dephasing_m: None,
+            };
+            cell_count
+        ];
+        descriptor.region_ids = vec![0; cell_count];
+        descriptor.spin_boundaries = vec![
+            spin_boundary_face(
+                StructuredBoundaryFaceIR::XMin,
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            spin_boundary_face(
+                StructuredBoundaryFaceIR::XMax,
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            spin_boundary_face(
+                StructuredBoundaryFaceIR::YMin,
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            spin_boundary_face(
+                StructuredBoundaryFaceIR::YMax,
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            spin_boundary_face(
+                StructuredBoundaryFaceIR::ZMin,
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            spin_boundary_face(
+                StructuredBoundaryFaceIR::ZMax,
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+        ];
+        descriptor.torque_target_cells = vec![false; cell_count];
+        descriptor.saturation_magnetization_apm = vec![8.0e5; cell_count];
+
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("workflow construction")
+            .expect("spin workflow");
+        let evaluation = workflow
+            .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
+            .expect("direct-SHE stage solve");
+        let module = &evaluation.modules[0];
+        let amplitude = 2.0 * theta_sh * sigma_spm * 1.0 * lambda_sf_m
+            / (sigma_s_spm * (0.5 * thickness_m / lambda_sf_m).cosh());
+        let dz = thickness_m / nz as f64;
+        for z in 0..nz {
+            let cell = 1 + nx * z;
+            let coordinate = (z as f64 + 0.5) * dz - 0.5 * thickness_m;
+            let exact = amplitude * (coordinate / lambda_sf_m).sinh();
+            assert!((module.spin_potential_volts[cell][1] - exact).abs() < 2.0e-4);
+            assert!(module.spin_potential_volts[cell][0].abs() < 2.0e-11);
+            assert!(module.spin_potential_volts[cell][2].abs() < 2.0e-11);
+            assert!((module.current_density_apm2[cell][0] - sigma_spm).abs() < 1.0e-10);
+        }
+        assert!(module.telemetry.spin_scaled_residual < 1.0e-10);
+        assert_eq!(
+            module.constitutive_version,
+            "transport_constitutive.one_way.fullmag.v1"
+        );
+        assert_eq!(module.spin_operator_version, "fv_spin_upwind_v1");
+        assert_eq!(module.spin_current_tensor_apm2.len(), cell_count);
+    }
+
+    #[test]
     fn reciprocal_bar_uses_exact_revision_warm_start_and_corrected_stage_lte_gate() {
         let plan = reciprocal_plan();
         let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)

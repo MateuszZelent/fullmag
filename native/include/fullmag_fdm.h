@@ -94,6 +94,13 @@ typedef enum {
 } fullmag_fdm_prescribed_sot_formula;
 
 typedef enum {
+    /* Zero preserves the historical upwind Zhang-Li ABI behavior. */
+    FULLMAG_FDM_ZHANG_LI_LEGACY_FULLMAG_V0 = 0,
+    /* MuMax3 addzhanglitorque2: central clamped/PBC stencil. */
+    FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1 = 1,
+} fullmag_fdm_zhang_li_formula;
+
+typedef enum {
     FULLMAG_FDM_BOUNDARY_NONE   = 0,  /* binary active_mask (current) */
     FULLMAG_FDM_BOUNDARY_VOLUME = 1,  /* T0: face-link + φ weighting */
     FULLMAG_FDM_BOUNDARY_FULL   = 2,  /* T1: ECB stencil + H_corr    */
@@ -279,6 +286,7 @@ typedef struct {
     double                     current_density_z;      /* j_z (A/m^2) */
     double                     stt_degree;             /* P (dimensionless) */
     double                     stt_beta;               /* beta (dimensionless) */
+    fullmag_fdm_zhang_li_formula zhang_li_formula;    /* explicit Zhang-Li realization */
     
     /* Slonczewski Spin-Transfer Torque (CPP / SOT) */
     double                     stt_p_x;                /* p_x (polarization direction) */

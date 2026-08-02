@@ -293,6 +293,72 @@ void direct_she_sign_and_torque_projection_are_canonical()
         "exchange/dephasing absorption was not projected to Gilbert torque");
 }
 
+void direct_she_matches_uniform_film_sinh_profile()
+{
+    constexpr double length_m = 1.0;
+    constexpr double lambda_m = 0.2;
+    constexpr double sigma_spm = 3.0;
+    constexpr double sigma_s_spm = 2.0;
+    constexpr double theta_sh = 0.1;
+    constexpr double electric_field_v_per_m = 1.0;
+    constexpr double transverse_width_m = 0.1;
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        4, 4, 32, mfem::Element::HEXAHEDRON, length_m, transverse_width_m, length_m);
+    mfem::ConstantCoefficient sigma(sigma_spm);
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+    SteadyTransportParameters parameters;
+    parameters.sigma_s_spm = sigma_s_spm;
+    parameters.lambda_sf_m = lambda_m;
+    parameters.theta_sh = theta_sh;
+    parameters.polarization_p = 0.0;
+    SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+
+    auto electrodes = x_electrodes(mesh);
+    mfem::FunctionCoefficient voltage([](const mfem::Vector &x) {
+        return 1.0 - electric_field_v_per_m * x[0];
+    });
+    const auto charge_diagnostics = oracle.solve_charge(
+        electrodes, voltage, ChargeGauge::BoundaryReference);
+    require(std::abs(charge_diagnostics.current_density_volume_average_apm2[0] -
+            sigma_spm * electric_field_v_per_m) < 1.0e-10,
+        "uniform-film direct-SHE charge field is not the prescribed linear field");
+    mfem::Array<int> no_spin_dirichlet(mesh.bdr_attributes.Max());
+    no_spin_dirichlet = 0;
+    const auto diagnostics = oracle.solve_spin(no_spin_dirichlet, nullptr);
+    require(diagnostics.converged, "uniform-film direct-SHE spin solve did not converge");
+
+    const double z_min = 0.0;
+    const double z_max = length_m;
+    const double z_mid = 0.5 * (z_min + z_max);
+    const double amplitude = 2.0 * theta_sh * sigma_spm * electric_field_v_per_m *
+        lambda_m / (sigma_s_spm * std::cosh(0.5 * length_m / lambda_m));
+    const double transverse_amplitude = -2.0 * theta_sh * sigma_spm * electric_field_v_per_m *
+        lambda_m / (sigma_s_spm * std::cosh(0.5 * transverse_width_m / lambda_m));
+
+    mfem::VectorFunctionCoefficient expected(3, [=](const mfem::Vector &x, mfem::Vector &value) {
+        value.SetSize(3);
+        value = 0.0;
+        value[1] = amplitude * std::sinh((x[2] - z_mid) / lambda_m);
+        value[2] = transverse_amplitude *
+            std::sinh((x[1] - 0.5 * transverse_width_m) / lambda_m);
+    });
+    const double profile_error = max_vector_nodal_error(oracle.spin_potential(), expected);
+    if (!(profile_error < 2.0e-3)) {
+        std::cerr << "uniform-film SHE profile error=" << profile_error
+                  << " top-bottom=" << diagnostics.spin_potential_top_minus_bottom_v[1]
+                  << " expected-top-bottom="
+                  << 2.0 * amplitude * std::sinh(0.5 * length_m / lambda_m)
+                  << " residual=" << diagnostics.relative_residual
+                  << " charge-current=" << charge_diagnostics.current_density_volume_average_apm2[0]
+                  << '\n';
+    }
+    require(profile_error < 2.0e-3,
+        "direct-SHE uniform-film profile does not match the sinh oracle");
+    require(std::abs(diagnostics.spin_potential_top_minus_bottom_v[1] -
+            2.0 * amplitude * std::sinh(0.5 * length_m / lambda_m)) < 2.0e-3,
+        "direct-SHE top-to-bottom spin voltage does not match the sinh oracle");
+}
+
 } // namespace
 
 int main()
@@ -305,6 +371,7 @@ int main()
         invalid_dissipative_block_fails_closed();
         spin_diffusion_matches_sinh_profile();
         direct_she_sign_and_torque_projection_are_canonical();
+        direct_she_matches_uniform_film_sinh_profile();
         std::cout << "fem steady transport contract: PASS\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

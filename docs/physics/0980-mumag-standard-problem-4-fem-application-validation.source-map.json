@@ -133,9 +133,9 @@
     {"id": "cartesian-grid", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "class CartesianGrid", "responsibility": "Define the common uniform Cartesian grid, bounds, axis order, and voxel volume."},
     {"id": "cartesian-restriction", "path": "packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py", "symbol": "build_prism6_cartesian_restriction", "responsibility": "Compute exact affine-P1 volume weights for aligned magnetic prism6 cells."},
     {"id": "mumax-state-loader", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "load_mumax_magnetization", "responsibility": "Load the MuMax3 tzyxc Zarr field and enforce final-frame provenance."},
-    {"id": "fullmag-state-loader", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "load_fullmag_fem_magnetization", "responsibility": "Load Fullmag's nodal final state together with its persisted FEM mesh."},
+    {"id": "fullmag-state-loader", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "load_fullmag_fem_magnetization", "responsibility": "Load Fullmag's nodal final state and bind it to the native planner mesh ordering from the run bundle."},
     {"id": "relaxed-state-comparison", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "compare_relaxed_states", "responsibility": "Run the final-state FEM-to-FDM restriction and quantitative comparison."},
-    {"id": "comparison-tests", "path": "packages/fullmag-py/tests/test_magnetization_comparison.py", "symbol": "test_compare_relaxed_states_loads_fullmag_node_state_and_reports_provenance", "responsibility": "Exercise loaders, restriction, metrics, and provenance on a complete synthetic artifact pair."}
+    {"id": "comparison-tests", "path": "packages/fullmag-py/tests/test_magnetization_comparison.py", "symbol": "test_compare_relaxed_states_uses_native_planner_mesh_node_order", "responsibility": "Prove that a planner-reordered FEM mesh is used when the saved state and source mesh have different node orderings."}
   ],
   "public_api": {
     "parameters": [

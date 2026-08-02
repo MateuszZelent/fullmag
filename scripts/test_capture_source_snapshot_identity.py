@@ -187,6 +187,90 @@ def test_compare_can_warn_when_worktree_changes_during_build(tmp_path: Path) -> 
     assert "SOURCE_IDENTITY_WARNING=source identity changed during managed FEM runtime build" in compared.stderr
 
 
+def test_snapshot_verification_does_not_read_live_worktree_after_capture(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    identity_path = tmp_path / "identity.json"
+    snapshot = tmp_path / "snapshot"
+    captured = _materialize(repo, snapshot, identity_path)
+    assert captured.returncode == 0, captured.stderr
+
+    (repo / "tracked.txt").write_text("changed while build runs\n", encoding="utf-8")
+
+    verified = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--compare",
+            str(identity_path),
+            "--verify-materialized-snapshot",
+            str(snapshot),
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert verified.returncode == 0, verified.stderr
+
+
+def test_runtime_snapshot_ignores_non_runtime_dirty_paths_during_materialization(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    docs = repo / "docs"
+    docs.mkdir()
+    (docs / "notes.md").write_text("committed docs\n", encoding="utf-8")
+    _git(repo, "add", "docs/notes.md")
+    _git(repo, "commit", "-qm", "add docs")
+    (docs / "notes.md").write_text("first docs edit\n", encoding="utf-8")
+    identity_path = tmp_path / "runtime-identity.json"
+    snapshot = tmp_path / "runtime-snapshot"
+
+    captured = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+            "--output",
+            str(identity_path),
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert captured.returncode == 0, captured.stderr
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    assert identity["dirty_path_content"] == []
+    assert identity["source_snapshot_dirty"] is False
+
+    (docs / "notes.md").write_text("second docs edit\n", encoding="utf-8")
+    materialized = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+            "--compare",
+            str(identity_path),
+            "--materialize",
+            str(snapshot),
+            "--materialize-existing-empty",
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert materialized.returncode == 0, materialized.stderr
+
+
 def test_successful_compare_is_silent(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     identity_path = tmp_path / "identity.json"

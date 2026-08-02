@@ -1414,7 +1414,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     ));
                 }
                 match formula_version.as_str() {
-                    "zhang_li.fullmag.v1" => {
+                    "zhang_li.fullmag.v1" | "zhang_li.mumax3.v1" => {
                         if schema_version.as_deref() != Some("zhang_li_torque.v1") {
                             errors.push(format!("spin_torque_modules[{index}] canonical zhang_li schema_version must be zhang_li_torque.v1"));
                         }
@@ -1424,11 +1424,22 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                         if target.as_ref().is_none_or(|target| target.object_id.trim().is_empty() || target.region_id.as_deref().is_some_and(|value| value.trim().is_empty())) {
                             errors.push(format!("spin_torque_modules[{index}] canonical zhang_li requires a non-empty target"));
                         }
-                        if operator_version.as_deref() != Some("zl_central_reference_v1") {
-                            errors.push(format!("spin_torque_modules[{index}] canonical FEM zhang_li requires operator_version zl_central_reference_v1"));
+                        let required_operator = if formula_version == "zhang_li.mumax3.v1" {
+                            "zl_mumax3_central_v1"
+                        } else {
+                            "zl_central_reference_v1"
+                        };
+                        if operator_version.as_deref() != Some(required_operator) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical zhang_li requires operator_version {required_operator}"));
                         }
                         if lande_g.is_none_or(|value| !value.is_finite() || value <= 0.0) {
                             errors.push(format!("spin_torque_modules[{index}] canonical zhang_li lande_g must be finite and > 0"));
+                        } else if formula_version == "zhang_li.mumax3.v1"
+                            && *lande_g != Some(2.0)
+                        {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] zhang_li.mumax3.v1 is source-compatible with MuMax3's fixed lande_g=2.0"
+                            ));
                         }
                     }
                     "zhang_li.legacy_fullmag.v0" => {

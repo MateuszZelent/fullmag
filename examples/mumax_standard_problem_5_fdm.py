@@ -99,6 +99,10 @@ study.spin_torque(
         current_density=CURRENT_DENSITY,
         degree=POLARIZATION,
         xi=XI,
+        id="sp5_zhang_li",
+        target=fm.RegionRef("plate"),
+        lande_g=2.0,
+        operator_version="zl_mumax3_central_v1",
     )
 )
 study.stages.add_run(RUN_UNTIL, stage_id="current_run")

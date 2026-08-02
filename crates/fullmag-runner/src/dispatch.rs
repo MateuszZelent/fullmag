@@ -4998,6 +4998,11 @@ fn execute_cuda_fdm(
                 continue;
             };
             ensure_single_object_scalars(&mut stats, "free");
+            // Keep accepted-step controller telemetry independent of the
+            // user-visible scalar cadence.  MuMax-compatible runs often have
+            // no scalar schedule, but qualification still requires every
+            // accepted step and its retry records.
+            artifacts.record_solver_step(&stats);
             current_time = stats.time;
             dt = crate::fdm::next_fdm_attempt_dt(
                 plan.adaptive_timestep.is_some(),
@@ -5144,9 +5149,11 @@ fn execute_cuda_fdm(
     let completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
+    let final_magnetization = backend.copy_m(cell_count)?;
     record_cuda_final_outputs(
         &backend,
         cell_count,
+        &final_magnetization,
         latest_stats,
         default_scalar_trace,
         &scalar_schedules,
@@ -5155,8 +5162,12 @@ fn execute_cuda_fdm(
         &mut artifacts,
     )?;
 
-    let final_magnetization = backend.copy_m(cell_count)?;
+    let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let mut auxiliary_artifacts = Vec::new();
+    if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_trace) {
+        auxiliary_artifacts.push(trace);
+    }
     let status = if cancelled {
         RunStatus::Cancelled
     } else {
@@ -5185,7 +5196,7 @@ fn execute_cuda_fdm(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
+        auxiliary_artifacts,
         provenance,
     })
 }
@@ -5969,6 +5980,7 @@ fn record_cuda_due_outputs(
 fn record_cuda_final_outputs(
     backend: &NativeFdmBackend,
     cell_count: usize,
+    final_magnetization: &[[f64; 3]],
     latest_stats: Option<StepStats>,
     default_scalar_trace: bool,
     scalar_schedules: &[OutputSchedule],
@@ -5992,7 +6004,7 @@ fn record_cuda_final_outputs(
                 .unwrap_or(true));
     if need_scalar {
         let mut final_stats = latest_stats.clone();
-        backend.apply_average_m_to_step_stats(&mut final_stats)?;
+        backend.apply_average_m_to_step_stats_from_values(&mut final_stats, final_magnetization);
         artifacts.record_scalar(&final_stats)?;
         steps.push(final_stats);
     }
@@ -6189,6 +6201,16 @@ mod tests {
             "native CUDA scalar rows must publish averaged magnetization components"
         );
 
+        let final_output_body = source
+            .split("fn record_cuda_final_outputs(")
+            .nth(1)
+            .expect("record_cuda_final_outputs should exist");
+        assert!(
+            final_output_body.contains("final_magnetization")
+                && final_output_body.contains("apply_average_m_to_step_stats_from_values"),
+            "native CUDA final scalar rows must reduce the same magnetization snapshot used by m_final"
+        );
+
         let execution = source
             .split("#[cfg(feature = \"cuda\")]\nfn execute_cuda_fdm(")
             .nth(1)
@@ -6199,6 +6221,11 @@ mod tests {
                 && execution.contains("if heavy_payload_due && !due_scalar_row")
                 && execution.contains("let magnetization = if heavy_payload_due"),
             "native CUDA live rows carrying a full magnetization payload must use the averaged stats"
+        );
+        assert!(
+            execution.contains("let final_magnetization = backend.copy_m(cell_count)?;")
+                && execution.contains("&final_magnetization,\n        latest_stats"),
+            "native CUDA final scalar publication must share the final m snapshot"
         );
     }
 
@@ -6432,8 +6459,13 @@ mod tests {
                 ],
                 cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
-                boundary_markers: vec![1],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                    [0, 1, 2],
+                    [0, 3, 1],
+                    [0, 2, 3],
+                    [1, 3, 2],
+                ]),
+                boundary_markers: vec![1, 1, 1, 1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: HashMap::new(),

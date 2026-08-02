@@ -30,6 +30,28 @@ def _polygon_area(polygon: np.ndarray) -> float:
     )
 
 
+def _polygon_centroid(polygon: np.ndarray, area: float) -> np.ndarray:
+    """Return the area centroid of a non-degenerate clipped polygon."""
+
+    if polygon.shape[0] < 3 or area <= np.finfo(np.float64).tiny:
+        raise MagnetizationComparisonError("clipped polygon is degenerate")
+    next_points = np.roll(polygon, -1, axis=0)
+    cross = (
+        polygon[:, 0] * next_points[:, 1]
+        - next_points[:, 0] * polygon[:, 1]
+    )
+    signed_area_twice = float(np.sum(cross))
+    if abs(signed_area_twice) <= np.finfo(np.float64).tiny:
+        raise MagnetizationComparisonError("clipped polygon has zero signed area")
+    centroid = np.sum(
+        (polygon + next_points) * cross[:, np.newaxis],
+        axis=0,
+    ) / (3.0 * signed_area_twice)
+    if not np.all(np.isfinite(centroid)):
+        raise MagnetizationComparisonError("clipped polygon centroid is non-finite")
+    return centroid
+
+
 def _clip_polygon(
     polygon: np.ndarray,
     *,
@@ -309,8 +331,15 @@ def build_prism6_cartesian_restriction(
                 area = _polygon_area(clipped)
                 if area <= np.finfo(np.float64).tiny:
                     continue
-                barycentric = _barycentric_coordinates(clipped, triangle)
-                lambda_integrals = area * np.mean(barycentric, axis=0)
+                # A clipped triangle is often a quadrilateral or pentagon.
+                # The arithmetic mean of polygon vertices is not its area
+                # centroid, so it does not integrate an affine P1 basis
+                # exactly.  Evaluate the barycentric basis at the shoelace
+                # area centroid instead.
+                centroid = _polygon_centroid(clipped, area)
+                lambda_integrals = area * _barycentric_coordinates(
+                    centroid[np.newaxis, :], triangle
+                )[0]
                 voxel = iy * grid.shape_zyx[2] + ix
                 voxel_volume = dx * dy * dz
                 base_factor = thickness / (2.0 * voxel_volume)

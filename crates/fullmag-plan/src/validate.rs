@@ -503,11 +503,6 @@ pub(crate) fn planned_study_controls(
             {
                 errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu'; auto selection cannot silently change the qualified adaptive lane".to_string());
             }
-            if resolved_backend == BackendTarget::Fdm
-                && matches!(requested_device, Some("cuda" | "gpu"))
-            {
-                errors.push("adaptive_timestep on FDM CUDA has no executable timestep capability identity; use runtime_selection.device='cpu' until the CUDA adaptive controller ABI is complete".to_string());
-            }
             if adaptive.dt_max.is_none() {
                 errors.push("adaptive_timestep.dt_max is required; planner will not invent a hidden upper bound".to_string());
             }

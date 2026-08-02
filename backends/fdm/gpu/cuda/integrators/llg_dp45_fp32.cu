@@ -123,8 +123,10 @@ __global__ void dp45_error_fp32_kernel(
     const float * __restrict__ k5x, const float * __restrict__ k5y, const float * __restrict__ k5z,
     const float * __restrict__ k6x, const float * __restrict__ k6y, const float * __restrict__ k6z,
     const float * __restrict__ k7x, const float * __restrict__ k7y, const float * __restrict__ k7z,
+    const float * __restrict__ m0x, const float * __restrict__ m0y, const float * __restrict__ m0z,
+    const float * __restrict__ m1x, const float * __restrict__ m1y, const float * __restrict__ m1z,
     double * __restrict__ error_sq,
-    int n, double dt)
+    int n, double dt, double atol, double rtol)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -133,7 +135,14 @@ __global__ void dp45_error_fp32_kernel(
     double ex = dt*(E1*(double)k1x[idx] + E3*(double)k3x[idx] + E4*(double)k4x[idx] + E5*(double)k5x[idx] + E6*(double)k6x[idx] + E7*(double)k7x[idx]);
     double ey = dt*(E1*(double)k1y[idx] + E3*(double)k3y[idx] + E4*(double)k4y[idx] + E5*(double)k5y[idx] + E6*(double)k6y[idx] + E7*(double)k7y[idx]);
     double ez = dt*(E1*(double)k1z[idx] + E3*(double)k3z[idx] + E4*(double)k4z[idx] + E5*(double)k5z[idx] + E6*(double)k6z[idx] + E7*(double)k7z[idx]);
-    error_sq[idx] = ex*ex + ey*ey + ez*ez;
+    double m0_norm = sqrt((double)m0x[idx] * m0x[idx] +
+                          (double)m0y[idx] * m0y[idx] +
+                          (double)m0z[idx] * m0z[idx]);
+    double m1_norm = sqrt((double)m1x[idx] * m1x[idx] +
+                          (double)m1y[idx] * m1y[idx] +
+                          (double)m1z[idx] * m1z[idx]);
+    double scale = atol + rtol * fmax(m0_norm, m1_norm);
+    error_sq[idx] = (ex*ex + ey*ey + ez*ez) / (scale * scale);
 }
 
 /* ── Helpers ── */
@@ -201,10 +210,12 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     const float A51 = 19372.0f/6561.0f, A52 = -25360.0f/2187.0f, A53 = 64448.0f/6561.0f, A54 = -212.0f/729.0f;
     const float A61 = 9017.0f/3168.0f, A62 = -355.0f/33.0f, A63 = 46732.0f/5247.0f, A64 = 49.0f/176.0f, A65 = -5103.0f/18656.0f;
     const float B1 = 35.0f/384.0f, B3 = 500.0f/1113.0f, B4 = 125.0f/192.0f, B5 = -2187.0f/6784.0f, B6 = 11.0f/84.0f;
+    const bool fsal_valid_before_step = ctx.fsal_valid;
 
     copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
+        ctx.current_dt = dt;
         dt_f = static_cast<float>(dt);
 
         if (ctx.fsal_valid) {
@@ -286,6 +297,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx.step_count++;
             ctx.current_time += dt;
             ctx.fsal_valid = false;
+            context_refresh_observables(ctx);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
             } else if (context_fill_current_stats(ctx, stats)) {
@@ -306,9 +318,22 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k5.x), static_cast<const float*>(ctx.k5.y), static_cast<const float*>(ctx.k5.z),
             static_cast<const float*>(ctx.k6.x), static_cast<const float*>(ctx.k6.y), static_cast<const float*>(ctx.k6.z),
             static_cast<const float*>(ctx.k_fsal.x), static_cast<const float*>(ctx.k_fsal.y), static_cast<const float*>(ctx.k_fsal.z),
-            ctx.reduction_scratch, n, dt);
+            static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
+            static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
+            ctx.reduction_scratch, n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
+
+        if (policy.dt_min_exhausted) {
+            if (fsal_valid_before_step) {
+                copy_field_d2d_fp32(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
+            }
+            ctx.fsal_valid = fsal_valid_before_step;
+            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            context_refresh_observables(ctx);
+            ctx.last_error = "dt_min_exhausted";
+            return;
+        }
 
         if (policy.accepted) {
             ctx.step_count++;
@@ -355,7 +380,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         dt = policy.dt_candidate;
-        ctx.fsal_valid = false;
+        copy_field_d2d_fp32(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
+        ctx.fsal_valid = true;
         copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
     }
 }

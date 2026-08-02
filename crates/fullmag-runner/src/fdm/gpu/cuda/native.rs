@@ -249,6 +249,27 @@ fn ffi_prescribed_sot_formula(
 }
 
 #[cfg(feature = "cuda")]
+fn ffi_zhang_li_formula(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<ffi::fullmag_fdm_zhang_li_formula, RunError> {
+    match plan.zhang_li_formula_version.as_deref() {
+        None | Some("zhang_li.legacy_fullmag.v0") => Ok(
+            ffi::fullmag_fdm_zhang_li_formula::FULLMAG_FDM_ZHANG_LI_LEGACY_FULLMAG_V0,
+        ),
+        Some("zhang_li.mumax3.v1") => Ok(
+            ffi::fullmag_fdm_zhang_li_formula::FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1,
+        ),
+        Some("zhang_li.fullmag.v1") => Err(RunError {
+            message: "zhang_li.fullmag.v1 is the canonical FEM realization and is not executable on FDM CUDA; select zhang_li.mumax3.v1 or use the FDM CPU reference"
+                .to_string(),
+        }),
+        Some(other) => Err(RunError {
+            message: format!("unsupported FDM CUDA Zhang-Li formula_version '{other}'"),
+        }),
+    }
+}
+
+#[cfg(feature = "cuda")]
 fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunError> {
     match kind {
         "identity" => Ok(ffi::fullmag_fdm_transfer_kind::FULLMAG_FDM_TRANSFER_IDENTITY),
@@ -631,6 +652,7 @@ impl NativeFdmBackend {
         ensure_cuda_slonczewski_supported(plan)?;
         validate_single_grid_budget(plan)?;
         let sot_formula = ffi_prescribed_sot_formula(plan)?;
+        let zhang_li_formula = ffi_zhang_li_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         if plan.material.ms_field.is_some()
             || plan.material.a_field.is_some()
@@ -820,6 +842,7 @@ impl NativeFdmBackend {
             current_density_z: plan.current_density.map_or(0.0, |j| j[2]),
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
+            zhang_li_formula,
 
             stt_p_x: plan.stt_spin_polarization.map_or(0.0, |p| p[0]),
             stt_p_y: plan.stt_spin_polarization.map_or(0.0, |p| p[1]),

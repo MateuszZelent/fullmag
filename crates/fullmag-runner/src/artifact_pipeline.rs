@@ -683,6 +683,11 @@ impl Drop for ArtifactPipeline {
 pub(crate) struct ArtifactRecorder {
     field_snapshots: Vec<FieldSnapshot>,
     field_snapshot_count: usize,
+    /// Every accepted time-domain solver step, independent of user-visible
+    /// scalar/field output cadence.  The diagnostics writer consumes this
+    /// trace after execution; it must not be confused with `RunResult.steps`,
+    /// which intentionally contains only requested output rows.
+    solver_steps: Vec<StepStats>,
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
     #[cfg(feature = "fem-gpu")]
@@ -696,6 +701,7 @@ impl ArtifactRecorder {
         Self {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
+            solver_steps: Vec::new(),
             pipeline: None,
             provenance,
             #[cfg(feature = "fem-gpu")]
@@ -714,6 +720,7 @@ impl ArtifactRecorder {
         Self {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
+            solver_steps: Vec::new(),
             pipeline: Some(pipeline),
             provenance,
             #[cfg(feature = "fem-gpu")]
@@ -753,6 +760,19 @@ impl ArtifactRecorder {
             return pipeline.push(ArtifactJob::ScalarRow(stats.clone()));
         }
         Ok(ArtifactEnqueueMetrics::default())
+    }
+
+    /// Retain one accepted solver step for the LLG diagnostics artifacts.
+    ///
+    /// This is deliberately separate from [`record_scalar`]: output cadence
+    /// may be sparse (or absent), while accepted-step telemetry must preserve
+    /// every controller decision and its attempt records.
+    pub(crate) fn record_solver_step(&mut self, stats: &StepStats) {
+        self.solver_steps.push(stats.clone());
+    }
+
+    pub(crate) fn take_solver_steps(&mut self) -> Vec<StepStats> {
+        std::mem::take(&mut self.solver_steps)
     }
 
     /// Replaces runtime provenance after a run has measured counters that are

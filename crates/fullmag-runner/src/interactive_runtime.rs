@@ -439,22 +439,22 @@ mod tests {
             fem_mesh_assets: vec![FemMeshAssetIR {
                 geometry_name: "strip".to_string(),
                 mesh_source: Some("meshes/unit_tet.msh".to_string()),
-                mesh: Some(MeshIR {
-                    mesh_name: "strip".to_string(),
-                    nodes: vec![
+                mesh: Some(MeshIR::from_legacy_tet4(
+                    "strip".to_string(),
+                    vec![
                         [0.0, 0.0, 0.0],
                         [1.0, 0.0, 0.0],
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
-                    element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
-                    boundary_markers: vec![1],
-                    periodic_boundary_pairs: Vec::new(),
-                    periodic_node_pairs: Vec::new(),
-                    per_domain_quality: std::collections::HashMap::new(),
-                }),
+                    vec![[0, 1, 2, 3]],
+                    vec![1],
+                    vec![[0, 1, 2]],
+                    vec![1],
+                    Vec::new(),
+                    Vec::new(),
+                    std::collections::HashMap::new(),
+                )),
             }],
             fem_domain_mesh_asset: None,
         });

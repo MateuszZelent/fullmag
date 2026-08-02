@@ -1511,9 +1511,8 @@ fn mixing_observation(
     );
     let (sml, from_reservoir, to_reservoir, reservoir_observation) =
         if let Some(reservoir) = sml_reservoir {
-            let denominator = reservoir.g_n_s_per_m2
-                + reservoir.g_f_s_per_m2
-                + reservoir.g_lattice_s_per_m2;
+            let denominator =
+                reservoir.g_n_s_per_m2 + reservoir.g_f_s_per_m2 + reservoir.g_lattice_s_per_m2;
             let reservoir_potential = scale(
                 add(
                     scale(spin[interface.from_cell], reservoir.g_n_s_per_m2),
@@ -1529,15 +1528,20 @@ fn mixing_observation(
                 add(spin[interface.to_cell], scale(reservoir_potential, -1.0)),
                 reservoir.g_f_s_per_m2,
             );
-            let reservoir_to_lattice =
-                scale(reservoir_potential, reservoir.g_lattice_s_per_m2);
+            let reservoir_to_lattice = scale(reservoir_potential, reservoir.g_lattice_s_per_m2);
             let power = 0.5
                 * (reservoir.g_n_s_per_m2
-                    * norm3(add(spin[interface.from_cell], scale(reservoir_potential, -1.0)))
-                        .powi(2)
+                    * norm3(add(
+                        spin[interface.from_cell],
+                        scale(reservoir_potential, -1.0),
+                    ))
+                    .powi(2)
                     + reservoir.g_f_s_per_m2
-                        * norm3(add(spin[interface.to_cell], scale(reservoir_potential, -1.0)))
-                            .powi(2)
+                        * norm3(add(
+                            spin[interface.to_cell],
+                            scale(reservoir_potential, -1.0),
+                        ))
+                        .powi(2)
                     + reservoir.g_lattice_s_per_m2 * norm3(reservoir_potential).powi(2));
             (
                 reservoir_to_lattice,

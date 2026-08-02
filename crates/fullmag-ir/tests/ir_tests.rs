@@ -5779,6 +5779,33 @@ fn spin_torque_current_source_must_reference_current_transport() {
 }
 
 #[test]
+fn canonical_mumax3_zhang_li_requires_source_g_factor() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some("cip".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.mumax3.v1".to_string(),
+        operator_version: Some("zl_mumax3_central_v1".to_string()),
+        current_density: Some([1e11, 0.0, 0.0]),
+        current_source: None,
+        degree: 0.4,
+        beta: 0.02,
+        lande_g: Some(1.9),
+    }];
+
+    let errors = ir
+        .validate()
+        .expect_err("MuMax3-compatible Zhang-Li must reject non-source g");
+    assert!(errors.iter().any(|error| {
+        error.contains("zhang_li.mumax3.v1") && error.contains("lande_g=2.0")
+    }));
+}
+
+#[test]
 fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {

@@ -191,8 +191,8 @@ public:
         const SteadyTransportParameters &parameters)
         : mesh(mesh), conductivity(charge_conductivity), magnetization(magnetization),
           parameters(parameters), collection(1, mesh.Dimension()),
-          scalar_space(&mesh, &collection), vector_space(&mesh, &collection, 3, mfem::Ordering::byVDIM),
-          tensor_space(&mesh, &collection, 9, mfem::Ordering::byVDIM),
+          scalar_space(&mesh, &collection), vector_space(&mesh, &collection, 3, mfem::Ordering::byNODES),
+          tensor_space(&mesh, &collection, 9, mfem::Ordering::byNODES),
           potential(&scalar_space), current(&vector_space), spin(&vector_space),
           spin_current(&tensor_space), torque(&vector_space)
     {

@@ -42,9 +42,10 @@ pub use fdm::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
     IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ReferenceDemoReport, ResolvedFdmPeriodicWorkspace, Result,
-    RegionalFieldDriveTerm, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SolverSession, SotConfig, SotFormula,
-    StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA, ZhangLiSttConfig,
+    OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm,
+    ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig,
+    SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig,
+    VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig,
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────
@@ -2535,6 +2536,7 @@ mod tests {
                 exchange: false,
                 demag: false,
                 zhang_li_stt: Some(ZhangLiSttConfig {
+                    formula: ZhangLiFormula::LegacyFullmagV0,
                     current_density: [1.0e3, 0.0, 0.0],
                     spin_polarization: 1.0,
                     non_adiabaticity: 0.2,
@@ -2619,6 +2621,7 @@ mod tests {
                 exchange: true,
                 demag: false,
                 zhang_li_stt: Some(ZhangLiSttConfig {
+                    formula: ZhangLiFormula::LegacyFullmagV0,
                     current_density: [1.0e3, 0.0, 0.0],
                     spin_polarization: 1.0,
                     non_adiabaticity: 0.2,

@@ -32,7 +32,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="Fullmag .fullmag-mesh artifact used by the relaxation",
     )
-    parser.add_argument("--fullmag-run-bundle", type=Path)
+    parser.add_argument(
+        "--fullmag-run-bundle",
+        required=True,
+        type=Path,
+        help="Fullmag run bundle containing the native planner mesh ordering",
+    )
     parser.add_argument("--output", type=Path, help="Write the JSON report to this path")
     parser.add_argument(
         "--high-error-threshold",

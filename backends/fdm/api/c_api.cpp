@@ -388,10 +388,21 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->current_density_z = plan->current_density_z;
     ctx->stt_degree = plan->stt_degree;
     ctx->stt_beta = plan->stt_beta;
+    ctx->zhang_li_formula = plan->zhang_li_formula;
     if (ctx->has_zhang_li_stt && ctx->Ms > 0) {
-        double mu_B = 9.274009994e-24; // Bohr magneton (J/T)
-        double e = 1.60217662e-19;     // Elementary charge (C)
-        double b = (ctx->stt_degree * mu_B) / (e * ctx->Ms * (1.0 + ctx->stt_beta * ctx->stt_beta));
+        // Keep the historical v0 coefficient byte-for-byte stable.  The
+        // MuMax3 realization uses the constants and 1/2 factor from
+        // addzhanglitorque2.cu; its central spatial stencil is selected in
+        // the CUDA RHS kernel by the same explicit formula discriminator.
+        const bool mumax3 =
+            ctx->zhang_li_formula == FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1;
+        double mu_B = mumax3 ? 9.2740091523e-24 : 9.274009994e-24; // J/T
+        double e = mumax3 ? 1.60217646e-19 : 1.60217662e-19;       // C
+        double denominator = e * ctx->Ms * (1.0 + ctx->stt_beta * ctx->stt_beta);
+        if (mumax3) {
+            denominator *= 2.0;
+        }
+        double b = (ctx->stt_degree * mu_B) / denominator;
         ctx->stt_u_pf = b;
     } else {
         ctx->stt_u_pf = 0.0;

@@ -444,6 +444,7 @@ fn cpu_reference_single_step(
             bulk_dmi: None,
             zhang_li_stt: if has_zhang_li_stt(plan) {
                 Some(fullmag_engine::ZhangLiSttConfig {
+                    formula: fullmag_engine::ZhangLiFormula::LegacyFullmagV0,
                     current_density: plan.current_density.expect("current density"),
                     spin_polarization: plan.stt_degree.expect("stt degree"),
                     non_adiabaticity: plan.stt_beta.unwrap_or(0.0),

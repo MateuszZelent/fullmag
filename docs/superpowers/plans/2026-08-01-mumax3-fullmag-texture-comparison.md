@@ -1,30 +1,81 @@
 # Plan ilościowego porównania końcowej tekstury MuMax3 i Fullmaga
 
-> Zakres tego planu obejmuje wyłącznie końcowy, zeropolowy stan równowagowy po `minimize()` w MuMax3 i po `relax` w Fullmagu. Dynamika, trajektorie czasowe i pierwsze przejście przez `<mx>=0` są poza zakresem.
+> Zakres tego planu obejmuje wyłącznie końcowy, zeropolowy stan równowagowy po `relax()`/`minimize()` w MuMax3 i po `relax` w Fullmagu. Dynamika, trajektorie czasowe i pierwsze przejście przez `<mx>=0` są poza zakresem.
 
 ## Status realizacji — 2026-08-02
 
 Zrealizowany został offline'owy rdzeń porównania oraz kontrakt zapisu końcowego
 stanu:
 
-- MuMax3: `minimize(); save(m); tablesave()` w
-  `external_solvers/3/test/standardproblem4.mx3`;
+- MuMax3/amumax: `/home/kkingstoun/git/3/build/mumax3`, jawny przebieg
+  `relax(); save(m); tablesave()` i natywny `-storage-format=zarr`;
 - Fullmag: etap `add_save_state(... dataset="m")` po relaxacji i `fields=[]`
   w scenariuszu PG-BB;
 - Python: loader MuMax3 `(t,z,y,x,component)`, loader Fullmag `(node,3)`,
   dokładna restrykcja jednowarstwowego `prism6` oraz metryki komponentowe i
   wektorowe w `fullmag.analysis`;
 - CLI: `scripts/compare_relaxed_magnetization.py`;
-- testy: moduł porównania `6 passed`, testy scenariusza i collect-results
-  `65 passed`, walidator noty naukowej PASS.
+- testy modułu porównania: `8 passed` po naprawie całkowania przyciętych
+  wielokątów i dodaniu regresji kolejności węzłów; testy scenariusza i
+  collect-results: `65 passed`; walidator noty
+  naukowej: PASS.
 
-Nie wykonano jeszcze świeżej pary produkcyjnych przebiegów MuMax3/Fullmag.
-Istniejący `standardproblem4.zarr` ma 11 klatek i jest odrzucany jako stary
-artefakt. Próba `just fem-managed-headless` została zatrzymana przez istniejący
-dirty native-runtime w głównym worktree (eksport wymagałby jawnego
-`FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1`); nie nadpisano tego runtime ani procesu
-GPU użytkownika. Po uzyskaniu świeżych artefaktów należy uruchomić CLI z trzema
-ścieżkami `--mumax`, `--fullmag-state`, `--fullmag-mesh` i zachować JSON report.
+Świeża para produkcyjna została wykonana bez dynamiki:
+
+- amumax `/home/kkingstoun/git/3/build/mumax3` (v3.11.2, commit `13ac56f1`)
+  wykonał czysty skrypt `relax(); save(m); tablesave()` z `-s -webui-disable`
+  i natywnym `-storage-format=zarr`. Artefakt
+  `.fullmag/reports/mumax-fullmag-validation-smoke/amumax-standardproblem4-relax.zarr`
+  ma jedną klatkę `m` o shape `(1,1,32,128,3)` oraz osobne kanały tabeli
+  `mx,my,mz`; nie użyto konwertera OVF.
+- Fullmag wykonał `projected_gradient_bb` przez zarządzaną recepturę
+  `just fem-managed-headless gpu`, a następnie końcowy etap
+  `flat_save_state`; artefakt `states/relaxed_m.zarr.zip` zawiera wyłącznie
+  `m(node,component)` dla 32 075 węzłów.
+- CLI zapisał JSON w
+  `.fullmag/reports/mumax-fullmag-validation-smoke/comparison/`
+  `relaxed-texture-comparison.json`.
+- Manifest wejść i komendy znajduje się w
+  `.fullmag/reports/mumax-fullmag-validation-smoke/comparison/`
+  `amumax-relax-manifest.json`.
+
+Operator restrykcji został poprawiony po kontroli produkcyjnej: dla
+czworokątów/pięciokątów powstałych po przecięciu `prism6` z komórką FDM używa
+shoelace area-centroid, a nie średniej arytmetycznej wierzchołków. Test
+regresyjny wymusza zachowanie całki dla pola afinicznego.
+
+Kontrola produkcyjna wykryła również rozbieżność kolejności węzłów: stan `m`
+Fullmaga jest zapisany po re-orderingu wspólnej siatki przez Rust planner,
+natomiast `.fullmag-mesh` zachowuje kolejność przed plannerem. Loader korzysta
+teraz z pełnego `execution_plan.backend_plan.mesh` z run bundle i odnotowuje
+`node_order="native_planner_mesh"`; przy podanym run bundle bez tych metadanych
+kończy się błędem zamiast mieszać wartości z innymi współrzędnymi.
+
+Wynik jest ilościowy, ale nie jest jeszcze kwalifikacją zgodności solverów.
+Coverage wynosi `0.9999999999984–1.0000000000015`, a względny błąd objętości
+`5.52e-15`; błąd całki FEM→Cartesian jest około `5.4e-37`, `3.4e-37` i
+`5.9e-41` dla `(x,y,z)`. Po zastosowaniu właściwej kolejności węzłów średnia
+restrykcji Fullmaga zgadza się z natywną tabelą do poziomu zaokrąglenia
+(`(0.97837365, 0.10333565, 4.4887e-6)`).
+
+Na wspólnej siatce pozostaje fizyczna/numerical różnica obu rozwiązań:
+vector RMS `0.0548477`, cosine similarity `0.9984958`, `mx` RMS `0.0299922`,
+`my` RMS `0.0459209`, `mz` RMS `8.56e-5`, vector max `0.2411974` i `p99
+0.2058739`. Średnie MuMax3 z tekstury i tabeli nadal różnią się tylko o
+`3.3e-9` oraz `4.7e-9`. Nie jest to jeszcze physics PASS; potrzebna jest
+seria zbieżności z Etapu 9.
+
+Dowód natywnego uruchomienia ma ograniczoną świeżość binarki: zarządzany
+runtime, który ukończył przebieg, jest czystym wariantem commit `ada50ce6`
+(GPU `RTX 4080 SUPER`, `fem_native_gpu`, CUDA/HYPRE device, bez fallbacku).
+Ten wariant poprzedza poprawkę `1066306c` zachowującą solver IR przy finalnym
+`save_state`, dlatego przebieg użył jednorazowego wrappera
+`/tmp/fullmag-sp4-managed-wrapper.py`, który zmienił wyłącznie przechwycenie
+stage IR; nie zmieniał równań, parametrów ani natywnego backendu. Jest to
+jawnie oznaczone w manifeście jako ograniczenie świeżości end-to-end runtime.
+Budowa runtime z aktualnego HEAD została zablokowana przez niezwiązaną
+migrację spin-transport (`coupled_checkpoint`/`MeshIR` API) oraz brak miejsca
+na osobnym cache; nie użyto obejścia ani nie nadpisano dirty runtime.
 
 ## Cel
 
@@ -40,12 +91,14 @@ Implementacja planu nie zmienia `ProblemIR`, publicznego authoringu, plannera an
 
 Warunkiem wejściowym jest zgodność problemu fizycznego, sprawdzana przed porównaniem pola: `500×125×3 nm`, `Ms=800 kA/m`, `Aex=13 pJ/m`, brak anizotropii i pola zewnętrznego, ten sam znormalizowany stan początkowy wynikający z `(1,0.1,0)` oraz ta sama konwencja zredukowanej magnetyzacji. `alpha=0.02` ma zostać zapisane w provenance, ale dla poprawnie osiągniętego minimum nie powinno zmieniać stanu równowagowego.
 
-Oba skrypty muszą jawnie zapisać końcową magnetyzację po relaksacji. W MuMax3 służy do tego `save(m)` po `minimize()`. W Fullmagu nie należy używać `film.save(...)`, ponieważ ta metoda zapisuje już załadowany stan obiektu, a nie wynik późniejszego etapu solvera. Istniejącym odpowiednikiem końcowego snapshotu jest `study.stages.add_save_state(...)` bezpośrednio po etapie `relax`. Jedynym zapisywanym polem wektorowym ma być `m` ze wszystkimi trzema komponentami; tabela skalarów pozostaje osobnym dowodem zbieżności i natywnej średniej.
+Oba skrypty muszą jawnie zapisać końcową magnetyzację po relaksacji. W użytym amumax służy do tego `save(m)` po `relax()` (równoważny przebieg można wykonać przez `minimize()`), a `tablesave()` zapisuje końcową średnią. W Fullmagu nie należy używać `film.save(...)`, ponieważ ta metoda zapisuje już załadowany stan obiektu, a nie wynik późniejszego etapu solvera. Istniejącym odpowiednikiem końcowego snapshotu jest `study.stages.add_save_state(...)` bezpośrednio po etapie `relax`. Jedynym zapisywanym polem wektorowym ma być `m` ze wszystkimi trzema komponentami; tabela skalarów pozostaje osobnym dowodem zbieżności i natywnej średniej.
 
 ## Stan wyjściowy potwierdzony 2026-08-01
 
 - MuMax3 używa layoutu `m.shape == (t,z,y,x,3)`; osie komponentów mają kolejność `(x,y,z)`.
-- Aktualny skrypt `external_solvers/3/test/standardproblem4.mx3` opisuje siatkę `128×32×1`, próbkę `500×125×3 nm` i kończy się na `minimize()`.
+- Skrypt referencyjny `external_solvers/3/test/standardproblem4.mx3` opisuje
+  siatkę `128×32×1` i próbkę `500×125×3 nm`; autorytatywny przebieg tego
+  raportu używa osobnego skryptu amumax z `relax(); save(m); tablesave()`.
 - Obecny `external_solvers/3/test/standardproblem4.zarr` nie może być wejściem referencyjnym: tablica `m` ma 11 klatek z czasami `0–1 ns`, podczas gdy aktualny skrypt i log nie zawierają etapu dynamicznego. Store łączy dane z różnych uruchomień.
 - Istniejący wynik Fullmaga dla projected-gradient BB zawiera końcową średnią około `(0.9783736, 0.1033357, 4.49e-6)`, lecz autosave zapisuje `H_ex`, `H_demag`, `H_eff`, a nie końcowe pole `m`. Jest tylko diagnostyką: nie dowodzi zgodności z aktualną lokalną tolerancją scenariusza i nie pozwala porównać tekstury.
 - Magnetyczna część kanonicznego mesha Fullmaga składa się z 16 088 elementów `prism6` w jednej warstwie przez grubość. Airbox zawiera osobne `pyramid5` i `tet4`.
@@ -231,9 +284,9 @@ def load_mumax_magnetization(
    - zgodność `Nx/Ny/Nz`, `Tx/Ty/Tz`, czasu pola i ostatniego wiersza tabeli;
    - efektywne `Ms=800e3 A/m`, `Aex=13e-12 J/m`, brak pola zewnętrznego i stan początkowy;
    - SHA-256 skryptu, metadanych i store;
-   - manifest zakończonego uruchomienia `minimize()`.
+   - manifest zakończonego uruchomienia `relax()`/`minimize()`.
 
-6. Dodać test regresyjny, który odrzuca obecny mieszany Zarr z 11 niezerowymi czasami, gdy skrypt/log opisuje wyłącznie `minimize()`.
+6. Dodać test regresyjny, który odrzuca obecny mieszany Zarr z 11 niezerowymi czasami, gdy skrypt/log opisuje wyłącznie stan końcowy bez dynamiki.
 
 Testy:
 
@@ -488,16 +541,22 @@ PYTHONPATH=packages/fullmag-py/src:. pytest -q \
 
 Kryterium: relaksacyjny raport korzysta z natywnej średniej oraz nowego operatora; kod dynamiczny pozostaje nietknięty.
 
-### Etap 7 — CLI i audytowalny raport
+### Etap 7 — CLI i audytowalny raport (wersja v1 wykonana)
+
+Wersja v1 dostarcza `scripts/compare_relaxed_magnetization.py` oraz
+JSON-serializowalny raport metryk i provenance. Osobny bundle map
+przestrzennych i wykresy pozostają świadomie odroczonym rozszerzeniem; nie są
+używane do bieżącej kwalifikacji.
 
 1. Utworzyć CLI z argumentami:
 
 ```text
---mumax-zarr PATH
---fullmag-bundle PATH
+--mumax PATH
+--fullmag-state PATH
 --fullmag-mesh PATH
---output-dir PATH
---edge-band-m 12e-9
+--fullmag-run-bundle PATH (wymagany dla native planner mesh)
+--output PATH
+--high-error-threshold 1e-3
 ```
 
 Nie dodawać selektora czasu ani indeksu. Każde wejście musi jednoznacznie publikować jeden końcowy stan relaksacji.
@@ -549,15 +608,19 @@ from fullmag.analysis import (
 )
 
 report = compare_relaxed_states(
-    ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-    "relaxed-s-state/mumax/standardproblem4.zarr",
+    ".fullmag/reports/mumax-fullmag-validation-smoke/"
+    "amumax-standardproblem4-relax.zarr",
     fullmag_state_path=(
-        ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-        "relaxed-s-state/fullmag/artifacts/states/relaxed_m.zarr.zip"
+        ".fullmag/reports/mumax-fullmag-validation-smoke/"
+        "fullmag-fem-sp4-managed-ada50ce-20260802/states/relaxed_m.zarr.zip"
     ),
     fullmag_mesh_path=(
-        ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-        "relaxed-s-state/fullmag/relax_projected_gradient_bb.fullmag-mesh"
+        "tests/standard_problems/mumag/sp4/fem/scenarios/"
+        "relax_projected_gradient_bb.fullmag-mesh"
+    ),
+    fullmag_run_bundle=(
+        ".fullmag/reports/mumax-fullmag-validation-smoke/"
+        "fullmag-fem-sp4-managed-ada50ce-20260802"
     ),
 )
 ```
@@ -573,56 +636,69 @@ PYTHONPATH=packages/fullmag-py/src:. pytest -q \
 
 Kryterium: identyczny fixture daje raport z zerowym RMSE; stary Zarr, błędna oś, niepełne coverage i niespójny final step są odrzucane.
 
-### Etap 8 — świeże uruchomienia i pierwszy raport
+### Etap 8 — świeże uruchomienia i pierwszy raport (wykonano 2026-08-02)
 
-1. Nie nadpisywać lokalnego `external_solvers/3/test/standardproblem4.zarr`. Świeży MuMax3 output zapisać w:
-
-   `.fullmag/reports/standard-problems/mumag/sp4/texture-comparison/relaxed-s-state/mumax/standardproblem4.zarr`.
-
-2. W `external_solvers/3/test/standardproblem4.mx3` dodać bezpośrednio po relaksacji dokładnie:
+1. Nie używać mieszanego `external_solvers/3/test/standardproblem4.zarr`.
+   Czysty skrypt amumax zapisano jako
+   `.fullmag/reports/mumax-fullmag-validation-smoke/amumax-standardproblem4-relax.mx3`:
 
 ```go
-minimize()
+setgridsize(128, 32, 1)
+setcellsize(500e-9/128, 125e-9/32, 3e-9)
+Msat = 800e3
+Aex = 13e-12
+alpha = 0.02
+m = uniform(1, 0.1, 0)
+relax()
 save(m)
 tablesave()
 ```
 
-Nie dodawać `autosave(m, ...)`, ponieważ porównanie wymaga jednego stanu końcowego, a nie szeregu czasowego. Zachować wszystkie pozostałe lokalne zmiany użytkownika w skrypcie. Obliczyć SHA-256 wejściowego `.mx3`, skopiować go do katalogu raportu i uruchomić MuMax3 z jawnym outputem. `save(m)` ma utworzyć jedną klatkę `m(t=1,z=1,y=32,x=128,component=3)`, a `tablesave()` ma dopisać odpowiadający jej końcowy wiersz średnich. Manifest ma zawierać:
-
-   - SHA-256 binarki i skryptu;
-   - wersję/commit MuMax3, jeśli binarka go raportuje;
-   - pełną komendę;
-   - identyfikację GPU;
-   - rozstrzygnięte parametry problemu fizycznego z outputu/logu, w tym końcowe `Ms=800e3 A/m` mimo wcześniejszego testowego przypisania `1600e3 A/m` w skrypcie;
-   - `shape_tzyxc == [1,1,32,128,3]`;
-   - status ukończonego `minimize()`;
-   - hash wynikowego store.
-
-3. Rozszerzyć `scripts/run_fem_sp4_scenario.sh` o opcjonalny, jawny `output_dir` i dodać niełamiącą istniejących wywołań recepturę `fem-sp4-scenario-output`. Receptura ma używać tego samego zarządzanego runtime co `fem-sp4-scenario`, przekazać `--output-dir`, uruchomić collector i skopiować użyty `.fullmag-mesh` do katalogu raportu wraz z SHA-256. Następnie uruchomić Fullmag wyłącznie tą recepturą:
+2. Uruchomienie wykonano wskazanym binarnym amumax, bez dynamiki i bez
+   ingerencji w skrypt użytkownika:
 
 ```bash
-just ensure-managed-fem-runtime
-just fem-sp4-scenario-output gpu \
-  tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py \
-  texture-compare-relaxed \
-  .fullmag/reports/standard-problems/mumag/sp4/texture-comparison/relaxed-s-state/fullmag/relax_projected_gradient_bb.zarr \
-  false
+/home/kkingstoun/git/3/build/mumax3 -s -webui-disable -f \
+  -storage-format=zarr \
+  -o .fullmag/reports/mumax-fullmag-validation-smoke/amumax-standardproblem4-relax.zarr \
+  .fullmag/reports/mumax-fullmag-validation-smoke/amumax-standardproblem4-relax.mx3
 ```
 
-Wymagany dowód: FEM GPU `double`, brak fallbacku, identity urządzenia, torque-qualified completion, dokładnie jeden `artifacts/states/relaxed_m.zarr.zip` z datasetem `m(node,component)`, brak okresowych Zarr pól `H_*`, fingerprint mesha i natywne `mx,my,mz`.
+   Artefakt natywny ma `shape_tzyxc == [1,1,32,128,3]`, `t=0`, kompletne
+   komponenty `(x,y,z)`, tabelę końcową `mx,my,mz` oraz status ukończenia.
+   Hashy binarki, skryptu i store, wersji/commit, GPU, parametrów i komendy
+   dowodzi `comparison/amumax-relax-manifest.json`.
 
-4. Dodać recepturę postprocessingu przyjmującą cztery jawne ścieżki i uruchomić ją dla katalogu:
+3. Fullmag uruchomiono przez zarządzaną recepturę GPU w czystym wariancie
+   runtime `ada50ce635c114b838a97b885a738f002805fd4d`. Końcowy etap
+   `add_save_state(... dataset="m")` zapisał wyłącznie
+   `states/relaxed_m.zarr.zip`; tabela accepted steps i kwalifikacja torque są
+   w run bundle, a pola okresowe pozostają wyłączone (`fields=[]`).
 
-   `.fullmag/reports/standard-problems/mumag/sp4/texture-comparison/relaxed-s-state`.
+4. Postprocessing wykonano jawnie:
 
-5. Pierwszy raport ma być opisowy, bez arbitralnego physics PASS/FAIL. Musi odpowiedzieć:
+```bash
+PYTHONPATH=packages/fullmag-py/src \
+python3 scripts/compare_relaxed_magnetization.py \
+  --mumax .fullmag/reports/mumax-fullmag-validation-smoke/amumax-standardproblem4-relax.zarr \
+  --fullmag-state .fullmag/reports/mumax-fullmag-validation-smoke/fullmag-fem-sp4-managed-ada50ce-20260802/states/relaxed_m.zarr.zip \
+  --fullmag-mesh tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.fullmag-mesh \
+  --fullmag-run-bundle .fullmag/reports/mumax-fullmag-validation-smoke/fullmag-fem-sp4-managed-ada50ce-20260802 \
+  --output .fullmag/reports/mumax-fullmag-validation-smoke/comparison/relaxed-texture-comparison.json
+```
 
-   - ile wynosi różnica natywnych średnich;
-   - ile tej różnicy wyjaśnia storage i restrykcja;
-   - gdzie przestrzennie leży pozostały błąd;
-   - czy błąd koncentruje się na krawędziach, narożnikach, wnętrzu lub przez grubość.
+5. Raport nie nadaje arbitralnego physics PASS/FAIL. Rozdziela zachowanie
+   objętości (`5.52e-15`), restrykcję (błąd całki `5.4e-37–5.9e-41`), różnicę
+   tablica-versus-textura amumax (`3.3e-9`, `4.7e-9`) oraz różnicę solverów.
+   Raport używa `node_order="native_planner_mesh"` z
+   `execution_plan.backend_plan.mesh`; średnia po restrykcji zgadza się z
+   natywną tabelą do błędu zaokrąglenia. Pozostałe różnice są różnicą pól
+   solverów, nie artefaktem kolejności węzłów ani awarią operatora
+   FEM→Cartesian: vector RMS `0.0548477`, cosine `0.9984958`, vector max
+   `0.2411974`.
 
-Kryterium: istnieje świeży, samowystarczalny raport końcowego stanu S, a obecny mieszany Zarr nie jest cytowany jako wynik.
+Kryterium tego etapu jest spełnione: istnieje świeży, samowystarczalny raport
+końcowego stanu, a stary mieszany Zarr nie jest cytowany jako wynik.
 
 ### Etap 9 — zbieżność przed przypisaniem przyczyny solverowi
 
@@ -690,8 +766,11 @@ Plan zostanie zrealizowany, gdy:
 - Fullmag publikuje końcowe `m`, właściwy mesh, accepted step i natywną średnią;
 - MuMax3 publikuje jedną końcową klatkę zgodną z tabelą i skryptem;
 - stałe i liniowe pola przechodzą testy dokładnej restrykcji;
-- realny SP4 zachowuje średnią FEM w tolerancji operatora;
-- raport zawiera dekompozycję średniej, metryki tekstury i mapy przestrzenne;
+- realny SP4 zachowuje średnią FEM w tolerancji operatora, z użyciem natywnej
+  kolejności węzłów planera;
+- raport JSON zawiera dekompozycję średniej, metryki tekstury i provenance;
+  mapy przestrzenne są świadomie odroczone jako osobne rozszerzenie v1;
 - wykonano co najmniej jeden zarządzany przebieg Fullmaga i odpowiadający mu świeży przebieg MuMax3;
 - raport jasno odróżnia dowód runtime od samych testów postprocessingu;
-- w `external_solvers/3/test/standardproblem4.mx3` dodano wyłącznie autoryzowane `save(m)` i `tablesave()`, a wszystkie pozostałe lokalne zmiany użytkownika pozostały nietknięte.
+- użyty amumax zapisuje `m` i `tablesave()` natywnie do jednego Zarr, a
+  lokalny `external_solvers/3` pozostaje nietknięty poza zmianami użytkownika.

@@ -1619,12 +1619,12 @@ Do odrzucenia jako publiczny kontrakt:
 
 Relevantne pliki:
 
-- `STransport_Charge.cpp`;
-- `STransport_Spin.cpp`;
-- `STransport_Spin_GInterf.cpp`;
-- `STransportCUDA*`;
-- `SOTField.cpp` i CUDA;
-- `Oersted.cpp`/`OerstedCUDA.cpp`.
+- `external_solvers/BORIS/Boris/STransport.h` i `STransport_Spin.cpp`;
+- `external_solvers/BORIS/Boris/Transport_Spin.cpp`;
+- `external_solvers/BORIS/Boris/STransport_Spin_GInterf.cpp`;
+- `external_solvers/BORIS/Boris/TransportBase.h`;
+- `external_solvers/BORIS/Boris/TransportCUDA.cu`;
+- `external_solvers/BORIS/Boris/Transport_Spin_Display.cpp`.
 
 Do wykorzystania:
 
@@ -1638,6 +1638,39 @@ Nie należy kopiować szerokiego supermesh/module ownership. Trzeba też zachowa
 negatywne lekcje: BORIS Oersted może użyć `sigma E` zamiast całkowitego `J_c`,
 a jego ścieżka cienka `nz=1` nie jest właściwym oraklem. Fullmag zachowuje
 ProblemIR, planner i backend-neutralne kontrakty.
+
+#### 11.2.1. Weryfikacja źródłowa 2026-08-02
+
+Porównanie wykonane na lokalnym snapshotcie `external_solvers/BORIS/Boris` jest
+zapisane szczegółowo w
+`docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/BORIS_FULLMAG_SHE_COMPARISON.md`.
+Nie jest to porównanie konkretnego wydania BORIS, ponieważ katalog nie ma
+niezależnej tożsamości commita w checkoutcie.
+
+Ustalenia, które muszą pozostać częścią planu:
+
+1. `STransport::solve_spin_transport_sor` wykonuje jawne `V -> E -> S`;
+   domyślne wartości to `errorMaxLaplace=1e-6`, `maxLaplaceIterations=500`,
+   `s_errorMax=1e-5`, `s_maxIterations=200` oraz damping `(1.4,0.5)`.
+2. Direct SHE w BORIS jest realizowane przez `SHA` w
+   `Transport::NHNeumann_Sdiff` i w źródle `PrimeSpinSolver_Spin`; inverse SHE
+   przez niezależny `iSHA` w `Transport::NHNeumann_Vdiff` oraz
+   `CalculateElectricField_Spin_withISHE_Kernel`.
+3. `SHA` i `iSHA` mogą się różnić. Ustawienie `iSHA=SHA` jest konieczne do
+   benchmarku wzajemności; `iSHA=0` jest wyłącznie testem one-way.
+4. BORIS przechowuje `S` i używa adaptera
+   `V_s=(De/elC)(e/muB)S`; Fullmag przechowuje pełne `mu_s` w woltach. Bez
+   kalibracji tego mapowania porównanie torque jest nieważne.
+5. `Gi/Gmix` i N/F/T są wykonywalnym wzorcem interfejsów, ale nie oznacza to,
+   że Fullmag może awansować mixing/SML bez własnego bilansu fluxu, reservoiru
+   i torque.
+
+Wniosek planistyczny: BORIS jest zewnętrznym executable reference dla zakresu
+ i implementacji, a Fullmag M2 pozostaje docelowym, bardziej jawnym
+ kontraktem fizycznym. Nie wolno twierdzić o zgodności ani awansować
+ capability na podstawie samej obecności kodu BORIS. Benchmark 1D/2D musi
+ najpierw uzgodnić `S <-> mu_s`, znaki, normalne, `SHA=iSHA`, BC, residuale i
+ bilanse, a następnie wykonać sweep siatki, tolerancji oraz CPU/CUDA.
 
 ### 11.3. NeuralMag
 
@@ -3300,12 +3333,12 @@ zostały do tego commitu dołączone.
 Wariant `40 nm` byłby błędną interpretacją i został wykluczony testem. Fullmag
 loweruje `cell=(3.125,3.125,2.5) nm` oraz `universe.size=(100,100,10) nm`.
 
-### 32.2. Wyniki runtime
+### 32.2. Wyniki runtime — historyczny baseline v0
 
 | Gate | Wynik | Granica |
 |---|---|---|
 | FDM Python/IR | **PASS** | kontrakt authoringu; nie jest to dowód trajektorii |
-| FDM CUDA adaptive RK45 | **REJECTED CORRECTLY** | brak executable timestep capability identity; brak CPU fallbacku |
+| FDM CUDA adaptive RK45 | **EXECUTABLE, UNVALIDATED** | single-grid v2 identity is now explicit; clean trajectory/trace qualification remains open; no CPU fallback |
 | FDM CUDA fixed Heun, `dt=1e-13 s`, relax `1e-4 T` | wykonany, `not_evaluated` | `m_final` mean `(-0.23433556,-0.09937264,0.02290284)`; max błąd `4.84e-3` |
 | FDM CUDA fixed Heun, `dt=1e-14 s`, relax `1e-4 T` | wykonany, `not_evaluated` | `m_final` mean `(-0.23433558,-0.09937265,0.02290284)`; max błąd `4.84e-3` |
 | FDM CUDA fixed Heun, `dt=1e-14 s`, relax `1e-6 T` | wykonany, `not_evaluated` | `m_final` mean `(-0.23433558,-0.09937255,0.02290284)`; max błąd `4.84e-3` |
@@ -3315,18 +3348,18 @@ Referencja z pliku MuMax3 to
 Wszystkie trzy ukończone przebiegi diagnostyczne przekraczają tę tolerancję, głównie w
 `m_y`; nie są kwalifikacją. `qualification.json` ma `status=not_evaluated`.
 
-Bez `tableautosave` bieżący scalar publisher zapisuje w `scalars.csv`
-`mx=my=mz=0`, mimo że `m_final.json` zawiera 4096 niezerowych wektorów. Do
-porównania użyto zatem jawnie średniej z `m_final.json`; ten defekt artefaktu
-pozostaje osobną bramą i nie może być maskowany zerowym wynikiem.
+W tym historycznym artefakcie, utworzonym przed poprawką publikacji skalarów,
+`scalars.csv` zawierał `mx=my=mz=0`, mimo że `m_final.json` miał 4096
+niezerowych wektorów. Do porównania użyto więc średniej z `m_final.json`.
+Aktualny stan tej bramy opisuje addendum 32.6.3.
 
-### 32.3. Wpływ na procent realizacji
+### 32.3. Wpływ na procent realizacji — stan przed świeżym v1
 
 Odtworzenie SP5 zwiększa pokrycie aplikacyjnego workloadu i daje konkretny
 source-to-IR oraz executed-device diagnostic, ale nie zamyka żadnej z
-niezależnych bram produkcyjnych. Ocena celu pozostaje **82% implementacji /
-58% gotowości produkcyjnej**. Do zamknięcia pozostają: CPU adaptive RK45 z
-kwalifikowaną relaksacją, naprawa scalar publication, rozdzielenie błędu stanu
+niezależnych bram produkcyjnych. Na tym historycznym etapie ocena wynosiła
+**82% implementacji / 58% gotowości produkcyjnej**. Do zamknięcia pozostają: CPU adaptive RK45 z
+kwalifikowaną relaksacją, rozdzielenie błędu stanu
 od konwencji Zhang–Li/demag, device-resident GPU adaptive parity, pełna suita
 Python, cross-backend FEM/FDM oraz końcowy browser/provenance gate.
 
@@ -3342,10 +3375,528 @@ Porównanie kodu źródłowego wykazało rozdzielną, konkretną różnicę nume
   (analogicznie dla pozostałych osi), a wynik dodaje bezpośrednio do RHS w
   `1/s`.
 
-Mapowanie parametrów (`J`, `Pol`, `xi`) jest zatem poprawne semantycznie, ale
-obecny operator przestrzenny nie jest MuMax3-compatible. Plateau błędu
-`4.84e-3` przy `dt=1e-13` i `1e-14 s` jest dowodem otwartej bramki operatora,
-nie dowodem błędnego znaku ani prefaktora. Wymagany następny krok to osobna,
-wersjonowana realizacja centralnego operatora zgodna z MuMax3 oraz oracle
-jednego kroku; nie wolno zmieniać globalnie legacy v0 bez migracji testów i
-provenance.
+Mapowanie parametrów (`J`, `Pol`, `xi`) było poprawne semantycznie, ale
+historyczny operator przestrzenny nie był MuMax3-compatible. Plateau błędu
+`4.84e-3` przy `dt=1e-13` i `1e-14 s` pozostaje baseline'em starego v0, a nie
+dowodem błędnego znaku ani prefaktora. Wersjonowana realizacja centralna i
+oracle zostały dodane w addendum 32.5; legacy v0 nie został zmieniony.
+
+## 32.5. Implementacja wersjonowanego operatora MuMax3 (2026-08-02)
+
+Wprowadzono następny krok bez naruszania `zhang_li.legacy_fullmag.v0`:
+
+- `ZhangLiSTT` przyjmuje jawne `operator_version="zl_mumax3_central_v1"`;
+  canonical identity (`id`, `target`, `lande_g`) przechodzi przez Python,
+  loader, script builder, SceneDocument, IR i `FdmPlanIR`;
+- planner dopuszcza MuMax3 wyłącznie na FDM i odrzuca FEM, a canonical FEM
+  `zhang_li.fullmag.v1` odrzuca na FDM zamiast uruchamiać zły legacy stencil;
+- FDM CPU realizuje dokładne stałe z `zhangli2.cu`, centralny stencil z clamp/PBC,
+  Gilbert projection i bezalokacyjną ścieżkę SoA; oracle testuje brzeg oraz
+  zgodność AoS/SoA;
+- ABI `fullmag_fdm_plan_desc` oraz `SttParams` przenoszą discriminator do
+  natywnych FP64/FP32 kernelów CUDA. Obie precyzje mają osobną gałąź centralną,
+  a dotychczasowa gałąź legacy pozostaje niezmieniona;
+- źródłowy native contract `stt_pbc_contract` sprawdza obecność ABI, kontekstu,
+  centralnego stencilu i wszystkich osi okresowych.
+
+Dowody wykonane lokalnie:
+
+| Gate | Wynik | Granica |
+|---|---|---|
+| Python SP5 + STT focused | **19 passed** | authoring/IR, bez trajektorii |
+| `cargo check -p fullmag-plan` | **PASS** | planowanie, bez runtime device |
+| `cargo check -p fullmag-runner` | **PASS** | CPU/native wrapper compile, bez managed CUDA build |
+| `fullmag-engine` MuMax3 one-step oracle | **1 passed** | algebra i clamp, bez cross-backend trajectory |
+| CUDA managed rebuild + SP5 rerun | **DONE — diagnostyczny** | świeży runtime i device-resident run wykonane; trajektoria nie przechodzi tolerancji |
+
+Do zamknięcia bramy SP5 pozostaje: pełny CPU adaptive RK45, sweep kroku i
+niezależne rozdzielenie stanu relaksacji, operatora, demagnetyzacji i kolejności
+aktualizacji. GPU fixed-step pozostaje `diagnostic-unqualified`.
+
+## 32.6. Świeże wykonanie SP5 i rozdzielenie defektu artefaktu od fizyki (2026-08-02)
+
+### 32.6.1. Tożsamość i wykonanie referencji
+
+MuMax3 uruchomiono bezpośrednio z `external_solvers/3/test/standardproblem5.mx3`.
+Wersja binarna to `v3.11.2`, commit `13ac56f1`, CUDA 12.4, NVIDIA GeForce RTX
+4080 SUPER, compute capability 8.9. Proces zakończył się kodem 0, a źródłowe
+`expect()` potwierdziły tolerancję `1e-4`. Zmierzone wartości:
+
+```text
+(-0.23488366603851318, -0.09453280270099640, 0.022961989045143127)
+```
+
+Artefakt referencji: `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-mumax3-reference-20260802-01`.
+Różnica względem literalnego golden w pliku źródłowym ma maksimum `8.59e-5`,
+więc wynik referencyjny mieści się w deklarowanej tolerancji.
+
+### 32.6.2. Fullmag managed CUDA
+
+Recepta `FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=1
+FULLMAG_RUNTIME_PRUNE=0 just rebuild-fem-runtime` zakończyła się poprawnie.
+Weryfikacja manifestu wykazała schema-v3, compute capability 8.9, ładowany
+HYPRE oraz commit źródłowy użyty przy eksporcie. Współdzielone drzewo robocze
+zmieniło commit podczas eksportu przez równoległy proces, dlatego ten runtime
+nie jest dowodem czystej/reproducible gałęzi; sam przebieg ma jawny device
+provenance i brak fallbacku.
+
+Fullmag uruchomiono z:
+
+```text
+FULLMAG_FDM_EXECUTION=gpu
+FULLMAG_SP5_DEVICE=gpu
+FULLMAG_SP5_FIXED_DT=1e-13
+FULLMAG_SP5_RELAX_TOL_T=1e-6
+FULLMAG_SP5_RELAX_MAX_STEPS=10000
+```
+
+Artefakt: `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-20260802-gpu2`.
+`metadata.json` potwierdza `execution_engine=cuda_fdm`, RTX 4080 SUPER, FP64,
+cuFFT i `lossy_fallback_used=false`. Średnia końcowa:
+
+| komponent | MuMax3 | Fullmag `zhang_li.mumax3.v1` | różnica |
+|---|---:|---:|---:|
+| $\bar m_x$ | `-0.2348836660385` | `-0.1168850822571` | `+1.1799858378145e-1` |
+| $\bar m_y$ | `-0.0945328027010` | `-0.0482401146804` | `+4.6292688020580e-2` |
+| $\bar m_z$ | `+0.0229619890451` | `+0.0257941117845` | `+2.8321227393710e-3` |
+
+Maksimum błędu komponentowego wynosi `1.1799858378e-1`, około 1180 razy ponad
+`1e-4`; `qualification.json` pozostaje `not_evaluated`. To jest wykonany wynik
+diagnostyczny, nie kwalifikacja produkcyjna. Pełny CPU przebieg został
+uruchomiony, ale przerwany w relaksacji przy kroku 550 z powodu kosztu
+otwarto-granicznej demagnetyzacji; CPU one-step oracle pozostaje zielony, lecz
+nie zastępuje full-trajectory gate.
+
+### 32.6.3. Scalar publication
+
+Aktywna ścieżka CUDA w `crates/fullmag-runner/src/dispatch.rs` pobiera jeden
+snapshot `final_magnetization`, używany zarówno do `m_final.json`, jak i do
+końcowego `scalars.csv`. Focused test
+`dispatch::tests::native_cuda_scalar_output_boundary_reduces_m_before_recording`
+przeszedł. W świeżym artefakcie różnice scalar–średnia pola wynoszą
+`(2.8e-17, 0.0, -3.5e-18)`, więc dawny zerowy fallback artefaktu został usunięty.
+
+### 32.6.4. Ocena i następne bramy
+
+Wynik centralnego v1 jest gorszy od historycznego legacy upwind baseline'u i
+nie mieści się w tolerancji MuMax3. Nie wolno z tego wnioskować o błędnym
+prefaktorze, znaku lub demagnetyzacji bez osobnych testów kontrolnych. Następne
+bramy muszą rozdzielić: (1) stan po relaksacji, (2) sam operator z analitycznym
+gradientem, (3) sweep `dt`, (4) demagnetyzację i kolejność aktualizacji oraz
+(5) pełny CPU adaptive RK45.
+
+Po tym dowodzie ocena celu wynosi konserwatywnie **84% implementacji / 58%
+gotowości produkcyjnej**. Implementacja rośnie dzięki zamknięciu wersjonowanego
+operatora, ABI CUDA i publikacji skalarów; gotowość produkcyjna pozostaje bez
+zmiany, ponieważ świeża trajektoria nie przechodzi tolerancji, CUDA adaptive
+nie ma capability identity, a cross-backend/FEM i pełna suita Python nadal nie
+są zamknięte.
+
+## 32.7. Porównanie SHE z BORIS — wynik audytu 2026-08-02
+
+Porównano normatywną stronę Fullmag
+`docs/physics/0970-spin-hall-drift-diffusion-transport.md`, kontrakt runtime,
+capability matrix oraz lokalne źródła
+`external_solvers/BORIS/Boris`. Szczegółowy raport znajduje się w
+`BORIS_FULLMAG_SHE_COMPARISON.md` w tym katalogu.
+
+### 32.7.1. Rozstrzygnięcie fizyczne
+
+BORIS jest obecnie silniejszym **wykonywalnym wzorcem**: ma sekwencyjny solve
+charge/spin, direct SHE (`SHA`), inverse SHE (`iSHA`), N/F/T contacts,
+`Gi/Gmix`, bulk/interface torque oraz CPU/CUDA realizację. Fullmag ma
+czytelniejszą **docelową formulację**: pełne `mu_s`, rozdział M1/M2/M3, jedna
+macierz reciprocal, jawne jednostki i bilanse. To drugie nie jest jeszcze
+dowodem produkcyjnej implementacji.
+
+W szczególności nie wolno utożsamiać BORIS `S` z Fullmag `mu_s`. BORIS jawnie
+używa adaptera `V_s=(De/elC)(e/muB)S`, natomiast Fullmag definiuje `mu_s` jako
+pełne rozszczepienie kanałów `V +/- mu_s/2`. Każdy benchmark musi ustalić tę
+konwersję na profilu analitycznym, a nie dopasowywać znak lub skalę torque po
+wykresie.
+
+### 32.7.2. Nowa bramka porównawcza
+
+Dodano niezależny gate `SHE-BORIS-001`:
+
+- [ ] zamrożona tożsamość snapshotu BORIS;
+- [ ] 1D direct-SHE z `iSHA=0` i wspólnymi `De`, `elC`, `lambda_sf`;
+- [ ] 1D reciprocal z `iSHA=SHA`;
+- [ ] konwersja `S <-> mu_s` oraz tabela znaków/normalnych;
+- [ ] porównanie `V`, akumulacji, pełnego `Q_ia`, fluxu normalnego, residualu,
+      charge/spin balance i torque interfejsowego;
+- [ ] trzy siatki, sweep tolerancji i limitów iteracji;
+- [ ] BORIS CPU/CUDA oraz Fullmag FDM CPU, FEM CPU i kwalifikowane GPU;
+- [ ] zapis artefaktów i provenance bez awansu capability przed przejściem.
+
+Do czasu zamknięcia `SHE-BORIS-001` direct/inverse SHE Fullmag pozostaje
+`semantic_only` poza jasno ograniczonym FEM CPU M1 reference slice, a ocena
+gotowości produkcyjnej pozostaje **58%**. Ocena pokrycia implementacyjnego
+pozostaje **84%**; porównanie nie dodaje punktów za samą obecność zewnętrznego
+solvera.
+
+## 32.8. Korekta kontrolera adaptacyjnego CUDA po merge (2026-08-02)
+
+Końcowa weryfikacja ujawniła regresję w scalonej ścieżce integratorów RK23/DP45:
+merge pozostawił starsze warianty czterech kernelów, bez typowanego
+`dt_min_exhausted`, snapshotu FSAL i normalizacji błędu przez `atol`/`rtol`.
+Dodatkowo legacy kernel polityki adaptacyjnej dostawał `adaptive_atol` jako
+próg, mimo że nowy kernel błędu zwraca już bezwymiarowy błąd znormalizowany.
+Skutkiem było efektywne zastosowanie `atol` po raz drugi i fałszywe wyczerpanie
+minimalnego kroku w teście z dynamicznym polem Oersteda.
+
+Korekta obejmuje wyłącznie istniejący kontrakt numeryczny: wszystkie cztery
+integratory CUDA liczą błąd z tą samą skalą `atol + rtol |m|`, zachowują
+`current_dt`, FSAL i stan magnetyzacji przy odrzuceniu/terminalnym
+`dt_min_exhausted`, a ścieżka fixed-step odświeża obserwable na końcu kroku.
+Legacy kontroler otrzymuje próg `1.0`, zgodny z bezwymiarowym wynikiem kernela.
+
+Świeże bramy managed/container po zmianie:
+
+| Gate | Wynik | Granica |
+|---|---|---|
+| `just verify-fdm-time-domain-native-contract` | **PASS** | ABI/source contract CPU+CUDA dla polityki czasu, Oersteda i partial-cell |
+| `just verify-fdm-oersted-native-contract` | **PASS** | wykonany CUDA runtime: stage-time, rollback, adaptive, FSAL, ABM3 i oracle osi |
+| `just verify-fdm-zhang-li-native-contract` | **PASS** | PBC/central-stencil contract oraz `cargo +nightly check --features cuda` |
+| `just verify-fdm-prescribed-sot-native-contract` | **PASS** | algebra SOT, CUDA FP64/FP32 runtime oraz `cargo +nightly check --features cuda` |
+
+Naprawa przywraca zamierzony kontrakt kontrolera i usuwa konkretną regresję
+merge, ale nie jest nową kwalifikacją fizyki. Nadal nie zamyka pełnej trajektorii
+SP5 (świeży fixed-step GPU wynik ma `qualification.json=not_evaluated` i
+maksymalny błąd około `1.18e-1`), bramy `SHE-BORIS-001`, cross-backend FEM/FDM
+ani produkcyjnej kwalifikacji adaptive GPU. Ocena pozostaje **84%
+implementacji / 58% gotowości produkcyjnej**.
+
+## 32.9. Granica parametru `lande_g` w realizacji MuMax3 (2026-08-02)
+
+Audyt ścieżki Python → IR → FDM wykazał, że canonical `lande_g` był wcześniej
+przenoszony jako metadana, lecz nie był używany przez kernel
+`zhang_li.mumax3.v1`. Był to błąd kontraktu: wartość `1.9` mogła przejść
+authoring, a wykonanie nadal używało stałych z zewnętrznego
+`zhangli2.cu`. Nie wolno naprawiać tego przez ciche przemnożenie prefaktora,
+bo zmieniłoby to źródłowo zgodną realizację SP5.
+
+Ustalona granica jest teraz jawna i testowana:
+
+- MuMax3-compatible `zl_mumax3_central_v1` wymaga `lande_g == 2.0`, zgodnie z
+  ustalonym przez źródło `GAMMA0=1.7595e11`; Python i walidator IR odrzucają
+  inną wartość komunikatem wskazującym `lande_g=2.0`;
+- `zhang_li.fullmag.v1` zachowuje pełny parametr `g` dla realizacji FEM/reference;
+- konfigurowalny `g` w FDM wymaga nowej wersji formuły, osobnego ABI/kernela i
+  niezależnego oracle'a — nie jest udawany przez obecny v1.
+
+Dowody:
+
+| Gate | Wynik |
+|---|---|
+| Python `TestZhangLiSTT` | **19 passed** |
+| IR `canonical_mumax3_zhang_li_requires_source_g_factor` | **PASS** |
+| JSON source map 0990 | **parseable; updated validation and symbol meaning** |
+
+Ta korekta poprawia zgodność interfejsu i eliminuje ciche ignorowanie parametru,
+ale nie zmienia statusu SP5: świeża trajektoria CUDA nadal jest
+`not_evaluated`, a pełna kwalifikacja CPU/GPU i cross-backend pozostają otwarte.
+
+## 32.10. Jawna tożsamość adaptive FDM CUDA (2026-08-02)
+
+Po przejściu bram kontraktowych dla kontrolera CUDA usunięto nieaktualną blokadę
+planera, która odrzucała każdą adaptację FDM CUDA tylko dlatego, że nie istniał
+wiersz tożsamości. Dodano `explicit_adaptive_fdm_cuda_double` do enumu
+kwalifikacji, registry oraz mapowania runtime. Wpis ma stan `unvalidated`:
+tożsamość wykonawcza jest teraz jawna, lecz registry nie awansuje jej bez
+niezależnego artefaktu, czystego źródła i śladu decyzji akceptacja/odrzucenie.
+
+Zakres pozostaje zamknięty:
+
+- dotyczy tylko single-grid FDM CUDA FP64 z RK23/DP45;
+- guardy `max_spin_rotation` i `norm_tolerance` nadal są odrzucane, bo native
+  enforcement nie jest kwalifikowany;
+- publiczny multilayer FDM nadal odrzuca adaptive;
+- brak wpisu kwalifikacyjnego nie wywołuje CPU fallbacku.
+
+Dowody po zmianie:
+
+| Gate | Wynik |
+|---|---|
+| planner `adaptive_fdm_requires_explicit_cpu_and_rejects_auto_or_cuda_routes` | **PASS** — CPU i jawne CUDA/GPU planują; auto nadal odrzucone |
+| runner registry lane coverage | **PASS** — 9 spójnych tożsamości, w tym adaptive FDM CUDA double |
+| managed runtime przed zmianą planera | **PASS**, ale binarium wymaga ponownego eksportu przed wykonaniem adaptive SP5 |
+
+Świeży managed runtime z tym mappingiem i wykonany adaptive RK45 są opisane w
+addendum 32.11. Nie dostarczyły jeszcze accepted-step trace ani kwalifikacji;
+ocena pozostaje **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.11. Świeży adaptive SP5 na urządzeniu CUDA — wykonanie bez kwalifikacji (2026-08-02)
+
+Po eksporcie runtime z aktualnego dirty tree wykonano SP5 z jawnym
+`FDM/CUDA/FP64/RK45/adaptive`. Artefakt
+`/zfn2/mateuszz/git/runs/mumax-sp5-fdm-mumax3-v1-20260802-gpu-adaptive1`
+potwierdza `execution_engine=cuda_fdm`, RTX 4080 SUPER (CC 8.9), cuFFT,
+FP64, `lossy_fallback_used=false` oraz
+`qualification_id=explicit_adaptive_fdm_cuda_double` z
+`validation_state=unvalidated`. Etap dynamiczny `1 ns` zakończył się kodem 0;
+średnia końcowa wyniosła
+`(-0.15208459449494185, -0.033110165787384384, 0.025342838207889982)`.
+Względem świeżej referencji MuMax3 maksimum błędu komponentowego wynosi
+`8.2799071544e-2`, a `qualification.json` pozostaje
+`status=not_evaluated`. `solver_attempts.csv` nie daje jeszcze accepted-step
+trace, więc dowód jest wykonaniem i identyfikacją lane'u, nie zbieżnością ani
+parity.
+
+Próba z `FULLMAG_SP5_RELAX_MAX_STEPS=100000` zakończyła się po około 22 850
+krokach relaksacji błędem `cudaMemcpyAsync(reduce_adaptive_error_policy):
+unspecified launch failure (719)` i nie wytworzyła finalnego artefaktu.
+Ponieważ podczas testu na karcie działały dwa niezależne przebiegi SP4, błąd
+pozostaje niesklasyfikowany: przed zmianą kernelu trzeba powtórzyć go na
+izolowanym urządzeniu z `CUDA_LAUNCH_BLOCKING=1` oraz zebrać pierwszy failing
+kernel. Nie jest to dowód błędnej fizyki ani dowód poprawności.
+
+Ten addendum zamyka wcześniejszy brak samej tożsamości adaptive CUDA, ale nie
+zamyka kwalifikacji SP5. Pozostają: accepted-step telemetry, pełna relaksacja
+bez błędu, CPU↔CUDA parity, sweep `dt`/siatki, rozdzielenie stanu relaksacji
+od operatora Zhang–Li, zgodność demagnetyzacji i kolejności aktualizacji oraz
+niezależny artefakt kwalifikacyjny. Ocena pozostaje **84% implementacji / 58%
+gotowości produkcyjnej**; nie podnoszę jej za sam fakt wykonania jednego
+przebiegu.
+
+## 32.12. Rozdzielenie accepted-step telemetry od output cadence (2026-08-02)
+
+Świeży audyt artefaktu SP5 wykazał defekt obserwowalności, a nie brak samego
+kontrolera: `RunResult.steps` przechowuje wiersze wynikające z harmonogramu
+scalarów. Skrypt `examples/mumax_standard_problem_5_fdm.py` nie deklaruje
+takiego harmonogramu, dlatego `solver_steps.csv` i `solver_attempts.csv`
+mogły zawierać tylko końcowy snapshot i nie były dowodem przebiegu
+adaptive RK.
+
+### 32.12.1. Korekta implementacyjna
+
+Wprowadzono osobny ślad accepted-step w `ArtifactRecorder`:
+
+- każdy zaakceptowany krok natywnego FDM CUDA jest rejestrowany niezależnie od
+  próbkowania `scalars.csv`;
+- każdy zaakceptowany krok FDM CPU reference jest rejestrowany tą samą ścieżką;
+- ślad jest przenoszony przez wersjonowany artefakt
+  `solver/accepted_steps.v1.json` (`LLG-TD-ACCEPTED-TRACE-V1`);
+- generator `solver_steps.csv`, `solver_attempts.csv` i `qualification.json`
+  wybiera ten pełny ślad, a nie tylko publiczne output rows;
+- `scalars.csv`, harmonogramy pól, UI i semantyka `RunResult.steps` nie zostały
+  rozszerzone o ukryte wiersze diagnostyczne;
+- `metadata.json` publikuje `accepted_solver_steps`, a `m_final` używa czasu,
+  kroku i `dt` z ostatniego accepted-step, gdy pełny ślad jest dostępny.
+
+To jest korekta kontraktu obserwowalności. Nie jest jeszcze dowodem fizycznej
+zgodności SP5: accepted-step trace zawiera decyzje i residuale, ale nie nadaje
+automatycznie statusu `validated`.
+
+### 32.12.2. Dowody
+
+| Gate | Wynik | Granica dowodu |
+|---|---|---|
+| `cargo test -p fullmag-runner --lib accepted_solver_trace_roundtrips_independently_of_output_rows` | **PASS** | wersjonowany ślad serializuje/deserializuje accepted step i retry; test nie uruchamia GPU |
+| wcześniejszy `solver_diagnostics` runner subset | **PASS, 11 tests** | zachowany rozdział attempts/accepted rows; nie zastępuje runtime |
+| `just verify-fdm-zhang-li-native-contract` | **PASS** | managed CUDA/CMake FDM build, `stt_pbc_contract`, `cargo +nightly check -p fullmag-runner --features cuda`; brak pełnego SP5 |
+| CPU launcher rebuild `just build fullmag 1` | **PASS** | build artefaktów przez `/tmp/fullmag-zfn2-build/cargo-targets/fullmag-cli`, bez CUDA/FEM; nie jest device proof |
+| krótki CPU SP5 probe z nowym launcherem | **INTERRUPTED** | probe zatrzymał się na relaksacji przy kroku 20; nie wytworzył finalnego artefaktu i nie kwalifikuje trajektorii |
+
+### 32.12.3. Następna bramka
+
+Po tej zmianie należy powtórzyć SP5 na izolowanym GPU z pełnym accepted trace,
+`CUDA_LAUNCH_BLOCKING=1` dla reprodukcji 719 oraz osobny CPU run z kontrolowanym
+limitem. Dopiero wtedy można policzyć: liczbę accepted/rejected attempts,
+`dt`/grid sweep, CPU↔CUDA parity, rozdzielenie wpływu operatora
+Zhang–Li/demag/stanu relaksacji i ewentualnie wypełnić `qualification.json`.
+Ocena celu pozostaje **84% implementacji / 58% gotowości produkcyjnej** —
+telemetryka zamyka defekt artefaktu, lecz nie zwiększa kwalifikacji fizycznej.
+
+## 32.13. Zredukowana brama BORIS–Fullmag dla direct SHE (2026-08-02)
+
+Źródłowy audyt BORIS wykazał, że `external_solvers/BORIS` jest lokalnym
+snapshotem kodu (w `makefile` występuje `BVERSION := 380`), ale checkout nie
+zawiera zbudowanego `BorisLin`. Próba wykonania pełnego porównania binarnego
+nie może więc być przedstawiona jako dowód; środowisko nie ma również `nvcc`,
+którego wymaga linuxowy makefile BORIS. Nie zmieniono capability na podstawie
+samej obecności kodu CUDA.
+
+### 32.13.1. Oracle źródłowy
+
+Dodano `scripts/verify_boris_fullmag_she_1d.py` oraz
+`scripts/test_verify_boris_fullmag_she_1d.py`. Workload jest celowo
+ograniczony do jednorodnego filmu N, `E=E_x e_x`, przepływu spinu w osi `z`,
+`iSHA=0`, stałego `lambda_sf` i zerowego normalnego spin fluxu. Z BORIS
+wyprowadzono:
+
+```text
+d_n S_y = SHA * sigma * MUB_E * E_x / De
+V_s = De*S/(sigma*MUB_E)
+d_n V_s = SHA*E_x
+```
+
+Po stronie Fullmag zastosowano M1 z `sigma_s=sigma`, `theta_SH=SHA` i
+`mu_s=2 V_s`, ponieważ publiczne `mu_s` oznacza pełne `V_+ - V_-`. Wtedy
+`Q_zy=-sigma_s*d_z(mu_s)/2+theta_SH*sigma*E_x` ma ten sam profil i ten sam
+znormalizowany flux co BORIS.
+
+### 32.13.2. Dowód
+
+| Gate | Wynik | Granica |
+|---|---|---|
+| `PYTHONPATH=scripts python3 -m pytest -q scripts/test_verify_boris_fullmag_she_1d.py` | **PASS, 4 tests** | reduced oracle; bez uruchomienia BORIS |
+| `python3 scripts/verify_boris_fullmag_she_1d.py --json` | **PASS** | profil i flux po konwersji mają błąd `0.0` dla parametrów referencyjnych |
+| negatywny test `theta_SH != SHA` | **PASS** | wykrywa zmianę normalizacji zamiast ją maskować |
+| SHA-256 źródeł BORIS | **zapisane w wyniku skryptu** | identyfikuje lokalny snapshot, nie release zewnętrzny |
+
+Brama zamknięta przez ten slice to wyłącznie
+`SHE-BORIS-REDUCED-1D-DIRECT`. Brama `SHE-BORIS-001` pozostaje otwarta: trzeba
+zbudować lub dostarczyć reprodukowalny executable BORIS, wykonać CPU/CUDA,
+ustawić osobno `iSHA=SHA`, porównać inverse SHE, profile materiałowe,
+interfejsy N/F/T oraz Fullmag FDM/FEM.
+
+Ocena pozostaje **84% implementacji / 58% gotowości produkcyjnej**. Test
+analityczny potwierdza konwersję zmiennych i znaku w prostym limicie, ale nie
+jest dowodem wykonawczej zgodności solverów.
+
+## 32.14. Managed FEM M1 direct-SHE profile gate i korekta layoutu MFEM (2026-08-02)
+
+Po redukowanym oraclu źródłowym BORIS wykonano rzeczywisty native gate Fullmag
+M1 FEM CPU. Dodano do `backends/fem/tests/steady_transport_contract.cpp`
+jednorodny workload H1/P1 na siatce `4 x 4 x 32` heksaedrów. Dla stałego
+`E_x`, `lambda_sf`, `sigma`, `sigma_s` i `theta_SH` test wymaga:
+
+- `J_x = sigma E_x` z błędem poniżej `1e-10`;
+- zbieżności solve spinowego;
+- pełnego wektorowego profilu analitycznego poniżej `2e-3` w każdym węźle;
+- zgodności `mu_y` góra–dół z profilem `sinh/cosh` w tym samym limicie.
+
+W skończonej szerokości poprzecznej nie wystarcza sprawdzenie jednego kanału.
+Konstytutywny tensor SHE ma tu oba niezerowe wpisy `Q_zy` i `Q_yz`, więc
+oracle sprawdza jednocześnie:
+
+```text
+mu_y(z) = 2 theta_SH sigma E_x lambda_sf
+          / (sigma_s cosh(L_z/(2 lambda_sf)))
+          * sinh((z-L_z/2)/lambda_sf)
+
+mu_z(y) = -2 theta_SH sigma E_x lambda_sf
+          / (sigma_s cosh(L_y/(2 lambda_sf)))
+          * sinh((y-L_y/2)/lambda_sf)
+```
+
+Test ujawnił rzeczywisty błąd layoutu, wcześniej maskowany przez mały residual
+układu liniowego. `steady_transport.cpp` deklarował przestrzenie wektorową i
+tensorową jako `mfem::Ordering::byVDIM` (interleaved), podczas gdy indeksowanie
+operatora, `copy_by_vdim` i ABI zakładały układ blokowy
+`[component][node]`. C API używał tej samej niespójności dla magnetyzacji.
+Wszystkie te przestrzenie przełączono na `mfem::Ordering::byNODES`, zgodne z
+kontraktem publikacji pól. To korekta fizyczno-numeryczna (usuwa permutację
+składowych), a nie zmiana tolerancji, znaku ani prefaktora SHE.
+
+Świeża sekwencja:
+
+```text
+just verify-fem-steady-transport-native-contract
+```
+
+przeszła kodem `0`. Oprócz native C++/ABI obejmuje ona canonical quantity
+metadata, planner, preflight runnera, publikację transportowych pól scalar/vector/tensor,
+dispatch oraz v2 data-plane. Uzupełniono również wyłącznie testowe fixtures:
+aktualny konstruktor `MeshIR` i komplet czterech faset tetraedru; nie jest to
+zmiana modelu fizycznego.
+
+### Granica dowodu
+
+Zamknięty jest teraz signed direct-SHE dla **conforming FEM CPU reference
+slice**. Nie zamyka to milestone'u M1 ani bramy `SHE-BORIS-001`: nadal brak
+wykonywalnego BORIS CPU/CUDA, reciprocal `iSHA=SHA`, heterogenicznych
+materiałów, N/F/T mixing/SML, h-convergence i wspólnego FDM/FEM/GPU
+benchmarku. Capability pozostaje ograniczona do jawnego reference scope;
+nie wolno awansować ogólnego direct/inverse SHE do `validated`.
+
+Ocena celu pozostaje konserwatywnie **84% implementacji / 58% gotowości
+produkcyjnej**. Gate usuwa konkretny defekt komponentowego layoutu i zamyka
+jedną bramę referencyjną, ale nie dostarcza jeszcze cross-backend parity,
+GPU/device-residency ani produkcyjnego interfejsu SHE. Następne kroki to
+niezależny cross-check FDM, test trzech rozdzielczości z residualami i bilansami,
+a dopiero potem executable BORIS CPU/CUDA oraz reciprocal/interface workload.
+
+## 32.15. FDM CPU workflow gate i korekta publicznej macierzy capability (2026-08-02)
+
+Silnik FDM posiadał już niezależny test operatora direct-SHE, lecz brakowało
+testu pełnego łańcucha `FdmSpinTransportWorkflow`. Dodano do
+`crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` workload filmu
+`3 x 1 x 48` z jawnym `E_x`, `theta_SH`, `lambda_sf`, `sigma` i `sigma_s`.
+Test materializuje canonical descriptor, rozwiązuje charge i spin, rekonstruuje
+`J_c` oraz `Q_ia`, publikuje telemetrykę i sprawdza:
+
+- profil `sinh/cosh` dla `mu_y(z)`;
+- `J_x = sigma E_x`;
+- zerowe niezamierzone składowe spin potential;
+- spin scaled residual poniżej `1e-10`;
+- wersje `transport_constitutive.one_way.fullmag.v1` i `fv_spin_upwind_v1`;
+- rozmiar kompletnego tensorowego artefaktu `Q_ia`.
+
+Weryfikacja referencyjna:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/shelane-runner \
+cargo test -p fullmag-runner --lib fdm::cpu::spin_transport::tests
+```
+
+zakończyła się wynikiem **17 passed, 0 failed**. To jest dowód pełnego FDM
+CPU reference workflow, nie dowód native CUDA ani produkcyjnej kwalifikacji.
+
+### Synchronizacja capability
+
+Po tym dowodzie zaktualizowano `docs/specs/capability-matrix-v0.json` oraz
+`docs/specs/capability-matrix-v0.md`. Wpisy
+`transport.spin.steady_drift_diffusion.fullmag.v1` i
+`transport.spin.direct_she.fullmag.v1` mają teraz `reference_executable` dla
+FDM CPU reference i ograniczonego conforming H1/P1 FEM CPU reference slice.
+GPU, M2/inverse SHE, mixing/SML, broken/mortar FEM oraz cross-backend pozostają
+`semantic_only`; `validated_workloads` pozostaje puste, ponieważ nie wykonano
+jeszcze pełnej kwalifikacji produkcyjnej.
+
+Ta korekta usuwa rozjazd między plannerem/runtime, raportem i macierzą, ale nie
+zamyka milestone'u M1 ani `SHE-BORIS-001`. Nadal wymagane są wspólny FDM/FEM
+continuum benchmark, trzy poziomy siatki z residualami/bilansami, executable
+BORIS CPU/CUDA, `iSHA=SHA`, inverse SHE i interfejsy N/F/T.
+
+## 32.16. Bramy Python/API/UI dla transportu (2026-08-02)
+
+Po zmianie statusu referencyjnego FDM CPU sprawdzono pełny łańcuch produktu, aby
+`reference_executable` nie oznaczał wyłącznie testu silnika:
+
+```text
+TMPDIR=/tmp/fullmag-py-tmp PYTHONPATH=packages/fullmag-py/src \
+python -m pytest -q \
+  packages/fullmag-py/tests/test_spin_drift_diffusion.py \
+  packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py
+30 passed, 45 subtests passed
+
+pnpm --dir apps/control-room exec vitest run \
+  src/modules/inspector/panels/TransportAuthoringInspectorModel.test.ts \
+  src/modules/inspector/panels/TransportAuthoringInspector.test.ts \
+  src/modules/footer/TransportLogTable.test.ts
+3 files, 26 tests passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/api-transport \
+cargo test -p fullmag-api spin_authoring_
+3 tests passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/plan-spin \
+cargo test -p fullmag-plan spin_transport
+14 tests passed
+```
+
+Testy obejmują typed Python DSL, canonical `ProblemIR`/runtime round-trip,
+resource-first OpenAPI CRUD z revision safety, opaque read-only semantics,
+Control Room inspector validation/mutation oraz plannerowe rozdzielenie
+requested intent od resolved FDM/FEM capability. Nie wykonano browserowego
+smoke na żywym managed runtime w tej bramie; dlatego nie awansuje ona statusu
+GPU, nie dowodzi cross-backend convergence i nie zmienia pustego
+`validated_workloads`.
+
+Walidator `scripts/validate_mixed_p1_capability_contract.py` oraz 20 testów
+`scientific-documentation-contract` również zakończyły się powodzeniem.
+Brakujące bramy pozostają jawne: pełny FDM/FEM continuum benchmark, executable
+BORIS CPU/CUDA z `iSHA=SHA`, M2 inverse SHE/Onsager, interfejsy N/F/T mixing/SML,
+GPU FP64/device residency oraz browser/managed end-to-end proof.

@@ -18,9 +18,46 @@ from typing import Sequence
 
 SCHEMA = "fullmag.source-snapshot.v2"
 
+# Keep this list aligned with runtime_source_change_policy.py. These paths may
+# change while a managed runtime is being built without changing its binary
+# inputs, so the runtime snapshot deliberately leaves them at their committed
+# contents.
+NON_RUNTIME_PREFIXES = (
+    ".agents/",
+    ".codex/",
+    ".github/",
+    "docs/",
+    "public_docs/",
+    "scripts/test_",
+)
+NON_RUNTIME_FILES = {"AGENTS.md", "CHANGELOG.md", "README.md"}
+NON_RUNTIME_EXACT_PATHS = {
+    "apps/control-room/next-env.d.ts",
+    "justfile",
+    "scripts/export_fem_gpu_runtime.sh",
+    "scripts/capture_source_snapshot_identity.py",
+    "scripts/lib/managed_fem_image_identity.sh",
+    "scripts/prune_managed_fem_runtimes.sh",
+    "scripts/public_docs_information_architecture.py",
+    "scripts/runtime_source_change_policy.py",
+}
+NON_RUNTIME_SUFFIXES = (".md", ".rst", ".source-map.json")
+
 
 class SourceIdentityError(RuntimeError):
     pass
+
+
+def _is_non_runtime_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return (
+        normalized in NON_RUNTIME_FILES
+        or normalized in NON_RUNTIME_EXACT_PATHS
+        or normalized.startswith(NON_RUNTIME_PREFIXES)
+        or normalized.endswith(NON_RUNTIME_SUFFIXES)
+    )
 
 
 def _git(repo_root: Path, *arguments: str) -> bytes:
@@ -389,7 +426,11 @@ def _dirty_content(repo_root: Path, records: Sequence[dict[str, object]]) -> lis
     return identities
 
 
-def _capture_once(repo_root: Path) -> dict[str, object]:
+def _capture_once(
+    repo_root: Path,
+    *,
+    ignore_non_runtime_dirty: bool = False,
+) -> dict[str, object]:
     try:
         commit = _git(repo_root, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
     except UnicodeDecodeError as error:
@@ -403,14 +444,22 @@ def _capture_once(repo_root: Path) -> dict[str, object]:
         for record in _status_records(repo_root)
         if not any(_is_gitlink_path(path, gitlink_paths) for path in record["paths"])
     ]
+    if ignore_non_runtime_dirty:
+        status_records = [
+            record
+            for record in status_records
+            if any(not _is_non_runtime_path(path) for path in record["paths"])
+        ]
     dirty_content = _dirty_content(repo_root, status_records)
-    payload = {
+    payload: dict[str, object] = {
         "schema": SCHEMA,
         "head_commit_full": commit,
         "head_tree_sha256": head_tree_sha256,
         "git_status_porcelain_v1": status_records,
         "dirty_path_content": dirty_content,
     }
+    if ignore_non_runtime_dirty:
+        payload["ignored_non_runtime_dirty"] = True
     return {
         **payload,
         "source_snapshot_dirty": bool(status_records),
@@ -419,10 +468,18 @@ def _capture_once(repo_root: Path) -> dict[str, object]:
     }
 
 
-def capture(repo_root: Path) -> dict[str, object]:
+def capture(
+    repo_root: Path,
+    *,
+    ignore_non_runtime_dirty: bool = False,
+) -> dict[str, object]:
     repo_root = repo_root.resolve()
-    first = _capture_once(repo_root)
-    second = _capture_once(repo_root)
+    first = _capture_once(
+        repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty
+    )
+    second = _capture_once(
+        repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty
+    )
     if second != first:
         raise SourceIdentityError("source identity changed while capturing the snapshot")
     return first
@@ -508,6 +565,7 @@ def materialize(
     identity: dict[str, object],
     *,
     existing_empty: bool = False,
+    ignore_non_runtime_dirty: bool = False,
 ) -> None:
     repo_root = repo_root.resolve()
     snapshot_root = snapshot_root.absolute()
@@ -557,7 +615,7 @@ def materialize(
         if not isinstance(entry, dict):
             raise SourceIdentityError("source identity has an invalid dirty entry")
         _copy_dirty_entry(repo_root, snapshot_root, entry)
-    if capture(repo_root) != identity:
+    if capture(repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty) != identity:
         raise SourceIdentityError("source identity changed while materializing the snapshot")
     verify_materialized(repo_root, snapshot_root, identity)
     _make_snapshot_read_only(snapshot_root)
@@ -604,6 +662,57 @@ def verify_materialized(
         )
 
 
+def verify_materialized_snapshot(
+    repo_root: Path,
+    snapshot_root: Path,
+    identity: dict[str, object],
+) -> None:
+    """Verify a snapshot using only the captured identity and Git objects.
+
+    This intentionally does not inspect dirty files in the live worktree. The
+    worktree is allowed to change after a managed build has captured its
+    immutable source snapshot.
+    """
+    commit = identity.get("head_commit_full")
+    dirty_content = identity.get("dirty_path_content")
+    if not isinstance(commit, str) or not isinstance(dirty_content, list):
+        raise SourceIdentityError("source identity cannot describe a materialized snapshot")
+    actual = _snapshot_entries(snapshot_root)
+    expected = _committed_entries(repo_root, commit)
+    for item in dirty_content:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            raise SourceIdentityError("source identity has an invalid dirty entry")
+        relative = item["path"]
+        if item.get("kind") == "missing":
+            expected.pop(relative, None)
+            continue
+        mode = item.get("mode")
+        digest = item.get("sha256")
+        if mode not in {"100644", "100755", "120000"} or not isinstance(
+            digest, str
+        ):
+            raise SourceIdentityError("source identity has an invalid dirty entry")
+        entry: dict[str, object] = {"mode": mode, "sha256": digest}
+        if mode == "120000":
+            snapshot_entry = actual.get(relative)
+            if (
+                not isinstance(snapshot_entry, dict)
+                or snapshot_entry.get("mode") != mode
+                or snapshot_entry.get("sha256") != digest
+                or not isinstance(snapshot_entry.get("target"), str)
+            ):
+                raise SourceIdentityError(
+                    f"materialized dirty symlink differs from captured identity: {relative}"
+                )
+            entry["target"] = snapshot_entry["target"]
+        expected[relative] = entry
+    _validate_tree_symlinks(expected)
+    if actual != expected:
+        raise SourceIdentityError(
+            "materialized source snapshot differs from captured identity"
+        )
+
+
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -632,15 +741,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="warn instead of failing when the live worktree differs from --compare",
     )
+    parser.add_argument(
+        "--ignore-non-runtime-dirty",
+        action="store_true",
+        help="exclude documentation, CI, tests, and packaging-only dirty paths",
+    )
+    parser.add_argument(
+        "--verify-materialized-snapshot",
+        type=Path,
+        help="verify a materialized snapshot without reading the live worktree",
+    )
     arguments = parser.parse_args(argv)
     try:
-        identity = capture(arguments.repo_root)
+        if arguments.verify_materialized_snapshot is not None:
+            if arguments.compare is None:
+                raise SourceIdentityError(
+                    "--verify-materialized-snapshot requires --compare"
+                )
+            if arguments.materialize is not None or arguments.output is not None:
+                raise SourceIdentityError(
+                    "--verify-materialized-snapshot cannot be combined with --output or --materialize"
+                )
+            expected = json.loads(arguments.compare.read_text(encoding="utf-8"))
+            verify_materialized_snapshot(
+                arguments.repo_root.resolve(),
+                arguments.verify_materialized_snapshot,
+                expected,
+            )
+            return 0
+        identity = capture(
+            arguments.repo_root,
+            ignore_non_runtime_dirty=arguments.ignore_non_runtime_dirty,
+        )
         if arguments.materialize is not None:
             materialize(
                 arguments.repo_root,
                 arguments.materialize,
                 identity,
                 existing_empty=arguments.materialize_existing_empty,
+                ignore_non_runtime_dirty=arguments.ignore_non_runtime_dirty,
             )
         elif arguments.materialize_existing_empty:
             raise SourceIdentityError(

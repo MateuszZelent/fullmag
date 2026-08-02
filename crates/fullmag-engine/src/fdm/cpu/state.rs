@@ -249,7 +249,10 @@ impl ExchangeLlgState {
         time_seconds: f64,
     ) -> Result<()> {
         if magnetization.len() != self.grid.cell_count()
-            || magnetization.iter().flatten().any(|value| !value.is_finite())
+            || magnetization
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
             || !time_seconds.is_finite()
             || time_seconds < 0.0
         {

@@ -430,10 +430,30 @@ def _decode_spin_torque(value: object) -> object:
         else {"current_source": _nonempty_string(source, f"{kind}.current_source")}
     )
     if kind == "zhang_li":
+        formula = entry.get("formula_version", "zhang_li.legacy_fullmag.v0")
+        common: dict[str, object] = {**binding}
+        if formula in {"zhang_li.fullmag.v1", "zhang_li.mumax3.v1"}:
+            required_operator = (
+                "zl_mumax3_central_v1"
+                if formula == "zhang_li.mumax3.v1"
+                else "zl_central_reference_v1"
+            )
+            if entry.get("schema_version") != "zhang_li_torque.v1":
+                raise ValueError("canonical Zhang-Li schema_version must be zhang_li_torque.v1")
+            if entry.get("operator_version") != required_operator:
+                raise ValueError(f"canonical Zhang-Li requires {required_operator}")
+            common.update(
+                id=_nonempty_string(entry.get("id"), "zhang_li.id"),
+                target=_region_ref(entry.get("target"), "zhang_li.target"),
+                lande_g=_finite_number(entry.get("lande_g"), "zhang_li.lande_g"),
+                operator_version=required_operator,
+            )
+        elif formula != "zhang_li.legacy_fullmag.v0":
+            raise ValueError(f"unsupported Zhang-Li formula_version {formula!r}")
         return ZhangLiSTT(
             degree=_finite_number(entry.get("degree"), "zhang_li.degree"),
             beta=_finite_number(entry.get("beta"), "zhang_li.beta"),
-            **binding,  # type: ignore[arg-type]
+            **common,  # type: ignore[arg-type]
         )
     if kind == "slonczewski":
         formula = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")

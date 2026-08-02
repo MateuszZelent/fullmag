@@ -10,7 +10,7 @@ use fullmag_engine::{
     ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, RegionalFieldDriveTerm,
     ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
-    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
+    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
@@ -195,6 +195,11 @@ fn build_zl_stt(plan: &FdmPlanIR) -> Option<ZhangLiSttConfig> {
         return None;
     }
     Some(ZhangLiSttConfig {
+        formula: match plan.zhang_li_formula_version.as_deref() {
+            Some("zhang_li.mumax3.v1") => ZhangLiFormula::Mumax3V1,
+            Some("zhang_li.fullmag.v1") => ZhangLiFormula::FullmagV1,
+            _ => ZhangLiFormula::LegacyFullmagV0,
+        },
         current_density: j,
         spin_polarization: p,
         non_adiabaticity: plan.stt_beta.unwrap_or(0.0),
@@ -1368,6 +1373,10 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 ..StepStats::default()
             };
             current_stats = latest_stats.clone();
+            // Preserve every accepted adaptive/fixed controller step for the
+            // solver diagnostics trace.  User-visible scalar schedules remain
+            // independent and may be sparse.
+            artifacts.record_solver_step(&latest_stats);
 
             final_coupled_checkpoint = spin_transport
                 .as_ref()
@@ -1564,6 +1573,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         &mut artifacts,
     )?;
 
+    let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut status = if paused {
         RunStatus::Paused
@@ -1615,6 +1625,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         .transpose()?
         .into_iter()
         .collect();
+    if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_trace) {
+        auxiliary_artifacts.push(trace);
+    }
     if let Some(checkpoint) = final_coupled_checkpoint {
         auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
             relative_path: "transport/coupled_checkpoint.json".to_string(),

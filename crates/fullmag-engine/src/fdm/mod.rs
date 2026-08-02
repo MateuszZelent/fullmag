@@ -27,8 +27,7 @@ pub use shared::VectorFieldSoA;
 pub use shared::terms::{
     CubicAnisotropyConfig, EffectiveFieldTerms, MagnetoelasticTermConfig, OerstedCylinderConfig,
     RegionalFieldDriveTerm, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula,
-    UniaxialAnisotropyConfig,
-    ZhangLiSttConfig,
+    UniaxialAnisotropyConfig, ZhangLiFormula, ZhangLiSttConfig,
 };
 pub use shared::types::{
     neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, CoupledImexArk2Stage,
