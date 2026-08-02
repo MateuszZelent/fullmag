@@ -11,7 +11,8 @@
     {"id": "eq-relax-ncg-retraction", "symbols": ["R", "m", "lambda", "p"], "sources": ["ncg-reference"]},
     {"id": "eq-relax-ncg-pr-plus", "symbols": ["g", "m", "beta", "metric"], "sources": ["ncg-policy"]},
     {"id": "eq-relax-ncg-direction", "symbols": ["p", "g", "beta", "m"], "sources": ["ncg-policy"]},
-    {"id": "eq-relax-ncg-armijo", "symbols": ["E", "lambda", "c1", "g", "p", "metric"], "sources": ["ncg-line-search"]}
+    {"id": "eq-relax-ncg-armijo", "symbols": ["E", "lambda", "c1", "g", "p", "metric"], "sources": ["ncg-line-search"]},
+    {"id": "eq-relax-ncg-energy-metric", "symbols": ["mu0", "Ms", "V", "a", "b"], "sources": ["ncg-policy", "ncg-reference", "fem-cpu-ncg", "fem-gpu-ncg"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m_i", "meaning": "reduced magnetization at active cell/node $i$", "si_unit": "1"},
@@ -27,7 +28,12 @@
     {"id": "N", "latex": "N", "meaning": "active cells or finite-element nodes", "si_unit": "1"},
     {"id": "k", "latex": "k", "meaning": "accepted minimizer iteration", "si_unit": "1"},
     {"id": "tau_max", "latex": "\\tau_{\\max}", "meaning": "maximum accepted-state torque", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "canonical torque threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"}
+    {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "canonical torque threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "Ms", "latex": "M_{s,i}", "meaning": "local saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "V", "latex": "V_i", "meaning": "cell or nodal volume weight", "si_unit": "\\mathrm{m^3}"},
+    {"id": "a", "latex": "a_i", "meaning": "first vector in the energy metric", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "b", "latex": "b_i", "meaning": "second vector in the energy metric", "si_unit": "\\mathrm{A\\,m^{-1}}"}
   ],
   "sources": [
     {"id": "python-relaxation", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public algorithm validation and ProblemIR serialization."},

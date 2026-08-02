@@ -31,12 +31,16 @@
     {"id": "python-stop", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class RelaxStop", "responsibility": "Public stopping criteria and validation."},
     {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first Python lowering and adaptive LLG policy."},
     {"id": "runner-mode", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "llg_overdamped_uses_pure_damping", "responsibility": "Resolves precession-disabled relaxation mode."},
-    {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Evaluates accepted-state relaxation completion."}
+    {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Evaluates accepted-state relaxation completion."},
+    {"id": "runner-confirmation", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "observe", "responsibility": "Requires three consecutive accepted-state samples."},
+    {"id": "fem-llg", "path": "crates/fullmag-runner/src/fem/relax/llg_overdamped.rs", "symbol": "execute_llg_overdamped", "responsibility": "Runs native FEM overdamped LLG and records resolved policy."},
+    {"id": "fdm-cpu-llg", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_reference_fdm_with_coupled_checkpoint", "responsibility": "Dispatches the Cartesian FDM reference relaxation path."}
   ],
   "public_api": {
     "parameters": [
       {"python": "StudyStagesBuilder.add_relax(algorithm=...)", "type": "str", "default": "\"llg_overdamped\"", "si_unit": "$1$", "validation": "one supported algorithm identifier", "meaning": "selects relaxation realization", "backend_support": "FEM/FDM; planner decides lane", "problem_ir": "study.algorithm"},
       {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; mutually exclusive with `tolA`", "meaning": "user torque threshold", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(tolA=...)", "type": "float", "default": "canonical default equivalent", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and positive; mutually exclusive with `tolT`", "meaning": "field-residual threshold", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
       {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "hard iteration budget", "backend_support": "FEM/FDM relaxation lanes", "problem_ir": "study.stop.max_steps"}
     ]
   }

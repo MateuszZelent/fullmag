@@ -38,6 +38,12 @@ window $W_E$:
 \Delta E_{W_E}^{(k)}\leq\varepsilon_E.
 ```
 
+In the shared runner, $W_E$ is exactly 50 accepted energy samples. The torque predicate is then
+observed on fresh accepted states and must be true for exactly three consecutive samples before
+`torque_confirmed` becomes true. A failed sample resets that consecutive counter to zero. This
+confirmation is independent of output cadence: sparse saved output cannot change the authoritative
+completion record.
+
 The logical completion rule is conjunction, not disjunction:
 
 ```{math}
@@ -66,6 +72,11 @@ rule is true, the result is budget-exhausted or non-converged, never converged b
 | $\mathrm{converged}$ | completion predicate | $1$ |
 | $k$ | accepted iteration index | $1$ |
 | $T_{\mathrm{relax}}$ | optional relaxation-coordinate ceiling | $\mathrm{s}$ |
+
+`max_pseudotime_s` and `max_physical_time_s` are Python aliases for the same canonical
+$T_{\mathrm{relax}}$ field. They are accepted only when they agree with
+`max_relaxation_time_s`, and only `llg_overdamped` may use the field. Direct minimizers report
+`time=0`, `dt=0`, and no pseudo-time.
 
 (numerical-methods-relaxation-stopping-assumptions-and-validity)=
 ## Assumptions and validity
@@ -156,6 +167,12 @@ minimizers. Unsupported combinations are rejected instead of weakening the compl
 The result must identify requested intent, `converged`, `stop_reason`, `stop_metric`, `stop_value`, and
 `stop_threshold`; a budget-exhausted result is not a converged result.
 
+The authoritative completion reasons include `torque` (three-sample torque confirmation, plus any
+configured energy plateau), `max_steps`, `max_physical_time`, `gradient` for numerical stagnation,
+`backend_error`, `user_cancelled`, and an unset reason while a stage remains incomplete. The
+`energy` metric alone never produces convergence because torque is mandatory in the canonical stop
+contract.
+
 (numerical-methods-relaxation-stopping-discrete-realization)=
 ## Discrete realization
 
@@ -168,6 +185,11 @@ The result must identify requested intent, `converged`, `stop_reason`, `stop_met
 
 The shared stop semantics do not imply identical floating-point reductions. Each lane must record
 precision, mesh/grid identity, field refresh, and runtime provenance with its metrics.
+
+For direct minimizers, `max_steps` counts accepted minimizer steps; rejected Armijo trials do not
+advance it. For LLG, `max_steps` counts accepted integration steps and the relaxation-time ceiling
+is checked against the stage relaxation coordinate. A failure or cancellation is mapped before any
+budget predicate, so it cannot be reclassified as converged.
 
 (numerical-methods-relaxation-stopping-implementation-mapping)=
 ## Implementation mapping
@@ -207,3 +229,6 @@ that the continuous functional has reached its global minimum.
 | Flat stage stop normalization | `packages/fullmag-py/src/fullmag/world.py` | `_resolve_flat_relax_stop` | tolT/tolA conversion and alias conflict handling | public API | stage tests |
 | Accepted-state completion | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_converged` | torque/energy conjunction and budget semantics | FDM/FEM orchestration | Rust tests |
 | Pure-damping mode selection | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | distinguishes overdamped LLG from full dynamics | FDM/FEM orchestration | runner tests |
+| Energy plateau window | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationEnergyPlateauWindow::record` | fixed 50-sample accepted-energy range | shared orchestration | runner tests |
+| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | three consecutive valid samples | shared orchestration | runner tests |
+| Final reason mapping | `crates/fullmag-runner/src/relaxation/convergence.rs` | `resolve_stage_completion` | maps torque, budgets, stagnation and backend status | shared orchestration | runner tests |
