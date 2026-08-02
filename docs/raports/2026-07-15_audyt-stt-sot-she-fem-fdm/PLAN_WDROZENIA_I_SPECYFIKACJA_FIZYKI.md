@@ -3900,3 +3900,72 @@ Walidator `scripts/validate_mixed_p1_capability_contract.py` oraz 20 testów
 Brakujące bramy pozostają jawne: pełny FDM/FEM continuum benchmark, executable
 BORIS CPU/CUDA z `iSHA=SHA`, M2 inverse SHE/Onsager, interfejsy N/F/T mixing/SML,
 GPU FP64/device residency oraz browser/managed end-to-end proof.
+
+## 32.17. Trzyrozdzielczościowa zbieżność direct-SHE FDM/FEM (2026-08-02)
+
+Dodano i wykonano niezależną bramę h-refinement dla tego samego ograniczonego
+workloadu M1 direct-SHE. Test nie porównuje jeszcze FDM z FEM w sensie
+continuum ani z BORIS; sprawdza, czy każda referencyjna realizacja z osobna
+zbliża się do tego samego analitycznego profilu `sinh/cosh`, zachowując
+konserwację i residual solve'u.
+
+### 32.17.1. FDM CPU
+
+`analytical_direct_she_evaluation(nz)` współdzieli dokładnie ten sam workflow
+charge/spin dla `nz = 24, 48, 96`, z `nx = 3`, jawnym sześcioma ścianami BC,
+stałym `E_x`, `sigma`, `sigma_s`, `theta_SH` i `lambda_sf`. Dla każdej siatki
+test mierzy względny błąd L2 `mu_y(z)` wobec profilu analitycznego, sprawdza
+`J_x = sigma E_x`, residual spinowy oraz względny bilans spinowy. Wymagane są
+ściśle malejące błędy i co najmniej 25% redukcji między siatką najgrubszą a
+najdrobniejszą.
+
+Dowód:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/shelane-runner \
+cargo test -p fullmag-runner --lib fdm::cpu::spin_transport::tests
+18 passed, 0 failed
+```
+
+### 32.17.2. FEM CPU/native
+
+`direct_she_converges_on_three_mesh_resolutions()` w
+`backends/fem/tests/steady_transport_contract.cpp` wykonuje pełny H1/P1
+conforming solve dla `z = 16, 32, 64` elementów (z odpowiednią poprzeczną
+refinacją), kontroluje `J_x`, residual i jednocześnie oba niezerowe kanały
+wektora SHE (`Q_zy` oraz `Q_yz`). Węzłowy błąd wektorowego profilu
+analitycznego musi maleć na kolejnych siatkach, a najdrobniejsza siatka musi
+zmniejszyć błąd co najmniej o 20% względem najgrubszej.
+
+Weryfikacja została wykonana wyłącznie przez zarządzane recepty `just`:
+
+```text
+just verify-fem-steady-transport-cpu-only-contract
+repository contract: pass
+runtime/configuration audit: pass
+fem steady transport contract: PASS
+fem steady transport ABI contract: PASS
+
+just build target=fem-gpu-runtime
+just verify-fem-steady-transport-native-contract
+fem steady transport contract: PASS
+fem steady transport ABI contract: PASS
+critical remediation, planner, runner, API, quantity metadata and cargo check: PASS
+```
+
+Pierwsza próba pełnej recepty zatrzymała się na brakującym
+`boost/multiprecision/cpp_int.hpp` w nieaktualnym obrazie `fem-gpu`; obraz
+odświeżono przez `just build target=fem-gpu-runtime`, po czym cała brama
+zakończyła się kodem 0. Nie jest to zmiana tolerancji ani obejście solvera.
+
+### 32.17.3. Granica dowodu i aktualizacja oceny
+
+Zamknięto lokalną bramę zbieżności direct-SHE dla FDM CPU reference i FEM CPU
+conforming H1/P1 reference slice. Wspólny punkt continuum FDM↔FEM nie jest
+jeszcze policzony na jednej tabeli błędów, więc capability pozostaje
+`reference_executable`, a `validated_workloads` pozostaje puste. Nadal otwarte
+są executable BORIS CPU/CUDA z `iSHA=SHA`, inverse SHE/Onsager, heterogeniczne
+materiały, interfejsy N/F/T mixing/SML, GPU FP64/device residency oraz
+browser/managed end-to-end proof. Ocena pozostaje konserwatywnie **84%
+implementacji / 58% gotowości produkcyjnej**; sama zbieżność referencyjna nie
+awansuje kodu do produkcji.

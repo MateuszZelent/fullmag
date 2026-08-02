@@ -359,6 +359,78 @@ void direct_she_matches_uniform_film_sinh_profile()
         "direct-SHE top-to-bottom spin voltage does not match the sinh oracle");
 }
 
+void direct_she_converges_on_three_mesh_resolutions()
+{
+    constexpr double length_m = 1.0;
+    constexpr double lambda_m = 0.2;
+    constexpr double sigma_spm = 3.0;
+    constexpr double sigma_s_spm = 2.0;
+    constexpr double theta_sh = 0.1;
+    constexpr double electric_field_v_per_m = 1.0;
+    constexpr double transverse_width_m = 0.1;
+    constexpr std::array<int, 3> z_elements = {16, 32, 64};
+    std::array<double, 3> profile_errors{};
+
+    const double amplitude = 2.0 * theta_sh * sigma_spm * electric_field_v_per_m *
+        lambda_m / (sigma_s_spm * std::cosh(0.5 * length_m / lambda_m));
+    const double transverse_amplitude = -2.0 * theta_sh * sigma_spm *
+        electric_field_v_per_m * lambda_m /
+        (sigma_s_spm * std::cosh(0.5 * transverse_width_m / lambda_m));
+
+    for (std::size_t index = 0; index < z_elements.size(); ++index) {
+        const int y_count = z_elements[index] / 8;
+        mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+            4, y_count, z_elements[index], mfem::Element::HEXAHEDRON,
+            length_m, transverse_width_m, length_m);
+        mfem::ConstantCoefficient sigma(sigma_spm);
+        mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+        SteadyTransportParameters parameters;
+        parameters.sigma_s_spm = sigma_s_spm;
+        parameters.lambda_sf_m = lambda_m;
+        parameters.theta_sh = theta_sh;
+        parameters.polarization_p = 0.0;
+        SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+
+        auto electrodes = x_electrodes(mesh);
+        mfem::FunctionCoefficient voltage([](const mfem::Vector &x) {
+            return 1.0 - electric_field_v_per_m * x[0];
+        });
+        const auto charge_diagnostics = oracle.solve_charge(
+            electrodes, voltage, ChargeGauge::BoundaryReference);
+        require(charge_diagnostics.converged,
+            "three-grid direct-SHE charge solve did not converge");
+        require(std::abs(charge_diagnostics.current_density_volume_average_apm2[0] -
+                sigma_spm * electric_field_v_per_m) < 1.0e-10,
+            "three-grid direct-SHE charge field is not the prescribed linear field");
+
+        mfem::Array<int> no_spin_dirichlet(mesh.bdr_attributes.Max());
+        no_spin_dirichlet = 0;
+        const auto diagnostics = oracle.solve_spin(no_spin_dirichlet, nullptr);
+        require(diagnostics.converged,
+            "three-grid direct-SHE spin solve did not converge");
+        require(diagnostics.relative_residual < 1.0e-10,
+            "three-grid direct-SHE residual exceeds contract");
+
+        const double z_mid = 0.5 * length_m;
+        const double y_mid = 0.5 * transverse_width_m;
+        mfem::VectorFunctionCoefficient expected(3, [=](const mfem::Vector &x,
+                                                        mfem::Vector &value) {
+            value.SetSize(3);
+            value = 0.0;
+            value[1] = amplitude * std::sinh((x[2] - z_mid) / lambda_m);
+            value[2] = transverse_amplitude *
+                std::sinh((x[1] - y_mid) / lambda_m);
+        });
+        profile_errors[index] = max_vector_nodal_error(oracle.spin_potential(), expected);
+    }
+
+    require(profile_errors[1] < profile_errors[0] &&
+            profile_errors[2] < profile_errors[1],
+        "direct-SHE profile error does not decrease on three mesh resolutions");
+    require(profile_errors[2] < 0.8 * profile_errors[0],
+        "direct-SHE three-grid refinement is too weak");
+}
+
 } // namespace
 
 int main()
@@ -372,6 +444,7 @@ int main()
         spin_diffusion_matches_sinh_profile();
         direct_she_sign_and_torque_projection_are_canonical();
         direct_she_matches_uniform_film_sinh_profile();
+        direct_she_converges_on_three_mesh_resolutions();
         std::cout << "fem steady transport contract: PASS\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
