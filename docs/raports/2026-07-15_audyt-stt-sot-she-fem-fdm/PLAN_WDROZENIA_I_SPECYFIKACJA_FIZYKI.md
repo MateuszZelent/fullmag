@@ -2951,7 +2951,8 @@ semantycznego.
 | bieżący slice DOS/SML FDM reference | `f6e9060fac5b0bad36c7e3cf91a716544469be36` |
 | bieżący test-gate fix | `6c865437e073a9841fe03c0de3e9b38603ad1ff0` |
 | aktualny `master` | `c262fa9d1ba660d70ed3d0849e6fe3469c9e5f32` |
-| bieżący plan checkpoint | `126e4cb736d6ec48cd7228d6166193d29d5aa98f` |
+| poprzedni plan checkpoint | `126e4cb736d6ec48cd7228d6166193d29d5aa98f` |
+| ostatni zapisany plan commit | `226236a0` |
 | rozjazd po bieżącym slice | `125` commitów tylko na gałęzi, `574` tylko na `master` |
 | integracja | nie wykonana; wymagany nowy worktree od aktualnego `master` i replay konfliktów semantycznych |
 | ciężkie artefakty | kanoniczny root `/zfn2/mateuszz/git/fullmag`; kompilacje FEM wykonywane przez repozytoryjne receptury `just` w zarządzanych kontenerach; brak twierdzenia o zapisie bezpośrednim do root-owned CIFS/WSL |
