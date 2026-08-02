@@ -1,7 +1,6 @@
 import { resolveChartUnit } from "../domain/analysis/chartUnits";
 import {
   axisScaleFromExtrema,
-  formatScaledTooltipValue,
   formatTooltipValue,
   sanitizeLabelText,
 } from "./scientificChartFormatting";
@@ -15,6 +14,62 @@ export interface ChartDisplayTransform {
   factor: number;
   displayUnit: string;
   formatValue(value: number): string;
+}
+
+interface ChartYAxisSeries {
+  points: readonly { y: number }[];
+  yAxis: number;
+}
+
+export function chartValueExtrema(
+  values: Iterable<number>,
+): readonly [number, number] | null {
+  let absMax = 0;
+  let absMin = Number.POSITIVE_INFINITY;
+  for (const value of values) {
+    if (!Number.isFinite(value) || value === 0) continue;
+    const magnitude = Math.abs(value);
+    absMax = Math.max(absMax, magnitude);
+    absMin = Math.min(absMin, magnitude);
+  }
+  return Number.isFinite(absMin) ? [absMin, absMax] : null;
+}
+
+export function formatChartDisplayValue(
+  value: number,
+  transform: ChartDisplayTransform,
+): string {
+  return formatTooltipValue(value / transform.factor, "");
+}
+
+export function createChartYAxisDisplayTransforms(
+  axes: readonly { unit: string }[],
+  series: readonly ChartYAxisSeries[],
+): ChartDisplayTransform[] {
+  let axisCount = Math.max(axes.length, 1);
+  for (const entry of series) axisCount = Math.max(axisCount, entry.yAxis + 1);
+  const extrema = Array.from({ length: axisCount }, () => ({
+    absMax: 0,
+    absMin: Number.POSITIVE_INFINITY,
+    hasFiniteNonZeroValue: false,
+  }));
+  for (const entry of series) {
+    const axis = extrema[entry.yAxis];
+    if (!axis) continue;
+    for (const point of entry.points) {
+      if (!Number.isFinite(point.y) || point.y === 0) continue;
+      const magnitude = Math.abs(point.y);
+      axis.absMax = Math.max(axis.absMax, magnitude);
+      axis.absMin = Math.min(axis.absMin, magnitude);
+      axis.hasFiniteNonZeroValue = true;
+    }
+  }
+  return extrema.map((axis, index) =>
+    createChartDisplayTransform(
+      axes[index]?.unit ?? "",
+      axis.hasFiniteNonZeroValue ? [axis.absMin, axis.absMax] : null,
+    ),
+  );
 }
 
 export function resolveChartScalePolicy(unit: string): ChartScalePolicy {
@@ -33,30 +88,43 @@ export function createChartDisplayTransform(
 ): ChartDisplayTransform {
   const policy = resolveChartScalePolicy(unit);
   if (policy.kind === "dimensionless") {
-    return {
+    const transform: ChartDisplayTransform = {
       factor: 1,
       displayUnit: "",
-      formatValue: (value) => formatTooltipValue(value, ""),
+      formatValue: (value) => formatChartDisplayValue(value, transform),
     };
+    return transform;
   }
   if (policy.kind === "fixed") {
-    return {
+    const transform: ChartDisplayTransform = {
       factor: policy.factor,
       displayUnit: policy.displayUnit,
       formatValue: (value) =>
-        formatTooltipValue(value / policy.factor, policy.displayUnit),
+        `${formatChartDisplayValue(value, transform)}${
+          policy.displayUnit ? ` ${sanitizeLabelText(policy.displayUnit)}` : ""
+        }`,
     };
+    return transform;
   }
 
+  const resolved = resolveChartUnit(unit);
+  const scaleToCanonical = resolved?.scaleToCanonical ?? 1;
   const scale = extrema
-    ? axisScaleFromExtrema(extrema[0], extrema[1], true)
+    ? axisScaleFromExtrema(
+        extrema[0] * scaleToCanonical,
+        extrema[1] * scaleToCanonical,
+        true,
+      )
     : { factor: 1, prefix: "" };
-  return {
-    factor: scale.factor,
+  const transform: ChartDisplayTransform = {
+    factor: scale.factor / scaleToCanonical,
     displayUnit: `${scale.prefix}${policy.canonicalUnit}`,
     formatValue: (value) =>
-      formatScaledTooltipValue(value, policy.canonicalUnit, scale),
+      `${formatChartDisplayValue(value, transform)}${
+        transform.displayUnit ? ` ${sanitizeLabelText(transform.displayUnit)}` : ""
+      }`,
   };
+  return transform;
 }
 
 export function chartAxisName(

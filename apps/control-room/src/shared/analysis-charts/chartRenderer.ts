@@ -8,7 +8,9 @@ import {
 } from "./scientificChartFormatting";
 import {
   chartAxisName,
+  chartValueExtrema,
   createChartDisplayTransform,
+  createChartYAxisDisplayTransforms,
   type ChartDisplayTransform,
 } from "./chartScalePolicy";
 import {
@@ -150,7 +152,7 @@ export function createChartRendererOwner(
 function computeXScale(model: ChartRenderModel): ChartDisplayTransform {
   return createChartDisplayTransform(
     model.xAxis.unit,
-    extremaFromValues(iterateXValues(model.series)),
+    chartValueExtrema(iterateXValues(model.series)),
   );
 }
 
@@ -158,42 +160,7 @@ function computeYScales(
   model: ChartRenderModel,
   axes: readonly { label: string; unit: string }[],
 ): ChartDisplayTransform[] {
-  const extrema = Array.from({ length: chartYAxisCount(model.series) }, () => ({
-    absMax: 0,
-    absMin: Number.POSITIVE_INFINITY,
-    hasFiniteNonZeroValue: false,
-  }));
-  for (const series of model.series) {
-    const axis = extrema[series.yAxis];
-    if (!axis) continue;
-    for (const point of series.points) {
-      if (!Number.isFinite(point.y) || point.y === 0) continue;
-      const magnitude = Math.abs(point.y);
-      axis.absMax = Math.max(axis.absMax, magnitude);
-      axis.absMin = Math.min(axis.absMin, magnitude);
-      axis.hasFiniteNonZeroValue = true;
-    }
-  }
-  return extrema.map((axis, index) =>
-    createChartDisplayTransform(
-      axes[index]?.unit ?? "",
-      axis.hasFiniteNonZeroValue ? [axis.absMin, axis.absMax] : null,
-    ),
-  );
-}
-
-function extremaFromValues(
-  values: Iterable<number>,
-): readonly [number, number] | null {
-  let absMax = 0;
-  let absMin = Number.POSITIVE_INFINITY;
-  for (const value of values) {
-    if (!Number.isFinite(value) || value === 0) continue;
-    const magnitude = Math.abs(value);
-    absMax = Math.max(absMax, magnitude);
-    absMin = Math.min(absMin, magnitude);
-  }
-  return Number.isFinite(absMin) ? [absMin, absMax] : null;
+  return createChartYAxisDisplayTransforms(axes, model.series);
 }
 
 function axisScale(transform: ChartDisplayTransform): AxisScale {

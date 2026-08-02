@@ -2088,9 +2088,51 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain('<button');
     expect(html).toContain('type="button"');
     // ChartLegend aria-label format: "label, unit UNIT, latest VALUE. Visible/Hidden..."
-    expect(html).toContain('aria-label="mx, unit 1, latest 0.2');
+    expect(html).toContain('aria-label="mx, unit dimensionless, latest 0.2');
     expect(html).toContain('class="fm-chart-legend__swatch');
     expect(html).toContain('class="fm-chart-legend__latest"');
+  });
+
+  it("keeps normalized legend readings dimensionless", () => {
+    const normalizedTable = {
+      ...table,
+      rows: [[1, 4.447e-6]],
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={{
+          label: "mx",
+          point: { rowIndex: 0, x: 1, y: 4.447e-6 },
+          quantity: "mx",
+          seriesId: "data.table:default:step:mx",
+          source: {
+            kind: "data.table.rows",
+            resourceKey: tableRowsResourceKey("default"),
+            tableId: "default",
+          },
+          unit: "1",
+          xUnit: "1",
+        }}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="ready"
+        visibleTable={chartWindow(normalizedTable)}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain(
+      'aria-label="mx, unit dimensionless, latest 4.4470e-6',
+    );
+    expect(html).toContain("cursor mx: 4.4470e-6");
+    expect(html).not.toContain("m1");
   });
 
   it("renders solver energy history as a separate chart source when available", () => {

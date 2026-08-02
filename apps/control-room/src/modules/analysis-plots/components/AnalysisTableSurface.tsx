@@ -7,10 +7,14 @@ import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCur
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import {
+  createChartDisplayTransform,
+  createChartYAxisDisplayTransforms,
+  formatChartDisplayValue,
+} from "@/shared/analysis-charts/chartScalePolicy";
 
 import { type ChartSeries, type ChartValueRange } from "../chartTableModel";
 import {
-  formatLatestValue,
   formatRange,
   tableWindowRowCount,
   tableWindowTotalRows,
@@ -70,20 +74,43 @@ export function AnalysisTableSurface({
   const visibleSeries = hidden.length === 0
     ? chartSeries
     : chartSeries.filter((series) => !hidden.includes(series.id));
-  const legendItems = chartSeries.map((series, index) => ({
-    colorIndex: index,
-    colorName: chartColorNameForIndex(index),
-    hidden: hidden.includes(series.id),
-    id: series.id,
-    label: series.label || series.quantity,
-    latestValue: formatLatestValue(series.points.at(-1)?.y),
-    soloed: false,
-    unit: series.unit,
-  }));
+  const yUnits = [...new Set(chartSeries.map((series) => series.unit))];
+  const yTransforms = createChartYAxisDisplayTransforms(
+    yUnits.map((unit) => ({ unit })),
+    chartSeries.map((series) => ({
+      points: series.points,
+      yAxis: yUnits.indexOf(series.unit),
+    })),
+  );
+  const displayTransforms = new Map(chartSeries.map((series) => [
+    series.id,
+    yTransforms[yUnits.indexOf(series.unit)] ??
+      createChartDisplayTransform(series.unit, null),
+  ]));
+  const legendItems = chartSeries.map((series, index) => {
+    const transform = displayTransforms.get(series.id)!;
+    return {
+      colorIndex: index,
+      colorName: chartColorNameForIndex(index),
+      hidden: hidden.includes(series.id),
+      id: series.id,
+      label: series.label || series.quantity,
+      latestValue: formatChartDisplayValue(
+        series.points.at(-1)?.y ?? Number.NaN,
+        transform,
+      ),
+      soloed: false,
+      unit: transform.displayUnit,
+    };
+  });
   const rowCount = tableWindowRowCount(table);
   const totalRows = table ? tableWindowTotalRows(table) : 0;
-  const cursorText = selectedPoint
-    ? `cursor ${selectedPoint.label}: ${selectedPoint.point.y}`
+  const selectedTransform = selectedPoint
+    ? displayTransforms.get(selectedPoint.seriesId) ??
+      createChartDisplayTransform(selectedPoint.unit, null)
+    : null;
+  const cursorText = selectedPoint && selectedTransform
+    ? `cursor ${selectedPoint.label}: ${selectedTransform.formatValue(selectedPoint.point.y)}`
     : "cursor —";
 
   return (

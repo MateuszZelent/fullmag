@@ -5,6 +5,7 @@ import {
   frequencySeriesRenderModel,
   frequencySpectrumRenderModel,
 } from "./frequencyRenderModels";
+import { chartRenderModelToEChartsOption } from "./chartRenderer";
 
 const source = {
   kind: "analysis.frequency_domain" as const,
@@ -18,6 +19,25 @@ describe("frequency render models", () => {
     expect(model.series[0]?.points).toEqual([{ rowIndex: 4, x: 9.5, y: 1 }]);
     expect(model.xAxis).toEqual({ label: "frequency [GHz]", unit: "GHz" });
     expect(model.provenance?.query).toBe("frequencyUnit=GHz");
+  });
+
+  it("keeps supplied GHz values physically correct at the renderer boundary", () => {
+    const model = frequencySpectrumRenderModel(
+      [{ frequencyValue: 9.5, rowIndex: 4 }],
+      "GHz",
+    );
+    const option = chartRenderModelToEChartsOption(model);
+    const formatter = (option.tooltip as {
+      formatter: (params: unknown) => string;
+    }).formatter;
+
+    expect(option.xAxis).toMatchObject({ name: "frequency [GHz]" });
+    expect(formatter([{
+      axisValue: 9.5,
+      data: [9.5, 1, 4],
+      seriesName: "Modes [a.u.]",
+      value: [9.5, 1, 4],
+    }])).toContain("frequency [GHz]: 9.5 GHz");
   });
 
   it("preserves the normalized 501-point Lorentzian envelope", () => {
