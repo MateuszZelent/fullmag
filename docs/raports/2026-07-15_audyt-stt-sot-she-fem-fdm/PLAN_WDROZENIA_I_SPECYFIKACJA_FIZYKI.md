@@ -2946,13 +2946,13 @@ semantycznego.
 |---|---|
 | worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-final` |
 | branch | `codex/spin-transport-final` |
-| HEAD przed bieżącym DOS/SML slice'em | `678eeb1f20b2a0dcbcfa8fc2fc681478bbc5e3f7` |
+| HEAD po bieżącym OE-F1 singular/near slice | `7f9b2ade4cfb086bc9c264805ae335dd329ace9f` |
 | v2 slice commit | `bb0031df5ca05766b379e27f569f8945f515674c` |
 | bieżący slice DOS/SML FDM reference | `f6e9060fac5b0bad36c7e3cf91a716544469be36` |
 | bieżący test-gate fix | `6c865437e073a9841fe03c0de3e9b38603ad1ff0` |
-| aktualny `master` | `102f99547c2a793edcbabc4c1c866548427ca01e` |
+| aktualny `master` | `c262fa9d1ba660d70ed3d0849e6fe3469c9e5f32` |
 | bieżący plan checkpoint | `126e4cb736d6ec48cd7228d6166193d29d5aa98f` |
-| rozjazd po bieżącym slice | `123` commitów tylko na gałęzi, `573` tylko na `master` |
+| rozjazd po bieżącym slice | `125` commitów tylko na gałęzi, `574` tylko na `master` |
 | integracja | nie wykonana; wymagany nowy worktree od aktualnego `master` i replay konfliktów semantycznych |
 | ciężkie artefakty | kanoniczny root `/zfn2/mateuszz/git/fullmag`; kompilacje FEM wykonywane przez repozytoryjne receptury `just` w zarządzanych kontenerach; brak twierdzenia o zapisie bezpośrednim do root-owned CIFS/WSL |
 
@@ -2996,7 +2996,7 @@ wszystkich warstwach nowego runu:
 | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo test -p fullmag-plan` | `241 pass, 0 fail` (fresh) | planner suite is green after aligning the certified Gamma_out/periodic-marker fixture and canonical prescribed-SOT relaxation rejection; this closes a verification gate, not a production backend gate |
 | `just verify-fem-stt-native-contract` | `pass` | managed CUDA/MFEM build, native FEM STT contract and append-only ABI test; GPU STT remains fail-closed |
 | `just verify-fem-oersted-oet0-cpu-contract` | `pass` (earlier evidence) | managed CPU/MPI weighted RT0/KKT contract; TSAN runtime remains WSL-blocked |
-| `just verify-fem-oersted-oef1-cpu-contract` | `pass` (bounded) | direct tetra far/reference workload only; singular/on-face convergence is open |
+| `just verify-fem-oersted-oef1-cpu-contract` | `pass` (fresh, managed, `7f9b2ade`) | direct tetra CPU/FP64 now covers representative interior/face/edge targets with cutoff-free Duffy integration, deterministic h+p near refinement, default-profile convergence, and fail-closed depth exhaustion; target-space projection, independent high-depth convergence and production scaling remain open |
 | `just verify-fem-oersted-oef2-cpu-contract` | `pass` (bounded prerequisite) | dense mixed exact-sequence reference; no scalable AMS/BoomerAMG/airbox qualification |
 
 The full `fullmag-plan` suite now passes 241/241. The two earlier failures were
@@ -3013,8 +3013,9 @@ not a passing race proof.
 
 The previous ledger value was **69% implementation / 41% production readiness**.
 After the DOS-backed `C_s` adapter, executable bounded FDM M2 SML lowering,
-reciprocal checkpoint identity repair, and runner balance/power artifact proof,
-the current estimate is **72% implementation / 45% production readiness**.
+reciprocal checkpoint identity repair, runner balance/power artifact proof, and
+the managed cutoff-free OE-F1 singular/near quadrature gate, the current
+estimate is **73% implementation / 45% production readiness**.
 The increase is deliberately bounded: SML is executable only in the reference
 FDM CPU lane, `C_s=e^2N_0` is still a scalar nonmagnetic reduction, and no
 native weak-form, FEM/GPU, device-residency, or browser proof is implied. The
@@ -3026,8 +3027,9 @@ production work. The following independent gates remain open:
 1. production SML reservoir weak form, spatially coupled DOS/susceptibility
    `C_s`, and thermodynamic production proof beyond the bounded local FDM
    reference algebra;
-2. singular/near-field OE-F1 quadrature, target projection, and FEM/FDM
-   convergence;
+2. OE-F1 target-space projection, independent high-depth/reference convergence,
+   and FEM/FDM convergence (the direct singular/near quadrature sub-gate is now
+   green only within the bounded CPU/FP64 oracle envelope);
 3. scalable OE-F2 `H_0(curl) x H1_0` solve with topology certificate,
    AMS/BoomerAMG, airbox study, and supported-source policy;
 4. native FDM production owner, FDM/CUDA FP64 parity, and any FP32 envelope;
