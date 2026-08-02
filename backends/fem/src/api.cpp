@@ -2901,6 +2901,10 @@ int fullmag_fem_get_regional_field_drive_abi_layout(
     out_layout->plan_stage_start_time_s_offset = offsetof(fullmag_fem_plan_desc, stage_start_time_s);
     out_layout->step_stats_size = sizeof(fullmag_fem_step_stats);
     out_layout->step_stats_drive_energy_joules_offset = offsetof(fullmag_fem_step_stats, drive_energy_joules);
+    out_layout->step_stats_rk_transaction_capture_host_wall_time_ns_offset =
+        offsetof(fullmag_fem_step_stats, rk_transaction_capture_host_wall_time_ns);
+    out_layout->step_stats_demag_hypre_timed_solve_count_offset =
+        offsetof(fullmag_fem_step_stats, demag_hypre_timed_solve_count);
     return FULLMAG_FEM_OK;
 }
 

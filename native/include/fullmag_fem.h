@@ -220,6 +220,8 @@ typedef struct {
     uint64_t plan_stage_start_time_s_offset;
     uint64_t step_stats_size;
     uint64_t step_stats_drive_energy_joules_offset;
+    uint64_t step_stats_rk_transaction_capture_host_wall_time_ns_offset;
+    uint64_t step_stats_demag_hypre_timed_solve_count_offset;
 } fullmag_fem_regional_field_drive_abi_layout;
 
 typedef enum {
@@ -593,6 +595,22 @@ typedef struct {
     int32_t demag_amg_strength_threshold_is_set;
     int32_t demag_amg_max_levels;
     int32_t demag_amg_max_levels_is_set;
+    /* Optional profiler-only RK transaction telemetry. */
+    uint64_t rk_transaction_capture_host_wall_time_ns;
+    uint64_t rk_transaction_capture_device_elapsed_time_ns;
+    uint64_t rk_transaction_capture_bytes;
+    uint64_t rk_transaction_restore_host_wall_time_ns;
+    uint64_t rk_transaction_restore_device_elapsed_time_ns;
+    uint64_t rk_transaction_restore_bytes;
+    uint64_t rk_transaction_rollback_count;
+    uint64_t rk_transaction_commit_count;
+    /* Optional profiler-only HYPRE stream timing telemetry. */
+    uint64_t demag_hypre_wait_in_enqueue_wall_time_ns;
+    uint64_t demag_hypre_host_api_wall_time_ns;
+    uint64_t demag_hypre_device_elapsed_time_ns;
+    uint64_t demag_hypre_wait_out_enqueue_wall_time_ns;
+    uint64_t demag_hypre_event_wait_count;
+    uint64_t demag_hypre_timed_solve_count;
 } fullmag_fem_step_stats;
 
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u

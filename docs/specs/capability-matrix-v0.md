@@ -373,6 +373,14 @@ Contract IDs: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, and
 `LLG-TD-ATOMIC-V1` as required policy semantics. Status describes publication availability; implementation
 and validation remain separate evidence axes.
 
+The validation vocabulary is exact and monotonic: `unvalidated`,
+`algebra_validated`, `physics_validated`, and `production_qualified`. Runtime,
+artifacts, API, and Control Room resolve the state from the checked-in registry;
+they never infer it from an engine or qualification ID. The registry key is
+capability ID + qualification ID + backend + device + precision + integrator +
+timestep policy. Missing or mismatched artifact/source evidence fails closed to
+`unvalidated`.
+
 | Policy | Backend | Device | Precision | Product status | implementation_state | validation_state | validated_scope |
 |---|---|---|---|---|---|---|---|
 | explicit fixed | FDM | CPU | double | `reference_executable` | executable | unvalidated | RK23/RK45 AoS/SoA exact fixed-step contract tests pass; no adaptive retry or next-step suggestion; scientific qualification pending |
@@ -387,9 +395,9 @@ and validation remain separate evidence axes.
 | explicit adaptive | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
 | explicit adaptive | FDM | CUDA | double | `source_visible` | executable | unvalidated | v2 ABI behavior, canonical PI vectors, fixed/adaptive separation, typed floor failure, and batch `dt_next` consumption are contract evidence; guard-enabled policies fail closed; trajectory/trace qualification pending |
 | explicit adaptive | FDM | CUDA | single | `source_visible` | executable | unvalidated | shared PI controller and FP32 compile/contract budget only; guards fail closed; separate runtime accuracy/trajectory qualification pending and no FP64 promotion |
-| explicit adaptive | FEM | CPU | double | `production_executable` | executable | validated | managed FP64 RK45 qualification covers Gilbert macrospin `alpha={0.1,1,10}`, periodic exchange frequency/decay/order, fast-mode rejection, exact relax-to-run handoff, bounded energy change, converged Poisson demag, attempt replay, and the checked-in periodic-antidot shared-domain PBC fixture; this does not imply every optional interaction |
+| explicit adaptive | FEM | CPU | double | `production_executable` | executable | unvalidated | prior managed FP64 RK45 evidence covers Gilbert macrospin, periodic exchange, fast-mode rejection, relax-to-run handoff, Poisson demag, replay, and the periodic-antidot fixture, but the current registry has no exact clean schema-v3 artifact/source binding; the lane therefore fails closed |
 | explicit adaptive | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
-| explicit adaptive | FEM | GPU | double | `production_executable` | executable | validated | managed strict-device FP64 RK45 qualification matches CPU at common physical times with CUDA RK kernels, device Hypre Poisson, no fallback, exact relax-to-run handoff, and the checked-in periodic-antidot shared-domain PBC fixture; FP32 and optional interactions outside the fixtures remain unqualified |
+| explicit adaptive | FEM | GPU | double | `production_executable` | executable | unvalidated | prior strict-device FP64 RK45 evidence used CUDA RK kernels, device Hypre Poisson, no fallback, exact relax-to-run handoff, and the periodic-antidot fixture, but the current registry has no exact clean schema-v3 artifact/source binding; the lane therefore fails closed and FP32 remains unqualified |
 | explicit adaptive | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 adaptive lane |
 | stiff time-domain | FEM | CPU | double | `unsupported` | absent | unvalidated | a physical-time tangent-plane integrator must be implemented separately |
 | stiff time-domain | FEM | CPU | single | `unsupported` | absent | unvalidated | no implementation; CPU remains double-only |
@@ -424,6 +432,7 @@ and validation remain separate evidence axes.
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |
 | LLG explicit fixed | see LLG time-domain evidence overlay | see LLG time-domain evidence overlay | `unsupported` | lane-specific | Existing fixed execution is retained, but `fix_dt` API/IR round-trip is not complete until Task 5. |
 | LLG explicit adaptive | `source_visible` | `source_visible` | `unsupported` | **`source_visible`** | RK23/RK45 source exists, but production publication is blocked by findings `LLG-TD-API-001` through `LLG-TD-TEST-011`. |
+| LLG timestep qualification registry | implemented, current state `unvalidated` | implemented, current state `unvalidated` | `unsupported` | **fail-closed evidence owner** | Exact lane identity includes integrator and timestep policy. Promotion requires artifact and clean runtime-source hashes, validated scope, timestamp, validator schema, and prerequisite gates; status is exposed unchanged through provenance, API, and Control Room. |
 | LLG stiff time-domain | `unsupported` | `unsupported` | `unsupported` | **`unsupported`** | The existing `Relaxation(tangent_plane_implicit)` is an energy minimizer, not full physical-time LLG. No explicit-to-stiff or GPU-to-CPU fallback is legal. |
 | `Relaxation(llg_overdamped)` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Shared `StudyIR::Relaxation` with `RelaxStop` and structured execution-owned completion. This is the only relaxation algorithm that owns `dynamics`, RK, `dt`, and a stage-local relaxation clock. |
 | `Relaxation(projected_gradient_bb)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu`, including demag at `rtol<=1e-12` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. FEM demag uses direct polarized increments; no hidden fallback is permitted. Heterogeneous cellwise FDM CUDA material fields remain fail-closed where that lane does not support them. |

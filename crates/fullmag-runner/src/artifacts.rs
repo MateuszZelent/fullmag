@@ -392,6 +392,12 @@ fn demag_runtime_metadata(
                     "solve": entry.demag_solve_wall_time_ns,
                     "solver_setup": entry.demag_solver_setup_wall_time_ns,
                     "solver_apply": entry.demag_solver_apply_wall_time_ns,
+                    "hypre_wait_in_enqueue": entry.demag_hypre_wait_in_enqueue_wall_time_ns,
+                    "hypre_host_api": entry.demag_hypre_host_api_wall_time_ns,
+                    "hypre_device_elapsed": entry.demag_hypre_device_elapsed_time_ns,
+                    "hypre_wait_out_enqueue": entry.demag_hypre_wait_out_enqueue_wall_time_ns,
+                    "hypre_event_wait_count": entry.demag_hypre_event_wait_count,
+                    "hypre_timed_solve_count": entry.demag_hypre_timed_solve_count,
                     "recover": entry.demag_recover_wall_time_ns,
                     "energy": entry.demag_energy_wall_time_ns,
                     "total": entry.demag_wall_time_ns,
@@ -1293,6 +1299,7 @@ fn write_solver_diagnostics_artifacts(
             )
         },
     );
+    let timestep_qualification = execution_identity.clone();
     fs::write(
         output_dir.join("solver_config.json"),
         serde_json::to_string_pretty(&serde_json::json!({
@@ -1376,6 +1383,7 @@ fn write_solver_diagnostics_artifacts(
             "schema_version": "LLG-TD-QUALIFICATION-V1",
             "status": "not_evaluated",
             "reason": "Scientific qualification is produced by the dedicated qualification gate; artifact creation alone is not evidence of validation.",
+            "timestep_qualification": timestep_qualification,
             "accepted_steps": steps.len(),
             "attempt_records": steps.iter().map(|step| step.solver_attempts.len()).sum::<usize>(),
             "checks": [],
@@ -4271,6 +4279,46 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(replay_root).unwrap();
+    }
+
+    #[test]
+    fn solver_qualification_artifact_carries_fail_closed_registry_provenance() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-llg-qualification-provenance-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let policy = crate::resolve_timestep_policy(
+            Some(IntegratorChoice::Rk45),
+            Some(1.0e-15),
+            None,
+            crate::types::TimestepExecutionLane::fem_cpu(ExecutionPrecision::Double),
+        )
+        .unwrap();
+        write_solver_diagnostics_artifacts(
+            &root,
+            &test_fem_execution_plan(),
+            Some(&policy),
+            &[],
+        )
+        .unwrap();
+
+        let qualification: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("qualification.json")).unwrap(),
+        )
+        .unwrap();
+        let identity = &qualification["timestep_qualification"];
+        assert_eq!(identity["validation_state"], "unvalidated");
+        assert_eq!(
+            identity["qualification_registry_version"],
+            "fullmag.llg_timestep_qualification_registry.v1"
+        );
+        assert!(identity.get("qualification_artifact_sha256").is_none());
+        assert!(identity.get("validated_scope").is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

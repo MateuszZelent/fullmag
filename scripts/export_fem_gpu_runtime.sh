@@ -17,10 +17,13 @@ persistent_staging_archive=""
 persistent_validation_root=""
 bootstrapped_source_identity_file="${FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE:-}"
 bootstrapped_source_snapshot_root="${FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT:-}"
+bootstrapped_source_provenance_file="${FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_FILE:-}"
 source_identity_file=""
+source_provenance_json=""
 SOURCE_SNAPSHOT_ROOT=""
 source_snapshot_materialize_root=""
 source_identity_owned=0
+source_provenance_owned="${FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_OWNED:-0}"
 source_snapshot_owned=0
 mkdir -p "${RUNTIME_PARENT}"
 exec 9>"${RUNTIME_LOCK}"
@@ -57,6 +60,15 @@ is_canonical_source_identity_path() {
     [[ "$(basename -- "${path}")" = source-identity.*.json ]]
 }
 
+is_canonical_source_provenance_path() {
+  local path="${1:-}"
+  local parent="${FULLMAG_CONTAINER_TARGET_DIR:-}"
+  [ -n "${path}" ] && [ -n "${parent}" ] &&
+    [ -f "${path}" ] && [ ! -L "${path}" ] &&
+    [ "$(dirname -- "${path}")" = "${parent}" ] &&
+    [[ "$(basename -- "${path}")" = source-provenance.*.json ]]
+}
+
 cleanup_failed_export() {
   local status="$?"
   trap - EXIT HUP INT TERM
@@ -83,6 +95,10 @@ cleanup_failed_export() {
   if [ "${source_identity_owned:-0}" = "1" ] &&
      is_canonical_source_identity_path "${source_identity_file:-}"; then
     rm -f -- "${source_identity_file}" || true
+  fi
+  if [ "${source_provenance_owned:-0}" = "1" ] &&
+     is_canonical_source_provenance_path "${source_provenance_json:-}"; then
+    rm -f -- "${source_provenance_json}" || true
   fi
   if [ "${source_snapshot_owned:-0}" = "1" ] &&
      is_canonical_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT:-}"; then
@@ -164,6 +180,33 @@ mkdir -p "${PERSISTENT_RUNTIME_PARENT}"
 mkdir -p "${VARIANTS_ROOT}" "${FULLMAG_CONTAINER_TARGET_DIR}/tmp" \
   "${FULLMAG_CONTAINER_TARGET_DIR}/cargo-home"
 
+prepare_source_provenance() {
+  if [ -n "${bootstrapped_source_provenance_file}" ]; then
+    if ! is_canonical_source_provenance_path "${bootstrapped_source_provenance_file}"; then
+      echo "[export_fem_gpu_runtime] supplied source provenance is invalid" >&2
+      return 2
+    fi
+    source_provenance_json="${bootstrapped_source_provenance_file}"
+    return 0
+  fi
+  source_provenance_json="$(mktemp "${FULLMAG_CONTAINER_TARGET_DIR}/source-provenance.XXXXXXXXXX.json")"
+  source_provenance_owned=1
+  source_provenance_args=()
+  case "${FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT:-0}" in
+    0) ;;
+    1) source_provenance_args+=(--allow-dirty) ;;
+    *)
+      echo "[export_fem_gpu_runtime] FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT must be 0 or 1" >&2
+      return 2
+      ;;
+  esac
+  python3 scripts/hash_managed_fem_runtime_sources.py \
+    --repo-root "${REPO_ROOT}" \
+    --source-input-manifest "${REPO_ROOT}/scripts/managed_fem_runtime_source_inputs.v1.txt" \
+    "${source_provenance_args[@]}" \
+    --output "${source_provenance_json}"
+}
+
 verify_source_snapshot_identity() {
   # The container builds the immutable snapshot. The live worktree may drift
   # while another agent edits docs; report that drift without invalidating the
@@ -198,6 +241,7 @@ bootstrap_new_source_snapshot() {
   source_identity_owned=1
   python3 scripts/capture_source_snapshot_identity.py \
     --repo-root "${REPO_ROOT}" --output "${source_identity_file}"
+  prepare_source_provenance
   source_snapshot_sha256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' "${source_identity_file}")"
   SOURCE_SNAPSHOT_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/source-cache.${source_snapshot_sha256}"
   if [ -e "${SOURCE_SNAPSHOT_ROOT}" ]; then
@@ -231,6 +275,8 @@ bootstrap_new_source_snapshot() {
   export FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE="${source_identity_file}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT="${SOURCE_SNAPSHOT_ROOT}"
+  export FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_FILE="${source_provenance_json}"
+  export FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_OWNED="${source_provenance_owned}"
   flock -u 9
   exec 9>&-
   exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"
@@ -264,14 +310,24 @@ export FULLMAG_ENABLE_NVTX
 FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
 resolve_source_snapshot_bootstrap
+prepare_source_provenance
 if [ ! -f "${source_identity_file}" ] || [ ! -d "${SOURCE_SNAPSHOT_ROOT}" ]; then
   echo "[export_fem_gpu_runtime] immutable source snapshot bootstrap is incomplete" >&2
+  exit 2
+fi
+if ! is_canonical_source_provenance_path "${source_provenance_json}"; then
+  echo "[export_fem_gpu_runtime] source provenance bootstrap is incomplete" >&2
   exit 2
 fi
 FULLMAG_SOURCE_GIT_COMMIT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head_commit_full"])' "${source_identity_file}")"
 FULLMAG_SOURCE_WORKTREE_STATE="$(python3 -c 'import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")' "${source_identity_file}")"
 FULLMAG_SOURCE_SNAPSHOT_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' "${source_identity_file}")"
-readonly FULLMAG_SOURCE_GIT_COMMIT FULLMAG_SOURCE_WORKTREE_STATE FULLMAG_SOURCE_SNAPSHOT_SHA256
+FULLMAG_SOURCE_GIT_TREE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_provenance"]["git_tree"])' "${source_provenance_json}")"
+if [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_provenance"]["git_commit"])' "${source_provenance_json}")" != "${FULLMAG_SOURCE_GIT_COMMIT}" ]; then
+  echo "[export_fem_gpu_runtime] source provenance commit differs from immutable source snapshot" >&2
+  exit 2
+fi
+readonly FULLMAG_SOURCE_GIT_COMMIT FULLMAG_SOURCE_GIT_TREE FULLMAG_SOURCE_WORKTREE_STATE FULLMAG_SOURCE_SNAPSHOT_SHA256
 verify_source_snapshot_identity
 cd "${SOURCE_SNAPSHOT_ROOT}"
 
@@ -979,11 +1035,13 @@ docker run --rm --network none \
     --variant "${FULLMAG_FEM_RUNTIME_VARIANT}" \
     --requested-cuda-architectures "${FULLMAG_CUDA_ARCHITECTURES}" \
     --hypre-build-metadata "/opt/fullmag-deps/share/fullmag/hypre-build-metadata.json" \
+    --source-provenance-json "/managed-runtime-target/$(basename "${source_provenance_json}")" \
     --runtime-diagnostics-json "/managed-runtime-target/runtime-export-staging.$$/runtime-diagnostics.json" \
     --docker-image-id "${docker_image_id}" \
     --observed-docker-image-id "${observed_docker_image_id}" \
     --created-at "${created_at}" \
     --git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
+    --git-tree "${FULLMAG_SOURCE_GIT_TREE}" \
     --worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
     --source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"
 
@@ -1142,6 +1200,11 @@ finalize_verified_source_publication() {
   fi
   source_identity_file=""
   source_identity_owned=0
+  if is_canonical_source_provenance_path "${source_provenance_json:-}"; then
+    rm -f -- "${source_provenance_json}"
+  fi
+  source_provenance_json=""
+  source_provenance_owned=0
 }
 
 finalize_verified_source_publication

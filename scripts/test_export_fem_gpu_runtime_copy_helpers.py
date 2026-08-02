@@ -166,8 +166,18 @@ int fullmag_fem_get_mesh_abi_layout(mesh_layout *out) {
         "schema": 3,
         "runtime": "fem-gpu-host",
         "variant": "test-sm89",
+        "parent_manifest_sha256": "0" * 64,
+        "source_provenance": {
+            "git_commit": "0123abcd" * 5,
+            "git_tree": "2" * 40,
+            "dirty": False,
+            "dirty_patch_sha256": None,
+            "source_inputs_sha256": "3" * 64,
+            "source_input_manifest": "scripts/managed_fem_runtime_source_inputs.v1.txt",
+        },
         "build_identity": {
             "git_commit": "0123abcd" * 5,
+            "git_tree": "2" * 40,
             "worktree_state": "dirty",
             "source_snapshot_sha256": "45" * 32,
         },
@@ -210,6 +220,11 @@ int fullmag_fem_get_mesh_abi_layout(mesh_layout *out) {
             "hypre_configure_flags": list(hypre_configure_flags),
             "hypre_config_macros": hypre_config_macros,
             "hypre_config_header_sha256": "f" * 64,
+            "source_inputs": {
+                "justfile_sha256": "4" * 64,
+                "dockerfile_sha256": "5" * 64,
+                "source_input_manifest_sha256": "6" * 64,
+            },
         },
         "runtime_diagnostics": {
             "device_name": "Synthetic RTX 4080",
@@ -1701,7 +1716,7 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
     assert "-newer" not in ensure_recipe
 
 
-def test_managed_runtime_validator_migrates_schema_2_without_treating_it_as_current(
+def test_managed_runtime_validator_rejects_schema_2_without_legacy_fallback(
     tmp_path: Path,
 ) -> None:
     runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
@@ -1710,25 +1725,25 @@ def test_managed_runtime_validator_migrates_schema_2_without_treating_it_as_curr
     manifest["schema"] = 2
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    compatible = validate_fake_bundle(runtime, ldd, readelf)
-    exact = validate_fake_bundle(
-        runtime,
-        ldd,
-        readelf,
-        "--require-git-commit",
-        "0123abcd" * 5,
-        "--require-worktree-state",
-        "dirty",
-        "--require-source-snapshot-sha256",
-        "45" * 32,
-    )
+    result = validate_fake_bundle(runtime, ldd, readelf)
 
-    assert compatible.returncode == 0, compatible.stderr
-    assert json.loads(compatible.stdout)["source_identity_compatibility"] == (
-        "legacy-schema-2-unbound"
-    )
-    assert exact.returncode == 2
-    assert "schema 2 cannot satisfy exact source identity" in exact.stderr
+    assert result.returncode == 2
+    assert "expected schema 3" in result.stderr
+
+
+def test_managed_runtime_validator_rejects_obsolete_source_manifest_sha256(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_manifest_sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert result.returncode == 2
+    assert "rejects obsolete source_manifest_sha256" in result.stderr
 
 
 def test_make_install_cli_uses_external_cargo_target_variable() -> None:
@@ -1783,6 +1798,32 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
         ),
         encoding="utf-8",
     )
+    source_provenance = tmp_path / "source-provenance.json"
+    source_provenance.write_text(
+        json.dumps(
+            {
+                "source_provenance": {
+                    "git_commit": "0123abcd" * 5,
+                    "git_tree": "89abcdef" * 5,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "e" * 64,
+                    "source_input_manifest": (
+                        "scripts/managed_fem_runtime_source_inputs.v1.txt"
+                    ),
+                },
+                "build_inputs": {
+                    "justfile_sha256": "a" * 64,
+                    "dockerfile_sha256": "b" * 64,
+                    "source_input_manifest_sha256": "c" * 64,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous_manifest_sha256 = hashlib.sha256(
+        (runtime / "manifest.json").read_bytes()
+    ).hexdigest()
 
     result = subprocess.run(
         [
@@ -1796,6 +1837,8 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
             "80-real;89-real;90-real;90-virtual",
             "--hypre-build-metadata",
             str(hypre_build_metadata),
+            "--source-provenance-json",
+            str(source_provenance),
             "--device-name",
             "Synthetic RTX 4080",
             "--compute-capability",
@@ -1804,6 +1847,8 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
             "591.86",
             "--git-commit",
             "0123abcd" * 5,
+            "--git-tree",
+            "89abcdef" * 5,
             "--worktree-state",
             "dirty",
             "--source-snapshot-sha256",
@@ -1825,6 +1870,21 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     manifest = json.loads((runtime / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema"] == 3
+    assert "source_manifest_sha256" not in manifest
+    assert manifest["parent_manifest_sha256"] == previous_manifest_sha256
+    assert manifest["source_provenance"] == {
+        "git_commit": "0123abcd" * 5,
+        "git_tree": "89abcdef" * 5,
+        "dirty": False,
+        "dirty_patch_sha256": None,
+        "source_inputs_sha256": "e" * 64,
+        "source_input_manifest": "scripts/managed_fem_runtime_source_inputs.v1.txt",
+    }
+    assert manifest["build"]["source_inputs"] == {
+        "justfile_sha256": "a" * 64,
+        "dockerfile_sha256": "b" * 64,
+        "source_input_manifest_sha256": "c" * 64,
+    }
     assert manifest["native_libraries"]["fullmag_fem"]["cubins"] == ["sm_89"]
     assert manifest["native_libraries"]["hypre"]["path"] == "lib/libHYPRE-3.1.0.so"
     assert manifest["loader_trace"]["fullmag_fem"]["libHYPRE-3.1.0.so"] == (
@@ -1835,6 +1895,7 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
     assert manifest["runtime_diagnostics"]["compute_capability"] == "8.9"
     assert manifest["build_identity"] == {
         "git_commit": "0123abcd" * 5,
+        "git_tree": "89abcdef" * 5,
         "worktree_state": "dirty",
         "source_snapshot_sha256": "45" * 32,
     }
@@ -1846,6 +1907,23 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
         ),
         "mesh_desc_field_offsets": MESH_FIELD_OFFSETS,
     }
+
+
+def test_export_script_hashes_host_source_provenance_before_starting_docker_build() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    provenance_index = script.find("python3 scripts/hash_managed_fem_runtime_sources.py")
+    build_index = script.find(
+        'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
+    )
+
+    assert provenance_index != -1
+    assert build_index != -1
+    assert provenance_index < build_index
+    assert "FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT" in script
+    assert '--source-provenance-json "/managed-runtime-target/' in script
+    assert ".fullmag/runtimes/$(basename" not in script
+    assert "FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_FILE" in script
 
 
 def test_export_script_replaces_existing_runtime_binaries_before_copying() -> None:

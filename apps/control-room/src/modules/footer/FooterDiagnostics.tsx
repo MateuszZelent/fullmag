@@ -72,6 +72,12 @@ export interface SolverProfilePanelModel {
   windowPhaseSummary: string;
 }
 
+export interface TimestepQualificationPanelModel {
+  detail: string;
+  label: string;
+  warning: boolean;
+}
+
 type SolverProfileCopyStatus = "copied" | "failed" | "idle";
 type SolverProfileStepSampleResource =
   SolverProfileResource["latest_samples"][number];
@@ -100,6 +106,9 @@ export function FooterDiagnostics() {
   const gpuDevices = gpu.data?.devices ?? [];
   const gpuStatus = gpu.data?.status ?? "pending";
   const profileModel = buildSolverProfilePanelModel(solverProfile.data);
+  const timestepQualificationModel = buildTimestepQualificationPanelModel(
+    solverProfile.data,
+  );
   const [profileCopyStatus, setProfileCopyStatus] =
     useState<SolverProfileCopyStatus>("idle");
   const profileCopyResetTimerRef = useRef<number | null>(null);
@@ -196,6 +205,25 @@ export function FooterDiagnostics() {
             )}
           </Button>
         </div>
+        {timestepQualificationModel ? (
+          <div
+            className={
+              timestepQualificationModel.warning
+                ? "fm-footer-diagnostics__warning"
+                : "fm-footer-diagnostics__threading"
+            }
+            role="status"
+          >
+            {timestepQualificationModel.warning ? (
+              <AlertTriangle size={13} aria-hidden="true" />
+            ) : (
+              <Server size={13} aria-hidden="true" />
+            )}
+            <span>
+              {timestepQualificationModel.label} — {timestepQualificationModel.detail}
+            </span>
+          </div>
+        ) : null}
         {profileModel.rows.length > 0 ? (
           <div className="fm-footer-diagnostics__profile">
             <div className="fm-footer-diagnostics__threading">
@@ -597,6 +625,44 @@ export function buildSolverProfilePanelModel(
     state: profile?.state ?? "pending",
     threadSummary: threading ? formatThreadSummary(threading) : "Threading pending",
     windowPhaseSummary: formatWindowPhaseSummary(profile?.latest_samples.at(-1)),
+  };
+}
+
+export function buildTimestepQualificationPanelModel(
+  profile: SolverProfileResource | null | undefined,
+): TimestepQualificationPanelModel | null {
+  const qualification = profile?.timestep_qualification;
+  if (!qualification) return null;
+
+  const stateLabel = titleCase(
+    qualification.validation_state.replaceAll("_", " "),
+  );
+  if (qualification.validation_state === "unvalidated") {
+    return {
+      detail: "No exact artifact/runtime-source binding.",
+      label: `LLG timestep: ${stateLabel}`,
+      warning: true,
+    };
+  }
+
+  const bindings = [
+    `Registry ${qualification.qualification_registry_version}.`,
+  ];
+  if (qualification.qualification_artifact_sha256) {
+    bindings.push(
+      `Artifact ${qualification.qualification_artifact_sha256.slice(0, 12)}.`,
+    );
+  }
+  if (qualification.runtime_source_inputs_sha256) {
+    bindings.push(
+      `Runtime source ${qualification.runtime_source_inputs_sha256.slice(0, 12)}.`,
+    );
+  }
+
+  return {
+    detail: bindings.join(" "),
+    label: `LLG timestep: ${stateLabel}`,
+    warning: false,
   };
 }
 

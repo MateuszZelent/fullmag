@@ -779,7 +779,7 @@ int gpu_relax_restore_previous_state_after_failure(
     std::string &error)
 {
     std::string restore_reason;
-    if (!gpu_rk_restore_step_transaction_device(ctx, restore_reason) ||
+    if (!gpu_relax_restore_step_transaction_device_unprofiled(ctx, restore_reason) ||
         !gpu_relax_restore_previous_direction(ctx, stream, rollback, restore_reason)) {
         error =
             "GPU nonlinear-CG failed to restore previous device state after " +
@@ -1157,7 +1157,7 @@ int gpu_relax_nonlinear_cg_step(
     const GpuRelaxNcgRollbackState rollback =
         capture_gpu_relax_ncg_rollback_state(ctx);
 
-    if (!gpu_rk_capture_step_transaction_device(ctx, reason) ||
+    if (!gpu_relax_capture_step_transaction_device_unprofiled(ctx, reason) ||
         !gpu_rk_copy_component_device(
             gpu.magnetization.m,
             gpu.rk.m_backup,
@@ -1494,7 +1494,7 @@ int gpu_relax_nonlinear_cg_step(
     if (!line_search_accepted) {
         if (every_permitted_trial_unchanged) {
             std::string restore_reason;
-            if (!gpu_rk_restore_step_transaction_device(ctx, restore_reason) ||
+            if (!gpu_relax_restore_step_transaction_device_unprofiled(ctx, restore_reason) ||
                 !gpu_relax_restore_previous_direction(
                     ctx, stream, rollback, restore_reason)) {
                 error =

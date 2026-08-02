@@ -1143,6 +1143,14 @@ void gpu_rk_phase_timing_is_opt_in_for_cuda_hot_loop() {
             step_stats_source.find("void gpu_rk_reset_phase_timing_events(Context &ctx)\n{\n    auto &timings = ctx.gpu_state.rk_phase_timings;\n    timings.enabled = phase_timing_env_enabled();") ==
                 std::string::npos,
         "GPU RK phase timing env gate must refresh at step preflight without entering the step reset hot path");
+    const auto override_pos = step_stats_source.find(
+        "if (timings.override_configured) {\n        return timings.override_enabled;\n    }");
+    const auto env_pos = step_stats_source.find(
+        "const int env_state = phase_timing_env_state();\n    if (env_state >= 0)");
+    check(
+        override_pos != std::string::npos && env_pos != std::string::npos &&
+            override_pos < env_pos,
+        "GPU RK phase timing must give an explicit API override precedence over the environment");
     check(
         step_stats_source.find("if (!enabled) {\n        destroy_phase_timing_events(timings.exchange_events);") !=
                 std::string::npos &&

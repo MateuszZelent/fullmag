@@ -1,0 +1,36 @@
+{
+  "document": {
+    "path": "docs/physics/0580-canonical-relaxation-equilibrium-contract.md"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "equilibrium-comparator",
+      "path": "scripts/validate_fem_relaxation_equilibrium_parity.py",
+      "symbol": "compare_equilibrium_states",
+      "responsibility": "Compare converged CPU/GPU magnetization and energy states at one tolerance."
+    },
+    {
+      "id": "equilibrium-summary",
+      "path": "scripts/analysis/fem_gpu_benchmark.py",
+      "symbol": "equilibrium_parity_summary",
+      "responsibility": "Build the versioned equilibrium parity summary from benchmark rows."
+    },
+    {
+      "id": "solver-time",
+      "path": "examples/bench_fem_gpu_long.py",
+      "symbol": "solver_time_to_tolerance_evidence",
+      "responsibility": "Measure native accepted-step time to the first torque-qualified state."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

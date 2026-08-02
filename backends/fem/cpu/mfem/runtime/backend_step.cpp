@@ -19,6 +19,7 @@
 #include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
+#include "cpu/mfem/runtime/step_metrics.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
 #include "gpu/cuda/relaxation/pgbb.hpp"
@@ -64,6 +65,13 @@ int run_backend_step_attempt(
             0.0);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
+    const auto refresh_transaction_stats = [&]() {
+        // The RK final-statistics path runs before the outer transaction is
+        // committed or rolled back. Refresh the transaction-only fields at
+        // each terminal boundary so public stats include the completed
+        // attempt group rather than a pre-commit snapshot.
+        fill_step_profiler_timing_stats(ctx, out_stats);
+    };
     auto rollback = [&]() {
         const std::string original_error = error;
         std::string rollback_error;
@@ -72,6 +80,7 @@ int run_backend_step_attempt(
         } else {
             error = original_error;
         }
+        refresh_transaction_stats();
     };
     bool ok = false;
     ctx.interrupt.step_interrupted = false;
@@ -162,6 +171,7 @@ int run_backend_step_attempt(
             0.0,
             0.0);
         out_stats.dt_seconds = 0.0;
+        refresh_transaction_stats();
         return FULLMAG_FEM_ERR_INTERRUPTED;
     }
     if (has_relax_stop_criteria(ctx)) {
@@ -183,10 +193,12 @@ int run_backend_step_attempt(
         if (energy_decision.kind == RelaxationEnergyAcceptanceKind::rejected_increase) {
             rollback();
             energy_rejected = true;
+            refresh_transaction_stats();
             return FULLMAG_FEM_OK;
         }
     }
     transaction.commit();
+    refresh_transaction_stats();
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;
@@ -211,6 +223,10 @@ int run_backend_step(
     }
     double active_dt = dt_seconds;
     uint32_t energy_rejections = 0;
+    // Transaction telemetry describes one public backend step, including any
+    // energy-rejection retries. Reset it outside run_backend_step_attempt so
+    // retry overhead remains visible in the final accepted-step diagnostics.
+    ctx.stepper.transaction_telemetry = {};
     for (;;) {
         bool energy_rejected = false;
         const int status = run_backend_step_attempt(

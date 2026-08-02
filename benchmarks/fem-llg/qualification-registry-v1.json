@@ -1,0 +1,181 @@
+{
+  "schema_version": "fullmag.llg_timestep_qualification_registry.v1",
+  "entries": [
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_adaptive_fem_cpu_double",
+        "backend": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "adaptive"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "Current managed artifacts predate exact schema-v3 source and registry bindings."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_adaptive_fem_gpu_double",
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "adaptive"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "Current managed artifacts predate exact schema-v3 source and registry bindings."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_fixed_fem_cpu_double",
+        "backend": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "fixed"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "No exact fixed-step FEM qualification artifact is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_fixed_fem_gpu_double",
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "fixed"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "No exact fixed-step FEM qualification artifact is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_fixed_fdm_cpu_double",
+        "backend": "fdm",
+        "device": "cpu",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "fixed"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "No exact fixed-step FDM qualification artifact is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_fixed_fdm_cuda_double",
+        "backend": "fdm",
+        "device": "cuda",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "fixed"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "No exact fixed-step FDM qualification artifact is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_fixed_fdm_cuda_single",
+        "backend": "fdm",
+        "device": "cuda",
+        "precision": "single",
+        "integrator": "rk45",
+        "timestep_policy": "fixed"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "No exact fixed-step FDM qualification artifact is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_adaptive_fdm_cpu_double",
+        "backend": "fdm",
+        "device": "cpu",
+        "precision": "double",
+        "integrator": "rk45",
+        "timestep_policy": "adaptive"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "No exact adaptive FDM qualification artifact is registered."
+    }
+  ]
+}

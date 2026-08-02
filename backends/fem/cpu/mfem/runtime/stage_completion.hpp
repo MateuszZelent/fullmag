@@ -142,6 +142,17 @@ bool complete_stage_from_current_stats(
     const fullmag_fem_step_stats &stats);
 
 /*
+ * Return whether the current torque-only relaxation sample is below tolerance
+ * but still needs one or more confirmations. This includes the first low
+ * sample: a caller may return a zero-dt stats sample so the existing stage
+ * orchestrator can advance the consecutive-sample counter without attempting
+ * another numerically unrepresentable minimizer step.
+ */
+bool relaxation_torque_confirmation_pending(
+    const Context &ctx,
+    double max_torque_apm);
+
+/*
  * Update relaxation stop state from the latest public step statistics.
  *
  * The function accumulates pseudo-time from non-negative `dt_seconds`, tracks

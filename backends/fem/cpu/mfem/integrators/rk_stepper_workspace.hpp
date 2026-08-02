@@ -79,6 +79,45 @@ struct RkAttemptTraceState {
 };
 
 /*
+ * Per-public-step telemetry for the explicit-RK transaction owners.
+ *
+ * The outer transaction records the host snapshot and queued device-to-device
+ * checkpoint separately because the CUDA capture is asynchronous. Device
+ * restore time includes the existing rollback stream synchronization. Payload
+ * byte counters describe dynamic host buffers and device buffers actually
+ * copied; they intentionally exclude fixed-size object metadata. Adaptive
+ * attempt-cache counters remain separate from the outer accepted-step
+ * transaction so retry overhead is not mistaken for a committed step.
+ *
+ * This is native owner state only. ABI/API/UI publication is a separate
+ * versioned propagation task.
+ */
+struct RkTransactionTelemetryState {
+    uint64_t step_transaction_begin_count = 0;
+    uint64_t step_transaction_commit_count = 0;
+    uint64_t step_transaction_rollback_count = 0;
+    uint64_t attempt_cache_capture_count = 0;
+    uint64_t attempt_cache_restore_count = 0;
+
+    uint64_t step_transaction_begin_wall_time_ns = 0;
+    uint64_t step_transaction_host_capture_wall_time_ns = 0;
+    uint64_t step_transaction_device_capture_enqueue_wall_time_ns = 0;
+    uint64_t step_transaction_commit_wall_time_ns = 0;
+    uint64_t step_transaction_rollback_wall_time_ns = 0;
+    uint64_t step_transaction_host_restore_wall_time_ns = 0;
+    uint64_t step_transaction_device_restore_wall_time_ns = 0;
+    uint64_t attempt_cache_capture_wall_time_ns = 0;
+    uint64_t attempt_cache_restore_wall_time_ns = 0;
+
+    uint64_t step_transaction_host_snapshot_payload_bytes = 0;
+    uint64_t step_transaction_device_snapshot_payload_bytes = 0;
+    uint64_t step_transaction_host_restore_payload_bytes = 0;
+    uint64_t step_transaction_device_restore_payload_bytes = 0;
+    uint64_t attempt_cache_snapshot_payload_bytes = 0;
+    uint64_t attempt_cache_restore_payload_bytes = 0;
+};
+
+/*
  * Runtime owner for the reusable explicit RK workspace.
  *
  * Context stores this owner rather than a flat StepperWorkspace so the
@@ -89,6 +128,7 @@ struct RkStepperRuntimeState {
     StepperWorkspace workspace{};
     RkStepFailureInjectionState failure_injection{};
     RkAttemptTraceState attempt_trace{};
+    RkTransactionTelemetryState transaction_telemetry{};
 };
 
 } // namespace fullmag::fem

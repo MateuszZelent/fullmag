@@ -18892,6 +18892,16 @@
                 "$ref": "#/components/schemas/SolverProfileThreadingResource"
               }
             ]
+          },
+          "timestep_qualification": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TimestepQualificationResource"
+              }
+            ]
           }
         },
         "required": [
@@ -21317,6 +21327,88 @@
             "type": "object"
           }
         ]
+      },
+      "TimestepQualificationResource": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "capability_id": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "integrator": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          },
+          "qualification_artifact_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "qualification_id": {
+            "type": "string"
+          },
+          "qualification_registry_version": {
+            "type": "string"
+          },
+          "qualification_validated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "qualification_validator_schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime_source_inputs_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestep_policy": {
+            "type": "string"
+          },
+          "validated_scope": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "validation_state": {
+            "$ref": "#/components/schemas/TimestepValidationStateResource"
+          }
+        },
+        "required": [
+          "capability_id",
+          "qualification_id",
+          "backend",
+          "device",
+          "precision",
+          "integrator",
+          "timestep_policy",
+          "validation_state",
+          "qualification_registry_version"
+        ],
+        "type": "object"
+      },
+      "TimestepValidationStateResource": {
+        "enum": [
+          "unvalidated",
+          "algebra_validated",
+          "physics_validated",
+          "production_qualified"
+        ],
+        "type": "string"
       },
       "TopologicalChargeExecutionProvenance": {
         "properties": {

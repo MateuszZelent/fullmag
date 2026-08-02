@@ -229,6 +229,8 @@ pub struct fullmag_fem_regional_field_drive_abi_layout {
     pub plan_stage_start_time_s_offset: u64,
     pub step_stats_size: u64,
     pub step_stats_drive_energy_joules_offset: u64,
+    pub step_stats_rk_transaction_capture_host_wall_time_ns_offset: u64,
+    pub step_stats_demag_hypre_timed_solve_count_offset: u64,
 }
 
 #[repr(C)]
@@ -694,6 +696,20 @@ pub struct fullmag_fem_step_stats {
     pub demag_amg_strength_threshold_is_set: i32,
     pub demag_amg_max_levels: i32,
     pub demag_amg_max_levels_is_set: i32,
+    pub rk_transaction_capture_host_wall_time_ns: u64,
+    pub rk_transaction_capture_device_elapsed_time_ns: u64,
+    pub rk_transaction_capture_bytes: u64,
+    pub rk_transaction_restore_host_wall_time_ns: u64,
+    pub rk_transaction_restore_device_elapsed_time_ns: u64,
+    pub rk_transaction_restore_bytes: u64,
+    pub rk_transaction_rollback_count: u64,
+    pub rk_transaction_commit_count: u64,
+    pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
+    pub demag_hypre_host_api_wall_time_ns: u64,
+    pub demag_hypre_device_elapsed_time_ns: u64,
+    pub demag_hypre_wait_out_enqueue_wall_time_ns: u64,
+    pub demag_hypre_event_wait_count: u64,
+    pub demag_hypre_timed_solve_count: u64,
 }
 
 pub const FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION: u32 = 1;
@@ -2021,6 +2037,17 @@ mod tests {
         assert_eq!(
             layout.step_stats_drive_energy_joules_offset as usize,
             std::mem::offset_of!(fullmag_fem_step_stats, drive_energy_joules)
+        );
+        assert_eq!(
+            layout.step_stats_rk_transaction_capture_host_wall_time_ns_offset as usize,
+            std::mem::offset_of!(
+                fullmag_fem_step_stats,
+                rk_transaction_capture_host_wall_time_ns
+            )
+        );
+        assert_eq!(
+            layout.step_stats_demag_hypre_timed_solve_count_offset as usize,
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_hypre_timed_solve_count)
         );
     }
 

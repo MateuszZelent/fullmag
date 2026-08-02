@@ -196,11 +196,17 @@ def _validate_runtime_manifest(path: Path) -> dict[str, object]:
         manifest.get("build_identity"), "runtime build_identity"
     )
     git_commit = build_identity.get("git_commit")
+    git_tree = build_identity.get("git_tree")
     if (
         not isinstance(git_commit, str)
         or re.fullmatch(r"[0-9a-f]{40}", git_commit) is None
     ):
         raise ContractError("runtime build_identity.git_commit must be full 40-hex")
+    if (
+        not isinstance(git_tree, str)
+        or re.fullmatch(r"[0-9a-f]{40}", git_tree) is None
+    ):
+        raise ContractError("runtime build_identity.git_tree must be full 40-hex")
     worktree_state = build_identity.get("worktree_state")
     if worktree_state not in {"clean", "dirty"}:
         raise ContractError("runtime build_identity.worktree_state must be clean or dirty")
@@ -211,9 +217,29 @@ def _validate_runtime_manifest(path: Path) -> dict[str, object]:
     for field in ("variant", "created_at", "docker_image_id"):
         if not isinstance(manifest.get(field), str) or not manifest[field]:
             raise ContractError(f"managed runtime manifest {field} must be present")
-    source_manifest_sha256 = _canonical_sha256(
-        manifest.get("source_manifest_sha256"), "runtime source_manifest_sha256"
+    if "source_manifest_sha256" in manifest:
+        raise ContractError("runtime manifest rejects obsolete source_manifest_sha256")
+    _canonical_sha256(
+        manifest.get("parent_manifest_sha256"), "runtime parent_manifest_sha256"
     )
+    source_provenance = _object(
+        manifest.get("source_provenance"), "runtime source provenance"
+    )
+    runtime_source_inputs_sha256 = _canonical_sha256(
+        source_provenance.get("source_inputs_sha256"),
+        "runtime source_inputs_sha256",
+    )
+    if (
+        source_provenance.get("git_commit") != git_commit
+        or source_provenance.get("git_tree") != git_tree
+        or source_provenance.get("dirty") is not False
+        or source_provenance.get("dirty_patch_sha256") is not None
+        or source_provenance.get("source_input_manifest")
+        != "scripts/managed_fem_runtime_source_inputs.v1.txt"
+    ):
+        raise ContractError(
+            "mixed-prism qualification requires a clean exact runtime source provenance"
+        )
     integrity = _object(manifest.get("integrity"), "runtime integrity")
     integrity_identity = {
         field: _canonical_sha256(integrity.get(field), f"runtime integrity.{field}")
@@ -266,7 +292,10 @@ def _validate_runtime_manifest(path: Path) -> dict[str, object]:
         "variant": manifest["variant"],
         "created_at": manifest["created_at"],
         "docker_image_id": manifest["docker_image_id"],
-        "source_manifest_sha256": source_manifest_sha256,
+        "runtime_git_tree": git_tree,
+        "runtime_source_inputs_sha256": runtime_source_inputs_sha256,
+        "runtime_dirty": False,
+        "runtime_dirty_patch_sha256": None,
         "runtime_git_commit": git_commit,
         "runtime_worktree_state": worktree_state,
         "runtime_source_snapshot_sha256": source_snapshot_sha256,
@@ -1803,7 +1832,10 @@ def compare_runtime_summaries(
         "runtime_source_snapshot_sha256",
         "source_snapshot_identity_sha256",
         "runtime_source_identity_compatibility",
-        "source_manifest_sha256",
+        "runtime_git_tree",
+        "runtime_source_inputs_sha256",
+        "runtime_dirty",
+        "runtime_dirty_patch_sha256",
         "libfullmag_fem_sha256",
         "canonical_source",
         "canonical_source_sha256",
@@ -2000,7 +2032,10 @@ def compare_runtime_summaries(
         "runtime_source_identity_compatibility": cpu[
             "runtime_source_identity_compatibility"
         ],
-        "source_manifest_sha256": cpu["source_manifest_sha256"],
+        "runtime_git_tree": cpu["runtime_git_tree"],
+        "runtime_source_inputs_sha256": cpu["runtime_source_inputs_sha256"],
+        "runtime_dirty": cpu["runtime_dirty"],
+        "runtime_dirty_patch_sha256": cpu["runtime_dirty_patch_sha256"],
         "libfullmag_fem_sha256": cpu["libfullmag_fem_sha256"],
         "canonical_source": cpu["canonical_source"],
         "canonical_source_sha256": cpu["canonical_source_sha256"],

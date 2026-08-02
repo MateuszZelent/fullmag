@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import fullmag as fm
@@ -491,6 +492,28 @@ def executed_problem_ir_sha256(problem: fm.Problem) -> str:
     return hashlib.sha256(canonical_bytes).hexdigest()
 
 
+def solver_time_to_tolerance_evidence(
+    steps: Sequence[object], torque_tolerance_apm: float
+) -> tuple[float | None, int, int]:
+    """Return native accepted-step time and partial demag telemetry.
+
+    The elapsed value stops at the first accepted state satisfying the field
+    torque criterion.  It deliberately excludes subprocess orchestration and
+    artifact serialization; incomplete runs retain their partial step count
+    and demag solve count but report no time-to-tolerance value.
+    """
+
+    elapsed_ns = 0
+    demag_solves = 0
+    for index, step in enumerate(steps, start=1):
+        elapsed_ns += max(0, int(getattr(step, "wall_time_ns", 0) or 0))
+        demag_solves += max(0, int(getattr(step, "demag_solves", 0) or 0))
+        torque = getattr(step, "max_torque_Apm", None)
+        if torque is not None and math.isfinite(float(torque)) and float(torque) <= torque_tolerance_apm:
+            return elapsed_ns / 1_000_000_000.0, index, demag_solves
+    return None, len(steps), demag_solves
+
+
 def emit_summary(
     result: fm.Result,
     mesh_path: Path,
@@ -506,6 +529,12 @@ def emit_summary(
     total_rhs_evals = sum(
         max(0, int(getattr(step, "rhs_evals", 0) or 0)) for step in result.steps
     )
+    torque_tolerance_apm = env_float(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE", DEFAULT_RELAX_TORQUE_TOLERANCE
+    )
+    time_to_tolerance_seconds, accepted_steps_to_tolerance, demag_solve_count_total = (
+        solver_time_to_tolerance_evidence(result.steps, torque_tolerance_apm)
+    )
     summary = {
         "status": result.status,
         "backend": result.backend.value,
@@ -518,6 +547,11 @@ def emit_summary(
         "relaxation_algorithm": (
             env_relaxation_algorithm() if scenario_uses_relaxation(scenario) else None
         ),
+        "resolved_torque_tolerance_apm": torque_tolerance_apm,
+        "time_to_tolerance_seconds": time_to_tolerance_seconds,
+        "time_to_tolerance_source": "accepted_step_diagnostics_wall_time_ns",
+        "accepted_steps_to_tolerance": accepted_steps_to_tolerance,
+        "demag_solve_count_total": demag_solve_count_total,
         "requested_steps": steps,
         "requested_dt_s": dt,
         "executed_steps": len(result.steps),
@@ -555,6 +589,36 @@ def emit_summary(
         ),
         "demag_solver_apply_wall_time_ns": (
             getattr(final, "demag_solver_apply_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_wait_in_enqueue_wall_time_ns": (
+            getattr(final, "demag_hypre_wait_in_enqueue_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_host_api_wall_time_ns": (
+            getattr(final, "demag_hypre_host_api_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_device_elapsed_time_ns": (
+            getattr(final, "demag_hypre_device_elapsed_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_wait_out_enqueue_wall_time_ns": (
+            getattr(final, "demag_hypre_wait_out_enqueue_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_event_wait_count": (
+            getattr(final, "demag_hypre_event_wait_count", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_timed_solve_count": (
+            getattr(final, "demag_hypre_timed_solve_count", None)
             if final is not None
             else None
         ),

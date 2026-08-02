@@ -4,6 +4,8 @@
 #include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>
@@ -264,6 +266,126 @@ void complete_device_transaction_restores_published_gpu_state()
     fullmag::fem::gpu_state_destroy(gpu);
 }
 
+void profiled_device_transaction_reports_exact_payload_and_events()
+{
+    fullmag::fem::Context ctx;
+    const double initial_m[3] = {1.0, 0.0, 0.0};
+    std::string error;
+    check(
+        fullmag::fem::gpu_state_initialize(
+            ctx.gpu_state.device,
+            1,
+            FULLMAG_FEM_INTEGRATOR_RK45_DP54,
+            true,
+            true,
+            initial_m,
+            3,
+            ctx.transfer_audit.audit,
+            error),
+        error.c_str());
+    fullmag::fem::set_gpu_step_profile(ctx, true);
+    auto &gpu = ctx.gpu_state.device;
+    set_component(gpu.magnetization.m, 1.0);
+    set_component(gpu.rk.k[0], 4.0);
+    set_component(gpu.fields.h_ex, 10.0);
+    set_component(gpu.fields.h_demag, 20.0);
+    set_component(gpu.fields.h_drive, 30.0);
+    set_component(gpu.fields.h_ani, 40.0);
+    set_component(gpu.fields.h_cubic_ani, 50.0);
+    set_component(gpu.fields.h_dmi, 60.0);
+    set_component(gpu.fields.h_bulk_dmi, 70.0);
+    set_component(gpu.fields.h_oe, 80.0);
+    set_component(gpu.fields.h_therm, 90.0);
+    set_component(gpu.fields.h_mel, 100.0);
+    set_component(gpu.fields.h_eff, 110.0);
+    set_value(gpu.demag_poisson.poisson_solution, 120.0);
+    set_value(gpu.demag_poisson.poisson_solution_full, 121.0);
+    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+
+    fullmag::fem::RkStepTransaction transaction(ctx);
+    check(transaction.begin(error), error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.capture_bytes == 328u,
+        "profiled GPU RK capture must report 328 bytes for one node and two Poisson solutions");
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.capture_event_pairs_created == 1u,
+        "profiled GPU RK capture must allocate one timing event pair");
+    check(transaction.rollback(error), error.c_str());
+    check(
+        fullmag::fem::gpu_rk_collect_step_transaction_timing(ctx, error),
+        error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.restore_bytes == 328u,
+        "profiled GPU RK restore must report 328 bytes for one node and two Poisson solutions");
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.restore_event_pairs_created == 1u,
+        "profiled GPU RK restore must allocate one timing event pair");
+
+    // An energy-rejection retry belongs to the same public step, so its
+    // transaction payload is aggregated before publication.
+    fullmag::fem::RkStepTransaction retry_transaction(ctx);
+    check(retry_transaction.begin(error), error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.capture_bytes == 656u,
+        "an RK retry must aggregate capture bytes within the public step");
+    check(retry_transaction.rollback(error), error.c_str());
+    check(
+        fullmag::fem::gpu_rk_collect_step_transaction_timing(ctx, error),
+        error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.restore_bytes == 656u,
+        "an RK retry must aggregate restore bytes within the public step");
+
+    // A subsequent public step clears the CPU transaction counters first;
+    // that boundary resets the GPU sample while reusing the CUDA event pair.
+    ctx.stepper.transaction_telemetry = {};
+    ctx.state.step_count = 1u;
+    fullmag::fem::RkStepTransaction transaction2(ctx);
+    check(transaction2.begin(error), error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.capture_bytes == 328u,
+        "a new GPU RK step must reset capture bytes before recording the next snapshot");
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.capture_event_pairs_created == 1u,
+        "a new GPU RK step must reuse the existing capture timing event pair");
+    check(transaction2.rollback(error), error.c_str());
+    check(
+        fullmag::fem::gpu_rk_collect_step_transaction_timing(ctx, error),
+        error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.restore_bytes == 328u,
+        "a new GPU RK step must reset restore bytes before recording rollback");
+    fullmag::fem::gpu_state_destroy(gpu);
+}
+
+void profiler_off_does_not_allocate_transaction_events()
+{
+    fullmag::fem::Context ctx;
+    const double initial_m[3] = {1.0, 0.0, 0.0};
+    std::string error;
+    check(
+        fullmag::fem::gpu_state_initialize(
+            ctx.gpu_state.device,
+            1,
+            FULLMAG_FEM_INTEGRATOR_RK45_DP54,
+            true,
+            true,
+            initial_m,
+            3,
+            ctx.transfer_audit.audit,
+            error),
+        error.c_str());
+    fullmag::fem::set_gpu_step_profile(ctx, false);
+    fullmag::fem::RkStepTransaction transaction(ctx);
+    check(transaction.begin(error), error.c_str());
+    check(transaction.rollback(error), error.c_str());
+    check(
+        ctx.gpu_state.rk_transaction_telemetry.capture_event_pairs_created == 0u &&
+            ctx.gpu_state.rk_transaction_telemetry.restore_event_pairs_created == 0u,
+        "profiler-off GPU RK transaction must not allocate CUDA timing events");
+    fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
+}
+
 } // namespace
 
 int main()
@@ -272,6 +394,8 @@ int main()
     inactive_airbox_vector_is_ignored();
     valid_active_vector_is_normalized();
     complete_device_transaction_restores_published_gpu_state();
+    profiled_device_transaction_reports_exact_payload_and_events();
+    profiler_off_does_not_allocate_transaction_events();
     std::printf("FEM CUDA RK guard contract PASS\n");
     return 0;
 }

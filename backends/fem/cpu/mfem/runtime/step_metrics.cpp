@@ -14,8 +14,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace fullmag::fem {
+
+namespace {
+
+uint64_t saturating_add_u64(uint64_t lhs, uint64_t rhs)
+{
+    return lhs > std::numeric_limits<uint64_t>::max() - rhs
+        ? std::numeric_limits<uint64_t>::max()
+        : lhs + rhs;
+}
+
+} // namespace
 
 std::array<double, 3> average_magnetization_components(const Context &ctx)
 {
@@ -132,6 +144,59 @@ void fill_demag_solver_stats(
 #endif
 }
 
+void fill_step_profiler_timing_stats(
+    const Context &ctx,
+    fullmag_fem_step_stats &stats)
+{
+    const auto &transaction = ctx.stepper.transaction_telemetry;
+    stats.rk_transaction_capture_host_wall_time_ns =
+        transaction.step_transaction_host_capture_wall_time_ns;
+    const auto &device_transaction = ctx.gpu_state.rk_transaction_telemetry;
+    stats.rk_transaction_capture_device_elapsed_time_ns =
+        device_transaction.capture_device_elapsed_ns;
+    stats.rk_transaction_capture_bytes = saturating_add_u64(
+        transaction.step_transaction_host_snapshot_payload_bytes,
+        saturating_add_u64(
+            transaction.step_transaction_device_snapshot_payload_bytes,
+            device_transaction.capture_bytes));
+    stats.rk_transaction_restore_host_wall_time_ns =
+        transaction.step_transaction_host_restore_wall_time_ns;
+    stats.rk_transaction_restore_device_elapsed_time_ns =
+        device_transaction.restore_device_elapsed_ns;
+    stats.rk_transaction_restore_bytes = saturating_add_u64(
+        transaction.step_transaction_host_restore_payload_bytes,
+        saturating_add_u64(
+            transaction.step_transaction_device_restore_payload_bytes,
+            device_transaction.restore_bytes));
+    stats.rk_transaction_rollback_count =
+        transaction.step_transaction_rollback_count;
+    stats.rk_transaction_commit_count =
+        transaction.step_transaction_commit_count;
+
+#if FULLMAG_HAS_MFEM_STACK
+    const auto &poisson = ctx.poisson_demag;
+    stats.demag_hypre_wait_in_enqueue_wall_time_ns =
+        poisson.step_hypre_wait_in_enqueue_wall_time_ns;
+    stats.demag_hypre_host_api_wall_time_ns =
+        poisson.step_hypre_host_api_wall_time_ns;
+    stats.demag_hypre_device_elapsed_time_ns =
+        poisson.step_solver_apply_device_wall_time_ns;
+    stats.demag_hypre_wait_out_enqueue_wall_time_ns =
+        poisson.step_hypre_wait_out_enqueue_wall_time_ns;
+    stats.demag_hypre_event_wait_count =
+        poisson.step_hypre_event_wait_count;
+    stats.demag_hypre_timed_solve_count =
+        poisson.step_hypre_timed_solve_count;
+#else
+    stats.demag_hypre_wait_in_enqueue_wall_time_ns = 0;
+    stats.demag_hypre_host_api_wall_time_ns = 0;
+    stats.demag_hypre_device_elapsed_time_ns = 0;
+    stats.demag_hypre_wait_out_enqueue_wall_time_ns = 0;
+    stats.demag_hypre_event_wait_count = 0;
+    stats.demag_hypre_timed_solve_count = 0;
+#endif
+}
+
 void fill_common_step_metrics(
     Context &ctx,
     fullmag_fem_step_stats &stats,
@@ -164,6 +229,7 @@ void fill_common_step_metrics(
     stats.my = average[1];
     stats.mz = average[2];
     fill_demag_solver_stats(ctx, stats);
+    fill_step_profiler_timing_stats(ctx, stats);
 }
 
 } // namespace fullmag::fem

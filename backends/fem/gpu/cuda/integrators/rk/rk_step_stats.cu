@@ -13,7 +13,9 @@
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_observable_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
+#include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats_publication.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 
 #include <cuda_runtime.h>
 
@@ -60,13 +62,13 @@ int phase_timing_env_state()
 
 bool phase_timing_requested(Context &ctx)
 {
-    const int env_state = phase_timing_env_state();
-    if (env_state >= 0) {
-        return env_state != 0;
-    }
     const auto &timings = ctx.gpu_state.rk_phase_timings;
     if (timings.override_configured) {
         return timings.override_enabled;
+    }
+    const int env_state = phase_timing_env_state();
+    if (env_state >= 0) {
+        return env_state != 0;
     }
     return false;
 }
@@ -174,6 +176,13 @@ void reset_phase_timing_accumulators(Context &ctx)
     timings.rhs_overflow_count = 0;
 #if FULLMAG_HAS_MFEM_STACK
     ctx.poisson_demag.step_assemble_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_apply_device_wall_time_ns = 0;
+    ctx.poisson_demag.step_solver_apply_device_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_wait_in_enqueue_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_host_api_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_wait_out_enqueue_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_event_wait_count = 0;
+    ctx.poisson_demag.step_hypre_timed_solve_count = 0;
     ctx.poisson_demag.step_recover_wall_time_ns = 0;
     ctx.poisson_demag.step_energy_wall_time_ns = 0;
 #endif
@@ -190,6 +199,9 @@ void refresh_phase_timing_enablement(Context &ctx)
             destroy_phase_timing_events(timings.demag_recover_events);
             destroy_phase_timing_events(timings.demag_energy_events);
             destroy_phase_timing_events(timings.rhs_events);
+#if FULLMAG_HAS_MFEM_STACK
+            destroy_context_hypre_apply_device_timing_events(ctx);
+#endif
         }
         timings.enabled = enabled;
         timings.configured = true;
@@ -205,6 +217,9 @@ void refresh_phase_timing_enablement(Context &ctx)
         destroy_phase_timing_events(timings.demag_recover_events);
         destroy_phase_timing_events(timings.demag_energy_events);
         destroy_phase_timing_events(timings.rhs_events);
+#if FULLMAG_HAS_MFEM_STACK
+        destroy_context_hypre_apply_device_timing_events(ctx);
+#endif
     }
     timings.enabled = enabled;
     reset_phase_timing_accumulators(ctx);
@@ -234,6 +249,18 @@ bool collect_gpu_rk_phase_timing_events(
             reason)) {
         return false;
     }
+#if FULLMAG_HAS_MFEM_STACK
+        if (!collect_context_hypre_apply_device_timing(
+            ctx,
+            ctx.poisson_demag.step_solver_apply_device_wall_time_ns,
+            reason)) {
+            return false;
+        }
+        ctx.poisson_demag.step_hypre_timed_solve_count =
+            context_hypre_apply_timed_solve_count(ctx);
+        ctx.poisson_demag.last_solver_apply_device_wall_time_ns =
+        ctx.poisson_demag.step_solver_apply_device_wall_time_ns;
+#endif
     if (!collect_phase_timing_events(
             timings.demag_assemble_events,
             timings.demag_assemble_used,
@@ -346,16 +373,29 @@ bool gpu_rk_prepare_phase_timing_event_count(
             reason)) {
         return false;
     }
-    return ensure_phase_timing_events(
-        timings.rhs_events,
+    if (!ensure_phase_timing_events(
+            timings.rhs_events,
+            required_count,
+            "GPU RK RHS phase timing pool",
+            reason)) {
+        return false;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    return prepare_context_hypre_apply_device_timing(
+        ctx,
+        true,
         required_count,
-        "GPU RK RHS phase timing pool",
         reason);
+#endif
+    return true;
 }
 
 void gpu_rk_reset_phase_timing_events(Context &ctx)
 {
     reset_phase_timing_accumulators(ctx);
+#if FULLMAG_HAS_MFEM_STACK
+    reset_context_hypre_apply_device_timing(ctx);
+#endif
 }
 
 void gpu_rk_destroy_phase_timing_events(Context &ctx)
@@ -368,6 +408,10 @@ void gpu_rk_destroy_phase_timing_events(Context &ctx)
     destroy_phase_timing_events(timings.demag_recover_events);
     destroy_phase_timing_events(timings.demag_energy_events);
     destroy_phase_timing_events(timings.rhs_events);
+#if FULLMAG_HAS_MFEM_STACK
+    destroy_context_hypre_apply_device_timing_events(ctx);
+#endif
+    gpu_rk_destroy_step_transaction_timing(ctx);
     timings.exchange_wall_time_ns = 0;
     timings.demag_assemble_wall_time_ns = 0;
     timings.demag_recover_wall_time_ns = 0;
@@ -442,6 +486,13 @@ bool finalize_step_stats_impl(
               read_count,
               reason);
     if (!read_ok) {
+        return false;
+    }
+
+    // The scalar readback above is the existing stream fence. Transaction
+    // event elapsed values are collected only after that fence; this path
+    // adds no synchronization to the RK hot loop.
+    if (!gpu_rk_collect_step_transaction_timing(ctx, reason)) {
         return false;
     }
 
