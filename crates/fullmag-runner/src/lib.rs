@@ -60,6 +60,23 @@ use types::TimestepExecutionLane;
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) const NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER: f64 = 1e-13;
 
+/// Default initial timestep seed when adaptive stepping has no meaningful seed.
+pub(crate) const DEFAULT_ADAPTIVE_DT_INITIAL: f64 = 1e-13;
+
+pub(crate) fn resolve_initial_timestep(
+    fixed_timestep: Option<f64>,
+    adaptive_timestep: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+) -> Option<f64> {
+    fixed_timestep.or_else(|| {
+        adaptive_timestep.map(|adaptive| {
+            adaptive
+                .dt_initial
+                .filter(|dt_initial| (*dt_initial - adaptive.dt_min).abs() > f64::EPSILON)
+                .unwrap_or(DEFAULT_ADAPTIVE_DT_INITIAL)
+        })
+    })
+}
+
 pub(crate) fn resolve_timestep_policy(
     integrator: Option<fullmag_ir::IntegratorChoice>,
     fixed_timestep: Option<f64>,
@@ -366,7 +383,27 @@ pub fn timestep_qualification_for_plan_with_binding(
     .ok()
 }
 
-// Public re-exports.
+/// Validate the complete public coupled-M3 checkpoint envelope before any
+/// runner or session state is restored.
+pub fn validate_coupled_m3_checkpoint_value(
+    value: &serde_json::Value,
+    vector_count: usize,
+) -> Result<(), RunError> {
+    fdm::cpu::spin_transport::validate_coupled_m3_checkpoint_value(value, vector_count)
+}
+
+/// Require exact bidirectional equality of coupled-M3 accepted module IDs and
+/// their runtime identity contracts.
+pub fn compare_coupled_m3_checkpoint_module_identity_values(
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> Result<(), RunError> {
+    fdm::cpu::spin_transport::compare_coupled_m3_checkpoint_module_identity_values(
+        actual, expected,
+    )
+}
+
+// Public re-exports (unchanged API surface).
 pub use capabilities::{
     BackendCapabilities, FeatureCapability, FeatureCapabilityStatus, RuntimeEngineId,
     MIXED_P1_FEATURE_CAPABILITY_IDS, MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
@@ -2192,6 +2229,7 @@ fn fem_eigen_progress_update(
     per_object_scalars.insert("fem_eigen_progress".to_string(), progress_scalars);
 
     StepUpdate {
+        coupled_checkpoint: None,
         stats: StepStats {
             step: progress
                 .iteration
@@ -2477,6 +2515,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: final_grid,
         fem_mesh_generation_id: fem_stage_context
@@ -2872,6 +2911,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: final_grid,
         fem_mesh_generation_id: fem_stage_context
@@ -3108,6 +3148,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         .flat_map(|vector| vector.iter().copied())
         .collect();
     on_step(StepUpdate {
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: fdm.grid.cells,
         fem_mesh_generation_id: None,
@@ -3232,6 +3273,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         ..StepStats::default()
     });
     on_step(StepUpdate {
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: [0, 0, 0],
         fem_mesh_generation_id,
@@ -3952,6 +3994,79 @@ pub fn run_reference_fdm(
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
     Ok(cpu_reference::execute_reference_fdm(plan, until_seconds, outputs, None, None)?.result)
+}
+
+/// Resume the CPU-double coupled M3 reference runtime from the exact backend
+/// state captured in a session checkpoint.
+pub fn resume_reference_fdm_from_coupled_checkpoint(
+    plan: &FdmPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    Ok(
+        cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+            plan,
+            until_seconds,
+            outputs,
+            None,
+            None,
+            Some(checkpoint),
+        )?
+        .result,
+    )
+}
+
+/// Resume the CPU-double coupled M3 reference runtime and return the public
+/// qualification evidence emitted by the accepted backend execution.
+#[derive(serde::Serialize)]
+pub struct CoupledM3ResumeEvidence {
+    status: RunStatus,
+    total_steps: usize,
+    final_time: Option<f64>,
+    final_magnetization: Vec<[f64; 3]>,
+    accepted_transport: Box<serde_json::value::RawValue>,
+    coupled_checkpoint: Box<serde_json::value::RawValue>,
+}
+
+pub fn resume_reference_fdm_from_coupled_checkpoint_evidence(
+    plan: &FdmPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<CoupledM3ResumeEvidence, RunError> {
+    let executed = cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+        plan,
+        until_seconds,
+        outputs,
+        None,
+        None,
+        Some(checkpoint),
+    )?;
+    let artifact = |path: &str| -> Result<Box<serde_json::value::RawValue>, RunError> {
+        let bytes = &executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == path)
+            .ok_or_else(|| RunError {
+                message: format!("resumed coupled M3 execution did not emit {path}"),
+            })?
+            .bytes;
+        let raw = String::from_utf8(bytes.clone()).map_err(|error| RunError {
+            message: format!("reading resumed coupled M3 artifact {path}: {error}"),
+        })?;
+        serde_json::value::RawValue::from_string(raw).map_err(|error| RunError {
+            message: format!("validating resumed coupled M3 artifact {path}: {error}"),
+        })
+    };
+    Ok(CoupledM3ResumeEvidence {
+        status: executed.result.status,
+        total_steps: executed.result.steps.len(),
+        final_time: executed.result.steps.last().map(|step| step.time),
+        final_magnetization: executed.result.final_magnetization,
+        accepted_transport: artifact("transport/spin_transport_accepted.json")?,
+        coupled_checkpoint: artifact("transport/coupled_checkpoint.json")?,
+    })
 }
 
 pub fn run_reference_multilayer_fdm(
@@ -5095,6 +5210,93 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn public_fem_dispatch_streams_transport_quantity_artifacts() {
+        let _guard = ENV_LOCK.lock().expect("environment mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        let mut fem = dispatch::test_tiny_fem_plan();
+        let resolved = native_fem::test_resolved_steady_transport_plan();
+        let descriptor = resolved.fem_cpu_double.as_ref().expect("FEM descriptor");
+        fem.current_modules = vec![fullmag_ir::CurrentModuleIR::CurrentTransport {
+            name: resolved.current_source_id.clone(),
+            model: fullmag_ir::CurrentTransportModelIR::OhmicPoisson,
+            current_density: None,
+            solve_region: None,
+            conductivity_s_per_m: None,
+            coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            definition: Some(descriptor.charge_definition.clone()),
+        }];
+        fem.spin_transport_plans = vec![resolved];
+        let plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: problem.ir_version.clone(),
+                requested_backend: fullmag_ir::BackendTarget::Fem,
+                resolved_backend: fullmag_ir::BackendTarget::Fem,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: fullmag_ir::BackendPlanIR::Fem(fem),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: vec![
+                    fullmag_ir::OutputIR::Field {
+                        name: "V_electric".into(),
+                        every_seconds: 1.0,
+                    },
+                    fullmag_ir::OutputIR::Field {
+                        name: "J_charge".into(),
+                        every_seconds: 1.0,
+                    },
+                    fullmag_ir::OutputIR::Field {
+                        name: "spin_current_tensor".into(),
+                        every_seconds: 1.0,
+                    },
+                ],
+            },
+            provenance: fullmag_ir::ProvenancePlanIR { notes: Vec::new() },
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-public-fem-transport-{}-{unique}",
+            std::process::id()
+        ));
+
+        let result = run_planned_problem(&problem, &plan, 1.0e-13, &output_dir)
+            .expect("public FEM dispatch should persist transport fields");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        assert_eq!(result.status, RunStatus::Completed);
+        for (quantity, components, unit) in [
+            ("V_electric", 1, "V"),
+            ("J_charge", 3, "A/m^2"),
+            ("spin_potential", 3, "V"),
+            ("spin_current_tensor", 9, "A/m^2"),
+            ("torque_stt", 3, "1/s"),
+        ] {
+            let payload: serde_json::Value = serde_json::from_slice(
+                &fs::read(
+                    output_dir
+                        .join("fields")
+                        .join(quantity)
+                        .join("step_000000.json"),
+                )
+                .unwrap_or_else(|error| panic!("missing {quantity} artifact: {error}")),
+            )
+            .expect("transport artifact JSON");
+            assert_eq!(payload["component_count"], components, "{quantity}");
+            assert_eq!(payload["unit"], unit, "{quantity}");
+        }
+        fs::remove_dir_all(output_dir).expect("remove public transport artifact fixture");
+    }
+
     #[test]
     fn interactive_runtime_hysteresis_entrypoint_routes_through_hysteresis_runner() {
         let source = fs::read_to_string(concat!(
@@ -5665,7 +5867,8 @@ mod tests {
             "FEM live preview helper must route through the shared preview boundary"
         );
         assert!(
-            preview.contains("backend.begin_live_preview_snapshot(&request)"),
+            preview.contains("backend.begin_live_preview_snapshot(&request)")
+                || preview.contains("backend.begin_live_preview_snapshot(&deferred.request)"),
             "FEM cached vector preview must still use the native snapshot boundary"
         );
     }
@@ -5769,7 +5972,7 @@ mod tests {
             "live preview handoff must poll the bounded worker without blocking"
         );
         assert!(
-            preview.contains("last_good"),
+            preview.contains("last_good") || preview.contains("active_ready"),
             "live preview handoff must retain the last completed preview"
         );
     }
@@ -5896,7 +6099,8 @@ mod tests {
             "fem/relax/preview.rs must own one bounded deferred snapshot frame"
         );
         assert!(
-            preview.contains("schedule_tx.send(())"),
+            preview.contains("schedule_tx.send(())")
+                || preview.contains("try_send_worker_output(&frame.schedule_tx, ())"),
             "snapshot worker must acknowledge native enqueue before materialization"
         );
         assert!(
@@ -7555,6 +7759,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: None,
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

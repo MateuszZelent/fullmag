@@ -45,7 +45,7 @@ pub use transport::{
 pub use provider::{EmptyFieldAccess, NamedFieldAccess, QuantityEvalContext, QuantityProvider};
 pub use registry::{
     register_standard_providers, GlobalScalarProvider, QuantityRegistry,
-    SpatialScalarFieldProvider, VectorFieldProvider,
+    SpatialScalarFieldProvider, TensorFieldProvider, VectorFieldProvider,
 };
 
 /// Shape / kind of a quantity (determines renderer and transport).
@@ -53,6 +53,7 @@ pub use registry::{
 #[serde(rename_all = "snake_case")]
 pub enum QuantityShape {
     VectorField,
+    TensorField,
     SpatialScalar,
     GlobalScalar,
 }
@@ -61,6 +62,7 @@ impl QuantityShape {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::VectorField => "vector_field",
+            Self::TensorField => "tensor_field",
             Self::SpatialScalar => "spatial_scalar",
             Self::GlobalScalar => "global_scalar",
         }

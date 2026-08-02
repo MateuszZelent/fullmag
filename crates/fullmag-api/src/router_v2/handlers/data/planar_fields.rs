@@ -125,9 +125,10 @@ pub async fn get_planar_field_vectors(
     if etag_matches(&headers, &built.etag) {
         return not_modified(&built.etag);
     }
-    let vectors = built.result.vector_values.as_ref().ok_or_else(|| {
-        ApiError::unprocessable_entity("planar_vector_unsupported: quantity is scalar")
-    })?;
+    let vectors =
+        built.result.vector_values.as_ref().ok_or_else(|| {
+            ApiError::unprocessable("planar_vector_unsupported: quantity is scalar")
+        })?;
     let values = vectors
         .iter()
         .flat_map(|vector| {
@@ -347,7 +348,7 @@ async fn build_planar_field(
             ApiError::bad_request("snapshot_requires_stage: snapshot_id requires stage_id")
         })?;
         if quantity_id != "m" {
-            return Err(ApiError::unprocessable_entity(
+            return Err(ApiError::unprocessable(
                 "snapshot_quantity_unsupported: persisted snapshots currently publish m",
             ));
         }
@@ -606,7 +607,7 @@ fn apply_resolved_scope(
     let scope_kind = query.scope_kind.as_deref().unwrap_or("monitor_target");
     if fem.is_none() {
         if scope_kind != "monitor_target" {
-            return Err(ApiError::unprocessable_entity(
+            return Err(ApiError::unprocessable(
                 "planar_scope_unsupported: structured-grid runtime does not publish mesh-part or airbox membership",
             ));
         }
@@ -672,7 +673,7 @@ fn apply_resolved_scope(
             MonitorTargetIR::Domain => unreachable!("domain target returned above"),
         };
         if !selected.iter().any(|selected| *selected) {
-            return Err(ApiError::unprocessable_entity(
+            return Err(ApiError::unprocessable(
                 "planar_scope_empty: resolved FDM monitor target has no active cells",
             ));
         }
@@ -734,7 +735,7 @@ fn apply_resolved_scope(
         _ => unreachable!("scope validated before resolution"),
     }
     if !selected.iter().any(|selected| *selected) {
-        return Err(ApiError::unprocessable_entity(
+        return Err(ApiError::unprocessable(
             "planar_scope_empty: resolved monitor target and runtime scope do not overlap",
         ));
     }

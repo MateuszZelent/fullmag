@@ -596,6 +596,7 @@ fn frequency_domain_unavailable(
     }
 }
 
+#[allow(dead_code)]
 fn frequency_domain_response_floquet_unavailable() -> FrequencyDomainAvailability {
     FrequencyDomainAvailability {
         status: "unavailable".to_string(),

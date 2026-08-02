@@ -52,7 +52,10 @@ use fullmag_authoring::{
     SceneDocument, SceneMeshInterface, SceneObject, ScriptBuilderMeshState,
     ScriptBuilderPerGeometryMeshState, ScriptBuilderUniverseState,
 };
-use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
+use fullmag_runner::{
+    capabilities::MIXED_P1_MESH_FEATURE_CAPABILITY_IDS, FemMeshObjectSegment, FemMeshPartPayload,
+    FemMeshPayload,
+};
 
 const MIXED_TOPOLOGY_NOT_SUPPORTED: &str = "mixed_topology_not_supported";
 
@@ -150,7 +153,7 @@ fn projected_mesh_capabilities(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    for id in fullmag_runner::MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
+    for id in MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
         projected.remove(id);
     }
     let feature = |id: &str| {
@@ -822,12 +825,9 @@ fn reject_mixed_topology_for_tet4_only_resource(
         .iter()
         .any(|cell_type| *cell_type != fullmag_ir::FemCellTypeIR::Tet4)
     {
-        return Err(ApiError::conflict_code(
-            MIXED_TOPOLOGY_NOT_SUPPORTED,
-            format!(
-                "{resource_label} is tet4-only; prism, pyramid, and other non-tetrahedral cells are not supported"
-            ),
-        ));
+        return Err(ApiError::conflict(format!(
+            "{MIXED_TOPOLOGY_NOT_SUPPORTED}: {resource_label} is tet4-only; prism, pyramid, and other non-tetrahedral cells are not supported"
+        )));
     }
     Ok(())
 }

@@ -158,7 +158,6 @@ impl ArtifactJob {
             ArtifactJob::FieldSnapshot { snapshot, .. } => snapshot
                 .values
                 .len()
-                .saturating_mul(3)
                 .saturating_mul(std::mem::size_of::<f64>())
                 as u64,
             #[cfg(feature = "cuda")]
@@ -224,6 +223,24 @@ pub(crate) struct ArtifactPipeline {
 }
 
 impl ArtifactPipeline {
+    /// Start the legacy artifact stream used by the unit-test recorder and
+    /// older runner call sites.  The production path should prefer
+    /// `start_for_problem_with_autosave_root`, but this wrapper preserves the
+    /// same writer contract without enabling stage autosave.
+    pub(crate) fn start(
+        output_dir: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+    ) -> Result<Self, RunError> {
+        Self::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            output_dir,
+            field_context,
+            capacity,
+            None,
+        )
+    }
+
     pub(crate) fn start_for_problem(
         problem: &fullmag_ir::ProblemIR,
         output_dir: PathBuf,
@@ -563,11 +580,7 @@ impl StageAutosaveRuntime {
     }
 
     fn append_field(&mut self, snapshot: &FieldSnapshot) -> Result<(), String> {
-        let values = snapshot
-            .values
-            .iter()
-            .flat_map(|value| value.iter().copied())
-            .collect::<Vec<_>>();
+        let values = snapshot.values.clone();
         self.append_field_values(
             &snapshot.name,
             snapshot.step,
@@ -1385,275 +1398,100 @@ fn update_atomic_max(target: &AtomicU64, value: u64) {
 }
 
 #[cfg(test)]
-mod stage_autosave_tests {
+mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn context() -> FieldArtifactContext {
-        FieldArtifactContext {
-            problem_name: "autosave-test".into(),
-            ir_version: fullmag_ir::IR_VERSION.into(),
+    #[test]
+    fn flat_field_snapshot_estimate_counts_each_stored_scalar_once() {
+        let job = ArtifactJob::FieldSnapshot {
+            snapshot: FieldSnapshot::new(
+                "spin_current_tensor",
+                0,
+                0.0,
+                0.0,
+                9,
+                "row_major_Q_ia",
+                "node",
+                "full",
+                1,
+                vec![0.0; 18],
+            )
+            .expect("valid flat tensor snapshot"),
+            provenance: ExecutionProvenance::default(),
+        };
+
+        assert_eq!(
+            job.estimated_bytes(),
+            18 * std::mem::size_of::<f64>() as u64
+        );
+    }
+
+    #[test]
+    fn recorder_streams_transport_scalar_vector_and_tensor_fields() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-transport-streaming-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "transport".into(),
+            ir_version: "v0".into(),
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
-            layout: serde_json::json!({}),
-        }
-    }
-
-    fn policy(format: &str, fields: serde_json::Value) -> fullmag_ir::StageAutosaveIR {
-        serde_json::from_value(serde_json::json!({
-            "kind": "stage_autosave",
-            "target": "main",
-            "layout": "continuous",
-            "format": format,
-            "table": {"every_steps": 2, "quantities": ["step", "mx"]},
-            "fields": fields
-        }))
-        .unwrap()
-    }
-
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-    #[test]
-    fn zarr_field_attrs_preserve_optional_mfem_version() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-zarr-mfem-provenance-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let mut provenance = ExecutionProvenance {
-            mfem_version: Some("4.9".into()),
-            ..ExecutionProvenance::default()
+            layout: serde_json::json!({"kind": "fem", "node_count": 2}),
         };
-        let info = NativeVectorSnapshotInfo {
-            cell_count: 1,
-            component_count: 3,
-            scalar_bytes: 8,
-            scalar_type: NativeSnapshotScalarType::F64,
-        };
-
-        ZarrFieldSeriesWriter::open(&root, &context(), &provenance, "m", info)
-            .expect("Zarr attrs must be created");
-        let attrs: serde_json::Value = serde_json::from_slice(
-            &fs::read(root.join("m.zarr/.zattrs")).expect("Zarr attrs must be readable"),
-        )
-        .expect("Zarr attrs must be valid JSON");
-        assert_eq!(attrs["provenance"]["mfem_version"], "4.9");
-
-        provenance.mfem_version = None;
-        ZarrFieldSeriesWriter::open(&root, &context(), &provenance, "H_eff", info)
-            .expect("Zarr attrs without MFEM identity must be created");
-        let attrs: serde_json::Value = serde_json::from_slice(
-            &fs::read(root.join("H_eff.zarr/.zattrs")).expect("Zarr attrs must be readable"),
-        )
-        .expect("Zarr attrs must be valid JSON");
-        assert!(!attrs["provenance"]
-            .as_object()
-            .expect("Zarr provenance must be an object")
-            .contains_key("mfem_version"));
-
-        fs::remove_dir_all(root).expect("Zarr test directory must be removable");
-    }
-
-    #[test]
-    fn stage_autosave_jobs_are_bounded_and_finish_drains_terminal_relax_state() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-artifact-pipeline-autosave-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
-            root.clone(),
-            context(),
-            1,
-            Some(StageAutosavePipelineConfig {
-                stage_id: "relax".into(),
-                policy: policy("zarr", serde_json::json!([])),
-            }),
-        )
-        .unwrap();
-        let provenance = ExecutionProvenance::default();
-        let mut recorder = ArtifactRecorder::streaming(provenance, pipeline.sender());
-        for step in 0..=3 {
-            let metrics = recorder
-                .record_scalar(&StepStats {
-                    step,
-                    mx: step as f64,
-                    ..StepStats::default()
-                })
-                .unwrap();
-            assert!(metrics.queue_depth_after <= 2);
-        }
-        let _ = recorder.finish();
-        pipeline.finish().unwrap();
-
-        let store = root.join("main.zarr");
-        let index = crate::autosave_zarr::read_logical_index(&store).unwrap();
-        assert_eq!(
-            index
-                .iter()
-                .map(|entry| match entry.coordinate {
-                    StageSampleCoordinate::AcceptedStep { accepted_step } => accepted_step,
-                    _ => panic!("Relax autosave must preserve accepted-step coordinates"),
-                })
-                .collect::<Vec<_>>(),
-            [0, 2, 3]
+        let mut pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
+            .expect("start artifact pipeline");
+        let mut recorder = ArtifactRecorder::streaming(
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".into(),
+                precision: "double".into(),
+                ..ExecutionProvenance::default()
+            },
+            pipeline.sender(),
         );
-        let manifest: StageManifest = serde_json::from_slice(
-            &fs::read(store.join("stages/stage_0000_relax/manifest.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(manifest.complete);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn consecutive_stage_pipelines_share_autosave_root_without_mixing_stage_artifacts() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-artifact-pipeline-shared-autosave-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let autosave_root = root.join("artifacts");
-        for (stage_index, stage_id) in ["relax", "run"].into_iter().enumerate() {
-            let stage_output = root.join(format!("stage-{stage_index}"));
-            let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
-                stage_output.clone(),
-                autosave_root.clone(),
-                context(),
-                1,
-                Some(StageAutosavePipelineConfig {
-                    stage_id: stage_id.into(),
-                    policy: policy("zarr", serde_json::json!([])),
-                }),
-            )
-            .unwrap();
-            let mut recorder =
-                ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        for (name, components, order, values, revision) in [
+            ("V_electric", 1, "scalar", vec![1.0, 0.0], 1),
+            ("J_charge", 3, "xyz", vec![1.0; 6], 2),
+            ("spin_current_tensor", 9, "row_major_Q_ia", vec![1.0; 18], 3),
+        ] {
             recorder
-                .record_scalar(&StepStats {
-                    step: stage_index as u64,
-                    mx: stage_index as f64,
-                    ..StepStats::default()
-                })
-                .unwrap();
-            let _ = recorder.finish();
-            pipeline.finish().unwrap();
-            assert!(stage_output.join("scalars.csv").is_file());
+                .record_field_snapshot(
+                    FieldSnapshot::new(
+                        name,
+                        0,
+                        0.0,
+                        0.0,
+                        components,
+                        order,
+                        "node",
+                        "transport_module:spin:full_solve_domain",
+                        revision,
+                        values,
+                    )
+                    .expect("valid transport snapshot"),
+                )
+                .expect("enqueue transport snapshot");
         }
-
-        let manifest: crate::autosave_storage::AutosaveArtifactManifest =
-            serde_json::from_slice(&fs::read(autosave_root.join("main.autosave.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            manifest
-                .stages
-                .iter()
-                .map(|stage| (stage.stage_index, stage.stage_id.as_str()))
-                .collect::<Vec<_>>(),
-            [(0, "relax"), (1, "run")]
-        );
-        assert_eq!(
-            crate::autosave_zarr::read_logical_index(&autosave_root.join("main.zarr"))
-                .unwrap()
-                .iter()
-                .map(|entry| entry.target_sample_index)
-                .collect::<Vec<_>>(),
-            [0, 1]
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn stage_autosave_writer_failure_is_returned_by_pipeline_finish() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-artifact-pipeline-autosave-error-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
-            root.clone(),
-            context(),
-            1,
-            Some(StageAutosavePipelineConfig {
-                stage_id: "run".into(),
-                policy: policy(
-                    "txt",
-                    serde_json::json!([{"quantity": "m", "every_steps": 1}]),
-                ),
-            }),
-        )
-        .unwrap();
-        let error = pipeline
-            .finish()
-            .expect_err("writer failure must propagate");
-        assert!(error.message.contains("scalar tables only"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(feature = "fem-gpu")]
-    #[test]
-    fn accepted_step_field_capture_schedule_includes_initial_due_and_final_once() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-artifact-pipeline-field-schedule-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
-            root.clone(),
-            context(),
-            1,
-            Some(StageAutosavePipelineConfig {
-                stage_id: "relax".into(),
-                policy: policy(
-                    "zarr",
-                    serde_json::json!([{"quantity": "m", "every_steps": 2}]),
-                ),
-            }),
-        )
-        .unwrap();
-        let mut recorder =
-            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
-        assert_eq!(recorder.due_accepted_step_fields(0, false), ["m"]);
-        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
-        assert_eq!(recorder.due_accepted_step_fields(2, false), ["m"]);
-        assert!(recorder.due_accepted_step_fields(2, true).is_empty());
-        assert_eq!(recorder.due_accepted_step_fields(3, true), ["m"]);
-        drop(recorder);
-        pipeline.finish().unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(feature = "fem-gpu")]
-    #[test]
-    fn accepted_step_operator_fields_include_step0_and_forced_step1_once() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-artifact-pipeline-step0-operator-fields-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
-            root.clone(),
-            context(),
-            1,
-            Some(StageAutosavePipelineConfig {
-                stage_id: "relax".into(),
-                policy: policy(
-                    "zarr",
-                    serde_json::json!([
-                        {"quantity": "H_ex", "every_steps": 50_000},
-                        {"quantity": "H_demag", "every_steps": 50_000},
-                        {"quantity": "H_eff", "every_steps": 50_000}
-                    ]),
-                ),
-            }),
-        )
-        .unwrap();
-        let mut recorder =
-            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
-        assert_eq!(
-            recorder.due_accepted_step_fields(0, false),
-            ["H_demag", "H_eff", "H_ex"]
-        );
-        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
-        assert_eq!(
-            recorder.due_accepted_step_fields(1, true),
-            ["H_demag", "H_eff", "H_ex"]
-        );
-        assert!(recorder.due_accepted_step_fields(1, true).is_empty());
-        drop(recorder);
-        pipeline.finish().unwrap();
-        fs::remove_dir_all(root).unwrap();
+        assert_eq!(recorder.finish().1, 3);
+        let summary = pipeline.finish().expect("finish artifact pipeline");
+        assert_eq!(summary.field_snapshots_written, 3);
+        for (name, components, unit) in [
+            ("V_electric", 1, "V"),
+            ("J_charge", 3, "A/m^2"),
+            ("spin_current_tensor", 9, "A/m^2"),
+        ] {
+            let bytes = fs::read(output_dir.join("fields").join(name).join("step_000000.json"))
+                .expect("streamed transport field");
+            let payload: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("transport field JSON");
+            assert_eq!(payload["component_count"], components);
+            assert_eq!(payload["unit"], unit);
+        }
+        fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
     }
 }

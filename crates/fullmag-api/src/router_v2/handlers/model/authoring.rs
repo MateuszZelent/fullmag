@@ -11,18 +11,26 @@ use crate::router_v2::handlers::data::field_resolution::flatten_json_field_value
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingCreateRequest,
     CouplingDeleteRequest, CouplingEndpointResolutionResource, CouplingListResource,
-    CouplingPatchRequest, CouplingResource, FieldDriveCreateRequest, FieldDriveDeleteRequest,
-    FieldDriveListResource, FieldDriveReplaceRequest, GeometryRealizationRequest,
-    MagnetizationAssetPatchRequest, MagnetizationAssetResource, MaterialParameterFieldListResource,
-    MaterialParameterFieldResource, MaterialPatchRequest, MaterialPropertiesResource,
-    MaterialReferenceResource, MaterialResource, NullableF64PatchValue, NullableStringPatchValue,
-    NullableU32PatchValue, ObjectCreateRequest, ObjectGeometryPatchRequest,
-    ObjectInteractionPatchRequest, ObjectInteractionResource, ObjectPatchRequest,
-    ObjectRegionCreateRequest, ObjectRegionDuplicateRequest, ObjectRegionPatchRequest,
-    ObjectRegionReorderRequest, RegionDiagnosticResource, RegionDiagnosticsResource,
-    RegionListResource, RegionPatchRequest, RegionResource, RegionalFieldDriveResource,
-    SceneCouplingPatch, ScenePatchRequest, SceneResource, StudyRuntimePatchRequest,
-    StudyRuntimeResource, UniverseFitRequest, UniversePatchRequest, UniverseResource,
+    CouplingPatchRequest, CouplingResource, CurrentTransportCommitResource,
+    CurrentTransportListResource, CurrentTransportMutationRequest, FieldDriveCreateRequest,
+    FieldDriveDeleteRequest, FieldDriveListResource, FieldDriveReplaceRequest,
+    GeometryRealizationRequest, MagnetizationAssetPatchRequest, MagnetizationAssetResource,
+    MaterialParameterFieldListResource, MaterialParameterFieldResource, MaterialPatchRequest,
+    MaterialPropertiesResource, MaterialReferenceResource, MaterialResource, NullableF64PatchValue,
+    NullableStringPatchValue, NullableU32PatchValue, ObjectCreateRequest,
+    ObjectGeometryPatchRequest, ObjectInteractionPatchRequest, ObjectInteractionResource,
+    ObjectPatchRequest, ObjectRegionCreateRequest, ObjectRegionDuplicateRequest,
+    ObjectRegionPatchRequest, ObjectRegionReorderRequest, OerstedFieldCommitResource,
+    OerstedFieldListResource, OerstedFieldMutationRequest, RegionDiagnosticResource,
+    RegionDiagnosticsResource, RegionListResource, RegionPatchRequest, RegionResource,
+    RegionalFieldDriveResource, SceneCouplingPatch, ScenePatchRequest, SceneResource,
+    SpinAuthoringDeleteRequest, SpinInterfaceListResource, SpinInterfaceProjectionItem,
+    SpinTorqueCommitResource, SpinTorqueListResource, SpinTorqueMutationRequest,
+    SpinTransportCommitResource, SpinTransportListResource, SpinTransportMutationRequest,
+    StudyRuntimePatchRequest, StudyRuntimeResource, TransportAuthoringOperation,
+    TransportExecutionCapability, TransportExecutionLane, TransportSemanticValidation,
+    TransportValidationCandidate, TransportValidationIssue, TransportValidationRequest,
+    TransportValidationResponse, UniverseFitRequest, UniversePatchRequest, UniverseResource,
 };
 use crate::types::{
     AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
@@ -31,10 +39,969 @@ use fullmag_authoring::{
     geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
     GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
     GeometryRealizationSnapshot, GeometryRegionCandidate, GeometryValidationResource,
-    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneMaterialReference,
-    SceneObject, SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
+    MagnetizationAsset, SceneCurrentTransport, SceneDocument, SceneGeometry, SceneMaterialAsset,
+    SceneMaterialReference, SceneObject, SceneOerstedField, SceneRegionOverride,
+    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneTransportCoupling,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderUniverseState, Transform3D,
 };
+
+fn spin_commit_scene_resource(scene: SceneDocument) -> Result<SceneResource, ApiError> {
+    SceneResource::from_scene_document(scene)
+        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+fn require_spin_base_revision(scene: &SceneDocument, base_revision: u64) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, Some(base_revision))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/current-transports", responses((status = 200, body = CurrentTransportListResource)), tag = "model")]
+pub async fn get_current_transports(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CurrentTransportListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    Ok(Json(CurrentTransportListResource {
+        scene_revision: scene.revision,
+        items: scene.current_transports,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneCurrentTransport), (status = 404)), tag = "model")]
+pub async fn get_current_transport(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SceneCurrentTransport>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    scene
+        .current_transports
+        .into_iter()
+        .find(|item| item.name() == Some(id.as_str()))
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))
+}
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/current-transports", request_body = CurrentTransportMutationRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn create_current_transport(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CurrentTransportMutationRequest>,
+) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let name = req.resource.name().ok_or_else(|| {
+        ApiError::bad_request("unsupported current transport variants are read-only")
+    })?;
+    if scene
+        .current_transports
+        .iter()
+        .any(|item| item.name() == Some(name))
+    {
+        return Err(ApiError::conflict(format!(
+            "duplicate current transport id '{name}'"
+        )));
+    }
+    let resource = req.resource;
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::CurrentTransport {
+            operation: TransportAuthoringOperation::Create,
+            path_id: None,
+            resource: resource.clone(),
+        },
+    )?;
+    scene.current_transports.push(resource.clone());
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(CurrentTransportCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), request_body = CurrentTransportMutationRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_current_transport(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<CurrentTransportMutationRequest>,
+) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if req.resource.known().is_none() {
+        return Err(ApiError::bad_request(
+            "unsupported current transport variants are read-only",
+        ));
+    }
+    if req.resource.name() != Some(id.as_str()) {
+        return Err(ApiError::bad_request(
+            "current transport resource name must match path id",
+        ));
+    }
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::CurrentTransport {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: req.resource.clone(),
+        },
+    )?;
+    let slot = scene
+        .current_transports
+        .iter_mut()
+        .find(|item| item.name() == Some(id.as_str()))
+        .ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    if slot.known().is_none() {
+        return Err(ApiError::bad_request(
+            "unsupported current transport variants are read-only",
+        ));
+    }
+    let resource = req.resource;
+    *slot = resource.clone();
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(CurrentTransportCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_current_transport(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SpinAuthoringDeleteRequest>,
+) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let index = scene
+        .current_transports
+        .iter()
+        .position(|item| item.name() == Some(id.as_str()))
+        .ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    if scene.current_transports[index].known().is_none() {
+        return Err(ApiError::bad_request(
+            "unsupported current transport variants are read-only",
+        ));
+    }
+    let resource = scene.current_transports.remove(index);
+    ensure_resulting_scene_authorable(
+        &scene,
+        &TransportValidationCandidate::CurrentTransport {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: resource.clone(),
+        },
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(CurrentTransportCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-transports", responses((status = 200, body = SpinTransportListResource)), tag = "model")]
+pub async fn get_spin_transports(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SpinTransportListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    Ok(Json(SpinTransportListResource {
+        scene_revision: scene.revision,
+        items: scene.spin_transports,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-interfaces", responses((status = 200, body = SpinInterfaceListResource)), tag = "model")]
+pub async fn get_spin_interfaces(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SpinInterfaceListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let mut items = Vec::new();
+    for transport in &scene.spin_transports {
+        let value = serde_json::to_value(transport).map_err(|error| {
+            ApiError::internal(format!("failed to project spin interfaces: {error}"))
+        })?;
+        let Some(owner) = value.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for interface in value
+            .get("interfaces")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            items.push(SpinInterfaceProjectionItem {
+                owner_spin_transport_id: owner.to_string(),
+                interface_id: interface
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                known: serde_json::from_value::<SceneSpinInterface>(interface.clone()).is_ok(),
+                interface: interface.clone(),
+            });
+        }
+    }
+    Ok(Json(SpinInterfaceListResource {
+        scene_revision: scene.revision,
+        items,
+    }))
+}
+
+fn replace_or_create<T>(
+    items: &mut Vec<T>,
+    operation: TransportAuthoringOperation,
+    path_id: Option<&str>,
+    resource_id: Option<&str>,
+    identity: impl Fn(&T) -> Option<&str>,
+    resource: T,
+) -> Result<(), String> {
+    match operation {
+        TransportAuthoringOperation::Create => {
+            let id = resource_id.ok_or_else(|| "candidate identity is unavailable".to_string())?;
+            if items.iter().any(|item| identity(item) == Some(id)) {
+                return Err(format!("duplicate candidate identity '{id}'"));
+            }
+            items.push(resource);
+        }
+        TransportAuthoringOperation::Replace => {
+            let path_id = path_id.ok_or_else(|| "replace requires path_id".to_string())?;
+            if resource_id != Some(path_id) {
+                return Err("candidate identity must match path_id".to_string());
+            }
+            let slot = items
+                .iter_mut()
+                .find(|item| identity(item) == Some(path_id))
+                .ok_or_else(|| format!("candidate target not found: {path_id}"))?;
+            *slot = resource;
+        }
+    }
+    Ok(())
+}
+
+fn requested_lane(resource: &SceneSpinTransport) -> Option<TransportExecutionLane> {
+    let request = &resource.known()?.requested_execution;
+    let value = serde_json::to_value(request).ok()?;
+    Some(TransportExecutionLane {
+        discretization: value.get("discretization")?.as_str()?.to_string(),
+        device: value.get("device")?.as_str()?.to_string(),
+        precision: value.get("precision")?.as_str()?.to_string(),
+        execution_mode: value.get("execution_mode")?.as_str()?.to_string(),
+    })
+}
+
+fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportExecutionCapability {
+    let (status, allowed, reason, requested) = match candidate {
+        TransportValidationCandidate::CurrentTransport { resource, .. } => {
+            if resource.known().is_none() {
+                return TransportExecutionCapability {
+                    status: "unsupported".to_string(),
+                    qualification: "unsupported".to_string(),
+                    authoring_allowed: false,
+                    reason: Some("Unknown current transport variants are read-only.".to_string()),
+                    requested_lane: None,
+                    resolved_lane: None,
+                };
+            }
+            let reciprocal = resource
+                .known()
+                .is_some_and(|value| value.coupling == SceneTransportCoupling::Bidirectional);
+            if reciprocal {
+                ("unsupported", false, Some("Bidirectional charge transport is an M2 authoring capability.".to_string()), None)
+            } else {
+                ("semantic_only", true, Some("M1 authoring is available; executable qualification remains workload-scoped.".to_string()), None)
+            }
+        }
+        TransportValidationCandidate::SpinTransport { resource, .. } => {
+            let requested = requested_lane(resource);
+            let Some(known) = resource.known() else {
+                return TransportExecutionCapability {
+                    status: "unsupported".to_string(),
+                    qualification: "unsupported".to_string(),
+                    authoring_allowed: false,
+                    reason: Some("Unknown spin transport variants are read-only.".to_string()),
+                    requested_lane: requested,
+                    resolved_lane: None,
+                };
+            };
+            let reciprocal = known.constitutive_version != "transport_constitutive.one_way.fullmag.v1";
+            let lane_blocked = requested.as_ref().is_some_and(|lane| {
+                lane.device == "gpu"
+                    || lane.precision == "single"
+                    || lane.execution_mode == "hybrid"
+                    || lane.discretization == "hybrid"
+            });
+            let transient = serde_json::to_value(known.mode).ok().and_then(|v| v.as_str().map(str::to_string)).as_deref() == Some("transient");
+            if reciprocal {
+                ("unsupported", false, Some("Reciprocal spin transport is an M2 authoring capability.".to_string()), requested)
+            } else if transient {
+                ("unsupported", false, Some("Transient spin transport is an M3 authoring capability.".to_string()), requested)
+            } else if lane_blocked {
+                ("unsupported", false, Some("M1 authoring is limited to CPU/auto, double precision, and strict or extended execution.".to_string()), requested)
+            } else {
+                ("semantic_only", true, Some("M1 steady one-way authoring is available; the execution lane is resolved only by planning.".to_string()), requested)
+            }
+        }
+        TransportValidationCandidate::SpinInterface { resource, .. } => {
+            let known = serde_json::from_value::<SceneSpinInterface>(resource.clone()).is_ok();
+            if known {
+                ("semantic_only", true, Some("Interface authoring is available; execution qualification remains workload-scoped.".to_string()), None)
+            } else {
+                ("unsupported", false, Some("Unknown spin interface variants are read-only.".to_string()), None)
+            }
+        }
+        TransportValidationCandidate::SpinTorque { resource, .. } => match resource {
+            SceneSpinTorque::Known(_) => (
+                "source_visible",
+                true,
+                Some("Typed torque authoring is available; execution qualification is variant-specific.".to_string()),
+                None,
+            ),
+            SceneSpinTorque::Unsupported(_) => (
+                "unsupported",
+                false,
+                Some("Unknown spin torque variants are read-only.".to_string()),
+                None,
+            ),
+        },
+        TransportValidationCandidate::OerstedField { resource, .. } => match resource {
+            SceneOerstedField::Known(_) => (
+                "source_visible",
+                true,
+                Some("Typed Oersted authoring is available; execution qualification is realization-specific.".to_string()),
+                None,
+            ),
+            SceneOerstedField::Unsupported(_) => (
+                "unsupported",
+                false,
+                Some("Unknown Oersted field variants are read-only.".to_string()),
+                None,
+            ),
+        },
+    };
+    TransportExecutionCapability {
+        status: status.to_string(),
+        qualification: status.to_string(),
+        authoring_allowed: allowed,
+        reason,
+        requested_lane: requested,
+        resolved_lane: None,
+    }
+}
+
+fn apply_validation_candidate(
+    scene: &mut SceneDocument,
+    candidate: TransportValidationCandidate,
+) -> Result<(), String> {
+    match candidate {
+        TransportValidationCandidate::CurrentTransport {
+            operation,
+            path_id,
+            resource,
+        } => {
+            let id = resource.name().map(str::to_string);
+            replace_or_create(
+                &mut scene.current_transports,
+                operation,
+                path_id.as_deref(),
+                id.as_deref(),
+                SceneCurrentTransport::name,
+                resource,
+            )
+        }
+        TransportValidationCandidate::SpinTransport {
+            operation,
+            path_id,
+            resource,
+        } => {
+            let id = resource.id().map(str::to_string);
+            replace_or_create(
+                &mut scene.spin_transports,
+                operation,
+                path_id.as_deref(),
+                id.as_deref(),
+                SceneSpinTransport::id,
+                resource,
+            )
+        }
+        TransportValidationCandidate::SpinTorque {
+            operation,
+            path_id,
+            resource,
+        } => {
+            let id = resource.id().to_string();
+            replace_or_create(
+                &mut scene.spin_torques,
+                operation,
+                path_id.as_deref(),
+                Some(id.as_str()),
+                |item| Some(item.id()),
+                resource,
+            )
+        }
+        TransportValidationCandidate::OerstedField {
+            operation,
+            path_id,
+            resource,
+        } => {
+            let id = resource.id().to_string();
+            replace_or_create(
+                &mut scene.oersted_fields,
+                operation,
+                path_id.as_deref(),
+                Some(id.as_str()),
+                |item| Some(item.id()),
+                resource,
+            )
+        }
+        TransportValidationCandidate::SpinInterface {
+            operation,
+            owner_spin_transport_id,
+            interface_id,
+            resource,
+        } => {
+            let slot = scene
+                .spin_transports
+                .iter_mut()
+                .find(|item| item.id() == Some(owner_spin_transport_id.as_str()))
+                .ok_or_else(|| {
+                    format!("owner spin transport not found: {owner_spin_transport_id}")
+                })?;
+            let mut value = serde_json::to_value(&*slot).map_err(|error| error.to_string())?;
+            let interfaces = value
+                .get_mut("interfaces")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| "owner spin transport has no interfaces array".to_string())?;
+            let resource_id = resource.get("id").and_then(Value::as_str);
+            match operation {
+                TransportAuthoringOperation::Create => {
+                    if resource_id.is_some_and(|id| {
+                        interfaces
+                            .iter()
+                            .any(|item| item.get("id").and_then(Value::as_str) == Some(id))
+                    }) {
+                        return Err(format!(
+                            "duplicate spin interface id '{}'",
+                            resource_id.unwrap_or_default()
+                        ));
+                    }
+                    interfaces.push(resource);
+                }
+                TransportAuthoringOperation::Replace => {
+                    let interface_id = interface_id
+                        .as_deref()
+                        .ok_or_else(|| "replace requires interface_id".to_string())?;
+                    if resource_id != Some(interface_id) {
+                        return Err("interface identity must match interface_id".to_string());
+                    }
+                    let target = interfaces
+                        .iter_mut()
+                        .find(|item| item.get("id").and_then(Value::as_str) == Some(interface_id))
+                        .ok_or_else(|| format!("spin interface not found: {interface_id}"))?;
+                    *target = resource;
+                }
+            }
+            *slot = serde_json::from_value(value).map_err(|error| error.to_string())?;
+            Ok(())
+        }
+    }
+}
+
+fn ensure_candidate_authorable(
+    scene: &SceneDocument,
+    candidate: TransportValidationCandidate,
+) -> Result<(), ApiError> {
+    let capability = candidate_capability(&candidate);
+    if !capability.authoring_allowed
+        || !matches!(
+            capability.status.as_str(),
+            "semantic_only" | "source_visible"
+        )
+    {
+        return Err(ApiError::bad_request(capability.reason.unwrap_or_else(
+            || "transport candidate capability is unavailable".to_string(),
+        )));
+    }
+    let mut clone = scene.clone();
+    apply_validation_candidate(&mut clone, candidate).map_err(ApiError::bad_request)?;
+    fullmag_authoring::validate_scene_document(&clone)
+        .map_err(|error| ApiError::bad_request(error.message))?;
+    Ok(())
+}
+
+fn ensure_resulting_scene_authorable(
+    scene: &SceneDocument,
+    removed: &TransportValidationCandidate,
+) -> Result<(), ApiError> {
+    let capability = candidate_capability(removed);
+    if !capability.authoring_allowed {
+        return Err(ApiError::bad_request(
+            capability
+                .reason
+                .unwrap_or_else(|| "transport resource is read-only".to_string()),
+        ));
+    }
+    fullmag_authoring::validate_scene_document(scene)
+        .map_err(|error| ApiError::unprocessable(error.message))
+}
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/transport-validation", request_body = TransportValidationRequest, responses((status = 200, body = TransportValidationResponse), (status = 409)), tag = "model")]
+pub async fn validate_transport_candidate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TransportValidationRequest>,
+) -> Result<Json<TransportValidationResponse>, ApiError> {
+    if req.validation_version != "transport-authoring-validation.v1" {
+        return Err(ApiError::bad_request(
+            "unsupported transport validation version",
+        ));
+    }
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let mut execution = candidate_capability(&req.candidate);
+    let apply_error = apply_validation_candidate(&mut scene, req.candidate).err();
+    let validation_error = apply_error.or_else(|| {
+        fullmag_authoring::validate_scene_document(&scene)
+            .err()
+            .map(|error| error.message)
+    });
+    let semantic = match validation_error {
+        Some(message) => TransportSemanticValidation {
+            valid: false,
+            issues: vec![TransportValidationIssue {
+                code: "invalid_transport_candidate".to_string(),
+                path: "candidate".to_string(),
+                message,
+            }],
+        },
+        None => TransportSemanticValidation {
+            valid: true,
+            issues: Vec::new(),
+        },
+    };
+    execution.authoring_allowed &= semantic.valid;
+    Ok(Json(TransportValidationResponse {
+        validation_version: "transport-authoring-validation.v1".to_string(),
+        scene_revision: req.base_revision,
+        semantic,
+        execution,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-transports/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneSpinTransport), (status = 404)), tag = "model")]
+pub async fn get_spin_transport(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SceneSpinTransport>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    scene
+        .spin_transports
+        .into_iter()
+        .find(|item| item.id() == Some(id.as_str()))
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("spin transport not found: {id}")))
+}
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/spin-transports", request_body = SpinTransportMutationRequest, responses((status = 200, body = SpinTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn create_spin_transport(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SpinTransportMutationRequest>,
+) -> Result<Json<SpinTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let id = req
+        .resource
+        .known()
+        .map(|resource| resource.id.as_str())
+        .ok_or_else(|| {
+            ApiError::bad_request("unsupported spin transport variants are read-only")
+        })?;
+    if scene
+        .spin_transports
+        .iter()
+        .any(|item| item.id() == Some(id))
+    {
+        return Err(ApiError::conflict(format!(
+            "duplicate spin transport id '{id}'"
+        )));
+    }
+    let resource = req.resource;
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::SpinTransport {
+            operation: TransportAuthoringOperation::Create,
+            path_id: None,
+            resource: resource.clone(),
+        },
+    )?;
+    scene.spin_transports.push(resource.clone());
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(SpinTransportCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/spin-transports/{id}", params(("id" = String, Path)), request_body = SpinTransportMutationRequest, responses((status = 200, body = SpinTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_spin_transport(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SpinTransportMutationRequest>,
+) -> Result<Json<SpinTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if req.resource.known().map(|resource| resource.id.as_str()) != Some(id.as_str()) {
+        return Err(ApiError::bad_request(
+            "known spin transport resource id must match path id",
+        ));
+    }
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::SpinTransport {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: req.resource.clone(),
+        },
+    )?;
+    let slot = scene
+        .spin_transports
+        .iter_mut()
+        .find(|item| item.id() == Some(id.as_str()))
+        .ok_or_else(|| ApiError::not_found(format!("spin transport not found: {id}")))?;
+    if slot.known().is_none() {
+        return Err(ApiError::bad_request(
+            "unsupported spin transport variants are read-only",
+        ));
+    }
+    let resource = req.resource;
+    *slot = resource.clone();
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(SpinTransportCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/spin-transports/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = SpinTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_spin_transport(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SpinAuthoringDeleteRequest>,
+) -> Result<Json<SpinTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let index = scene
+        .spin_transports
+        .iter()
+        .position(|item| item.id() == Some(id.as_str()))
+        .ok_or_else(|| ApiError::not_found(format!("spin transport not found: {id}")))?;
+    if scene.spin_transports[index].known().is_none() {
+        return Err(ApiError::bad_request(
+            "unsupported spin transport variants are read-only",
+        ));
+    }
+    let resource = scene.spin_transports.remove(index);
+    ensure_resulting_scene_authorable(
+        &scene,
+        &TransportValidationCandidate::SpinTransport {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: resource.clone(),
+        },
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(SpinTransportCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-torques", responses((status = 200, body = SpinTorqueListResource)), tag = "model")]
+pub async fn get_spin_torques(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SpinTorqueListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    Ok(Json(SpinTorqueListResource {
+        scene_revision: scene.revision,
+        items: scene.spin_torques,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-torques/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneSpinTorque), (status = 404)), tag = "model")]
+pub async fn get_spin_torque(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SceneSpinTorque>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    scene
+        .spin_torques
+        .into_iter()
+        .find(|item| item.id() == id)
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}")))
+}
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/spin-torques", request_body = SpinTorqueMutationRequest, responses((status = 200, body = SpinTorqueCommitResource), (status = 409)), tag = "model")]
+pub async fn create_spin_torque(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SpinTorqueMutationRequest>,
+) -> Result<Json<SpinTorqueCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if scene
+        .spin_torques
+        .iter()
+        .any(|item| item.id() == req.resource.id())
+    {
+        return Err(ApiError::conflict(format!(
+            "duplicate spin torque id '{}'",
+            req.resource.id()
+        )));
+    }
+    let resource = req.resource;
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::SpinTorque {
+            operation: TransportAuthoringOperation::Create,
+            path_id: None,
+            resource: resource.clone(),
+        },
+    )?;
+    scene.spin_torques.push(resource.clone());
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(SpinTorqueCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/spin-torques/{id}", params(("id" = String, Path)), request_body = SpinTorqueMutationRequest, responses((status = 200, body = SpinTorqueCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_spin_torque(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SpinTorqueMutationRequest>,
+) -> Result<Json<SpinTorqueCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if req.resource.id() != id {
+        return Err(ApiError::bad_request(
+            "spin torque resource id must match path id",
+        ));
+    }
+    if scene
+        .spin_torques
+        .iter()
+        .find(|item| item.id() == id)
+        .is_some_and(|item| matches!(item, fullmag_authoring::SceneSpinTorque::Unsupported(_)))
+    {
+        return Err(ApiError::bad_request(
+            "unsupported spin torque variants are read-only",
+        ));
+    }
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::SpinTorque {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: req.resource.clone(),
+        },
+    )?;
+    let slot = scene
+        .spin_torques
+        .iter_mut()
+        .find(|item| item.id() == id)
+        .ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}")))?;
+    let resource = req.resource;
+    *slot = resource.clone();
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(SpinTorqueCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/spin-torques/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = SpinTorqueCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_spin_torque(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SpinAuthoringDeleteRequest>,
+) -> Result<Json<SpinTorqueCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let index = scene
+        .spin_torques
+        .iter()
+        .position(|item| item.id() == id)
+        .ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}")))?;
+    if matches!(
+        scene.spin_torques[index],
+        fullmag_authoring::SceneSpinTorque::Unsupported(_)
+    ) {
+        return Err(ApiError::bad_request(
+            "unsupported spin torque variants are read-only",
+        ));
+    }
+    let resource = scene.spin_torques.remove(index);
+    ensure_resulting_scene_authorable(
+        &scene,
+        &TransportValidationCandidate::SpinTorque {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: resource.clone(),
+        },
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(SpinTorqueCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/oersted-fields", responses((status = 200, body = OerstedFieldListResource)), tag = "model")]
+pub async fn get_oersted_fields(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<OerstedFieldListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    Ok(Json(OerstedFieldListResource {
+        scene_revision: scene.revision,
+        items: scene.oersted_fields,
+    }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/oersted-fields/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneOerstedField), (status = 404)), tag = "model")]
+pub async fn get_oersted_field(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SceneOerstedField>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    scene
+        .oersted_fields
+        .into_iter()
+        .find(|item| item.id() == id)
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}")))
+}
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/oersted-fields", request_body = OerstedFieldMutationRequest, responses((status = 200, body = OerstedFieldCommitResource), (status = 409)), tag = "model")]
+pub async fn create_oersted_field(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<OerstedFieldMutationRequest>,
+) -> Result<Json<OerstedFieldCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if scene
+        .oersted_fields
+        .iter()
+        .any(|item| item.id() == req.resource.id())
+    {
+        return Err(ApiError::conflict(format!(
+            "duplicate Oersted field id '{}'",
+            req.resource.id()
+        )));
+    }
+    let resource = req.resource;
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::OerstedField {
+            operation: TransportAuthoringOperation::Create,
+            path_id: None,
+            resource: resource.clone(),
+        },
+    )?;
+    scene.oersted_fields.push(resource.clone());
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(OerstedFieldCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/oersted-fields/{id}", params(("id" = String, Path)), request_body = OerstedFieldMutationRequest, responses((status = 200, body = OerstedFieldCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_oersted_field(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<OerstedFieldMutationRequest>,
+) -> Result<Json<OerstedFieldCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if req.resource.id() != id {
+        return Err(ApiError::bad_request(
+            "Oersted field resource id must match path id",
+        ));
+    }
+    if scene
+        .oersted_fields
+        .iter()
+        .find(|item| item.id() == id)
+        .is_some_and(|item| matches!(item, fullmag_authoring::SceneOerstedField::Unsupported(_)))
+    {
+        return Err(ApiError::bad_request(
+            "unsupported Oersted field variants are read-only",
+        ));
+    }
+    ensure_candidate_authorable(
+        &scene,
+        TransportValidationCandidate::OerstedField {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: req.resource.clone(),
+        },
+    )?;
+    let slot = scene
+        .oersted_fields
+        .iter_mut()
+        .find(|item| item.id() == id)
+        .ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}")))?;
+    let resource = req.resource;
+    *slot = resource.clone();
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(OerstedFieldCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/oersted-fields/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = OerstedFieldCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_oersted_field(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SpinAuthoringDeleteRequest>,
+) -> Result<Json<OerstedFieldCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let index = scene
+        .oersted_fields
+        .iter()
+        .position(|item| item.id() == id)
+        .ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}")))?;
+    if matches!(
+        scene.oersted_fields[index],
+        fullmag_authoring::SceneOerstedField::Unsupported(_)
+    ) {
+        return Err(ApiError::bad_request(
+            "unsupported Oersted field variants are read-only",
+        ));
+    }
+    let resource = scene.oersted_fields.remove(index);
+    ensure_resulting_scene_authorable(
+        &scene,
+        &TransportValidationCandidate::OerstedField {
+            operation: TransportAuthoringOperation::Replace,
+            path_id: Some(id.clone()),
+            resource: resource.clone(),
+        },
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(OerstedFieldCommitResource {
+        scene_revision: committed.revision,
+        resource,
+        committed_scene: spin_commit_scene_resource(committed)?,
+    }))
+}
 
 #[utoipa::path(
     get,

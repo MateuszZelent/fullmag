@@ -17,7 +17,7 @@ namespace fdm {
 extern void launch_exchange_field_fp32(Context &ctx);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
-extern void launch_effective_field_fp32(Context &ctx);
+extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
@@ -48,12 +48,6 @@ __global__ void llg_rhs_fp32_kernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
-    if (stt.active_mask && stt.active_mask[idx] == 0) {
-        out_x[idx] = 0.0f;
-        out_y[idx] = 0.0f;
-        out_z[idx] = 0.0f;
-        return;
-    }
 
     float m0 = mx[idx], m1 = my[idx], m2 = mz[idx];
     float h0 = hx[idx], h1 = hy[idx], h2 = hz[idx];
@@ -95,39 +89,39 @@ __global__ void llg_rhs_fp32_kernel(
         float dmx_u = 0.0f, dmy_u = 0.0f, dmz_u = 0.0f;
         
         // x-derivative
-        if (ux > 0.0f && (x > 0 || stt.periodic_x)) {
-            int prev = (x > 0) ? idx - 1 : idx + nx - 1;
+        if (ux > 0.0f && x > 0) {
+            int prev = idx - 1;
             dmx_u += ux * (m0 - mx[prev]) * inv_dx;
             dmy_u += ux * (m1 - my[prev]) * inv_dx;
             dmz_u += ux * (m2 - mz[prev]) * inv_dx;
-        } else if (ux < 0.0f && (x < nx - 1 || stt.periodic_x)) {
-            int next = (x < nx - 1) ? idx + 1 : idx - nx + 1;
+        } else if (ux < 0.0f && x < nx - 1) {
+            int next = idx + 1;
             dmx_u += ux * (mx[next] - m0) * inv_dx;
             dmy_u += ux * (my[next] - m1) * inv_dx;
             dmz_u += ux * (mz[next] - m2) * inv_dx;
         }
 
         // y-derivative
-        if (uy > 0.0f && (y > 0 || stt.periodic_y)) {
-            int prev = (y > 0) ? idx - nx : idx + nx * (ny - 1);
+        if (uy > 0.0f && y > 0) {
+            int prev = idx - nx;
             dmx_u += uy * (m0 - mx[prev]) * inv_dy;
             dmy_u += uy * (m1 - my[prev]) * inv_dy;
             dmz_u += uy * (m2 - mz[prev]) * inv_dy;
-        } else if (uy < 0.0f && (y < ny - 1 || stt.periodic_y)) {
-            int next = (y < ny - 1) ? idx + nx : idx - nx * (ny - 1);
+        } else if (uy < 0.0f && y < ny - 1) {
+            int next = idx + nx;
             dmx_u += uy * (mx[next] - m0) * inv_dy;
             dmy_u += uy * (my[next] - m1) * inv_dy;
             dmz_u += uy * (mz[next] - m2) * inv_dy;
         }
 
         // z-derivative
-        if (uz > 0.0f && (z > 0 || stt.periodic_z)) {
-            int prev = (z > 0) ? idx - nx * ny : idx + nx * ny * (nz - 1);
+        if (uz > 0.0f && z > 0) {
+            int prev = idx - nx * ny;
             dmx_u += uz * (m0 - mx[prev]) * inv_dz;
             dmy_u += uz * (m1 - my[prev]) * inv_dz;
             dmz_u += uz * (m2 - mz[prev]) * inv_dz;
-        } else if (uz < 0.0f && (z < nz - 1 || stt.periodic_z)) {
-            int next = (z < nz - 1) ? idx + nx * ny : idx - nx * ny * (nz - 1);
+        } else if (uz < 0.0f && z < nz - 1) {
+            int next = idx + nx * ny;
             dmx_u += uz * (mx[next] - m0) * inv_dz;
             dmy_u += uz * (my[next] - m1) * inv_dz;
             dmz_u += uz * (mz[next] - m2) * inv_dz;
@@ -187,32 +181,43 @@ __global__ void llg_rhs_fp32_kernel(
         rhs_z += damping_like_scale * double_m_cross_pz + field_like_scale * m_cross_pz;
     }
 
-    // --- Spin-Orbit Torque (SOT) --- Manchon-Zhang DL + FL model
-    if (sot.has_sot) {
-        float sx = static_cast<float>(sot.sx);
-        float sy = static_cast<float>(sot.sy);
-        float sz = static_cast<float>(sot.sz);
-        float amp = static_cast<float>(sot.amp);
-        float xi_dl = static_cast<float>(sot.xi_dl);
-        float xi_fl = static_cast<float>(sot.xi_fl);
-        float m_dot_s = m0*sx + m1*sy + m2*sz;
-        // FL term: m × σ̂
-        float fl_x = m1*sz - m2*sy;
-        float fl_y = m2*sx - m0*sz;
-        float fl_z = m0*sy - m1*sx;
-        // DL term: m × (m × σ̂) = (m·σ̂)m - σ̂
-        float dl_x = m_dot_s*m0 - sx;
-        float dl_y = m_dot_s*m1 - sy;
-        float dl_z = m_dot_s*m2 - sz;
-        float raw_x = -xi_dl*dl_x + xi_fl*fl_x;
-        float raw_y = -xi_dl*dl_y + xi_fl*fl_y;
-        float raw_z = -xi_dl*dl_z + xi_fl*fl_z;
-        float m_cross_raw_x = m1 * raw_z - m2 * raw_y;
-        float m_cross_raw_y = m2 * raw_x - m0 * raw_z;
-        float m_cross_raw_z = m0 * raw_y - m1 * raw_x;
-        rhs_x += gamma_bar * amp * (raw_x + alpha * m_cross_raw_x);
-        rhs_y += gamma_bar * amp * (raw_y + alpha * m_cross_raw_y);
-        rhs_z += gamma_bar * amp * (raw_z + alpha * m_cross_raw_z);
+    // --- Prescribed SOT v1: canonical Gilbert source converted exactly once. ---
+    if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_V1 &&
+        (!sot.has_active_mask || sot.active_mask[idx] != 0) &&
+        sot.has_target_mask && sot.target_mask[idx] != 0)
+    {
+        const auto sot_rhs = prescribed_sot_explicit_rhs(
+            PrescribedSotVector<float>{m0, m1, m2},
+            PrescribedSotVector<float>{
+                static_cast<float>(sot.sx),
+                static_cast<float>(sot.sy),
+                static_cast<float>(sot.sz)},
+            static_cast<float>(sot.amp),
+            static_cast<float>(sot.xi_dl),
+            static_cast<float>(sot.xi_fl),
+            alpha);
+        rhs_x += sot_rhs.x;
+        rhs_y += sot_rhs.y;
+        rhs_z += sot_rhs.z;
+    } else if (sot.has_sot &&
+               sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
+               (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
+        const float sx = static_cast<float>(sot.sx);
+        const float sy = static_cast<float>(sot.sy);
+        const float sz = static_cast<float>(sot.sz);
+        const float amp = static_cast<float>(sot.amp);
+        const float xi_dl = static_cast<float>(sot.xi_dl);
+        const float xi_fl = static_cast<float>(sot.xi_fl);
+        const float m_dot_s = m0 * sx + m1 * sy + m2 * sz;
+        const float fl_x = m1 * sz - m2 * sy;
+        const float fl_y = m2 * sx - m0 * sz;
+        const float fl_z = m0 * sy - m1 * sx;
+        const float dl_x = m_dot_s * m0 - sx;
+        const float dl_y = m_dot_s * m1 - sy;
+        const float dl_z = m_dot_s * m2 - sz;
+        rhs_x += amp * (-xi_dl * dl_x + xi_fl * fl_x);
+        rhs_y += amp * (-xi_dl * dl_y + xi_fl * fl_y);
+        rhs_z += amp * (-xi_dl * dl_z + xi_fl * fl_z);
     }
 
     out_x[idx] = rhs_x;
@@ -314,6 +319,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float alpha_f = static_cast<float>(ctx.alpha);
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f = static_cast<float>(dt);
+    const double step_start_time = ctx.current_time;
 
     // Save original m in tmp
     size_t bytes = n * sizeof(float);
@@ -328,7 +334,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 2: k1 = RHS(m, H_eff)
@@ -355,7 +361,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time + dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 5: k2 = RHS(m_pred, H_eff_pred) → store in h_ex
@@ -390,7 +396,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time + dt);
 
     double e_ex = 0.0;
     if (ctx.enable_exchange) {

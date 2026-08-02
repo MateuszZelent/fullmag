@@ -1619,6 +1619,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -1728,6 +1729,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -1966,6 +1968,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -2082,6 +2085,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -2390,6 +2394,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -2486,6 +2491,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -2711,6 +2717,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -2817,6 +2824,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 latest_local_stats = Some(local_stats.clone());
             }
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -3104,6 +3112,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -3229,6 +3238,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -3427,6 +3437,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -3539,10 +3550,15 @@ impl CpuInteractiveFemPreviewRuntime {
                             step: local_stats.step,
                             time: local_stats.time,
                             solver_dt: report.dt_used,
-                            values: select_output_field_values_from_observables(
+                           component_count: 3,
+                           component_order: "xyz".into(),
+                           location: "sample".into(),
+                           scope: "full".into(),
+                           revision: (local_stats.step as u64).saturating_add(1),
+                            values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(
                                 &observables,
                                 name,
-                            )?,
+                            )?),
                         })?;
                     }
                     advance_due_schedules(&mut field_schedules, local_stats.time);
@@ -3570,6 +3586,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -3832,6 +3849,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -3920,6 +3938,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -4094,6 +4113,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -4163,6 +4183,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -4361,7 +4382,12 @@ fn record_due_cpu_outputs(
                 step,
                 time,
                 solver_dt,
-                values: select_output_field_values_from_observables(observables, &name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(observables, &name)?),
             })?;
         }
         advance_due_schedules(field_schedules, time);
@@ -4413,7 +4439,12 @@ fn record_final_cpu_outputs(
             step,
             time,
             solver_dt,
-            values: select_output_field_values_from_observables(observables, &name)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(observables, &name)?),
         })?;
     }
 
@@ -4485,7 +4516,12 @@ fn capture_initial_native_fem_runtime_fields(
             step: 0,
             time: 0.0,
             solver_dt: 0.0,
-            values: copy_native_fem_field_values(backend, node_count, &name)?,
+           component_count: 3,
+           component_order: "xyz".into(),
+           location: "sample".into(),
+           scope: "full".into(),
+           revision: (0 as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(backend, node_count, &name)?),
         })?;
     }
     advance_due_schedules(field_schedules, 0.0);
@@ -4522,7 +4558,12 @@ fn record_due_native_fem_runtime_outputs(
             step: stats.step,
             time: stats.time,
             solver_dt: stats.dt,
-            values: copy_native_fem_field_values(backend, node_count, &name)?,
+           component_count: 3,
+           component_order: "xyz".into(),
+           location: "sample".into(),
+           scope: "full".into(),
+           revision: (stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(backend, node_count, &name)?),
         })?;
     }
     advance_due_schedules(field_schedules, stats.time);
@@ -4571,7 +4612,12 @@ fn record_final_native_fem_runtime_outputs(
             step: latest_stats.step,
             time: latest_stats.time,
             solver_dt: latest_stats.dt,
-            values: copy_native_fem_field_values(backend, node_count, name)?,
+           component_count: 3,
+           component_order: "xyz".into(),
+           location: "sample".into(),
+           scope: "full".into(),
+           revision: (latest_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(backend, node_count, name)?),
         })?;
     }
     let _ = scalar_schedules;
@@ -4648,7 +4694,12 @@ fn capture_initial_cuda_runtime_fields(
             step: 0,
             time: 0.0,
             solver_dt: 0.0,
-            values: copy_cuda_field_values(backend, cell_count, &name)?,
+           component_count: 3,
+           component_order: "xyz".into(),
+           location: "sample".into(),
+           scope: "full".into(),
+           revision: (0 as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, &name)?),
         })?;
     }
     advance_due_schedules(field_schedules, 0.0);
@@ -4687,7 +4738,12 @@ fn record_due_cuda_runtime_outputs(
             step: stats.step,
             time: stats.time,
             solver_dt: stats.dt,
-            values: copy_cuda_field_values(backend, cell_count, &name)?,
+           component_count: 3,
+           component_order: "xyz".into(),
+           location: "sample".into(),
+           scope: "full".into(),
+           revision: (stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, &name)?),
         })?;
     }
     advance_due_schedules(field_schedules, stats.time);
@@ -4738,7 +4794,12 @@ fn record_final_cuda_runtime_outputs(
             step: latest_stats.step,
             time: latest_stats.time,
             solver_dt: latest_stats.dt,
-            values: copy_cuda_field_values(backend, cell_count, name)?,
+           component_count: 3,
+           component_order: "xyz".into(),
+           location: "sample".into(),
+           scope: "full".into(),
+           revision: (latest_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, name)?),
         })?;
     }
     let _ = scalar_schedules;
@@ -4813,6 +4874,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         };
 
     Ok(ExecutionProvenance {
+        transport_modules: Vec::new(),
         execution_engine: "cpu_reference".to_string(),
         precision: "double".to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -4904,6 +4966,7 @@ fn cuda_execution_provenance(
             )?)
         };
     Ok(ExecutionProvenance {
+        transport_modules: Vec::new(),
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -5015,6 +5078,7 @@ fn fem_gpu_execution_provenance(
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {
+        transport_modules: Vec::new(),
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),

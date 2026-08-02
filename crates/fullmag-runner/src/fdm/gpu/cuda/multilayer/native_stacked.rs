@@ -332,6 +332,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             )?;
             if let Some((_, on_step)) = live.as_mut() {
                 let action = on_step(StepUpdate {
+                    coupled_checkpoint: None,
                     stats: stats.clone(),
                     grid: native.global_grid,
                     fem_mesh_generation_id: None,
@@ -353,6 +354,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             }
         } else if let Some((_, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: stats.clone(),
                 grid: native.global_grid,
                 fem_mesh_generation_id: None,
@@ -418,7 +420,16 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values: select_state_observable_field(&final_observables, &schedule.name, false)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (final_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                &final_observables,
+                &schedule.name,
+                false,
+            )?),
         })?;
     }
 

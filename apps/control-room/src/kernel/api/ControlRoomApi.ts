@@ -97,8 +97,14 @@ import {
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_COUPLINGS_PATH,
+  MODEL_CURRENT_TRANSPORT_PATH,
+  MODEL_CURRENT_TRANSPORTS_PATH,
   MODEL_FIELD_DRIVE_PATH,
   MODEL_FIELD_DRIVES_PATH,
+  MODEL_SPIN_TRANSPORT_PATH,
+  MODEL_SPIN_TRANSPORTS_PATH,
+  MODEL_SPIN_INTERFACES_PATH,
+  MODEL_TRANSPORT_VALIDATION_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
@@ -118,6 +124,10 @@ import {
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_SPIN_TORQUE_PATH,
+  MODEL_SPIN_TORQUES_PATH,
+  MODEL_OERSTED_FIELD_PATH,
+  MODEL_OERSTED_FIELDS_PATH,
   MODEL_SCRIPT_PATH,
   MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
@@ -311,6 +321,26 @@ import type {
   TableRowsQuery,
   TableRowsResource,
   SceneResource,
+  SceneCurrentTransport,
+  SceneSpinTransport,
+  SceneSpinTorque,
+  SceneOerstedField,
+  CurrentTransportListResource,
+  CurrentTransportMutationRequest,
+  CurrentTransportCommitResource,
+  SpinTransportListResource,
+  SpinTransportMutationRequest,
+  SpinTransportCommitResource,
+  SpinInterfaceListResource,
+  TransportValidationRequest,
+  TransportValidationResponse,
+  SpinTorqueListResource,
+  SpinTorqueMutationRequest,
+  SpinTorqueCommitResource,
+  OerstedFieldListResource,
+  OerstedFieldMutationRequest,
+  OerstedFieldCommitResource,
+  SpinAuthoringDeleteRequest,
   ScriptSyncRequest,
   ScriptSyncResponse,
   ScriptSourceResponse,
@@ -1381,6 +1411,50 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    currentTransports: (options?: RequestOptions) =>
+      this.requestJson<CurrentTransportListResource>(MODEL_CURRENT_TRANSPORTS_PATH, options),
+    currentTransport: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneCurrentTransport>(MODEL_CURRENT_TRANSPORT_PATH, options, { path: { id } }),
+    createCurrentTransport: (request: CurrentTransportMutationRequest, options?: RequestOptions) =>
+      this.postJson<CurrentTransportCommitResource, CurrentTransportMutationRequest>(MODEL_CURRENT_TRANSPORTS_PATH, request, options),
+    replaceCurrentTransport: (id: string, request: CurrentTransportMutationRequest, options?: RequestOptions) =>
+      this.patchJson<CurrentTransportCommitResource, CurrentTransportMutationRequest>(MODEL_CURRENT_TRANSPORT_PATH, request, options, { path: { id } }),
+    deleteCurrentTransport: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<CurrentTransportCommitResource, SpinAuthoringDeleteRequest>(MODEL_CURRENT_TRANSPORT_PATH, request, options, { path: { id } }),
+    spinTransports: (options?: RequestOptions) =>
+      this.requestJson<SpinTransportListResource>(MODEL_SPIN_TRANSPORTS_PATH, options),
+    spinTransport: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneSpinTransport>(MODEL_SPIN_TRANSPORT_PATH, options, { path: { id } }),
+    createSpinTransport: (request: SpinTransportMutationRequest, options?: RequestOptions) =>
+      this.postJson<SpinTransportCommitResource, SpinTransportMutationRequest>(MODEL_SPIN_TRANSPORTS_PATH, request, options),
+    replaceSpinTransport: (id: string, request: SpinTransportMutationRequest, options?: RequestOptions) =>
+      this.patchJson<SpinTransportCommitResource, SpinTransportMutationRequest>(MODEL_SPIN_TRANSPORT_PATH, request, options, { path: { id } }),
+    deleteSpinTransport: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<SpinTransportCommitResource, SpinAuthoringDeleteRequest>(MODEL_SPIN_TRANSPORT_PATH, request, options, { path: { id } }),
+    spinInterfaces: (options?: RequestOptions) =>
+      this.requestJson<SpinInterfaceListResource>(MODEL_SPIN_INTERFACES_PATH, options),
+    validateTransport: (request: TransportValidationRequest, options?: RequestOptions) =>
+      this.postJson<TransportValidationResponse, TransportValidationRequest>(MODEL_TRANSPORT_VALIDATION_PATH, request, options),
+    spinTorques: (options?: RequestOptions) =>
+      this.requestJson<SpinTorqueListResource>(MODEL_SPIN_TORQUES_PATH, options),
+    spinTorque: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneSpinTorque>(MODEL_SPIN_TORQUE_PATH, options, { path: { id } }),
+    createSpinTorque: (request: SpinTorqueMutationRequest, options?: RequestOptions) =>
+      this.postJson<SpinTorqueCommitResource, SpinTorqueMutationRequest>(MODEL_SPIN_TORQUES_PATH, request, options),
+    replaceSpinTorque: (id: string, request: SpinTorqueMutationRequest, options?: RequestOptions) =>
+      this.patchJson<SpinTorqueCommitResource, SpinTorqueMutationRequest>(MODEL_SPIN_TORQUE_PATH, request, options, { path: { id } }),
+    deleteSpinTorque: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<SpinTorqueCommitResource, SpinAuthoringDeleteRequest>(MODEL_SPIN_TORQUE_PATH, request, options, { path: { id } }),
+    oerstedFields: (options?: RequestOptions) =>
+      this.requestJson<OerstedFieldListResource>(MODEL_OERSTED_FIELDS_PATH, options),
+    oerstedField: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneOerstedField>(MODEL_OERSTED_FIELD_PATH, options, { path: { id } }),
+    createOerstedField: (request: OerstedFieldMutationRequest, options?: RequestOptions) =>
+      this.postJson<OerstedFieldCommitResource, OerstedFieldMutationRequest>(MODEL_OERSTED_FIELDS_PATH, request, options),
+    replaceOerstedField: (id: string, request: OerstedFieldMutationRequest, options?: RequestOptions) =>
+      this.patchJson<OerstedFieldCommitResource, OerstedFieldMutationRequest>(MODEL_OERSTED_FIELD_PATH, request, options, { path: { id } }),
+    deleteOerstedField: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<OerstedFieldCommitResource, SpinAuthoringDeleteRequest>(MODEL_OERSTED_FIELD_PATH, request, options, { path: { id } }),
     planarMonitors: {
       list: (options?: RequestOptions) =>
         this.requestJson<PlanarMonitorCollectionResource>(

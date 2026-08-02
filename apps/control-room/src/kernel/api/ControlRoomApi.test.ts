@@ -4835,167 +4835,192 @@ describe("ControlRoomApi", () => {
     await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
   });
 
-  it("uses the generated planar monitor and field resource routes", async () => {
-    const requests: Array<{
-      body: unknown;
-      method: string | undefined;
-      signal: AbortSignal | null | undefined;
-      url: string;
-    }> = [];
-    const controller = new AbortController();
+  it("routes spin-transport list and mutations through the canonical model resource", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (url, init) => {
         requests.push({
-          body: init?.body ? parseRequestBody(init.body) : null,
-          method: init?.method,
-          signal: init?.signal,
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
           url: String(url),
         });
-        if (String(url).endsWith("/scalar")) {
-          return binaryResponse(new Uint8Array([1, 2]).buffer, {
-            headers: { etag: '"planar-field-1"', ...contractHeaders },
-          });
-        }
-        return jsonResponse(
-          String(url).includes("/data/fields/")
-            ? {
-                basis_order: 0,
-                canonical_unit: "1",
-                component: "z",
-                etag: '"planar-field-1"',
-                field_revision: 4,
-                field_source: "current",
-                fold_count: 0,
-                frame: {
-                  bounds_uv_m: [0, 1, 0, 1],
-                  normal: [0, 0, 1],
-                  origin_m: [0, 0, 0],
-                  u_axis: [1, 0, 0],
-                  v_axis: [0, 1, 0],
-                },
-                generation_id: 1,
-                integration_order: 1,
-                links: {
-                  empty_mask: "",
-                  mesh_overlay: "",
-                  probe: "",
-                  render_png: "",
-                  scalar: "",
-                  vectors: "",
-                },
-                mesh_revision: 2,
-                monitor_hash: "hash",
-                monitor_id: "plane/a",
-                monitor_revision: 3,
-                non_injective: false,
-                occupancy: {
-                  empty: 0,
-                  occupied: 1,
-                  occupied_measure: 1,
-                  partial: 0,
-                },
-                overlap_count: 0,
-                pixel_size_m: [1, 1],
-                quantity_id: "m",
-                resolution: [1, 1],
-                sample_support: "cell",
-                sampler_version: "1",
-                sampling_execution: "cpu",
-                sampling_method: "exact",
-                schema_version: "1",
-                scope_kind: "full",
-              }
-            : {
-                monitor: {
-                  frame: {
-                    extent: { kind: "universe", padding_m: 0 },
-                    normal: [0, 0, 1],
-                    normalization_version: "planar_frame_v1",
-                    origin_m: [0, 0, 0],
-                    preset: "xy",
-                    u_axis: [1, 0, 0],
-                    v_axis: [0, 1, 0],
-                  },
-                  id: "plane/a",
-                  name: "Plane A",
-                  operator: { kind: "plane_sample" },
-                  target: { kind: "domain" },
-                },
-                scene_revision: 8,
-              },
-        );
+        return jsonResponse({ items: [], scene_revision: 7 });
       },
     });
-
-    await api.model.planarMonitors.get("plane/a", {
-      signal: controller.signal,
-    });
-    await api.model.planarMonitors.patch(
-      "plane/a",
-      {
-        expected_scene_revision: 7,
-        monitor: {
-          frame: {
-            extent: { kind: "universe", padding_m: 0 },
-            normal: [0, 0, 1],
-            normalization_version: "planar_frame_v1",
-            origin_m: [0, 0, 0],
-            preset: "xy",
-            u_axis: [1, 0, 0],
-            v_axis: [0, 1, 0],
-          },
-          id: "plane/a",
-          name: "Plane A",
-          operator: { kind: "plane_sample" },
-          target: { kind: "domain" },
+    const request = {
+      base_revision: 7,
+      resource: {
+        boundaries: [],
+        constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+        current_source_id: " charge ",
+        domain: [],
+        id: "spin path/1",
+        interfaces: [],
+        materials: [],
+        mode: "steady" as const,
+        requested_execution: {
+          device: "auto" as const,
+          discretization: "auto" as const,
+          execution_mode: "strict" as const,
+          precision: "double" as const,
+        },
+        schema_version: "spin_transport.v1",
+        solver: {
+          default_external_boundary: "spin_insulating",
+          engine: "gmres",
+          linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+          operator_version: "fv_spin_upwind_v1",
+          physical_residual_version: "transport_balance_integrated_l2.v1",
         },
       },
-      { signal: controller.signal },
-    );
-    await api.data.fields.planar.meta(
-      "m",
-      "plane/a",
-      { component: "z", resolution_x: 64 },
-      { signal: controller.signal },
-    );
-    const scalar = await api.data.fields.planar.scalar(
-      "m",
-      "plane/a",
-      { component: "z", resolution_x: 64 },
-      { etag: '"old"', signal: controller.signal },
-    );
+    };
 
-    expect(scalar.status).toBe("ready");
-    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
-      {
-        method: "GET",
-        url: "http://127.0.0.1:8765/v2/sessions/current/model/planar-monitors/plane%2Fa",
+    await api.model.spinTransports();
+    await api.model.spinTransport("spin path/1");
+    await api.model.createSpinTransport(request);
+    await api.model.replaceSpinTransport("spin path/1", request);
+    await api.model.deleteSpinTransport("spin path/1", { base_revision: 8 });
+
+    const collection = "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports";
+    const member = `${collection}/spin%20path%2F1`;
+    expect(requests).toEqual([
+      { body: null, method: "GET", url: collection },
+      { body: null, method: "GET", url: member },
+      { body: request, method: "POST", url: collection },
+      { body: request, method: "PATCH", url: member },
+      { body: { base_revision: 8 }, method: "DELETE", url: member },
+    ]);
+  });
+
+  it("preserves surrounding whitespace in an exact spin-transport member route", async () => {
+    const requests: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        requests.push(String(url));
+        return jsonResponse({ items: [], scene_revision: 7 });
       },
+    });
+
+    await api.model.spinTransport(" spin ");
+
+    expect(requests).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
+    ]);
+  });
+
+  it("preserves exact spaced transport identities in replace routes and payloads", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
+          url: String(url),
+        });
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
+    });
+    const currentRequest = {
+      base_revision: 7,
+      resource: {
+        coupling: "one_way" as const,
+        current_density: [1, 0, 0],
+        kind: "current_transport" as const,
+        model: "prescribed_density" as const,
+        name: " charge ",
+      },
+    };
+    const spinRequest = {
+      base_revision: 7,
+      resource: {
+        boundaries: [],
+        constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+        current_source_id: "charge",
+        domain: [],
+        id: " spin ",
+        interfaces: [],
+        materials: [],
+        mode: "steady" as const,
+        requested_execution: {
+          device: "auto" as const,
+          discretization: "auto" as const,
+          execution_mode: "strict" as const,
+          precision: "double" as const,
+        },
+        schema_version: "spin_transport.v1",
+        solver: {
+          default_external_boundary: "spin_insulating",
+          engine: "gmres",
+          linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+          operator_version: "fv_spin_upwind_v1",
+          physical_residual_version: "transport_balance_integrated_l2.v1",
+        },
+      },
+    };
+
+    await api.model.replaceCurrentTransport(" charge ", currentRequest);
+    await api.model.replaceSpinTransport(" spin ", spinRequest);
+
+    expect(requests).toEqual([
       {
+        body: currentRequest,
         method: "PATCH",
-        url: "http://127.0.0.1:8765/v2/sessions/current/model/planar-monitors/plane%2Fa",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/current-transports/%20charge%20",
       },
       {
-        method: "GET",
-        url: "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/planar-monitors/plane%2Fa/meta?component=z&resolution_x=64",
-      },
-      {
-        method: "GET",
-        url: "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/planar-monitors/plane%2Fa/scalar?component=z&resolution_x=64",
+        body: spinRequest,
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
       },
     ]);
-    expect(requests[1]?.body).toEqual({
-      expected_scene_revision: 7,
-      monitor: expect.objectContaining({
-        id: "plane/a",
-        name: "Plane A",
-        operator: { kind: "plane_sample" },
-        target: { kind: "domain" },
-      }),
+  });
+
+  it("routes spin-interface projection and clone-only transport validation through model resources", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
+          url: String(url),
+        });
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
     });
-    expect(requests.every((request) => request.signal != null)).toBe(true);
-    controller.abort();
-    expect(requests.every((request) => request.signal?.aborted)).toBe(true);
+    const validation = {
+      base_revision: 7,
+      candidate: {
+        kind: "current_transport" as const,
+        operation: "create" as const,
+        resource: {
+          coupling: "one_way" as const,
+          current_density: [1, 0, 0],
+          kind: "current_transport" as const,
+          model: "prescribed_density" as const,
+          name: "charge",
+        },
+      },
+      validation_version: "transport-authoring-validation.v1",
+    };
+
+    await api.model.spinInterfaces();
+    await api.model.validateTransport(validation);
+
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/spin-interfaces",
+      },
+      {
+        body: validation,
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transport-validation",
+      },
+    ]);
   });
 });

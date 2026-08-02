@@ -217,6 +217,37 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
         && plan.stt_lambda.is_some()
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn ensure_cuda_slonczewski_supported(plan: &fullmag_ir::FdmPlanIR) -> Result<(), RunError> {
+    match plan.slonczewski_formula_version.as_deref() {
+        None | Some("slonczewski.legacy_fullmag.v0") => Ok(()),
+        Some("slonczewski.fullmag.v2") => Err(RunError {
+            message: "slonczewski.fullmag.v2 is not executable on FDM CUDA until the native descriptor carries formula version, signed stack-normal current, and the separate target mask; use FDM CPU reference"
+                .to_string(),
+        }),
+        Some(other) => Err(RunError {
+            message: format!("unsupported FDM CUDA Slonczewski formula_version '{other}'"),
+        }),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn ffi_prescribed_sot_formula(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<ffi::fullmag_fdm_prescribed_sot_formula, RunError> {
+    match plan.sot_formula_version.as_deref() {
+        None | Some("prescribed_sot.legacy_fullmag.v0") => Ok(
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0,
+        ),
+        Some("prescribed_sot.fullmag.v1") => Ok(
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1,
+        ),
+        Some(other) => Err(RunError {
+            message: format!("unsupported prescribed SOT formula_version '{other}'"),
+        }),
+    }
+}
+
 #[cfg(feature = "cuda")]
 fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunError> {
     match kind {
@@ -597,12 +628,9 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
-        validate_native_adaptive_policy(
-            plan.integrator
-                .unwrap_or(fullmag_ir::IntegratorChoice::Heun),
-            plan.adaptive_timestep.as_ref(),
-        )?;
+        ensure_cuda_slonczewski_supported(plan)?;
         validate_single_grid_budget(plan)?;
+        let sot_formula = ffi_prescribed_sot_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         if plan.material.ms_field.is_some()
             || plan.material.a_field.is_some()
@@ -669,6 +697,11 @@ impl NativeFdmBackend {
         let active_mask_flat: Option<Vec<u8>> = plan.active_mask.as_ref().map(|mask| {
             mask.iter()
                 .map(|is_active| if *is_active { 1u8 } else { 0u8 })
+                .collect()
+        });
+        let sot_active_mask_flat: Option<Vec<u8>> = plan.sot_active_mask.as_ref().map(|mask| {
+            mask.iter()
+                .map(|is_target| if *is_target { 1u8 } else { 0u8 })
                 .collect()
         });
         let region_mask_flat = if plan.region_mask.is_empty() {
@@ -804,11 +837,18 @@ impl NativeFdmBackend {
             } else {
                 0
             },
+            sot_formula,
             sot_je: plan.sot_current_density.unwrap_or(0.0),
             sot_xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
             sot_xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
             sot_sigma: plan.sot_sigma.unwrap_or([0.0, 0.0, 1.0]),
             sot_thickness: plan.sot_thickness.unwrap_or(1.0e-9),
+            sot_active_mask: sot_active_mask_flat
+                .as_ref()
+                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+            sot_active_mask_len: sot_active_mask_flat
+                .as_ref()
+                .map_or(0, |mask| mask.len() as u64),
 
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -2195,6 +2235,30 @@ mod tests {
         CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, LlgConfig,
         MaterialParameters, TimeIntegrator, UniaxialAnisotropyConfig,
     };
+
+    #[test]
+    fn prescribed_sot_formula_mapping_preserves_legacy_and_selects_v1_explicitly() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        assert_eq!(
+            ffi_prescribed_sot_formula(&plan).unwrap(),
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0
+        );
+
+        plan.sot_formula_version = Some("prescribed_sot.legacy_fullmag.v0".to_string());
+        assert_eq!(
+            ffi_prescribed_sot_formula(&plan).unwrap(),
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0
+        );
+
+        plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        assert_eq!(
+            ffi_prescribed_sot_formula(&plan).unwrap(),
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1
+        );
+
+        plan.sot_formula_version = Some("prescribed_sot.unknown".to_string());
+        assert!(ffi_prescribed_sot_formula(&plan).is_err());
+    }
     use fullmag_ir::{
         AxisBoundary, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
         FdmMaterialIR, FdmPeriodicityIR, FdmPlanIR, GridDimensions, IntegratorChoice,
@@ -3677,7 +3741,23 @@ mod tests {
 
 #[cfg(test)]
 mod exact_metric_contract_tests {
-    use super::validate_native_step_metrics;
+    use super::{ensure_cuda_slonczewski_supported, validate_native_step_metrics};
+
+    #[test]
+    fn canonical_slonczewski_fails_before_native_cuda_construction() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+        plan.current_density = Some([0.0, 0.0, 7.0e11]);
+        plan.stt_degree = Some(0.6);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.7);
+
+        let error = ensure_cuda_slonczewski_supported(&plan)
+            .expect_err("canonical Slonczewski must not reach the legacy CUDA descriptor");
+        assert!(error.message.contains("slonczewski.fullmag.v2"));
+        assert!(error.message.contains("CUDA"));
+        assert!(error.message.contains("target mask"));
+    }
 
     #[test]
     fn fdm_native_exact_torque_value_is_independent_of_rhs_norm() {

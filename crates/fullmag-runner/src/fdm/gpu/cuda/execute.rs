@@ -152,6 +152,7 @@ pub(crate) fn execute_cuda_fdm(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
+                        coupled_checkpoint: None,
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
@@ -315,6 +316,7 @@ pub(crate) fn execute_cuda_fdm(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
+                        coupled_checkpoint: None,
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
@@ -409,6 +411,7 @@ pub(crate) fn execute_cuda_fdm(
                     None
                 };
                 let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: None,
                     stats: sampled_stats.clone(),
                     grid: live.grid,
                     fem_mesh_generation_id: None,

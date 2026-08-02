@@ -6,6 +6,13 @@
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
+> **Normative reconciliation (2026-07-15).** This note preserves the
+> implemented, source-count-capped midpoint bootstrap. The production M1 FDM
+> target in 0980 is a conservative face-to-cell reconstruction of the same
+> signed `J_charge` followed by a cell-integrated antisymmetric open-boundary
+> FFT kernel with versioned padding/crop/precision. Executability of this
+> midpoint path is not validation of the target FFT solver or of solved SHE.
+
 ## 1. Problem statement
 
 After `0850`, native FEM can execute general
@@ -82,6 +89,7 @@ infinite-cylinder reduction instead of this midpoint fallback.
 5. Cylindrical exact lowering still wins whenever applicable.
 6. The added Oersted field enters FDM execution as a planner-resolved per-cell field, not as a new public authoring construct.
 7. The current public FDM planner rejects this generalized midpoint path above a finite active-source-cell threshold, because the bootstrap realization is explicitly `O(N^2)` in planner cost.
+8. A globally closed source circuit or explicit return-path extension is required by the canonical contract; a locally conservative truncated conductor alone is insufficient.
 
 ## 3. Numerical interpretation
 

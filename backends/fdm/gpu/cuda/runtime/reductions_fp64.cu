@@ -840,7 +840,7 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         src,
         ctx.adaptive_policy_scratch,
         dt,
-        1.0,
+        ctx.adaptive_atol > 0.0 ? ctx.adaptive_atol : 1.0,
         ctx.adaptive_dt_min,
         ctx.adaptive_dt_max,
         ctx.adaptive_safety,
@@ -1127,7 +1127,7 @@ double reduce_external_energy_fp64(Context &ctx) {
         oe_x,
         oe_y,
         oe_z,
-        oersted_field_scale(ctx));
+        oersted_field_scale(ctx, ctx.current_time));
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 
@@ -1156,7 +1156,7 @@ double reduce_external_energy_fp32(Context &ctx) {
         oe_x,
         oe_y,
         oe_z,
-        oersted_field_scale(ctx));
+        oersted_field_scale(ctx, ctx.current_time));
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 

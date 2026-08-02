@@ -156,6 +156,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -233,6 +234,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -385,6 +387,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -443,6 +446,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),

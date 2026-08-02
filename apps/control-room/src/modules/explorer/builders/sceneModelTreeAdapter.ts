@@ -1,5 +1,6 @@
 import type {
   CouplingListResource,
+  CurrentTransportListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
   MeshSharedDomainManifestResource,
@@ -7,8 +8,18 @@ import type {
   RegionListResource,
   SceneResource,
   StageExecutionResource,
+  SpinTransportListResource,
+  SpinInterfaceListResource,
+  SpinTorqueListResource,
+  OerstedFieldListResource,
 } from "@/kernel/api/apiTypes";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  isKnownCurrentTransport,
+  isKnownSpinTransport,
+  transportIdentity,
+} from "@/shared/domain/physics/transportRecognition";
+import { isUnsupportedSpinAuthoringResource } from "@/shared/domain/physics/spinAuthoringRecognition";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
@@ -44,10 +55,15 @@ type SceneMaterialParameterAssignment = NonNullable<
 
 interface ModelTreeResourceInputs {
   couplings?: CouplingListResource | null;
+  currentTransports?: CurrentTransportListResource | null;
+  meshManifest?: MeshSharedDomainManifestResource | null;
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
   regionMemberships?: readonly MeshRegionMembershipResource[] | null;
-  meshManifest?: MeshSharedDomainManifestResource | null;
+  spinTransports?: SpinTransportListResource | null;
+  spinInterfaces?: SpinInterfaceListResource | null;
+  spinTorques?: SpinTorqueListResource | null;
+  oerstedFields?: OerstedFieldListResource | null;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -96,6 +112,45 @@ export function modelTreeSnapshotFromScene(
         }, [])
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
+    currentTransports: (resources.currentTransports?.items ?? []).map((item, index) => {
+      const id = transportIdentity("current_transport", item);
+      return {
+        id,
+        index,
+        label: id ?? `Unknown current transport ${index + 1}`,
+        model: "model" in item && typeof item.model === "string" ? item.model : null,
+        supported: isKnownCurrentTransport(item),
+      };
+    }),
+    spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => {
+      const id = transportIdentity("spin_transport", item);
+      return {
+      currentSourceId: "current_source_id" in item && typeof item.current_source_id === "string" ? item.current_source_id : null,
+      id,
+      index,
+      label: id ?? `Unknown spin transport ${index + 1}`,
+      mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
+      supported: isKnownSpinTransport(item),
+      };
+    }),
+    spinInterfaces: (resources.spinInterfaces?.items ?? []).map((item, index) => ({
+      id: item.interface_id ?? null,
+      index,
+      known: item.known,
+      ownerId: item.owner_spin_transport_id,
+    })),
+    spinTorques: (resources.spinTorques?.items ?? []).map((item, index) => ({
+      id: "id" in item && typeof item.id === "string" && item.id.trim() ? item.id : null,
+      index,
+      kind: "kind" in item && typeof item.kind === "string" ? item.kind : null,
+      supported: !isUnsupportedSpinAuthoringResource("spin_torque", item),
+    })),
+    oerstedFields: (resources.oerstedFields?.items ?? []).map((item, index) => ({
+      id: "id" in item && typeof item.id === "string" && item.id.trim() ? item.id : null,
+      index,
+      kind: "kind" in item && typeof item.kind === "string" ? item.kind : null,
+      supported: !isUnsupportedSpinAuthoringResource("oersted_field", item),
+    })),
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };

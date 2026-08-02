@@ -17,7 +17,7 @@ namespace fdm {
 // External declarations — fp32 variants
 extern void launch_exchange_field_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
-extern void launch_effective_field_fp32(Context &ctx);
+extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
@@ -84,10 +84,8 @@ __global__ void rk23_error_fp32_kernel(
     const float * __restrict__ k2x, const float * __restrict__ k2y, const float * __restrict__ k2z,
     const float * __restrict__ k3x, const float * __restrict__ k3y, const float * __restrict__ k3z,
     const float * __restrict__ k4x, const float * __restrict__ k4y, const float * __restrict__ k4z,
-    const float * __restrict__ m0x, const float * __restrict__ m0y, const float * __restrict__ m0z,
-    const float * __restrict__ m1x, const float * __restrict__ m1y, const float * __restrict__ m1z,
     double * __restrict__ error_sq,
-    int n, double dt, double atol, double rtol)
+    int n, double dt)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -95,10 +93,7 @@ __global__ void rk23_error_fp32_kernel(
     double ex = dt * (E1*(double)k1x[idx] + E2*(double)k2x[idx] + E3*(double)k3x[idx] + E4*(double)k4x[idx]);
     double ey = dt * (E1*(double)k1y[idx] + E2*(double)k2y[idx] + E3*(double)k3y[idx] + E4*(double)k4y[idx]);
     double ez = dt * (E1*(double)k1z[idx] + E2*(double)k2z[idx] + E3*(double)k3z[idx] + E4*(double)k4z[idx]);
-    double m0_norm = sqrt((double)m0x[idx]*m0x[idx] + (double)m0y[idx]*m0y[idx] + (double)m0z[idx]*m0z[idx]);
-    double m1_norm = sqrt((double)m1x[idx]*m1x[idx] + (double)m1y[idx]*m1y[idx] + (double)m1z[idx]*m1z[idx]);
-    double scale = atol + rtol * fmax(m0_norm, m1_norm);
-    error_sq[idx] = (ex*ex + ey*ey + ez*ez) / (scale * scale);
+    error_sq[idx] = ex*ex + ey*ey + ez*ez;
 }
 
 /* ── Helpers ── */
@@ -111,7 +106,7 @@ static void copy_field_d2d_fp32(DeviceVectorField &dst, const DeviceVectorField 
 }
 
 static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, float gamma_bar, float alpha)
+    int n, int grid, float gamma_bar, float alpha, double evaluation_time)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp32(ctx);
@@ -127,7 +122,7 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
             return false;
         }
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, evaluation_time);
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;
@@ -158,22 +153,22 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float alpha_f = static_cast<float>(ctx.alpha);
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f = static_cast<float>(dt);
+    const double step_start_time = ctx.current_time;
 
     const float A21 = 0.5f;
     const float A32 = 0.75f;
     const float B1 = 2.0f/9.0f, B2 = 1.0f/3.0f, B3 = 4.0f/9.0f;
-    const bool fsal_valid_before_step = ctx.fsal_valid;
 
     copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
-        ctx.current_dt = dt;
         dt_f = static_cast<float>(dt);
 
         if (ctx.fsal_valid) {
             copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
-            if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f)) return;
+            if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
+                                       step_start_time)) return;
         }
         if (abort_step_from_tmp(ctx)) return;
 
@@ -183,7 +178,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k1.x), static_cast<const float*>(ctx.k1.y), static_cast<const float*>(ctx.k1.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A21);
-        if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + static_cast<double>(A21) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 3
@@ -192,7 +188,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k2.x), static_cast<const float*>(ctx.k2.y), static_cast<const float*>(ctx.k2.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A32);
-        if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + static_cast<double>(A32) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // 3rd-order solution
@@ -218,8 +215,9 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             return;
         }
 
-        // FSAL: k4 = RHS(y3), adaptive only
-        if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f)) return;
+        // FSAL: k4 = RHS(y3)
+        if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Error estimate (fp64 accumulators)
@@ -228,21 +226,9 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k2.x), static_cast<const float*>(ctx.k2.y), static_cast<const float*>(ctx.k2.z),
             static_cast<const float*>(ctx.k3.x), static_cast<const float*>(ctx.k3.y), static_cast<const float*>(ctx.k3.z),
             static_cast<const float*>(ctx.k_fsal.x), static_cast<const float*>(ctx.k_fsal.y), static_cast<const float*>(ctx.k_fsal.z),
-            static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
-            static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-            ctx.reduction_scratch, n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
+            ctx.reduction_scratch, n, dt);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
-
-        if (policy.dt_min_exhausted) {
-            if (fsal_valid_before_step) {
-                copy_field_d2d_fp32(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
-            }
-            ctx.fsal_valid = fsal_valid_before_step;
-            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
-            ctx.last_error = "dt_min_exhausted";
-            return;
-        }
 
         if (policy.accepted) {
             ctx.step_count++;
@@ -289,8 +275,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         dt = policy.dt_candidate;
-        copy_field_d2d_fp32(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
-        ctx.fsal_valid = true;
+        ctx.fsal_valid = false;
         copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
     }
 }

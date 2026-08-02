@@ -10,6 +10,12 @@ set(FULLMAG_EXTERNAL_FDM_LIB_DIR "" CACHE PATH "Use an externally built fullmag_
 set(FULLMAG_BACKENDS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../backends" CACHE PATH "Root containing Fullmag compiled backend sources")
 
 if(FULLMAG_ENABLE_CUDA)
+    # Keep managed/container builds reproducible even when NVCC cannot infer a
+    # host GPU architecture during configure. Individual targets may narrow
+    # this list, but every CUDA target must start with a non-empty property.
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES "80;86;89;90")
+    endif()
     include(CheckLanguage)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)

@@ -1065,4 +1065,77 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it("selects a spin transport as its own semantic resource", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:physics:spin-transports:spin",
+      kind: "physics.spin-transport",
+      label: "spin",
+      parentId: "model:physics:spin-transports",
+      spinTransportId: "spin",
+      spinTransportIndex: 0,
+    }, "explorer");
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "physics.spin-transport",
+      nodeId: "model:physics:spin-transports:spin",
+      spinTransportId: "spin",
+      spinTransportIndex: 0,
+      type: "spin-transport",
+    });
+  });
+
+  it("selects a current transport record with stable identity", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      currentTransportId: "charge",
+      id: "model:physics:current-transports:id:charge",
+      kind: "physics.current-transport",
+      label: "charge",
+      parentId: "model:physics:current-transports",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportId: "charge",
+      kind: "physics.current-transport",
+      nodeId: "model:physics:current-transports:id:charge",
+      type: "current-transport",
+    });
+  });
+
+  it("keeps separate id-less current transport records positionally selectable", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      currentTransportIndex: 1,
+      id: "model:physics:current-transports:position:1",
+      kind: "physics.current-transport",
+      label: "Unknown current transport 2",
+      parentId: "model:physics:current-transports",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportIndex: 1,
+      kind: "physics.current-transport",
+      nodeId: "model:physics:current-transports:position:1",
+      type: "current-transport",
+    });
+  });
+
+  it("keeps an id-less spin transport positionally selectable", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:physics:spin-transports:position:2",
+      kind: "physics.spin-transport",
+      label: "Unknown spin transport 3",
+      parentId: "model:physics:spin-transports",
+      spinTransportIndex: 2,
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "physics.spin-transport",
+      nodeId: "model:physics:spin-transports:position:2",
+      spinTransportIndex: 2,
+      type: "spin-transport",
+    });
+  });
 });

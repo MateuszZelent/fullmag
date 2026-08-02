@@ -18,7 +18,7 @@ namespace fdm {
 // External declarations
 extern void launch_exchange_field_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
-extern void launch_effective_field_fp64(Context &ctx);
+extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
@@ -135,10 +135,9 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
     int grid = (n + 255) / 256;
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
-
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, ctx.current_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp64(ctx);
@@ -195,6 +194,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    const double step_start_time = ctx.current_time;
 
     // Check for dt change — restart if > 10% different
     if (ctx.abm_last_dt > 0.0 && fabs(dt - ctx.abm_last_dt) / ctx.abm_last_dt > 0.1) {
@@ -212,7 +212,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         // k1 = RHS(m)
         if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx);
+        launch_effective_field_fp64(ctx, step_start_time);
         if (abort_step_from_tmp(ctx, false)) return;
 
         llg_rhs_fp64_kernel<<<grid, 256>>>(
@@ -246,7 +246,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         // k2 = RHS(m_pred)
         if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx);
+        launch_effective_field_fp64(ctx, step_start_time + dt);
         if (abort_step_from_tmp(ctx, false)) return;
 
         llg_rhs_fp64_kernel<<<grid, 256>>>(
@@ -286,7 +286,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         // Compute RHS at accepted point and store in history
         if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx);
+        launch_effective_field_fp64(ctx, ctx.current_time);
 
         // Rotate history, then store new f_n
         abm3_rotate_history(ctx, ctx.cell_count);
@@ -343,7 +343,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     // Evaluate RHS at predicted point (the ONLY new RHS eval)
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, step_start_time + dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
     llg_rhs_fp64_kernel<<<grid, 256>>>(

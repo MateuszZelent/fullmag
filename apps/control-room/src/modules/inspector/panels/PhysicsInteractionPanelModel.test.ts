@@ -127,7 +127,7 @@ describe("PhysicsInteractionPanelModel", () => {
       }),
     ).toEqual({
       error:
-        "Regional field sources need a dedicated source/current-module authoring resource before control-room edits are safe.",
+        "Regional field source is not writable from the current control-room authoring surface.",
     });
   });
 

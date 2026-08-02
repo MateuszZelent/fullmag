@@ -75,8 +75,16 @@ type ExplorerNodeKind =
   | "visualizations-2d.plot"
   | "physics.couplings"
   | "physics.coupling"
-  | "physics.field-drives"
-  | "physics.field-drive"
+  | "physics.current-transports"
+  | "physics.current-transport"
+  | "physics.spin-transports"
+  | "physics.spin-transport"
+  | "physics.spin-interfaces"
+  | "physics.spin-interface"
+  | "physics.spin-torques"
+  | "physics.spin-torque"
+  | "physics.oersted-fields"
+  | "physics.oersted-field"
   | "study.root"
   | "study.execution"
   | "study.recovery"
@@ -284,7 +292,17 @@ export interface ExplorerNode {
   objectId?: string;
   observableId?: string;
   couplingId?: string;
-  fieldDriveId?: string;
+  currentTransportId?: string;
+  currentTransportIndex?: number;
+  spinTransportId?: string;
+  spinTransportIndex?: number;
+  spinInterfaceId?: string;
+  spinInterfaceIndex?: number;
+  spinInterfaceOwnerId?: string;
+  spinTorqueId?: string;
+  spinTorqueIndex?: number;
+  oerstedFieldId?: string;
+  oerstedFieldIndex?: number;
   regionId?: string;
   resourceRef?: string;
   tableId?: string;
@@ -405,6 +423,42 @@ export interface ModelTreeSnapshot {
   objects?: readonly ModelTreeObjectSnapshot[];
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
   study?: ModelTreeStudySnapshot | null;
+  currentTransports?: readonly ModelTreeCurrentTransportSnapshot[];
+  spinTransports?: readonly ModelTreeSpinTransportSnapshot[];
+  spinInterfaces?: readonly ModelTreeSpinInterfaceSnapshot[];
+  spinTorques?: readonly ModelTreeAuthoredSourceSnapshot[];
+  oerstedFields?: readonly ModelTreeAuthoredSourceSnapshot[];
+}
+
+export interface ModelTreeCurrentTransportSnapshot {
+  id: string | null;
+  index: number;
+  label: string;
+  model: string | null;
+  supported: boolean;
+}
+
+export interface ModelTreeSpinTransportSnapshot {
+  currentSourceId: string | null;
+  id: string | null;
+  index: number;
+  label: string;
+  mode: string | null;
+  supported: boolean;
+}
+
+export interface ModelTreeSpinInterfaceSnapshot {
+  id: string | null;
+  index: number;
+  known: boolean;
+  ownerId: string;
+}
+
+export interface ModelTreeAuthoredSourceSnapshot {
+  id: string | null;
+  index: number;
+  kind: string | null;
+  supported: boolean;
 }
 
 export interface ModelTreeCrossSectionSnapshot {

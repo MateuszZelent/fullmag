@@ -31,15 +31,43 @@ def _base_problem(**kwargs) -> fm.Problem:
 
 
 class CurrentTransportTests(unittest.TestCase):
-    def test_legacy_spin_torque_normalization_survives_problem_replace(self) -> None:
-        torque = fm.ZhangLiSTT(current_density=(8.0e12, 0.0, 0.0))
-        problem = _base_problem(spin_torque=torque)
+    def test_ohmic_poisson_serializes_complete_charge_contract(self) -> None:
+        conductor = fm.RegionRef("layer")
+        x_min = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
+        x_max = fm.SurfaceRef("layer", "x_max", (1.0, 0.0, 0.0))
+        transport = fm.CurrentTransport(
+            name="charge",
+            model="ohmic_poisson",
+            domain=[conductor],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    conductor,
+                    fm.ChargeTransportMaterial(sigma_Spm=5.8e7),
+                )
+            ],
+            boundaries=[
+                fm.VoltageElectrode("ground", [x_min], potential_V=0.0),
+                fm.VoltageElectrode("drive", [x_max], potential_V=0.1),
+            ],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(relative_tolerance=1.0e-10),
+        )
 
-        replaced = replace(problem, study=problem.study)
+        ir = transport.to_ir()
+        self.assertEqual(ir["domain"], [{"object_id": "layer"}])
+        self.assertEqual(ir["materials"][0]["material"]["sigma_Spm"], 5.8e7)  # type: ignore[index]
+        self.assertEqual(ir["boundaries"][0]["kind"], "voltage_electrode")  # type: ignore[index]
+        self.assertEqual(ir["gauge"], "dirichlet_reference")
+        self.assertEqual(ir["solver"]["engine"], "cg")  # type: ignore[index]
 
-        self.assertIsNone(replaced.spin_torque)
-        self.assertEqual(replaced.spin_torques, (torque,))
-        self.assertEqual(replaced.to_ir()["spin_torque_modules"][0]["kind"], "zhang_li")  # type: ignore[index]
+    def test_ohmic_poisson_rejects_ambiguous_legacy_definition(self) -> None:
+        with self.assertRaisesRegex(ValueError, "complete charge contract"):
+            fm.CurrentTransport(
+                name="charge",
+                model="ohmic_poisson",
+                solve_region="layer",
+                conductivity_s_per_m=5.8e7,
+            )
 
     def test_prescribed_density_serializes_to_ir(self) -> None:
         transport = fm.CurrentTransport(

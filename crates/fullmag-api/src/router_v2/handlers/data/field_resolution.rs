@@ -96,6 +96,35 @@ pub(crate) fn json_field_payload_signature(raw: &serde_json::Value) -> (usize, u
     (count, hash)
 }
 
+pub(crate) fn strict_flat_json_field_values(raw: &serde_json::Value) -> Option<Vec<f64>> {
+    raw.get("values")?
+        .as_array()?
+        .iter()
+        .map(|value| value.as_f64().filter(|value| value.is_finite()))
+        .collect()
+}
+
+#[cfg(test)]
+mod strict_json_tests {
+    use super::strict_flat_json_field_values;
+
+    #[test]
+    fn strict_flat_field_values_reject_non_numbers_nulls_and_nested_arrays() {
+        for raw in [
+            serde_json::json!({"values": [1.0, "2.0"]}),
+            serde_json::json!({"values": [1.0, null]}),
+            serde_json::json!({"values": [[1.0], 2.0]}),
+        ] {
+            assert!(strict_flat_json_field_values(&raw).is_none(), "{raw}");
+        }
+        assert_eq!(
+            strict_flat_json_field_values(&serde_json::json!({"values": [1.0, -2.0]})),
+            Some(vec![1.0, -2.0])
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(r#"{"values":[NaN]}"#).is_err());
+    }
+}
+
 pub(crate) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
     raw.get("layout")
         .and_then(|l| l.get("grid_cells"))

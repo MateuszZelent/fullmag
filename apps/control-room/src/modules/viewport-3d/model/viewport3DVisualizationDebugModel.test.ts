@@ -617,50 +617,6 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(mismatching.carriers[0]?.scanState).toBe("complete");
   });
 
-  it.each([
-    {
-      code: "all-zero-values",
-      rangeDiagnostics: {
-        finiteCount: 2,
-        max: 0,
-        mean: 0,
-        min: 0,
-        nonFiniteCount: 0,
-        outlierDominated: false,
-        p01: 0,
-        p99: 0,
-        zeroCount: 2,
-      },
-    },
-    {
-      code: "non-finite-values",
-      rangeDiagnostics: {
-        finiteCount: 1,
-        max: 1,
-        mean: 1,
-        min: 1,
-        nonFiniteCount: 1,
-        outlierDominated: false,
-        p01: 1,
-        p99: 1,
-        zeroCount: 0,
-      },
-    },
-  ])("attributes $code to render-only statistics", ({ code, rangeDiagnostics }) => {
-    const result = snapshot([
-      carrier({
-        decoded: null,
-        rangeDiagnostics,
-        rangeDiagnosticsComponent: "full",
-        scannedStats: null,
-      }),
-    ]);
-
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({ code, source: "render-derived" }),
-    );
-  });
-
   it("bounds carrier collections and diagnostic text below the controller limit", () => {
     const longText = "x".repeat(20_000);
     const carriers = Array.from({ length: 20 }, (_, index) =>

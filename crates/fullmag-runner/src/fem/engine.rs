@@ -67,6 +67,35 @@ pub fn availability() -> GpuAvailability {
     native_availability()
 }
 
+/// Returns the first plan-level reason why the native device-resident explicit
+/// RK path cannot execute `plan`.
+///
+/// Runtime-owned prerequisites such as successful `FemGpuState` allocation,
+/// uploaded geometry, and hypre-device workspace are still checked by the
+/// native `gpu_rk_plan_device_resident` contract before provenance is built.
+pub(crate) fn gpu_rk_plan_preflight_block_reason(plan: &FemPlanIR) -> Option<&'static str> {
+    if let Some(contract) = plan.spin_torque_contract.as_ref() {
+        match contract.formula_version.as_str() {
+            "slonczewski.fullmag.v2" => {
+                return Some("canonical FEM STT formula_version=slonczewski.fullmag.v2 is CPU-only until an identical qualified device realization exists");
+            }
+            "zhang_li.fullmag.v1" => {
+                return Some("canonical FEM STT formula_version=zhang_li.fullmag.v1 is CPU-only until an identical qualified device realization exists");
+            }
+            _ => {}
+        }
+    }
+    if !plan.enable_exchange {
+        return Some("GPU RK device-resident path requires enable_exchange=true");
+    }
+    if matches!(plan.integrator, Some(fullmag_ir::IntegratorChoice::Abm3)) {
+        return Some(
+            "GPU RK device-resident path currently supports Heun, RK4, RK23, and RK45 only",
+        );
+    }
+    None
+}
+
 // ── Engine resolution ─────────────────────────────────────────────────────────
 
 /// Reads `FULLMAG_FEM_EXECUTION` from the environment and returns the

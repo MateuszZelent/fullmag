@@ -150,6 +150,7 @@ pub(crate) fn execute_direct_minimizer(
                     live_stats.preview_callback_thread_cpu_started_ns =
                         preview_callback_cpu_started;
                     let action = (live.on_step)(StepUpdate {
+                        coupled_checkpoint: None,
                         stats: live_stats,
                         grid: live.grid,
                         fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -328,6 +329,7 @@ pub(crate) fn execute_direct_minimizer(
                 elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
             live_stats.preview_callback_thread_cpu_started_ns = preview_callback_cpu_started;
             let action = (live.on_step)(StepUpdate {
+                coupled_checkpoint: None,
                 stats: live_stats,
                 grid: live.grid,
                 fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -410,7 +412,8 @@ mod tests {
                 && source.contains("current_stats = accepted_stats;\n\n        if let Some(live) = live.as_mut() {")
                 && source.contains("live_stats.field_copy_bytes =\n                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);")
                 && source.contains("live_stats.wall_time_ns = live_stats")
-                && source.contains("let action = (live.on_step)(StepUpdate {\n                stats: live_stats,"),
+                && source.contains("let action = (live.on_step)(StepUpdate {
+            coupled_checkpoint: None,\n                stats: live_stats,"),
             "FEM direct minimizer must publish accepted-step live stats/magnetization with cadence and timing/copy metrics"
         );
     }

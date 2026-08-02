@@ -8,8 +8,9 @@ use crate::{
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
     IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RegionalFieldDriveIR, RelaxStopIR,
-    RelaxationAlgorithmIR, ResolvedPeriodicImagesIR, SeedPolicy, SpinWaveBoundaryConditionIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RelaxStopIR, RelaxationAlgorithmIR,
+    RegionalFieldDriveIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy,
+    SpinWaveBoundaryConditionIR,
     ThermalSeedConfig, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
@@ -447,6 +448,8 @@ pub struct FdmPlanIR {
     pub region_mask: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: FdmMaterialIR,
     pub enable_exchange: bool,
@@ -532,9 +535,21 @@ pub struct FdmPlanIR {
     /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_fixed_layer_position: Option<String>,
+    /// Versioned Slonczewski evaluator identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_formula_version: Option<String>,
+    /// Independent signed-current stack normal for canonical Slonczewski v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_stack_normal: Option<[f64; 3]>,
+    /// Canonical authored target retained in the execution plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_target: Option<RegionRefIR>,
+    /// Resolved FDM cells selected by the canonical target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_active_mask: Option<Vec<bool>>,
 
     // ── Spin-Orbit Torque (SOT) ────────────────────────
-    /// Charge current density magnitude for SOT |Je| [A/m²]
+    /// Prescribed-SOT source current density [A/m²]: signed for v1, raw legacy scalar for v0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sot_current_density: Option<f64>,
     /// Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH)
@@ -549,6 +564,21 @@ pub struct FdmPlanIR {
     /// FM layer thickness t_F [m] (for SOT amplitude)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sot_thickness: Option<f64>,
+    /// Versioned prescribed-SOT formula selected by the planner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_formula_version: Option<String>,
+    /// Authored target retained for provenance and runtime inspection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_target: Option<crate::RegionRefIR>,
+    /// Per-cell target mask for prescribed SOT, intersected with `active_mask`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_active_mask: Option<Vec<bool>>,
+    /// Exact authored dimensionless source envelope; source amplitude remains in `sot_current_density`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_envelope: Option<crate::TimeEnvelopeIR>,
+    /// Exact canonical v1 authored drive identity and axes retained for provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_drive: Option<crate::PrescribedSotV1DriveIR>,
 
     // ── Oersted field (cylindrical conductor) ──
     /// Whether to include the Oersted field from a cylindrical conductor.
@@ -752,6 +782,25 @@ pub struct FemRegionMaterialIR {
     pub object_id: String,
     pub material: MaterialIR,
     pub element_marker: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemSpinTorquePlanIR {
+    pub formula_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<RegionRefIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lande_g: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_node_mask: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_element_mask: Option<Vec<bool>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -980,6 +1029,8 @@ pub struct FemPlanIR {
     pub time_stage: TimeStageContextIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
     pub exchange_bc: ExchangeBoundaryCondition,
@@ -1036,6 +1087,9 @@ pub struct FemPlanIR {
     /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_fixed_layer_position: Option<String>,
+    /// Versioned FEM spin-torque formula, target and discrete realization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spin_torque_contract: Option<FemSpinTorquePlanIR>,
 
     /// Oersted field from cylindrical conductor
     #[serde(default)]

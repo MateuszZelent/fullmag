@@ -160,6 +160,26 @@ pub struct CapabilityMap {
     pub preview_2d: bool,
     pub preview_3d: bool,
     pub algorithms_available: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_authoring: Option<TransportAuthoringCapabilityMap>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TransportAuthoringCapability {
+    pub status: String,
+    pub authoring_allowed: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TransportAuthoringCapabilityMap {
+    pub contract_version: String,
+    pub m1_one_way_steady: TransportAuthoringCapability,
+    pub m2_reciprocal: TransportAuthoringCapability,
+    pub m3_transient: TransportAuthoringCapability,
+    pub gpu: TransportAuthoringCapability,
+    pub single_precision: TransportAuthoringCapability,
+    pub hybrid: TransportAuthoringCapability,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

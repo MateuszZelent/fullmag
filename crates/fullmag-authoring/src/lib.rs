@@ -5,6 +5,7 @@ mod builder;
 mod geometry;
 mod region_revisions;
 mod scene;
+mod spin_transport;
 mod validation;
 
 pub use adapters::{
@@ -17,4 +18,5 @@ pub use builder::*;
 pub use geometry::*;
 pub use region_revisions::*;
 pub use scene::*;
+pub use spin_transport::*;
 pub use validation::{validate_scene_document, SceneDocumentValidationError};

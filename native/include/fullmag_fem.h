@@ -37,6 +37,26 @@ typedef enum {
     FULLMAG_FEM_HOST_THREAD_POLICY_AUTO_UNCAPPED = 5,
 } fullmag_fem_host_thread_policy_reason;
 
+typedef enum {
+    FULLMAG_FEM_STT_FORMULA_LEGACY_FULLMAG_V0 = 0,
+    /* Historical canonical evaluator; read-only provenance only. */
+    FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1 = 1,
+    FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1 = 2,
+    /* Corrected canonical Slonczewski evaluator (Omega_J uses hbar/e). */
+    FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2 = 3,
+} fullmag_fem_stt_formula_version;
+
+typedef enum {
+    FULLMAG_FEM_STT_REALIZATION_NONE = 0,
+    FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1 = 1,
+    FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_INTERFACE_FLUX_V1 = 2,
+} fullmag_fem_stt_realization_version;
+
+typedef enum {
+    FULLMAG_FEM_STT_OPERATOR_NONE = 0,
+    FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1 = 1,
+} fullmag_fem_stt_operator_version;
+
 typedef struct {
     double atol;
     double rtol;
@@ -480,7 +500,6 @@ typedef struct {
     double                     stt_epsilon_prime;
     double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = geometry-derived */
     double                     stt_current_sign;         /* +1 top, -1 bottom for Slonczewski */
-
     /* Oersted field from cylindrical conductor */
     int                        has_oersted_cylinder;
     double                     oersted_current;
@@ -526,10 +545,115 @@ typedef struct {
        precession_enabled=1 = full Gilbert LLG, 0 = pure damping relaxation. */
     int                        has_precession_enabled;
     int                        precession_enabled;
+
+    /* Time-aware regional field drives. These fields are part of the
+       established plan ABI prefix and must remain before later extensions. */
     const fullmag_fem_regional_field_drive_desc *regional_field_drives;
     uint64_t                   regional_field_drive_count;
     double                     stage_start_time_s;
+
+    /* Append-only versioned STT extension. Keep after the established plan prefix. */
+    uint32_t                   stt_formula_version;
+    uint32_t                   stt_realization_version;
+    uint32_t                   stt_operator_version;
+    double                     stt_stack_normal[3];
+    double                     stt_lande_g;
+    const uint8_t             *stt_active_node_mask;
+    uint64_t                   stt_active_node_mask_len;
+    const uint8_t             *stt_active_element_mask;
+    uint64_t                   stt_active_element_mask_len;
 } fullmag_fem_plan_desc;
+
+/*
+ * Standalone M1 steady charge/spin transport ABI.
+ *
+ * This is intentionally separate from fullmag_fem_plan_desc and Context: the
+ * transport workflow owns its MFEM spaces, operators, fields and diagnostics.
+ * Future revisions append fields after the v1 tails and bump abi_version.
+ */
+#define FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION 1u
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_CPU_DOUBLE = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE = 2,
+} fullmag_fem_steady_transport_execution_lane;
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_TRANSPARENT_CONFORMING_H1 = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_MIXING_BROKEN_H1 = 2,
+} fullmag_fem_steady_transport_interface_model;
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL = 2,
+} fullmag_fem_steady_transport_charge_gauge;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_execution_lane execution_lane;
+    fullmag_fem_steady_transport_interface_model interface_model;
+    fullmag_fem_steady_transport_charge_gauge charge_gauge;
+    const char *constitutive_version;
+    const char *operator_version;
+    const char *physical_residual_version;
+    fullmag_fem_mesh_desc mesh;
+    const double *charge_conductivity_spm_per_element;
+    uint64_t charge_conductivity_spm_per_element_len;
+    const double *magnetization_xyz;
+    uint64_t magnetization_xyz_len;
+    double sigma_s_spm;
+    double polarization_p;
+    double theta_sh;
+    double lambda_sf_m;
+    int has_lambda_j;
+    double lambda_j_m;
+    int has_lambda_phi;
+    double lambda_phi_m;
+    double gamma_e_per_ts;
+    double saturation_magnetization_apm;
+    double relative_tolerance;
+    double absolute_tolerance;
+    uint32_t maximum_iterations;
+    const uint32_t *charge_dirichlet_boundary_attributes;
+    const double *charge_dirichlet_values_v;
+    uint64_t charge_dirichlet_count;
+    const uint32_t *spin_dirichlet_boundary_attributes;
+    const double *spin_dirichlet_values_v;
+    uint64_t spin_dirichlet_count;
+} fullmag_fem_steady_transport_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    double *electric_potential_v;
+    uint64_t electric_potential_v_len;
+    double *charge_current_density_xyz_apm2;
+    uint64_t charge_current_density_xyz_apm2_len;
+    double *spin_potential_xyz_v;
+    uint64_t spin_potential_xyz_v_len;
+    double *spin_current_tensor_row_major_qia_apm2;
+    uint64_t spin_current_tensor_row_major_qia_apm2_len;
+    double *torque_xyz_per_s;
+    uint64_t torque_xyz_len;
+    int charge_converged;
+    uint32_t charge_iterations;
+    double charge_relative_residual;
+    double net_boundary_current_a;
+    double current_density_volume_average_apm2[3];
+    int spin_converged;
+    uint32_t spin_iterations;
+    double spin_relative_residual;
+    double boundary_spin_flux_a[3];
+    double reaction_integral_a[3];
+    double angular_momentum_balance_apm2[3];
+    double torque_volume_average_per_s[3];
+    double torque_l2_per_s;
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_steady_transport_result_v1;
 
 typedef struct {
     uint64_t step;
@@ -1353,6 +1477,10 @@ typedef struct {
 } fullmag_fem_snapshot_desc;
 
 int fullmag_fem_is_available(void);
+int fullmag_fem_solve_steady_transport_v1(
+    const fullmag_fem_steady_transport_request_v1 *request,
+    fullmag_fem_steady_transport_result_v1 *result
+);
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 int fullmag_fem_get_frequency_domain_availability_info(
     const fullmag_fem_frequency_domain_availability_request *request,

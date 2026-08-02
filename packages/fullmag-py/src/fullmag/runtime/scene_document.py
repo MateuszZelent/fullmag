@@ -1,6 +1,45 @@
 from __future__ import annotations
 
+import copy
+import math
+from collections.abc import Mapping, Sequence
 from typing import Any
+
+from fullmag.model.current_transport import (
+    ChargeInsulating,
+    ChargePotentialGauge,
+    ChargeSolverPolicy,
+    ChargeTransportMaterial,
+    ChargeTransportMaterialAssignment,
+    CurrentTransport,
+    NormalCurrentElectrode,
+    VoltageElectrode,
+)
+from fullmag.model.energy import (
+    Constant as OerstedConstant,
+    OerstedCylinder,
+    OerstedField,
+    PiecewiseLinear as OerstedPiecewiseLinear,
+    Pulse as OerstedPulse,
+    SincPulse as OerstedSincPulse,
+    Sinusoidal as OerstedSinusoidal,
+)
+from fullmag.model.spin_torque import (
+    ConstantEnvelope,
+    PiecewiseLinearEnvelope,
+    PrescribedSpinOrbitTorque,
+    PulseEnvelope,
+    RegionRef,
+    SignedScalarDrive,
+    SincEnvelope,
+    SinusoidalEnvelope,
+    SlonczewskiSTT,
+    TabulatedEnvelope,
+    TimeEnvelopePoint,
+    VectorCurrentDrive,
+    ZhangLiSTT,
+)
+from fullmag.model.spin_transport import SurfaceRef
 
 
 def _material_id(name: str) -> str:
@@ -38,6 +77,492 @@ def _default_texture_transform() -> dict[str, object]:
         "scale": _one_vec3(),
         "pivot": _zero_vec3(),
     }
+
+
+def _copy_present_collection(
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    key: str,
+) -> None:
+    if key not in source:
+        return
+    value = source[key]
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list when present")
+    destination[key] = list(value)
+
+
+def _mapping(value: object, context: str) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context} must be an object")
+    return dict(value)
+
+
+def _finite_number(value: object, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{context} must be a finite number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{context} must be a finite number")
+    return result
+
+
+def _positive_integer(value: object, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{context} must be a positive integer")
+    return value
+
+
+def _vec3(value: object, context: str, *, nonzero: bool = False) -> tuple[float, float, float]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 3:
+        raise ValueError(f"{context} must be a three-component vector")
+    result = tuple(_finite_number(component, f"{context}[{index}]") for index, component in enumerate(value))
+    if nonzero and math.hypot(*result) <= 1e-12:
+        raise ValueError(f"{context} must be nonzero")
+    return result  # type: ignore[return-value]
+
+
+def _nonempty_string(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context} must be a non-empty string")
+    return value.strip()
+
+
+def _region_ref(value: object, context: str) -> RegionRef:
+    entry = _mapping(value, context)
+    object_id = _nonempty_string(entry.get("object_id"), f"{context}.object_id")
+    region_id = entry.get("region_id")
+    if region_id is not None:
+        region_id = _nonempty_string(region_id, f"{context}.region_id")
+    return RegionRef(object_id, region_id)
+
+
+def _decode_current_transport(value: object) -> CurrentTransport:
+    entry = _mapping(value, "current_transport")
+    if entry.get("kind") != "current_transport":
+        raise ValueError(f"unsupported current transport kind {entry.get('kind')!r}")
+    current_density = entry.get("current_density")
+    domain_value = entry.get("domain", [])
+    materials_value = entry.get("materials", [])
+    boundaries_value = entry.get("boundaries", [])
+    if not isinstance(domain_value, list):
+        raise ValueError("current_transport.domain must be a list")
+    if not isinstance(materials_value, list):
+        raise ValueError("current_transport.materials must be a list")
+    if not isinstance(boundaries_value, list):
+        raise ValueError("current_transport.boundaries must be a list")
+    domain = [
+        _region_ref(region, f"current_transport.domain[{index}]")
+        for index, region in enumerate(domain_value)
+    ]
+    materials: list[ChargeTransportMaterialAssignment] = []
+    for index, raw_assignment in enumerate(materials_value):
+        assignment = _mapping(raw_assignment, f"current_transport.materials[{index}]")
+        material = _mapping(
+            assignment.get("material"),
+            f"current_transport.materials[{index}].material",
+        )
+        materials.append(
+            ChargeTransportMaterialAssignment(
+                _region_ref(
+                    assignment.get("region"),
+                    f"current_transport.materials[{index}].region",
+                ),
+                ChargeTransportMaterial(
+                    _finite_number(
+                        material.get("sigma_Spm"),
+                        f"current_transport.materials[{index}].material.sigma_Spm",
+                    )
+                ),
+            )
+        )
+
+    boundaries = []
+    for index, raw_boundary in enumerate(boundaries_value):
+        boundary = _mapping(raw_boundary, f"current_transport.boundaries[{index}]")
+        surfaces_value = boundary.get("surfaces")
+        if not isinstance(surfaces_value, list):
+            raise ValueError(f"current_transport.boundaries[{index}].surfaces must be a list")
+        surfaces = []
+        for surface_index, raw_surface in enumerate(surfaces_value):
+            surface = _mapping(
+                raw_surface,
+                f"current_transport.boundaries[{index}].surfaces[{surface_index}]",
+            )
+            surfaces.append(
+                SurfaceRef(
+                    _nonempty_string(
+                        surface.get("object_id"),
+                        f"current_transport.boundaries[{index}].surfaces[{surface_index}].object_id",
+                    ),
+                    _nonempty_string(
+                        surface.get("surface_id"),
+                        f"current_transport.boundaries[{index}].surfaces[{surface_index}].surface_id",
+                    ),
+                    _vec3(
+                        surface.get("orientation"),
+                        f"current_transport.boundaries[{index}].surfaces[{surface_index}].orientation",
+                        nonzero=True,
+                    ),
+                )
+            )
+        boundary_id = _nonempty_string(
+            boundary.get("id"), f"current_transport.boundaries[{index}].id"
+        )
+        kind = boundary.get("kind")
+        if kind == "voltage_electrode":
+            boundaries.append(
+                VoltageElectrode(
+                    boundary_id,
+                    surfaces,
+                    potential_V=_finite_number(
+                        boundary.get("potential_V"),
+                        f"current_transport.boundaries[{index}].potential_V",
+                    ),
+                )
+            )
+        elif kind == "normal_current_electrode":
+            boundaries.append(
+                NormalCurrentElectrode(
+                    boundary_id,
+                    surfaces,
+                    outward_current_density_Apm2=_finite_number(
+                        boundary.get("outward_current_density_Apm2"),
+                        f"current_transport.boundaries[{index}].outward_current_density_Apm2",
+                    ),
+                )
+            )
+        elif kind == "insulating":
+            boundaries.append(ChargeInsulating(boundary_id, surfaces))
+        else:
+            raise ValueError(f"unsupported charge boundary kind {kind!r}")
+
+    gauge_value = entry.get("gauge")
+    solver_value = entry.get("solver")
+    solver = None
+    if solver_value is not None:
+        solver_entry = _mapping(solver_value, "current_transport.solver")
+        linear = _mapping(solver_entry.get("linear"), "current_transport.solver.linear")
+        solver = ChargeSolverPolicy(
+            engine=_nonempty_string(solver_entry.get("engine"), "current_transport.solver.engine"),
+            relative_tolerance=_finite_number(
+                linear.get("relative_tolerance"),
+                "current_transport.solver.linear.relative_tolerance",
+            ),
+            absolute_tolerance=_finite_number(
+                linear.get("absolute_tolerance"),
+                "current_transport.solver.linear.absolute_tolerance",
+            ),
+            max_iterations=_positive_integer(
+                linear.get("max_iterations"),
+                "current_transport.solver.linear.max_iterations",
+            ),
+            physical_residual_version=_nonempty_string(
+                solver_entry.get("physical_residual_version"),
+                "current_transport.solver.physical_residual_version",
+            ),
+            operator_version=_nonempty_string(
+                solver_entry.get("operator_version"),
+                "current_transport.solver.operator_version",
+            ),
+        )
+    return CurrentTransport(
+        name=_nonempty_string(entry.get("name"), "current_transport.name"),
+        model=_nonempty_string(entry.get("model", "prescribed_density"), "current_transport.model"),
+        current_density=(
+            _vec3(current_density, "current_transport.current_density")
+            if current_density is not None
+            else None
+        ),
+        solve_region=(
+            _nonempty_string(entry["solve_region"], "current_transport.solve_region")
+            if entry.get("solve_region") is not None
+            else None
+        ),
+        conductivity_s_per_m=(
+            _finite_number(entry["conductivity_s_per_m"], "current_transport.conductivity_s_per_m")
+            if entry.get("conductivity_s_per_m") is not None
+            else None
+        ),
+        coupling=_nonempty_string(
+            entry.get("coupling", "one_way"), "current_transport.coupling"
+        ),
+        domain=domain,
+        materials=materials,
+        boundaries=boundaries,
+        gauge=(
+            ChargePotentialGauge(
+                _nonempty_string(gauge_value, "current_transport.gauge")
+            )
+            if gauge_value is not None
+            else None
+        ),
+        solver=solver,
+    )
+
+
+def _decode_sot_envelope(value: object) -> object:
+    entry = _mapping(value, "prescribed_sot.drive.envelope")
+    kind = entry.get("kind")
+    if kind == "constant":
+        return ConstantEnvelope(_finite_number(entry.get("value"), "envelope.value"))
+    if kind == "sinusoidal":
+        return SinusoidalEnvelope(
+            _finite_number(entry.get("amplitude"), "envelope.amplitude"),
+            _finite_number(entry.get("frequency_hz"), "envelope.frequency_hz"),
+            phase_rad=_finite_number(entry.get("phase_rad"), "envelope.phase_rad"),
+            offset=_finite_number(entry.get("offset"), "envelope.offset"),
+        )
+    if kind == "pulse":
+        return PulseEnvelope(
+            _finite_number(entry.get("amplitude"), "envelope.amplitude"),
+            _finite_number(entry.get("t_on_s"), "envelope.t_on_s"),
+            _finite_number(entry.get("t_off_s"), "envelope.t_off_s"),
+        )
+    if kind == "piecewise_linear":
+        points = entry.get("points")
+        if not isinstance(points, list):
+            raise ValueError("envelope.points must be a list")
+        return PiecewiseLinearEnvelope(
+            [
+                TimeEnvelopePoint(
+                    _finite_number(_mapping(point, f"envelope.points[{index}]").get("time_s"), f"envelope.points[{index}].time_s"),
+                    _finite_number(_mapping(point, f"envelope.points[{index}]").get("value"), f"envelope.points[{index}].value"),
+                )
+                for index, point in enumerate(points)
+            ]
+        )
+    if kind == "sinc":
+        return SincEnvelope(
+            _finite_number(entry.get("amplitude"), "envelope.amplitude"),
+            center_s=_finite_number(entry.get("center_s"), "envelope.center_s"),
+            bandwidth_hz=_finite_number(entry.get("bandwidth_hz"), "envelope.bandwidth_hz"),
+            offset=_finite_number(entry.get("offset"), "envelope.offset"),
+        )
+    if kind == "tabulated":
+        bandwidth = entry.get("bandwidth_hz")
+        return TabulatedEnvelope(
+            _nonempty_string(entry.get("artifact_ref"), "envelope.artifact_ref"),
+            interpolation=_nonempty_string(entry.get("interpolation"), "envelope.interpolation"),
+            extrapolation=_nonempty_string(entry.get("extrapolation"), "envelope.extrapolation"),
+            bandwidth_hz=(
+                _finite_number(bandwidth, "envelope.bandwidth_hz") if bandwidth is not None else None
+            ),
+        )
+    raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
+
+
+def _decode_prescribed_sot(entry: dict[str, object]) -> PrescribedSpinOrbitTorque:
+    if entry.get("schema_version") != "prescribed_sot.v1":
+        raise ValueError("unsupported prescribed SOT schema_version")
+    formula = entry.get("formula_version")
+    module_id = _nonempty_string(entry.get("id"), "prescribed_sot.id")
+    drive = _mapping(entry.get("drive"), "prescribed_sot.drive")
+    if formula == "prescribed_sot.legacy_fullmag.v0":
+        prefix = "legacy_prescribed_sot_"
+        if not module_id.startswith(prefix) or not module_id[len(prefix):].isdigit():
+            raise ValueError("legacy prescribed SOT id must encode module_index")
+        kind = drive.get("kind")
+        kwargs: dict[str, object] = {}
+        if kind == "legacy_scalar_magnitude":
+            kwargs["raw_charge_current_density_Apm2"] = _finite_number(
+                drive.get("raw_charge_current_density_Apm2"), "prescribed_sot.drive.raw_charge_current_density_Apm2"
+            )
+        elif kind == "legacy_current_source_norm":
+            kwargs["current_source_id"] = _nonempty_string(
+                drive.get("current_source_id"), "prescribed_sot.drive.current_source_id"
+            )
+        else:
+            raise ValueError(f"unsupported legacy prescribed SOT drive kind {kind!r}")
+        return PrescribedSpinOrbitTorque.from_legacy_v0(
+            module_index=int(module_id[len(prefix):]),
+            target=None,
+            raw_spin_polarization=_vec3(entry.get("raw_spin_polarization"), "prescribed_sot.raw_spin_polarization"),
+            xi_dl=_finite_number(entry.get("xi_dl"), "prescribed_sot.xi_dl"),
+            xi_fl=_finite_number(entry.get("xi_fl"), "prescribed_sot.xi_fl"),
+            free_layer_thickness_m=_finite_number(entry.get("free_layer_thickness_m"), "prescribed_sot.free_layer_thickness_m"),
+            compatibility_origin=_mapping(entry.get("compatibility_origin"), "prescribed_sot.compatibility_origin"),
+            **kwargs,  # type: ignore[arg-type]
+        )
+    if formula != "prescribed_sot.fullmag.v1":
+        raise ValueError(f"unsupported prescribed SOT formula_version {formula!r}")
+    drive_kind = drive.get("kind")
+    if drive_kind == "signed_scalar":
+        envelope = drive.get("envelope")
+        decoded_drive = SignedScalarDrive(
+            _finite_number(drive.get("current_density_Apm2"), "prescribed_sot.drive.current_density_Apm2"),
+            _vec3(drive.get("sigma_hat"), "prescribed_sot.drive.sigma_hat", nonzero=True),
+            _decode_sot_envelope(envelope) if envelope is not None else None,  # type: ignore[arg-type]
+        )
+    elif drive_kind == "vector_current_source":
+        decoded_drive = VectorCurrentDrive(
+            _nonempty_string(drive.get("current_source_id"), "prescribed_sot.drive.current_source_id"),
+            _vec3(drive.get("drive_direction"), "prescribed_sot.drive.drive_direction", nonzero=True),
+            _vec3(drive.get("interface_normal"), "prescribed_sot.drive.interface_normal", nonzero=True),
+        )
+    else:
+        raise ValueError(f"unsupported prescribed SOT drive kind {drive_kind!r}")
+    return PrescribedSpinOrbitTorque(
+        module_id,
+        _region_ref(entry.get("target"), "prescribed_sot.target"),
+        decoded_drive,
+        xi_dl=_finite_number(entry.get("xi_dl"), "prescribed_sot.xi_dl"),
+        xi_fl=_finite_number(entry.get("xi_fl"), "prescribed_sot.xi_fl"),
+        free_layer_thickness_m=_finite_number(entry.get("free_layer_thickness_m"), "prescribed_sot.free_layer_thickness_m"),
+    )
+
+
+def _decode_spin_torque(value: object) -> object:
+    entry = _mapping(value, "spin_torque")
+    kind = entry.get("kind")
+    if kind == "prescribed_sot":
+        return _decode_prescribed_sot(entry)
+    if kind not in {"slonczewski", "zhang_li"}:
+        raise ValueError(f"unsupported spin torque kind {kind!r}")
+    density = entry.get("current_density")
+    source = entry.get("current_source")
+    binding: dict[str, object]
+    if (density is None) == (source is None):
+        raise ValueError(f"{kind} requires exactly one current binding")
+    binding = (
+        {"current_density": _vec3(density, f"{kind}.current_density")}
+        if density is not None
+        else {"current_source": _nonempty_string(source, f"{kind}.current_source")}
+    )
+    if kind == "zhang_li":
+        return ZhangLiSTT(
+            degree=_finite_number(entry.get("degree"), "zhang_li.degree"),
+            beta=_finite_number(entry.get("beta"), "zhang_li.beta"),
+            **binding,  # type: ignore[arg-type]
+        )
+    if kind == "slonczewski":
+        formula = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
+        common: dict[str, object] = {
+            **binding,
+            "spin_polarization": _vec3(entry.get("spin_polarization"), "slonczewski.spin_polarization", nonzero=formula in {"slonczewski.fullmag.v2", "slonczewski.fullmag.v1"}),
+            "degree": _finite_number(entry.get("degree"), "slonczewski.degree"),
+            "lambda_asymmetry": _finite_number(entry.get("lambda_asymmetry"), "slonczewski.lambda_asymmetry"),
+            "epsilon_prime": _finite_number(entry.get("epsilon_prime"), "slonczewski.epsilon_prime"),
+        }
+        thickness = entry.get("free_layer_thickness_m")
+        if thickness is not None:
+            common["free_layer_thickness_m"] = _finite_number(thickness, "slonczewski.free_layer_thickness_m")
+        if formula == "slonczewski.fullmag.v2":
+            if entry.get("schema_version") != "slonczewski_torque.v1" or entry.get("realization") != {
+                "kind": "thin_layer_homogenized",
+                "realization_version": "slonczewski_thin_layer_homogenized.v1",
+            }:
+                raise ValueError("unsupported canonical Slonczewski realization")
+            return SlonczewskiSTT(
+                id=_nonempty_string(entry.get("id"), "slonczewski.id"),
+                target=_region_ref(entry.get("target"), "slonczewski.target"),
+                stack_normal=_vec3(entry.get("stack_normal"), "slonczewski.stack_normal", nonzero=True),
+                **common,  # type: ignore[arg-type]
+            )
+        if formula == "slonczewski.fullmag.v1":
+            raise ValueError("slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2")
+        if formula != "slonczewski.legacy_fullmag.v0":
+            raise ValueError(f"unsupported Slonczewski formula_version {formula!r}")
+        return SlonczewskiSTT(
+            fixed_layer_position=_nonempty_string(entry.get("fixed_layer_position", "top"), "slonczewski.fixed_layer_position"),
+            **common,  # type: ignore[arg-type]
+        )
+    raise ValueError(f"unsupported spin torque kind {kind!r}")
+
+
+def _decode_oersted_time_dependence(value: object) -> object:
+    entry = _mapping(value, "oersted_field.time_dependence")
+    kind = entry.get("kind")
+    if kind == "constant":
+        return OerstedConstant()
+    if kind == "sinusoidal":
+        return OerstedSinusoidal(
+            _finite_number(entry.get("frequency_hz"), "time_dependence.frequency_hz"),
+            phase_rad=_finite_number(entry.get("phase_rad"), "time_dependence.phase_rad"),
+            offset=_finite_number(entry.get("offset"), "time_dependence.offset"),
+        )
+    if kind == "pulse":
+        return OerstedPulse(
+            _finite_number(entry.get("t_on"), "time_dependence.t_on"),
+            _finite_number(entry.get("t_off"), "time_dependence.t_off"),
+        )
+    if kind == "piecewise_linear":
+        points = entry.get("points")
+        if not isinstance(points, list):
+            raise ValueError("time_dependence.points must be a list")
+        decoded_points = []
+        for index, point in enumerate(points):
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError(f"time_dependence.points[{index}] must be a pair")
+            decoded_points.append([
+                _finite_number(point[0], f"time_dependence.points[{index}][0]"),
+                _finite_number(point[1], f"time_dependence.points[{index}][1]"),
+            ])
+        return OerstedPiecewiseLinear(decoded_points)
+    if kind == "sinc_pulse":
+        return OerstedSincPulse(
+            _finite_number(entry.get("cutoff_hz"), "time_dependence.cutoff_hz"),
+            t0=_finite_number(entry.get("t0"), "time_dependence.t0"),
+            amplitude=_finite_number(entry.get("amplitude"), "time_dependence.amplitude"),
+        )
+    raise ValueError(f"unsupported Oersted time-dependence kind {kind!r}")
+
+
+def _decode_oersted_field(value: object) -> OerstedCylinder | OerstedField:
+    entry = _mapping(value, "oersted_field")
+    entry.pop("id", None)
+    kind = entry.get("kind")
+    if kind == "oersted_field":
+        return OerstedField(
+            source=_nonempty_string(entry.get("source"), "oersted_field.source"),
+            model=_nonempty_string(entry.get("model"), "oersted_field.model"),
+        )
+    if kind == "oersted_cylinder":
+        time_dependence = entry.get("time_dependence")
+        return OerstedCylinder(
+            current=_finite_number(entry.get("current"), "oersted_cylinder.current"),
+            radius=_finite_number(entry.get("radius"), "oersted_cylinder.radius"),
+            center=_vec3(entry.get("center"), "oersted_cylinder.center"),
+            axis=_vec3(entry.get("axis"), "oersted_cylinder.axis", nonzero=True),
+            time_dependence=(
+                _decode_oersted_time_dependence(time_dependence) if time_dependence is not None else None
+            ),  # type: ignore[arg-type]
+        )
+    raise ValueError(f"unsupported Oersted field kind {kind!r}")
+
+
+def _canonical_current_transports(values: object) -> list[dict[str, object]]:
+    if not isinstance(values, list):
+        raise ValueError("current_transports must be a list")
+    return [_decode_current_transport(value).to_ir() for value in values]
+
+
+def _canonical_spin_torques(values: object, *, scene_ids: bool) -> list[dict[str, object]]:
+    if not isinstance(values, list):
+        raise ValueError("spin_torques must be a list")
+    result: list[dict[str, object]] = []
+    for index, value in enumerate(values):
+        entry = _mapping(copy.deepcopy(value), f"spin_torques[{index}]")
+        kind = entry.get("kind")
+        formula = entry.get("formula_version")
+        if kind == "zhang_li" or (kind == "slonczewski" and formula not in {"slonczewski.fullmag.v2", "slonczewski.fullmag.v1"}):
+            entry.pop("id", None)
+        module = _decode_spin_torque(entry)
+        canonical = module.to_ir_module()  # type: ignore[attr-defined]
+        if scene_ids and "id" not in canonical:
+            canonical = {"id": f"spin-torque:{index}", **canonical}
+        result.append(canonical)
+    return result
+
+
+def _canonical_oersted_fields(values: object, *, scene_ids: bool) -> list[dict[str, object]]:
+    if not isinstance(values, list):
+        raise ValueError("oersted_fields must be a list")
+    result = []
+    for index, value in enumerate(values):
+        canonical = _decode_oersted_field(copy.deepcopy(value)).to_ir()
+        result.append({"id": f"oersted-field:{index}", **canonical} if scene_ids else canonical)
+    return result
 
 
 _INTERACTION_ORDER = (
@@ -276,7 +801,18 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             }
         )
 
-    return {
+    raw_current_modules = builder.get("current_modules") or []
+    if not isinstance(raw_current_modules, list):
+        raise ValueError("current_modules must be a list")
+    current_transport_entries: list[object] = []
+    legacy_current_modules: list[object] = []
+    for module in raw_current_modules:
+        if isinstance(module, Mapping) and module.get("kind") == "current_transport":
+            current_transport_entries.append(module)
+        else:
+            legacy_current_modules.append(copy.deepcopy(module))
+
+    document = {
         "version": "scene.v2",
         "revision": int(builder.get("revision", 0)),
         "scene": {
@@ -290,16 +826,13 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         "materials": materials,
         "magnetization_assets": magnetization_assets,
         "current_modules": {
-            "modules": builder.get("current_modules") or [],
+            "modules": legacy_current_modules,
             "excitation_analysis": builder.get("excitation_analysis"),
         },
-        "field_drives": {
-            "drives": builder.get("field_drives") or [],
-        },
-        "monitors": {
-            "planar": builder.get("planar_monitors") or [],
-        },
+        "current_transports": _canonical_current_transports(current_transport_entries),
         "couplings": builder.get("couplings") or [],
+        "field_drives": {"drives": copy.deepcopy(builder.get("field_drives") or [])},
+        "monitors": {"planar": copy.deepcopy(builder.get("planar_monitors") or [])},
         "study": {
             "backend": builder.get("backend"),
             "requested_backend": "auto",
@@ -338,6 +871,15 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    if "spin_torques" in builder:
+        document["spin_torques"] = _canonical_spin_torques(
+            builder["spin_torques"], scene_ids=True
+        )
+    if "oersted_terms" in builder:
+        document["oersted_fields"] = _canonical_oersted_fields(
+            builder["oersted_terms"], scene_ids=True
+        )
+    return document
 
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
@@ -421,8 +963,29 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 
     study = dict(scene.get("study") or {})
     current_modules = dict(scene.get("current_modules") or {})
-    field_drives = dict(scene.get("field_drives") or {})
-    return {
+    legacy_modules = current_modules.get("modules") or []
+    if not isinstance(legacy_modules, list):
+        raise ValueError("current_modules.modules must be a list")
+    migrated_transports = [
+        module
+        for module in legacy_modules
+        if isinstance(module, Mapping) and module.get("kind") == "current_transport"
+    ]
+    antenna_modules = [
+        copy.deepcopy(module)
+        for module in legacy_modules
+        if not (isinstance(module, Mapping) and module.get("kind") == "current_transport")
+    ]
+    if "current_transports" in scene:
+        transports = _canonical_current_transports(scene["current_transports"])
+        if migrated_transports:
+            transports.extend(_canonical_current_transports(migrated_transports))
+    else:
+        transports = _canonical_current_transports(migrated_transports)
+    transport_names = [str(entry["name"]) for entry in transports]
+    if len(transport_names) != len(set(transport_names)):
+        raise ValueError("current_transports contains duplicate names")
+    builder = {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend"),
         "requested_mode": study.get("requested_mode", "strict"),
@@ -441,11 +1004,32 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
         "couplings": scene.get("couplings") or [],
-        "current_modules": current_modules.get("modules") or [],
-        "field_drives": field_drives.get("drives") or [],
-        "planar_monitors": (scene.get("monitors") or {}).get("planar") or [],
+        "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": current_modules.get("excitation_analysis"),
     }
+    field_drives = scene.get("field_drives")
+    if isinstance(field_drives, Mapping):
+        drives = field_drives.get("drives")
+        if isinstance(drives, list):
+            builder["field_drives"] = copy.deepcopy(drives)
+    monitors = scene.get("monitors")
+    if isinstance(monitors, Mapping):
+        planar = monitors.get("planar")
+        if isinstance(planar, list):
+            builder["planar_monitors"] = copy.deepcopy(planar)
+    if "spin_torques" in scene:
+        builder["spin_torques"] = _canonical_spin_torques(
+            scene["spin_torques"], scene_ids=False
+        )
+    if "oersted_fields" in scene:
+        builder["oersted_terms"] = _canonical_oersted_fields(
+            scene["oersted_fields"], scene_ids=False
+        )
+    elif "oersted_terms" in scene:
+        builder["oersted_terms"] = _canonical_oersted_fields(
+            scene["oersted_terms"], scene_ids=False
+        )
+    return builder
 
 
 def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
@@ -485,7 +1069,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "max_steps": _int_or_none(solver.get("max_relax_steps")),
     }
     mesh = dict(builder.get("mesh") or {})
-    return {
+    overrides = {
         "runtime_selection": {
             "cpu_threads": _int_or_none(builder.get("cpu_threads")),
         },
@@ -603,6 +1187,9 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    _copy_present_collection(builder, overrides, "spin_torques")
+    _copy_present_collection(builder, overrides, "oersted_terms")
+    return overrides
 
 
 def _stage_adaptive_timestep_override(value: Any) -> dict[str, Any] | None:

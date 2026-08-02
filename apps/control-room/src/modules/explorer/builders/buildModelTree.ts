@@ -1049,27 +1049,107 @@ function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): Explore
   };
 }
 
-function fieldDriveNodes(drives: readonly ModelTreeFieldDriveSnapshot[]): ExplorerNode | null {
-  if (drives.length === 0) return null;
+function spinTransportNodes(transports: NonNullable<ModelTreeSnapshot["spinTransports"]>): ExplorerNode {
   return {
-    id: "model:physics:field-drives",
-    kind: "physics.field-drives",
-    label: "Field drives",
+    id: "model:physics:spin-transports",
+    kind: "physics.spin-transports",
+    label: "Spin Transport",
     parentId: "model:session",
-    badge: `${drives.length}`,
-    icon: "wave",
+    badge: `${transports.length}`,
+    icon: "activity",
     status: "ready",
-    contextCommands: ["workspace.focus-selection"],
-    children: drives.map((drive) => ({
-      id: `model:physics:field-drives:${drive.id}`,
-      kind: "physics.field-drive" as const,
-      label: drive.label,
-      parentId: "model:physics:field-drives",
-      badge: `${drive.targetKind} · ${drive.waveformKind}`,
-      icon: "wave" as const,
-      fieldDriveId: drive.id,
-      status: drive.enabled ? "ready" as const : "degraded" as const,
-      contextCommands: ["workspace.focus-selection"],
+    children: transports.map((transport) => ({
+      id: transport.id === null
+        ? `model:physics:spin-transports:position:${transport.index}`
+        : `model:physics:spin-transports:id:${encodeURIComponent(transport.id)}`,
+      kind: "physics.spin-transport" as const,
+      label: transport.label,
+      parentId: "model:physics:spin-transports",
+      badge: transport.supported ? `${transport.mode ?? "typed"} · ${transport.currentSourceId ?? "no source"}` : "read-only",
+      icon: "activity" as const,
+      ...(transport.id === null
+        ? { spinTransportIndex: transport.index }
+        : { spinTransportId: transport.id }),
+      status: transport.supported ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
+function currentTransportNodes(transports: NonNullable<ModelTreeSnapshot["currentTransports"]>): ExplorerNode {
+  return {
+    id: "model:physics:current-transports",
+    kind: "physics.current-transports",
+    label: "Current Transport",
+    parentId: "model:session",
+    badge: `${transports.length}`,
+    icon: "activity",
+    status: "ready",
+    children: transports.map((transport) => ({
+      id: transport.id === null
+        ? `model:physics:current-transports:position:${transport.index}`
+        : `model:physics:current-transports:id:${encodeURIComponent(transport.id)}`,
+      kind: "physics.current-transport" as const,
+      label: transport.label,
+      parentId: "model:physics:current-transports",
+      badge: transport.supported ? transport.model ?? "typed" : "read-only",
+      icon: "activity" as const,
+      ...(transport.id === null
+        ? { currentTransportIndex: transport.index }
+        : { currentTransportId: transport.id }),
+      status: transport.supported ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
+function spinInterfaceNodes(interfaces: NonNullable<ModelTreeSnapshot["spinInterfaces"]>): ExplorerNode {
+  return {
+    id: "model:physics:spin-interfaces",
+    kind: "physics.spin-interfaces",
+    label: "Spin Interfaces",
+    parentId: "model:session",
+    badge: `${interfaces.length}`,
+    icon: "activity",
+    status: "ready",
+    children: interfaces.map((item) => ({
+      id: `model:physics:spin-interfaces:${encodeURIComponent(item.ownerId)}:position:${item.index}`,
+      kind: "physics.spin-interface" as const,
+      label: item.id ?? `Unknown interface ${item.index + 1}`,
+      parentId: "model:physics:spin-interfaces",
+      badge: `${item.ownerId} · ${item.known ? "typed" : "read-only"}`,
+      icon: "activity" as const,
+      spinInterfaceId: item.id ?? undefined,
+      spinInterfaceIndex: item.index,
+      spinInterfaceOwnerId: item.ownerId,
+      status: item.known ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
+function authoredSourceNodes(
+  family: "spin-torques" | "oersted-fields",
+  items: NonNullable<ModelTreeSnapshot["spinTorques"]>,
+): ExplorerNode {
+  const torque = family === "spin-torques";
+  const root = `model:physics:${family}`;
+  return {
+    id: root,
+    kind: torque ? "physics.spin-torques" : "physics.oersted-fields",
+    label: torque ? "Spin Torques" : "Oersted Fields",
+    parentId: "model:session",
+    badge: `${items.length}`,
+    icon: "activity",
+    status: "ready",
+    children: items.map((item) => ({
+      id: `${root}:position:${item.index}`,
+      kind: torque ? "physics.spin-torque" as const : "physics.oersted-field" as const,
+      label: item.id ?? `Unknown ${torque ? "spin torque" : "Oersted field"} ${item.index + 1}`,
+      parentId: root,
+      badge: item.supported ? item.kind ?? "typed" : "read-only",
+      icon: "activity" as const,
+      ...(torque
+        ? { spinTorqueId: item.id ?? undefined, spinTorqueIndex: item.index }
+        : { oerstedFieldId: item.id ?? undefined, oerstedFieldIndex: item.index }),
+      status: item.supported ? "ready" as const : "unsupported" as const,
     })),
   };
 }
@@ -1252,10 +1332,11 @@ export function buildModelTree(
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
   }
-  const fieldDriveBranch = fieldDriveNodes(snapshot?.fieldDrives ?? []);
-  if (fieldDriveBranch) {
-    sessionChildren.push(fieldDriveBranch);
-  }
+  sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
+  sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
+  sessionChildren.push(spinInterfaceNodes(snapshot?.spinInterfaces ?? []));
+  sessionChildren.push(authoredSourceNodes("spin-torques", snapshot?.spinTorques ?? []));
+  sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
 
   sessionChildren.push(
     meshPolicyNodes(snapshot?.mesh ?? null),

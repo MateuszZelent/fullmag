@@ -62,7 +62,12 @@ pub(super) fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         if has_due_fields {
@@ -94,7 +99,12 @@ pub(super) fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: select_state_observable_field(&observables, &name, true)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(select_state_observable_field(&observables, &name, true)?),
             })?;
         }
         advance_due_schedules(field_schedules, state.time_seconds);
@@ -187,7 +197,12 @@ pub(super) fn record_final_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         return Ok(());
@@ -218,7 +233,12 @@ pub(super) fn record_final_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         return Ok(());
@@ -245,7 +265,12 @@ pub(super) fn record_final_outputs(
             step,
             time: state.time_seconds,
             solver_dt,
-            values: select_state_observable_field(&observables, &name, true)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(&observables, &name, true)?),
         })?;
     }
 
@@ -282,11 +307,7 @@ pub(crate) fn observe_state(
     } else {
         vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
     };
-    let oersted_field = problem
-        .terms
-        .per_node_field
-        .clone()
-        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let oersted_field = problem.oersted_field_at_time(state.time_seconds);
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
 
     let torque_field = compute_torque_field(

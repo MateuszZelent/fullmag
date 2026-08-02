@@ -65,6 +65,36 @@ The default frontend base path is `/v2/sessions/current`.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 
+### Planned M0–M3 spin-transport projections
+
+The spin-transport runtime contract reserves typed projections over the one
+canonical `SceneDocument`:
+
+```text
+/v2/sessions/current/model/current-transports
+/v2/sessions/current/model/spin-transports
+/v2/sessions/current/model/spin-interfaces
+/v2/sessions/current/model/spin-torques
+/v2/sessions/current/model/oersted-fields
+```
+
+These routes are **planned**, not asserted as implemented by this spec update.
+When implemented, collection routes use `GET`/`POST`, item routes use
+`GET`/`PATCH`/`DELETE`, mutations require `base_revision`, and responses return
+the committed scene plus `scene_revision`. A stale revision returns
+`409 revision_conflict`. The projections must not create a second physics
+model or permit a raw merge patch to lose tagged-union variants.
+
+Stable quantity ids remain `V_electric`, `J_charge`, `H_oe`, `torque_stt`, and
+`torque_sot`. Planned detailed ids include `spin_potential`,
+`spin_current_tensor`, `spin_flux_normal`, `torque_zhang_li`,
+`torque_slonczewski`, `torque_transport`, and `torque_spin_total`. A rank-2
+spin current uses the existing FMVP data plane with `n_comp=9` and versioned
+`row_major_Q_ia` metadata; it is never flattened semantically into a vector.
+Solver residuals, balance errors, refresh counts, and requested/resolved lane
+belong in thin diagnostics/manifests, while numerical arrays stay under
+`data/fields`.
+
 ## 3.1 Realtime invalidation rules
 
 The canonical websocket remains an invalidation bus, not a payload stream. That

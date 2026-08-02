@@ -28,8 +28,14 @@ from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
-from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
-from fullmag.model.spin_torque import LegacySpinTorque, SpinTorqueModule
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.spin_torque import (
+    LegacySpinTorque,
+    PrescribedSpinOrbitTorque,
+    SpinOrbitTorque,
+    SpinTorqueModule,
+)
+from fullmag.model.spin_transport import DriftDiffusionSpinTorque, SpinDriftDiffusion
 from fullmag.model.mechanics import (
     ElasticBody,
     ElasticMaterial,
@@ -1304,6 +1310,7 @@ class Problem:
     spin_torque: LegacySpinTorque | None = None
     # Canonical torque family. Allows more than one module to be authored.
     spin_torques: Sequence[SpinTorqueModule] = ()
+    spin_transports: Sequence[SpinDriftDiffusion] = ()
     # Temperature for Brown thermal field [K] (optional, 0 = no noise)
     temperature: float | None = None
     # Magnetoelastic (optional)
@@ -1351,6 +1358,14 @@ class Problem:
         )
         object.__setattr__(self, "spin_torque", None)
         object.__setattr__(self, "spin_torques", normalized_spin_torques)
+        ensure_unique_names(
+            (
+                module.name
+                for module in normalized_spin_torques
+                if isinstance(module, (PrescribedSpinOrbitTorque, SpinOrbitTorque))
+            ),
+            "prescribed SOT ids",
+        )
 
         if self.temperature is not None and self.temperature < 0.0:
             raise ValueError("temperature must be >= 0")
@@ -1411,6 +1426,14 @@ class Problem:
             "planar monitor names",
         )
         current_modules_by_name = _current_module_name_map(self.current_modules)
+        ensure_unique_names((module.id for module in self.spin_transports), "spin transport ids")
+        spin_transports_by_id = {module.id: module for module in self.spin_transports}
+        for module in self.spin_transports:
+            source_module = current_modules_by_name.get(module.current_source_id)
+            if not isinstance(source_module, CurrentTransport):
+                raise ValueError(
+                    f"spin transport current_source_id={module.current_source_id!r} must reference a CurrentTransport"
+                )
         if self.excitation_analysis is not None:
             source_module = current_modules_by_name.get(self.excitation_analysis.source)
             if source_module is None:
@@ -1422,6 +1445,12 @@ class Problem:
                     "excitation_analysis.source must reference an AntennaFieldSource"
                 )
         for module in self.spin_torques:
+            if isinstance(module, DriftDiffusionSpinTorque):
+                if module.solve_id not in spin_transports_by_id:
+                    raise ValueError(
+                        f"drift-diffusion torque solve_id={module.solve_id!r} must reference Problem.spin_transports"
+                    )
+                continue
             current_source = getattr(module, "current_source", None)
             if current_source is None:
                 continue
@@ -1595,10 +1624,11 @@ class Problem:
             ],
             "couplings": [coupling.to_ir() for coupling in self.couplings],
             "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
+            "field_drives": [drive.to_ir() for drive in self.field_drives],
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
-            "field_drives": [drive.to_ir() for drive in self.field_drives],
+            "spin_transport_modules": [module.to_ir() for module in self.spin_transports],
             "excitation_analysis": self.excitation_analysis.to_ir()
             if self.excitation_analysis is not None
             else None,
