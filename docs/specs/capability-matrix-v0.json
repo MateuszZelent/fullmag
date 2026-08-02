@@ -232,7 +232,7 @@
     },
     {
       "id":"transport.spin.memory_loss.fullmag.v2", "capability_id":"transport.spin.memory_loss", "formula_version":"sml_reservoir.fullmag.v2",
-      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"unsupported","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"sml_reservoir_balance_v2 and sml_reservoir_entropy_v2.", "validated_workloads":[], "notes":"Authoring and IR are versioned, but the reservoir surface weak form is fail-closed until its balance and entropy gates pass."
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"unsupported","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"sml_reservoir_balance_v2 and sml_reservoir_entropy_v2.", "validated_workloads":[], "notes":"Bounded FDM M2 reference lane executes the statically eliminated local reservoir and publishes balance/power traces; native production, FEM and GPU remain unsupported."
     },
     {
       "id":"transport.spin.transient_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.transient_drift_diffusion", "operator_version":"coupled_imex_ark2.v1",

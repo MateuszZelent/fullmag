@@ -154,6 +154,12 @@ pub struct SceneSpinTransportMaterial {
     pub spin_capacitance_as_per_v_m3: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacitance_formula_version: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "density_of_states_per_spin_Jinv_m3"
+    )]
+    pub density_of_states_per_spin_j_inv_m3: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]

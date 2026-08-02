@@ -113,7 +113,7 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     let mut transient_value = encoded;
     transient_value["spin_transport_modules"][0]["mode"] = serde_json::json!("transient");
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
-        ["spin_capacitance_As_per_V_m3"] = serde_json::json!(2.0);
+        ["density_of_states_per_spin_Jinv_m3"] = serde_json::json!(2.0);
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
         ["capacitance_formula_version"] =
             serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
@@ -128,6 +128,21 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     transient
         .validate()
         .expect("transient M3 IR with the coupled integrator should validate semantically");
+    assert_eq!(
+        transient.spin_transport_modules[0].materials[0]
+            .material
+            .density_of_states_per_spin_j_inv_m3,
+        Some(2.0)
+    );
+    let mut inconsistent = transient.clone();
+    inconsistent.spin_transport_modules[0].materials[0]
+        .material
+        .spin_capacitance_as_per_v_m3 = Some(1.0);
+    assert!(inconsistent
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("must equal e^2 times density_of_states")));
 
     let mut unsupported_capacitance = transient.clone();
     unsupported_capacitance.spin_transport_modules[0].materials[0]
@@ -175,14 +190,13 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
         .as_object_mut()
         .unwrap()
-        .remove("spin_capacitance_As_per_V_m3");
+        .remove("density_of_states_per_spin_Jinv_m3");
     let invalid: ProblemIR = serde_json::from_value(transient_value).unwrap();
     assert!(invalid
         .validate()
         .unwrap_err()
         .iter()
-        .any(|error| error
-            .contains("spin capacitance and formula version must be authored together")));
+        .any(|error| error.contains("capacitance_formula_version requires spin capacitance")));
 }
 
 #[test]

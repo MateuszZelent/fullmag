@@ -150,6 +150,7 @@ function isSpinMaterialAssignment(value: unknown): boolean {
   const material = value.material;
   return hasOnlyKeys(material, [
     "capacitance_formula_version",
+    "density_of_states_per_spin_Jinv_m3",
     "lambda_j_m",
     "lambda_phi_m",
     "lambda_sf_m",
@@ -169,6 +170,9 @@ function isSpinMaterialAssignment(value: unknown): boolean {
     && (material.spin_capacitance_As_per_V_m3 === undefined
       || material.spin_capacitance_As_per_V_m3 === null
       || isFiniteNumber(material.spin_capacitance_As_per_V_m3))
+    && (material.density_of_states_per_spin_Jinv_m3 === undefined
+      || material.density_of_states_per_spin_Jinv_m3 === null
+      || isFiniteNumber(material.density_of_states_per_spin_Jinv_m3))
     && isFiniteNumber(material.theta_sh)
     && isRegionRef(value.region);
 }

@@ -40,6 +40,15 @@ pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_P
 /// and therefore remain unsupported until a tensor/charge-spin contract exists.
 pub const DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA: &str =
     "dos_isotropic_nonmagnetic.fullmag.v1";
+/// Elementary charge used by the canonical DOS-to-spin-capacitance adapter.
+pub const ELEMENTARY_CHARGE_C: f64 = 1.602_176_634e-19;
+
+/// Convert a per-spin density of states `N_0 [J^-1 m^-3]` into the scalar
+/// spin capacitance `C_s=e^2 N_0 [A s V^-1 m^-3]` used by the non-magnetic
+/// transient reduction.
+pub fn spin_capacitance_from_density_of_states(density_of_states_per_spin_j_inv_m3: f64) -> f64 {
+    ELEMENTARY_CHARGE_C * ELEMENTARY_CHARGE_C * density_of_states_per_spin_j_inv_m3
+}
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
 pub fn is_supported_ir_version_for_read(version: &str) -> bool {

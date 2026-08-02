@@ -84,6 +84,32 @@ describe("transport authoring drafts", () => {
     });
   });
 
+  it("accepts the canonical DOS adapter without requiring a duplicated scalar capacitance", () => {
+    const draft = spinTransportDraft();
+    draft.mode = "transient";
+    draft.materials = JSON.stringify([{
+      material: {
+        capacitance_formula_version: "dos_isotropic_nonmagnetic.fullmag.v1",
+        density_of_states_per_spin_Jinv_m3: 2.0,
+        lambda_j_m: "disabled",
+        lambda_phi_m: "disabled",
+        lambda_sf_m: 1e-9,
+        polarization_p: 0.4,
+        sigma_s_Spm: 2,
+        theta_sh: 0.1,
+      },
+      region: { object_id: "stack", region_id: "normal" },
+    }]);
+
+    expect(buildSpinTransport(draft)).toMatchObject({
+      materials: [{ material: {
+        capacitance_formula_version: "dos_isotropic_nonmagnetic.fullmag.v1",
+        density_of_states_per_spin_Jinv_m3: 2.0,
+      } }],
+      mode: "transient",
+    });
+  });
+
   it("rejects transient materials without the paired capacitance fields", () => {
     const draft = spinTransportDraft();
     draft.mode = "transient";

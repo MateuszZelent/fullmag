@@ -827,6 +827,7 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
                 lambda_phi_m: ReactionLengthIR::Enabled(0.6),
                 spin_capacitance_as_per_v_m3: None,
                 capacitance_formula_version: None,
+                density_of_states_per_spin_j_inv_m3: None,
             },
         }],
         interfaces: vec![],

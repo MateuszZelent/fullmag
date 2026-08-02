@@ -239,17 +239,41 @@ fn validate_spin_authoring(
                 &material.lambda_phi_m,
                 &format!("spin_transports[{index}].materials[{material_index}].lambda_phi_m"),
             )?;
+            let density_of_states = material.density_of_states_per_spin_j_inv_m3;
+            let has_physical_capacitance_source =
+                material.spin_capacitance_as_per_v_m3.is_some() || density_of_states.is_some();
             match (
-                material.spin_capacitance_as_per_v_m3,
+                has_physical_capacitance_source,
                 material.capacitance_formula_version.as_deref(),
             ) {
-                (Some(capacitance), Some(version)) => {
-                    positive(
-                        capacitance,
-                        &format!(
-                            "spin_transports[{index}].materials[{material_index}].spin_capacitance_As_per_V_m3"
-                        ),
-                    )?;
+                (true, Some(version)) => {
+                    if let Some(capacitance) = material.spin_capacitance_as_per_v_m3 {
+                        positive(
+                            capacitance,
+                            &format!(
+                                "spin_transports[{index}].materials[{material_index}].spin_capacitance_As_per_V_m3"
+                            ),
+                        )?;
+                    }
+                    if let Some(density) = density_of_states {
+                        positive(
+                            density,
+                            &format!(
+                                "spin_transports[{index}].materials[{material_index}].density_of_states_per_spin_Jinv_m3"
+                            ),
+                        )?;
+                        if let Some(capacitance) = material.spin_capacitance_as_per_v_m3 {
+                            let expected =
+                                fullmag_ir::spin_capacitance_from_density_of_states(density);
+                            let tolerance =
+                                1.0e-12 * capacitance.abs().max(expected.abs()).max(1.0e-300);
+                            if (capacitance - expected).abs() > tolerance {
+                                return Err(SceneDocumentValidationError::new(format!(
+                                    "spin_transports[{index}].materials[{material_index}] spin capacitance must equal e^2 times density_of_states_per_spin_Jinv_m3"
+                                )));
+                            }
+                        }
+                    }
                     if version.trim().is_empty() {
                         return Err(SceneDocumentValidationError::new(format!(
                             "spin_transports[{index}].materials[{material_index}].capacitance_formula_version must be non-empty"
@@ -263,15 +287,20 @@ fn validate_spin_authoring(
                         )));
                     }
                 }
-                (None, None) if module.mode == SceneSpinTransportMode::Steady => {}
-                (None, None) => {
+                (false, None) if module.mode == SceneSpinTransportMode::Steady => {}
+                (false, None) => {
                     return Err(SceneDocumentValidationError::new(format!(
                         "spin_transports[{index}].materials[{material_index}] transient mode requires physical spin capacitance and formula version"
                     )));
                 }
-                _ => {
+                (false, Some(_)) => {
                     return Err(SceneDocumentValidationError::new(format!(
-                        "spin_transports[{index}].materials[{material_index}] spin capacitance and formula version must be authored together"
+                        "spin_transports[{index}].materials[{material_index}] capacitance_formula_version requires spin capacitance or density of states"
+                    )));
+                }
+                (true, None) => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_transports[{index}].materials[{material_index}] spin capacitance or density of states requires capacitance_formula_version"
                     )));
                 }
             }
@@ -1756,22 +1785,52 @@ mod tests {
             serde_json::from_value(serde_json::json!([transient.clone()])).unwrap();
         validate_scene_document(&scene).expect("physical transient contract must validate");
 
+        let mut dos_only = transient.clone();
+        dos_only["materials"][0]["material"]
+            .as_object_mut()
+            .unwrap()
+            .remove("spin_capacitance_As_per_V_m3");
+        dos_only["materials"][0]["material"]["density_of_states_per_spin_Jinv_m3"] =
+            serde_json::json!(2.0);
+        scene.spin_transports = serde_json::from_value(serde_json::json!([dos_only])).unwrap();
+        validate_scene_document(&scene).expect("DOS adapter must qualify transient material");
+
+        let mut inconsistent = transient.clone();
+        inconsistent["materials"][0]["material"]["density_of_states_per_spin_Jinv_m3"] =
+            serde_json::json!(2.0);
+        scene.spin_transports = serde_json::from_value(serde_json::json!([inconsistent])).unwrap();
+        let error = validate_scene_document(&scene)
+            .expect_err("inconsistent explicit capacitance and DOS must fail");
+        assert!(error.message.contains("must equal e^2 times density_of_states"), "{error}");
+
         let mut unsupported = transient.clone();
         unsupported["materials"][0]["material"]["capacitance_formula_version"] =
             serde_json::json!("dos_constant.fullmag.v1");
         scene.spin_transports = serde_json::from_value(serde_json::json!([unsupported])).unwrap();
         let error = validate_scene_document(&scene)
             .expect_err("unversioned DOS convention must fail closed");
-        assert!(error.message.contains("unsupported capacitance_formula_version"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("unsupported capacitance_formula_version"),
+            "{error}"
+        );
 
         let mut missing = transient;
         missing["materials"][0]["material"]
             .as_object_mut()
             .unwrap()
             .remove("spin_capacitance_As_per_V_m3");
+        missing["materials"][0]["material"]["capacitance_formula_version"] =
+            serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
         scene.spin_transports = serde_json::from_value(serde_json::json!([missing])).unwrap();
         let error = validate_scene_document(&scene).expect_err("partial capacitance must fail");
-        assert!(error.message.contains("authored together"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("requires spin capacitance or density of states"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -4,8 +4,8 @@ use fullmag_ir::{
     BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision, FemMeshPartIR,
     FemObjectSegmentIR, MeshIR, ProblemIR, ReactionLengthIR, RegionRefIR,
     ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
-    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR, ResolvedFemSpinTransportIR,
-    ResolvedFdmTransientSpinTransportIR, ResolvedReciprocalMaterialIR,
+    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
+    ResolvedFdmTransientSpinTransportIR, ResolvedFemSpinTransportIR, ResolvedReciprocalMaterialIR,
     ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR, ResolvedSpinInterfaceFaceIR,
     ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR, ResolvedSpinTransportPlanIR,
     SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR, StructuredBoundaryFaceIR,
@@ -123,6 +123,22 @@ pub(crate) fn resolve_spin_transport(
             continue;
         };
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+        let requests_sml_reservoir = module.interfaces.iter().any(|interface| {
+            matches!(
+                interface,
+                fullmag_ir::SpinInterfaceIR::MixingConductance {
+                    spin_memory_loss: Some(_),
+                    ..
+                }
+            )
+        });
+        if requests_sml_reservoir && !reciprocal {
+            errors.push(format!(
+                "spin transport '{}' requests sml_reservoir.fullmag.v2, which requires bidirectional M2 coupling",
+                module.id
+            ));
+            continue;
+        }
         let expected_model = if reciprocal {
             fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
         } else {
@@ -195,14 +211,18 @@ pub(crate) fn resolve_spin_transport(
                     "transport.coupling.one_way".to_string(),
                 ]
             } else if reciprocal {
-                vec![
+                let mut capabilities = vec![
                     "transport.charge.magnetoresistive".to_string(),
                     "transport.spin.steady_drift_diffusion".to_string(),
                     "transport.spin.direct_she".to_string(),
                     "transport.spin.inverse_she".to_string(),
                     "transport.spin.mixing_conductance".to_string(),
                     "transport.coupling.bidirectional".to_string(),
-                ]
+                ];
+                if requests_sml_reservoir {
+                    capabilities.push("transport.spin.memory_loss".to_string());
+                }
+                capabilities
             } else {
                 vec![
                     "transport.charge.ohmic".to_string(),
@@ -243,10 +263,10 @@ fn materialize_transient_descriptor(
     for assignment in &module.materials {
         let value = assignment
             .material
-            .spin_capacitance_as_per_v_m3
+            .resolved_spin_capacitance_as_per_v_m3()
             .ok_or_else(|| {
                 vec![format!(
-                    "spin transport '{}' transient material is missing physical spin capacitance",
+                    "spin transport '{}' transient material is missing physical spin capacitance or density of states",
                     module.id
                 )]
             })?;
@@ -733,16 +753,19 @@ fn materialize_fem_descriptor(
             SpinInterfaceIR::MixingConductance { .. } => None,
         })
         .collect();
-    let torque_target = problem.spin_torque_modules.iter().find_map(|torque| match torque {
-        SpinTorqueModuleIR::DriftDiffusionSpinTorque {
-            id,
-            solve_id,
-            target,
-            formula_version,
-            ..
-        } if solve_id == &module.id => Some((id, target, formula_version)),
-        _ => None,
-    });
+    let torque_target = problem
+        .spin_torque_modules
+        .iter()
+        .find_map(|torque| match torque {
+            SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+                id,
+                solve_id,
+                target,
+                formula_version,
+                ..
+            } if solve_id == &module.id => Some((id, target, formula_version)),
+            _ => None,
+        });
     let torque_target = torque_target
         .map(|(id, target, formula_version)| -> Result<_, Vec<String>> {
             Ok(fullmag_ir::ResolvedFemTorqueTargetIR {
@@ -1796,18 +1819,6 @@ fn resolve_interfaces(
                 },
             ),
         };
-        if matches!(
-            &law,
-            ResolvedSpinInterfaceLawIR::MixingConductance {
-                spin_memory_loss: Some(_),
-                ..
-            }
-        ) {
-            return Err(vec![format!(
-                "spin transport '{}' requests sml_reservoir.fullmag.v2, but the surface reservoir weak-form realization is not executable",
-                module.id
-            )]);
-        }
         let from_mask = resolve_region_mask(from_ref, context, "spin interface from-side")?;
         let to_mask = resolve_region_mask(to_ref, context, "spin interface to-side")?;
         let (axis, sign) = axis_and_sign(normal)?;
@@ -1982,6 +1993,7 @@ mod tests {
                     lambda_phi_m: ReactionLengthIR::Disabled(DisabledReactionIR::Disabled),
                     spin_capacitance_as_per_v_m3: None,
                     capacitance_formula_version: None,
+                    density_of_states_per_spin_j_inv_m3: None,
                 },
             }],
             interfaces: vec![],
@@ -2100,23 +2112,25 @@ mod tests {
     }
 
     #[test]
-    fn sml_reservoir_v2_remains_fail_closed_until_surface_weak_form_is_ready() {
+    fn sml_reservoir_v2_lowers_to_the_fdm_m2_reference_descriptor() {
         let owners = ["strip"];
-        let region_mask = [0];
-        let magnetization = [[0.0, 0.0, 1.0]];
-        let ms = [8.0e5];
-        let region_ids = BTreeMap::new();
-        let mut problem = problem(ExecutionDevice::Cpu);
+        let region_mask = [0, 1];
+        let magnetization = [[0.0, 0.0, 1.0]; 2];
+        let ms = [8.0e5; 2];
+        let mut region_ids = BTreeMap::new();
+        region_ids.insert("normal".into(), 0);
+        region_ids.insert("ferro".into(), 1);
+        let mut problem = reciprocal_problem(ExecutionDevice::Cpu);
         problem.spin_transport_modules[0].interfaces = vec![SpinInterfaceIR::MixingConductance {
             id: "sml".into(),
             normal_to_ferromagnet: [1.0, 0.0, 0.0],
             normal_side: RegionRefIR {
                 object_id: "strip".into(),
-                region_id: None,
+                region_id: Some("normal".into()),
             },
             ferromagnet_side: RegionRefIR {
                 object_id: "strip".into(),
-                region_id: None,
+                region_id: Some("ferro".into()),
             },
             g_up_spm2: 2.0,
             g_down_spm2: 3.0,
@@ -2133,16 +2147,24 @@ mod tests {
             formula_version: "magnetoelectronic.fullmag.v2".into(),
         }];
 
-        let error = resolve_spin_transport(
-            &problem,
-            BackendTarget::Fdm,
-            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
-        )
-        .expect_err("SML v2 must not silently lower to the legacy surface law");
-        assert!(error.reasons.iter().any(|reason| {
-            reason.contains("sml_reservoir.fullmag.v2")
-                && reason.contains("weak-form realization is not executable")
-        }), "{error:?}");
+        let mut resolution_context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
+        resolution_context.grid_cells = [2, 1, 1];
+        let plans = resolve_spin_transport(&problem, BackendTarget::Fdm, &resolution_context)
+        .expect("SML v2 should lower to the FDM M2 reference descriptor");
+        let descriptor = plans[0]
+            .fdm_cpu_double_reciprocal
+            .as_ref()
+            .expect("reciprocal descriptor");
+        assert!(plans[0]
+            .capabilities
+            .contains(&"transport.spin.memory_loss".to_string()));
+        assert!(matches!(
+            descriptor.interfaces[0].law,
+            fullmag_ir::ResolvedSpinInterfaceLawIR::MixingConductance {
+                spin_memory_loss: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2272,6 +2294,44 @@ mod tests {
         assert_eq!(
             provenance["fdm_cpu_double_transient"]["capacitance_formula_versions"][0],
             "dos_isotropic_nonmagnetic.fullmag.v1"
+        );
+    }
+
+    #[test]
+    fn resolves_transient_dos_adapter_to_physical_spin_capacitance() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let mut problem = problem(ExecutionDevice::Cpu);
+        let spin = &mut problem.spin_transport_modules[0];
+        spin.mode = SpinTransportModeIR::Transient;
+        spin.materials[0]
+            .material
+            .density_of_states_per_spin_j_inv_m3 =
+            Some(2.0 / fullmag_ir::ELEMENTARY_CHARGE_C.powi(2));
+        spin.materials[0].material.capacitance_formula_version =
+            Some("dos_isotropic_nonmagnetic.fullmag.v1".into());
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
+            unreachable!()
+        };
+        let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+        *integrator = "coupled_imex_ark2".into();
+
+        let plans = resolve_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect("DOS-only transient material should resolve");
+        assert_eq!(
+            plans[0]
+                .fdm_cpu_double_transient
+                .as_ref()
+                .expect("transient descriptor")
+                .spin_capacitance_as_per_v_m3,
+            [2.0]
         );
     }
 

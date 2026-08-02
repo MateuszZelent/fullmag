@@ -7,7 +7,8 @@ use fullmag_engine::fdm::cpu::transport::{
     CoupledTransportOuterErrorBudget, OrientedSpinInterface, PotentialGauge,
     ReciprocalConstitutiveMaterial, SpinBoundaryCondition, SpinBoundaryConditions,
     SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw, SpinMaterialFields,
-    SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets, StructuredChargeProblem,
+    SpinMemoryLossReservoirLaw, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
+    StructuredChargeProblem,
     StructuredSpinFace, TransientErrorControllerState, TransientSpinIntegrator,
     TransientSpinMaterial, TransientSpinSolverConfig, TransientSpinState,
 };
@@ -59,12 +60,23 @@ pub(crate) struct FdmSpinTransportTelemetry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmSpinMemoryLossReservoirSnapshot {
+    pub reservoir_potential_v: [f64; 3],
+    pub normal_to_reservoir_apm2: [f64; 3],
+    pub ferromagnet_to_reservoir_apm2: [f64; 3],
+    pub reservoir_to_lattice_apm2: [f64; 3],
+    pub surface_power_w_per_m2: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinInterfaceFluxSnapshot {
     pub source_id: String,
     pub incoming_longitudinal_apm2: [f64; 3],
     pub backflow_longitudinal_apm2: [f64; 3],
     pub absorbed_transverse_apm2: [f64; 3],
     pub spin_memory_loss_apm2: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sml_reservoir: Option<FdmSpinMemoryLossReservoirSnapshot>,
     pub from_side_outgoing_apm2: [f64; 3],
     pub to_side_transmitted_apm2: [f64; 3],
 }
@@ -458,6 +470,20 @@ fn flux_values(flux: &FdmSpinInterfaceFluxSnapshot) -> impl Iterator<Item = f64>
         .chain(&flux.spin_memory_loss_apm2)
         .chain(&flux.from_side_outgoing_apm2)
         .chain(&flux.to_side_transmitted_apm2)
+        .chain(
+            flux.sml_reservoir
+                .as_ref()
+                .into_iter()
+                .flat_map(|reservoir| {
+                    reservoir
+                        .reservoir_potential_v
+                        .iter()
+                        .chain(&reservoir.normal_to_reservoir_apm2)
+                        .chain(&reservoir.ferromagnet_to_reservoir_apm2)
+                        .chain(&reservoir.reservoir_to_lattice_apm2)
+                        .chain(std::iter::once(&reservoir.surface_power_w_per_m2))
+                }),
+        )
         .copied()
 }
 
@@ -1126,6 +1152,30 @@ impl FdmSpinTransportWorkflow {
                         "coupled trial interface source identity mismatch",
                     ));
                 }
+                match (&left_flux.sml_reservoir, &right_flux.sml_reservoir) {
+                    (Some(left), Some(right)) => {
+                        compare_family!(
+                            left.reservoir_potential_v
+                                .into_iter()
+                                .chain(left.normal_to_reservoir_apm2)
+                                .chain(left.ferromagnet_to_reservoir_apm2)
+                                .chain(left.reservoir_to_lattice_apm2)
+                                .chain(std::iter::once(left.surface_power_w_per_m2))
+                                .collect(),
+                            right.reservoir_potential_v
+                                .into_iter()
+                                .chain(right.normal_to_reservoir_apm2)
+                                .chain(right.ferromagnet_to_reservoir_apm2)
+                                .chain(right.reservoir_to_lattice_apm2)
+                                .chain(std::iter::once(right.surface_power_w_per_m2))
+                                .collect(),
+                            "SML reservoir flux",
+                            1.0e-12
+                        );
+                    }
+                    (None, None) => {}
+                    _ => return Err(run_error("coupled trial SML reservoir presence mismatch")),
+                }
                 compare_family!(
                     left_flux
                         .incoming_longitudinal_apm2
@@ -1602,18 +1652,19 @@ fn materialize_interfaces(
                     spin_memory_loss,
                     ..
                 } => {
-                    if spin_memory_loss.is_some() {
-                        return Err(run_error(
-                            "sml_reservoir.fullmag.v2 is not executable in the FDM reference runner",
-                        ));
-                    }
                     SpinInterfaceLaw::MixingConductance {
                         g_up_s_per_m2: *g_up_spm2,
                         g_down_s_per_m2: *g_down_spm2,
                         g_r_s_per_m2: *g_r_spm2,
                         g_i_s_per_m2: *g_i_spm2,
                         g_sml_s_per_m2: *g_sml_spm2,
-                        sml_reservoir: None,
+                        sml_reservoir: spin_memory_loss.as_ref().map(|reservoir| {
+                            SpinMemoryLossReservoirLaw {
+                                g_n_s_per_m2: reservoir.g_n_spm2,
+                                g_f_s_per_m2: reservoir.g_f_spm2,
+                                g_lattice_s_per_m2: reservoir.g_lattice_spm2,
+                            }
+                        }),
                         magnetization: *magnetization.get(to_cell).ok_or_else(|| {
                             run_error("coupled interface target cell is outside the FDM grid")
                         })?,
@@ -1653,6 +1704,15 @@ fn interface_snapshot(
         backflow_longitudinal_apm2: observation.backflow_longitudinal_a_per_m2,
         absorbed_transverse_apm2: observation.absorbed_transverse_a_per_m2,
         spin_memory_loss_apm2: observation.spin_memory_loss_a_per_m2,
+        sml_reservoir: observation.sml_reservoir.map(|reservoir| {
+            FdmSpinMemoryLossReservoirSnapshot {
+                reservoir_potential_v: reservoir.reservoir_potential_v,
+                normal_to_reservoir_apm2: reservoir.normal_to_reservoir_a_per_m2,
+                ferromagnet_to_reservoir_apm2: reservoir.ferromagnet_to_reservoir_a_per_m2,
+                reservoir_to_lattice_apm2: reservoir.reservoir_to_lattice_a_per_m2,
+                surface_power_w_per_m2: reservoir.surface_power_w_per_m2,
+            }
+        }),
         from_side_outgoing_apm2: observation.from_side_outgoing_a_per_m2,
         to_side_transmitted_apm2: observation.to_side_transmitted_a_per_m2,
     }
@@ -1665,16 +1725,80 @@ fn descriptor_revision(descriptor: &ResolvedFdmCoupledSpinTransportIR) -> Result
 }
 
 fn checkpoint_identity(plan: &FdmPlanIR) -> Result<FdmCoupledCheckpointIdentity, RunError> {
-    let transient = plan
+    let resolved = plan
         .spin_transport_plans
         .iter()
-        .find(|resolved| resolved.fdm_cpu_double_transient.is_some())
-        .ok_or_else(|| run_error("coupled checkpoint identity requires a transient descriptor"))?;
-    let descriptor = transient
-        .fdm_cpu_double_transient
-        .as_ref()
-        .expect("presence checked");
-    let requested = &transient.requested_execution;
+        .find(|resolved| {
+            resolved.fdm_cpu_double_transient.is_some()
+                || resolved.fdm_cpu_double_reciprocal.is_some()
+        })
+        .ok_or_else(|| run_error("coupled checkpoint identity requires a transport descriptor"))?;
+    let requested = &resolved.requested_execution;
+    let (
+        current_operator,
+        spin_operator,
+        material_transport,
+        capacitance,
+        capacitance_formula,
+        oersted_operator,
+        source,
+    ) = if let Some(descriptor) = resolved.fdm_cpu_double_transient.as_ref() {
+        (
+            serde_json::json!({
+                "active": descriptor.steady_operator.charge_active_cells,
+                "conductivity": descriptor.steady_operator.charge_conductivity_spm,
+                "boundaries": descriptor.steady_operator.charge_boundaries,
+                "gauge": descriptor.steady_operator.charge_gauge,
+                "solver": descriptor.steady_operator.charge_solver,
+            }),
+            serde_json::to_value(descriptor)
+                .map_err(|error| run_error(format!("cannot fingerprint transient descriptor: {error}")))?,
+            serde_json::to_value(&descriptor.steady_operator)
+                .map_err(|error| run_error(format!("cannot fingerprint transport material: {error}")))?,
+            serde_json::to_value(&descriptor.spin_capacitance_as_per_v_m3)
+                .map_err(|error| run_error(format!("cannot fingerprint spin capacitance: {error}")))?,
+            serde_json::to_value(&descriptor.capacitance_formula_versions)
+                .map_err(|error| run_error(format!("cannot fingerprint capacitance formula: {error}")))?,
+            serde_json::json!({
+                "bound": descriptor.steady_operator.oersted_source_bound,
+                "charge_active": descriptor.steady_operator.charge_active_cells,
+                "cell_size": plan.cell_size,
+            }),
+            serde_json::json!({
+                "module_id": resolved.module_id,
+                "current_source_id": resolved.current_source_id,
+                "charge_boundaries": descriptor.steady_operator.charge_boundaries,
+            }),
+        )
+    } else if let Some(descriptor) = resolved.fdm_cpu_double_reciprocal.as_ref() {
+        (
+            serde_json::json!({
+                "active": descriptor.active_cells,
+                "boundaries": descriptor.charge_boundaries,
+                "solver": descriptor.linear_solver,
+            }),
+            serde_json::to_value(descriptor)
+                .map_err(|error| run_error(format!("cannot fingerprint reciprocal descriptor: {error}")))?,
+            serde_json::to_value(&descriptor.reciprocal_materials)
+                .map_err(|error| run_error(format!("cannot fingerprint reciprocal material: {error}")))?,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::json!({
+                "bound": descriptor.oersted_source_bound,
+                "charge_active": descriptor.active_cells,
+                "cell_size": plan.cell_size,
+            }),
+            serde_json::json!({
+                "module_id": resolved.module_id,
+                "current_source_id": resolved.current_source_id,
+                "charge_boundaries": descriptor.charge_boundaries,
+            }),
+        )
+    } else {
+        return Err(run_error(
+            "coupled checkpoint identity descriptor is incomplete",
+        ));
+    };
     let scene_revision = fingerprint_value(
         "scene",
         &serde_json::json!({
@@ -1701,46 +1825,23 @@ fn checkpoint_identity(plan: &FdmPlanIR) -> Result<FdmCoupledCheckpointIdentity,
         "material",
         &serde_json::json!({
             "magnetic": plan.material,
-            "spin_capacitance": descriptor.spin_capacitance_as_per_v_m3,
-            "capacitance_formula": descriptor.capacitance_formula_versions,
-            "transport_material": descriptor.steady_operator,
+            "spin_capacitance": capacitance,
+            "capacitance_formula": capacitance_formula,
+            "transport_material": material_transport,
         }),
     )?;
-    let current_operator_revision = fingerprint_value(
-        "current_operator",
-        &serde_json::json!({
-            "active": descriptor.steady_operator.charge_active_cells,
-            "conductivity": descriptor.steady_operator.charge_conductivity_spm,
-            "boundaries": descriptor.steady_operator.charge_boundaries,
-            "gauge": descriptor.steady_operator.charge_gauge,
-            "solver": descriptor.steady_operator.charge_solver,
-        }),
-    )?;
-    let spin_operator_revision = fingerprint_value("spin_operator", descriptor)?;
-    let oersted_operator_revision = fingerprint_value(
-        "oersted_operator",
-        &serde_json::json!({
-            "bound": descriptor.steady_operator.oersted_source_bound,
-            "charge_active": descriptor.steady_operator.charge_active_cells,
-            "cell_size": plan.cell_size,
-        }),
-    )?;
-    let source_revision = fingerprint_value(
-        "source",
-        &serde_json::json!({
-            "module_id": transient.module_id,
-            "current_source_id": transient.current_source_id,
-            "charge_boundaries": descriptor.steady_operator.charge_boundaries,
-        }),
-    )?;
+    let current_operator_revision = fingerprint_value("current_operator", &current_operator)?;
+    let spin_operator_revision = fingerprint_value("spin_operator", &spin_operator)?;
+    let oersted_operator_revision = fingerprint_value("oersted_operator", &oersted_operator)?;
+    let source_revision = fingerprint_value("source", &source)?;
     Ok(FdmCoupledCheckpointIdentity {
         requested_discretization: format!("{:?}", requested.discretization).to_lowercase(),
         requested_device: format!("{:?}", requested.device).to_lowercase(),
         requested_precision: format!("{:?}", requested.precision).to_lowercase(),
         requested_execution_mode: format!("{:?}", requested.execution_mode).to_lowercase(),
-        resolved_discretization: format!("{:?}", transient.resolved_discretization).to_lowercase(),
-        resolved_device: format!("{:?}", transient.resolved_device).to_lowercase(),
-        resolved_precision: format!("{:?}", transient.resolved_precision).to_lowercase(),
+        resolved_discretization: format!("{:?}", resolved.resolved_discretization).to_lowercase(),
+        resolved_device: format!("{:?}", resolved.resolved_device).to_lowercase(),
+        resolved_precision: format!("{:?}", resolved.resolved_precision).to_lowercase(),
         resolved_execution_mode: "strict".into(),
         scene_revision,
         plan_revision,
@@ -2136,18 +2237,19 @@ fn materialize_one_way_problem(
                         spin_memory_loss,
                         ..
                     } => {
-                        if spin_memory_loss.is_some() {
-                            return Err(run_error(
-                                "sml_reservoir.fullmag.v2 is not executable in the FDM reference runner",
-                            ));
-                        }
                         SpinInterfaceLaw::MixingConductance {
                             g_up_s_per_m2: *g_up_spm2,
                             g_down_s_per_m2: *g_down_spm2,
                             g_r_s_per_m2: *g_r_spm2,
                             g_i_s_per_m2: *g_i_spm2,
                             g_sml_s_per_m2: *g_sml_spm2,
-                            sml_reservoir: None,
+                            sml_reservoir: spin_memory_loss.as_ref().map(|reservoir| {
+                                SpinMemoryLossReservoirLaw {
+                                    g_n_s_per_m2: reservoir.g_n_spm2,
+                                    g_f_s_per_m2: reservoir.g_f_spm2,
+                                    g_lattice_s_per_m2: reservoir.g_lattice_spm2,
+                                }
+                            }),
                             magnetization: magnetization[interface.to_cell as usize],
                         }
                     },
@@ -2230,6 +2332,15 @@ fn solve_one_way_snapshot(
                 backflow_longitudinal_apm2: observation.backflow_longitudinal_a_per_m2,
                 absorbed_transverse_apm2: observation.absorbed_transverse_a_per_m2,
                 spin_memory_loss_apm2: observation.spin_memory_loss_a_per_m2,
+                sml_reservoir: observation.sml_reservoir.map(|reservoir| {
+                    FdmSpinMemoryLossReservoirSnapshot {
+                        reservoir_potential_v: reservoir.reservoir_potential_v,
+                        normal_to_reservoir_apm2: reservoir.normal_to_reservoir_a_per_m2,
+                        ferromagnet_to_reservoir_apm2: reservoir.ferromagnet_to_reservoir_a_per_m2,
+                        reservoir_to_lattice_apm2: reservoir.reservoir_to_lattice_a_per_m2,
+                        surface_power_w_per_m2: reservoir.surface_power_w_per_m2,
+                    }
+                }),
                 from_side_outgoing_apm2: observation.from_side_outgoing_a_per_m2,
                 to_side_transmitted_apm2: observation.to_side_transmitted_a_per_m2,
             }
@@ -3555,6 +3666,81 @@ mod tests {
         assert_eq!(
             document["evaluation"]["modules"][0]["telemetry"]["transport_outer_error_ratio"],
             0.0
+        );
+    }
+
+    #[test]
+    fn reference_runner_publishes_sml_reservoir_balance_and_power() {
+        let mut plan = reciprocal_plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let descriptor = resolved
+            .fdm_cpu_double_reciprocal
+            .as_mut()
+            .expect("reciprocal descriptor");
+        descriptor.region_ids = vec![0, 0, 1, 1];
+        descriptor.interfaces = vec![fullmag_ir::ResolvedSpinInterfaceFaceIR {
+            source_id: "sml".into(),
+            face: fullmag_ir::StructuredInternalFaceIR {
+                axis: 0,
+                negative_cell: 1,
+                positive_cell: 2,
+            },
+            from_cell: 1,
+            to_cell: 2,
+            law: fullmag_ir::ResolvedSpinInterfaceLawIR::MixingConductance {
+                g_up_spm2: 2.0,
+                g_down_spm2: 3.0,
+                g_r_spm2: 4.0,
+                g_i_spm2: 0.0,
+                g_sml_spm2: 0.0,
+                spin_memory_loss: Some(fullmag_ir::SpinMemoryLossReservoirIR {
+                    g_n_spm2: 2.0,
+                    g_f_spm2: 3.0,
+                    g_lattice_spm2: 4.0,
+                    formula_version: "sml_reservoir.fullmag.v2".into(),
+                }),
+                formula_version: "magnetoelectronic.fullmag.v2".into(),
+            },
+        }];
+        resolved.capabilities.push("transport.spin.memory_loss".into());
+        plan.fixed_timestep = Some(1e-15);
+        plan.integrator = Some(IntegratorChoice::Heun);
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.material = FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 8e5,
+            exchange_stiffness: 13e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+
+        let executed = super::super::reference::execute_reference_fdm(
+            &plan,
+            1e-15,
+            &[],
+            None,
+            None,
+        )
+        .expect("SML reservoir reference run");
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .expect("accepted reciprocal transport artifact");
+        let document: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("transport artifact JSON");
+        let reservoir = &document["evaluation"]["modules"][0]["interface_fluxes"][0]
+            ["sml_reservoir"];
+        assert!(reservoir.is_object(), "{document}");
+        assert!(reservoir["surface_power_w_per_m2"].as_f64().unwrap() >= 0.0);
+        assert_eq!(
+            reservoir["reservoir_to_lattice_apm2"]
+                .as_array()
+                .expect("lattice flux vector")
+                .len(),
+            3
         );
     }
 }

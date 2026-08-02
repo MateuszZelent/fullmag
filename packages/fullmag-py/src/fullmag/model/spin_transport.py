@@ -11,6 +11,7 @@ from fullmag.model.spin_torque import RegionRef
 
 
 DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA = "dos_isotropic_nonmagnetic.fullmag.v1"
+ELEMENTARY_CHARGE_C = 1.602176634e-19
 
 
 def _unit_vector(value: Sequence[float], name: str) -> tuple[float, float, float]:
@@ -78,6 +79,7 @@ class SpinTransportMaterial:
     lambda_phi_m: float | None = None
     spin_capacitance_As_per_V_m3: float | None = None
     capacitance_formula_version: str | None = None
+    density_of_states_per_spin_Jinv_m3: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sigma_s_Spm", require_positive(self.sigma_s_Spm, "sigma_s_Spm"))
@@ -91,11 +93,13 @@ class SpinTransportMaterial:
             object.__setattr__(self, "lambda_j_m", require_positive(self.lambda_j_m, "lambda_j_m"))
         if self.lambda_phi_m is not None:
             object.__setattr__(self, "lambda_phi_m", require_positive(self.lambda_phi_m, "lambda_phi_m"))
-        if (self.spin_capacitance_As_per_V_m3 is None) != (self.capacitance_formula_version is None):
+        has_capacitance = self.spin_capacitance_As_per_V_m3 is not None
+        has_density_of_states = self.density_of_states_per_spin_Jinv_m3 is not None
+        if (has_capacitance or has_density_of_states) != (self.capacitance_formula_version is not None):
             raise ValueError(
-                "spin_capacitance_As_per_V_m3 and capacitance_formula_version must be authored together"
+                "spin capacitance/DOS and capacitance_formula_version must be authored together"
             )
-        if self.spin_capacitance_As_per_V_m3 is not None:
+        if has_capacitance:
             object.__setattr__(
                 self,
                 "spin_capacitance_As_per_V_m3",
@@ -114,6 +118,40 @@ class SpinTransportMaterial:
                     "capacitance_formula_version must be "
                     f"'{DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA}'"
                 )
+        if has_density_of_states:
+            density_of_states = require_positive(
+                self.density_of_states_per_spin_Jinv_m3,
+                "density_of_states_per_spin_Jinv_m3",
+            )
+            object.__setattr__(
+                self,
+                "density_of_states_per_spin_Jinv_m3",
+                density_of_states,
+            )
+            if self.capacitance_formula_version != DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA:
+                raise ValueError(
+                    "capacitance_formula_version must be "
+                    f"'{DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA}'"
+                )
+            if has_capacitance:
+                expected = ELEMENTARY_CHARGE_C**2 * density_of_states
+                if not math.isclose(
+                    self.spin_capacitance_As_per_V_m3 or 0.0,
+                    expected,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-300,
+                ):
+                    raise ValueError(
+                        "spin_capacitance_As_per_V_m3 must equal e^2 times "
+                        "density_of_states_per_spin_Jinv_m3"
+                    )
+
+    def resolved_spin_capacitance_As_per_V_m3(self) -> float | None:
+        if self.spin_capacitance_As_per_V_m3 is not None:
+            return self.spin_capacitance_As_per_V_m3
+        if self.density_of_states_per_spin_Jinv_m3 is not None:
+            return ELEMENTARY_CHARGE_C**2 * self.density_of_states_per_spin_Jinv_m3
+        return None
 
     def to_ir(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -126,6 +164,9 @@ class SpinTransportMaterial:
         }
         if self.spin_capacitance_As_per_V_m3 is not None:
             value["spin_capacitance_As_per_V_m3"] = self.spin_capacitance_As_per_V_m3
+        if self.density_of_states_per_spin_Jinv_m3 is not None:
+            value["density_of_states_per_spin_Jinv_m3"] = self.density_of_states_per_spin_Jinv_m3
+        if self.capacitance_formula_version is not None:
             value["capacitance_formula_version"] = self.capacitance_formula_version
         return value
 
@@ -357,7 +398,8 @@ class SpinDriftDiffusion:
         if not all(isinstance(item, SpinTransportMaterialAssignment) for item in resolved_materials):
             raise TypeError("materials must contain SpinTransportMaterialAssignment values")
         if mode == "transient" and any(
-            item.material.spin_capacitance_As_per_V_m3 is None for item in resolved_materials
+            item.material.resolved_spin_capacitance_As_per_V_m3() is None
+            for item in resolved_materials
         ):
             raise ValueError(
                 "transient SpinDriftDiffusion requires physical spin_capacitance_As_per_V_m3 "

@@ -50,11 +50,23 @@ pub struct ChargeTransportMaterialAssignmentIR {
 pub struct ChargeTransportMaterialIR {
     #[serde(rename = "sigma_Spm")]
     pub sigma_spm: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_parallel_Spm")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_parallel_Spm"
+    )]
     pub sigma_parallel_spm: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_perpendicular_Spm")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_perpendicular_Spm"
+    )]
     pub sigma_perpendicular_spm: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_AHE_Spm")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_AHE_Spm"
+    )]
     pub sigma_ahe_spm: Option<f64>,
 }
 
@@ -162,6 +174,21 @@ pub struct SpinTransportMaterialIR {
     pub spin_capacitance_as_per_v_m3: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacitance_formula_version: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "density_of_states_per_spin_Jinv_m3"
+    )]
+    pub density_of_states_per_spin_j_inv_m3: Option<f64>,
+}
+
+impl SpinTransportMaterialIR {
+    pub fn resolved_spin_capacitance_as_per_v_m3(&self) -> Option<f64> {
+        self.spin_capacitance_as_per_v_m3.or_else(|| {
+            self.density_of_states_per_spin_j_inv_m3
+                .map(crate::spin_capacitance_from_density_of_states)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

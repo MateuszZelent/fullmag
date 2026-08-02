@@ -1366,10 +1366,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             "transport_constitutive.one_way.fullmag.v1"
         };
         if source_model != expected_model {
-            errors.push(format!("{prefix} current source model is inconsistent with its coupling"));
+            errors.push(format!(
+                "{prefix} current source model is inconsistent with its coupling"
+            ));
         }
         if module.constitutive_version != expected_constitutive {
-            errors.push(format!("{prefix}.constitutive_version is inconsistent with its coupling"));
+            errors.push(format!(
+                "{prefix}.constitutive_version is inconsistent with its coupling"
+            ));
         }
         if module.requested_execution.precision != crate::ExecutionPrecision::Double {
             errors.push(format!(
@@ -1394,15 +1398,38 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             {
                 errors.push(format!("{prefix}.materials[{material_index}] theta_sh must be finite and lambda_sf_m > 0"));
             }
+            let density_of_states = material.density_of_states_per_spin_j_inv_m3;
+            let has_physical_capacitance_source =
+                material.spin_capacitance_as_per_v_m3.is_some() || density_of_states.is_some();
             match (
-                material.spin_capacitance_as_per_v_m3,
+                has_physical_capacitance_source,
                 material.capacitance_formula_version.as_deref(),
             ) {
-                (Some(capacitance), Some(version)) => {
+                (true, Some(version)) => {
+                    if let Some(capacitance) = material.spin_capacitance_as_per_v_m3 {
                     if !capacitance.is_finite() || capacitance <= 0.0 {
                         errors.push(format!(
                             "{prefix}.materials[{material_index}].spin_capacitance_As_per_V_m3 must be finite and > 0"
                         ));
+                    }
+                    }
+                    if let Some(density) = density_of_states {
+                        if !density.is_finite() || density <= 0.0 {
+                            errors.push(format!(
+                                "{prefix}.materials[{material_index}].density_of_states_per_spin_Jinv_m3 must be finite and > 0"
+                            ));
+                        }
+                        if let Some(capacitance) = material.spin_capacitance_as_per_v_m3 {
+                            let expected =
+                                crate::spin_capacitance_from_density_of_states(density);
+                            let tolerance = 1.0e-12
+                                * capacitance.abs().max(expected.abs()).max(1.0e-300);
+                            if (capacitance - expected).abs() > tolerance {
+                                errors.push(format!(
+                                    "{prefix}.materials[{material_index}] spin capacitance must equal e^2 times density_of_states_per_spin_Jinv_m3"
+                                ));
+                            }
+                        }
                     }
                     if version.trim().is_empty() {
                         errors.push(format!(
@@ -1417,12 +1444,15 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                         ));
                     }
                 }
-                (None, None) if module.mode == crate::SpinTransportModeIR::Steady => {}
-                (None, None) => errors.push(format!(
+                (false, None) if module.mode == crate::SpinTransportModeIR::Steady => {}
+                (false, None) => errors.push(format!(
                     "{prefix}.materials[{material_index}] transient mode requires physical spin capacitance and formula version"
                 )),
-                _ => errors.push(format!(
-                    "{prefix}.materials[{material_index}] spin capacitance and formula version must be authored together"
+                (false, Some(_)) => errors.push(format!(
+                    "{prefix}.materials[{material_index}] capacitance_formula_version requires spin capacitance or density of states"
+                )),
+                (true, None) => errors.push(format!(
+                    "{prefix}.materials[{material_index}] spin capacitance or density of states requires capacitance_formula_version"
                 )),
             }
             let sigma_ref = charge_definition.and_then(|definition| {
@@ -1435,8 +1465,20 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             if let Some(sigma) = sigma_ref {
                 let reciprocal_lambda_min = if reciprocal {
                     charge_definition
-                        .and_then(|definition| definition.materials.iter().find(|charge| charge.region == assignment.region))
-                        .and_then(|charge| Some(charge.material.sigma_parallel_spm?.min(charge.material.sigma_perpendicular_spm?)))
+                        .and_then(|definition| {
+                            definition
+                                .materials
+                                .iter()
+                                .find(|charge| charge.region == assignment.region)
+                        })
+                        .and_then(|charge| {
+                            Some(
+                                charge
+                                    .material
+                                    .sigma_parallel_spm?
+                                    .min(charge.material.sigma_perpendicular_spm?),
+                            )
+                        })
                 } else {
                     Some(sigma)
                 };
@@ -1479,15 +1521,11 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                     ("g_sml_Spm2", *g_sml_spm2),
                 ] {
                     if !value.is_finite() || value < 0.0 {
-                        errors.push(format!(
-                            "{interface_prefix}.{name} must be finite and >= 0"
-                        ));
+                        errors.push(format!("{interface_prefix}.{name} must be finite and >= 0"));
                     }
                 }
                 if !g_i_spm2.is_finite() {
-                    errors.push(format!(
-                        "{interface_prefix}.g_i_Spm2 must be finite"
-                    ));
+                    errors.push(format!("{interface_prefix}.g_i_Spm2 must be finite"));
                 }
                 if *g_sml_spm2 > 0.0 {
                     errors.push(format!(
@@ -1510,9 +1548,7 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                             ));
                         }
                     }
-                    if !reservoir.g_lattice_spm2.is_finite()
-                        || reservoir.g_lattice_spm2 <= 0.0
-                    {
+                    if !reservoir.g_lattice_spm2.is_finite() || reservoir.g_lattice_spm2 <= 0.0 {
                         errors.push(format!(
                             "{interface_prefix}.spin_memory_loss.g_lattice_Spm2 must be finite and > 0"
                         ));
@@ -1553,10 +1589,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                         && policy.eta_transport.is_finite()
                         && policy.eta_transport > 0.0
                         && policy.eta_transport <= 1.0 => {}
-                _ => errors.push(format!("{prefix}.solver requires a valid reciprocal_nonlinear policy for M2")),
+                _ => errors.push(format!(
+                    "{prefix}.solver requires a valid reciprocal_nonlinear policy for M2"
+                )),
             }
         } else if module.solver.reciprocal_nonlinear.is_some() {
-            errors.push(format!("{prefix}.solver.reciprocal_nonlinear is valid only for M2"));
+            errors.push(format!(
+                "{prefix}.solver.reciprocal_nonlinear is valid only for M2"
+            ));
         }
         if module.solver.linear.relative_tolerance <= 0.0
             || module.solver.linear.absolute_tolerance < 0.0

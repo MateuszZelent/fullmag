@@ -7022,6 +7022,8 @@ export interface components {
         SceneSpinTransport: components["schemas"]["KnownSceneSpinTransport"] | components["schemas"]["UnsupportedAuthoringRecord"];
         SceneSpinTransportMaterial: {
             capacitance_formula_version?: string | null;
+            /** Format: double */
+            density_of_states_per_spin_Jinv_m3?: number | null;
             lambda_j_m: components["schemas"]["SceneReactionLength"];
             lambda_phi_m: components["schemas"]["SceneReactionLength"];
             /** Format: double */

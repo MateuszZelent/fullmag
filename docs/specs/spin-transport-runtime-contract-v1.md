@@ -254,10 +254,17 @@ SpinTransportMaterial = {
   lambda_sf_m>0,
   lambda_j_m:(positive|"disabled"),
   lambda_phi_m:(positive|"disabled"),
-  spin_capacitance_As_per_V_m3:(positive|required only for transient),
-  capacitance_formula_version:(nonempty|required with spin_capacitance)
+  spin_capacitance_As_per_V_m3:(positive|optional calibrated reduction),
+  density_of_states_per_spin_Jinv_m3:(positive|optional per-spin DOS adapter),
+  capacitance_formula_version:(nonempty|required with either source)
 }
 ```
+
+For `dos_isotropic_nonmagnetic.fullmag.v1`, the planner derives
+`C_s=e^2 N_0` from `density_of_states_per_spin_Jinv_m3`. An explicitly authored
+`C_s` is a calibrated scalar susceptibility; when both values are present they
+must agree within `1e-12` relative error. A transient material must provide one
+of these physical sources; arbitrary capacitance formula strings are rejected.
 
 In ferromagnets the dissipative block MUST satisfy
 `sigma_s - polarization_p^2*sigma_ref > 0`, where `sigma_ref` is the bound

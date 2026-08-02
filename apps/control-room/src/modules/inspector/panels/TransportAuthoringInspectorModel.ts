@@ -9,6 +9,8 @@ import {
   type TransportFamily,
 } from "@/shared/domain/physics/transportRecognition";
 
+const ELEMENTARY_CHARGE_C = 1.602176634e-19;
+
 export interface CurrentTransportDraft {
   boundaries: string;
   conductivity: string;
@@ -91,6 +93,7 @@ export function resolveTransportRecord<T extends SceneCurrentTransport | SceneSp
 interface SpinMaterialAssignmentDraftValue {
   material?: {
     capacitance_formula_version?: unknown;
+    density_of_states_per_spin_Jinv_m3?: unknown;
     spin_capacitance_As_per_V_m3?: unknown;
   };
 }
@@ -210,17 +213,30 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
   if (!Array.isArray(materials)) throw new Error("Spin materials must be a JSON array.");
   materials.forEach(({ material }, index) => {
     const capacitance = material?.spin_capacitance_As_per_V_m3;
+    const densityOfStates = material?.density_of_states_per_spin_Jinv_m3;
     const version = material?.capacitance_formula_version;
     const hasCapacitance = capacitance !== undefined && capacitance !== null;
+    const hasDensityOfStates = densityOfStates !== undefined && densityOfStates !== null;
     const hasVersion = version !== undefined && version !== null;
-    if (hasCapacitance !== hasVersion) {
-      throw new Error(`Spin material ${index + 1}: spin capacitance and formula version must be authored together.`);
+    if ((hasCapacitance || hasDensityOfStates) !== hasVersion) {
+      throw new Error(`Spin material ${index + 1}: spin capacitance/DOS and formula version must be authored together.`);
     }
-    if (draft.mode === "transient" && !hasCapacitance) {
-      throw new Error(`Spin material ${index + 1}: transient mode requires spin_capacitance_As_per_V_m3 and capacitance_formula_version.`);
+    if (draft.mode === "transient" && !hasCapacitance && !hasDensityOfStates) {
+      throw new Error(`Spin material ${index + 1}: transient mode requires spin_capacitance_As_per_V_m3 or density_of_states_per_spin_Jinv_m3 and capacitance_formula_version.`);
     }
     if (hasCapacitance && (typeof capacitance !== "number" || !Number.isFinite(capacitance) || capacitance <= 0)) {
       throw new Error(`Spin material ${index + 1}: spin_capacitance_As_per_V_m3 must be finite and greater than zero.`);
+    }
+    if (hasDensityOfStates && (typeof densityOfStates !== "number" || !Number.isFinite(densityOfStates) || densityOfStates <= 0)) {
+      throw new Error(`Spin material ${index + 1}: density_of_states_per_spin_Jinv_m3 must be finite and greater than zero.`);
+    }
+    if (hasCapacitance && hasDensityOfStates) {
+      const expected = ELEMENTARY_CHARGE_C ** 2 * (densityOfStates as number);
+      const actual = capacitance as number;
+      const tolerance = 1e-12 * Math.max(Math.abs(actual), Math.abs(expected), 1e-300);
+      if (Math.abs(actual - expected) > tolerance) {
+        throw new Error(`Spin material ${index + 1}: spin_capacitance_As_per_V_m3 must equal e^2 times density_of_states_per_spin_Jinv_m3.`);
+      }
     }
     if (hasVersion && (typeof version !== "string" || version.trim() === "")) {
       throw new Error(`Spin material ${index + 1}: capacitance_formula_version must be a non-empty string.`);

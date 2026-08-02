@@ -170,6 +170,40 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
                 lambda_sf_m=1.0,
             )
 
+    def test_transient_dos_adapter_derives_spin_capacitance(self) -> None:
+        material = fm.SpinTransportMaterial(
+            sigma_s_Spm=1.0,
+            polarization_p=0.0,
+            theta_sh=0.0,
+            lambda_sf_m=1.0,
+            density_of_states_per_spin_Jinv_m3=2.0,
+            capacitance_formula_version="dos_isotropic_nonmagnetic.fullmag.v1",
+        )
+        ir = material.to_ir()
+        self.assertEqual(ir["density_of_states_per_spin_Jinv_m3"], 2.0)
+        self.assertNotIn("spin_capacitance_As_per_V_m3", ir)
+        transient = fm.SpinDriftDiffusion(
+            id="transient-dos",
+            current_source_id="charge",
+            domain=[self.nm],
+            materials=[fm.SpinTransportMaterialAssignment(self.nm, material)],
+            mode="transient",
+        )
+        self.assertEqual(
+            transient.to_ir()["materials"][0]["material"]["density_of_states_per_spin_Jinv_m3"],
+            2.0,
+        )
+        with self.assertRaisesRegex(ValueError, "must equal e\\^2"):
+            fm.SpinTransportMaterial(
+                sigma_s_Spm=1.0,
+                polarization_p=0.0,
+                theta_sh=0.0,
+                lambda_sf_m=1.0,
+                spin_capacitance_As_per_V_m3=1.0,
+                density_of_states_per_spin_Jinv_m3=2.0,
+                capacitance_formula_version="dos_isotropic_nonmagnetic.fullmag.v1",
+            )
+
     def test_coupled_imex_ark2_is_owned_by_llg_and_round_trips_exactly(self) -> None:
         dynamics = fm.LLG(
             integrator="coupled_imex_ark2",

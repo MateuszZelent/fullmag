@@ -15942,6 +15942,13 @@
               "null"
             ]
           },
+          "density_of_states_per_spin_Jinv_m3": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "lambda_j_m": {
             "$ref": "#/components/schemas/SceneReactionLength"
           },

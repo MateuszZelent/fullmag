@@ -129,7 +129,19 @@ R_phi = sigma_s/(2 lambda_phi^2) m x (mu_s x m).
 ```
 
 M1/M2 are quasistatic (`partial_t mu_s=0`). M3 requires a physical,
-versioned `C_s`; assigning `C_s=1` is dimensionally invalid. Outside a
+versioned `C_s`; assigning `C_s=1` is dimensionally invalid. For the canonical
+isotropic non-magnetic reduction, the public material may provide the
+per-spin density of states `N_0 [J^-1 m^-3]` and the planner derives
+
+```text
+C_s = e^2 N_0,
+e = 1.602176634e-19 C.
+```
+
+An explicit scalar `C_s` remains a calibrated susceptibility reduction. If
+both `C_s` and `N_0` are authored, they must agree at relative tolerance
+`1e-12`; a ferromagnetic material without a named susceptibility tensor or
+documented reduction is fail-closed. Outside a
 ferromagnet `P=R_J=R_phi=0`. Every active length is strictly positive;
 `lambda=infinity` is represented by an explicit disabled reaction, never a
 zero coefficient. Only `R_J+R_phi` transfers angular momentum to the magnet:
@@ -321,6 +333,7 @@ production authoring choice in M3.
 | `sigma`, `sigma_s`, `sigma_parallel/perp`, `sigma_AHE` | conductivity | S/m |
 | `P`, `theta_SH` | signed dimensionless coefficients | 1, finite |
 | `C_s` | spin capacitance/susceptibility | A s V^-1 m^-3, `>0` in M3 |
+| `N_0` | per-spin density of states for the canonical DOS adapter | J^-1 m^-3, `>0`; `C_s=e^2N_0` |
 | `lambda_sf/J/phi` | reaction lengths | m, `>0` when active |
 | `R_sf/J/phi` | volumetric spin sink | A/m^3 |
 | `G_up/down/r/i/SML` | interface conductance | S/m^2 |
