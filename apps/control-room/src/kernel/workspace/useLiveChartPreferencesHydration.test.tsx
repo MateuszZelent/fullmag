@@ -2,10 +2,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LIVE_CHART_PREFERENCES_STORAGE_KEY,
+  MAX_NEW_STORED_BYTES,
   createDefaultLiveChartPreferences,
   resetLiveChartPreferencesStoreForTests,
   liveChartPreferencesStore,
 } from "./liveChartPreferences";
+
+function escapedText(prefix: string, maximumLength: number): string {
+  const escapedToken = `\"${String.fromCharCode(0)}${String.fromCharCode(0xd800)}`;
+  return `${prefix}${escapedToken.repeat(Math.ceil(maximumLength / escapedToken.length))}`.slice(0, maximumLength);
+}
+
+function escapedDescriptorPatch(index: number) {
+  return {
+    displayUnits: {},
+    liveMode: "paused" as const,
+    range: { mode: "tailRows" as const, rows: 24 },
+    selectedSeriesIds: Array.from({ length: 100 }, (_, seriesIndex) => escapedText(`${index}-${seriesIndex}:`, 160)),
+    targetPoints: 1600 as const,
+    xAxisId: escapedText(`time-${index}:`, 160),
+  };
+}
 
 afterEach(() => {
   vi.doUnmock("react");
@@ -116,6 +133,68 @@ describe("useLiveChartPreferencesHydration", () => {
     expect(writeKeys).toEqual([LIVE_CHART_PREFERENCES_STORAGE_KEY]);
     expect(values.get("fm:analysis-chart-preferences:v1")).toBe(legacy);
     expect(notifications).toBe(1);
+    unsubscribe();
+  });
+
+  it("round-trips compact escaped preferences through browser storage", () => {
+    const values = new Map<string, string>();
+    const writes: string[] = [];
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => values.delete(key),
+      setItem: (key: string, value: string) => {
+        writes.push(key);
+        values.set(key, value);
+      },
+    } as unknown as Storage;
+
+    resetLiveChartPreferencesStoreForTests(storage);
+    const unsubscribe = liveChartPreferencesStore.subscribe(() => undefined);
+    writes.length = 0;
+    for (let index = 0; index < 3; index += 1) {
+      liveChartPreferencesStore.updateDescriptor(escapedText(`descriptor-${index}:`, 160), () => escapedDescriptorPatch(index));
+    }
+    const persisted = values.get(LIVE_CHART_PREFERENCES_STORAGE_KEY);
+    const expected = liveChartPreferencesStore.getSnapshot();
+
+    expect(persisted).toBeDefined();
+    expect(new TextEncoder().encode(persisted!).byteLength).toBeLessThanOrEqual(MAX_NEW_STORED_BYTES);
+    expect(persisted).toContain('\\"');
+    expect(persisted).toContain("\\u0000");
+    expect(persisted).toContain("\\ud800");
+
+    resetLiveChartPreferencesStoreForTests(storage);
+    const rehydratedUnsubscribe = liveChartPreferencesStore.subscribe(() => undefined);
+
+    expect(liveChartPreferencesStore.getSnapshot()).toEqual(expected);
+    unsubscribe();
+    rehydratedUnsubscribe();
+  });
+
+  it("rejects an escaped update over budget without snapshot drift or a storage write", () => {
+    const values = new Map<string, string>();
+    const writes: string[] = [];
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => values.delete(key),
+      setItem: (key: string, value: string) => {
+        writes.push(key);
+        values.set(key, value);
+      },
+    } as unknown as Storage;
+
+    resetLiveChartPreferencesStoreForTests(storage);
+    const unsubscribe = liveChartPreferencesStore.subscribe(() => undefined);
+    for (let index = 0; index < 3; index += 1) {
+      liveChartPreferencesStore.updateDescriptor(escapedText(`descriptor-${index}:`, 160), () => escapedDescriptorPatch(index));
+    }
+    const snapshotBeforeRejectedUpdate = liveChartPreferencesStore.getSnapshot();
+    writes.length = 0;
+
+    liveChartPreferencesStore.updateDescriptor(escapedText("descriptor-over-budget:", 160), () => escapedDescriptorPatch(4));
+
+    expect(liveChartPreferencesStore.getSnapshot()).toBe(snapshotBeforeRejectedUpdate);
+    expect(writes).toEqual([]);
     unsubscribe();
   });
 

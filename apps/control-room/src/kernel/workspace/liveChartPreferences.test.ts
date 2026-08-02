@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultLiveChartPreferences,
   LIVE_CHART_PREFERENCES_STORAGE_KEY,
+  MAX_LEGACY_STORED_BYTES,
   MAX_LIVE_CHART_DESCRIPTORS,
   MAX_NEW_STORED_BYTES,
   parseLiveChartPreferences,
@@ -87,16 +88,22 @@ describe("Live Chart preferences", () => {
     const serialized = serializeLiveChartPreferences(validPreferences);
 
     expect(LIVE_CHART_PREFERENCES_STORAGE_KEY).toBe("fm:live-chart-preferences:v1");
-    expect(JSON.parse(serialized)).toEqual(parseLiveChartPreferences(validPreferences));
+    expect(serialized).not.toBeNull();
+    expect(JSON.parse(serialized!)).toEqual(parseLiveChartPreferences(validPreferences));
   });
 
-  it("rejects an oversized raw storage value before JSON parsing", () => {
+  it("uses the compact Analysis-compatible storage budget", () => {
+    expect(MAX_NEW_STORED_BYTES).toBe(256 * 1024);
+    expect(MAX_LEGACY_STORED_BYTES).toBe(MAX_NEW_STORED_BYTES);
+  });
+
+  it("rejects a raw value one byte over budget before JSON parsing", () => {
     expect(parseStoredLiveChartPreferences(" ".repeat(MAX_NEW_STORED_BYTES + 1))).toEqual(
       createDefaultLiveChartPreferences(),
     );
   });
 
-  it("round-trips the largest bounded v1 preference payload", () => {
+  it("rejects a normalized schema that cannot be persisted compactly", () => {
     const preferences = {
       descriptors: Object.fromEntries(Array.from({ length: MAX_LIVE_CHART_DESCRIPTORS }, (_, descriptorIndex) => {
         const suffix = String(descriptorIndex).padStart(3, "0");
@@ -122,8 +129,7 @@ describe("Live Chart preferences", () => {
 
     const serialized = serializeLiveChartPreferences(preferences);
 
-    expect(parseStoredLiveChartPreferences(serialized)).toEqual(parseLiveChartPreferences(preferences));
-    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(MAX_NEW_STORED_BYTES);
+    expect(serialized).toBeNull();
   });
 
   it("rejects oversized selected-id arrays before visiting their items", () => {

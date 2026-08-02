@@ -25,10 +25,9 @@ export interface LiveChartPreferencesV1 {
 
 export const LIVE_CHART_PREFERENCES_STORAGE_KEY = "fm:live-chart-preferences:v1";
 export const MAX_LIVE_CHART_DESCRIPTORS = 50;
-/** Worst-case serialized v1 payload, including JSON escaping of bounded strings. */
-export const MAX_NEW_STORED_BYTES = 8 * 1024 * 1024;
-/** Matches the legacy Analysis writer's storage ceiling. */
-export const MAX_LEGACY_STORED_BYTES = 256 * 1024;
+/** Matches the compact Analysis preference storage contract. */
+export const MAX_NEW_STORED_BYTES = 256 * 1024;
+export const MAX_LEGACY_STORED_BYTES = MAX_NEW_STORED_BYTES;
 
 const MAX_DESCRIPTOR_ID_LENGTH = 160;
 const MAX_SELECTED_SERIES_IDS = 100;
@@ -193,11 +192,9 @@ export function parseStoredLiveChartPreferences(serialized: string | null): Live
   }
 }
 
-export function serializeLiveChartPreferences(value: unknown): string {
+export function serializeLiveChartPreferences(value: unknown): string | null {
   const serialized = JSON.stringify(parseLiveChartPreferences(value));
-  return fitsStoredBytes(serialized, MAX_NEW_STORED_BYTES)
-    ? serialized
-    : JSON.stringify(createDefaultLiveChartPreferences());
+  return fitsStoredBytes(serialized, MAX_NEW_STORED_BYTES) ? serialized : null;
 }
 
 function storageFromBrowser(): Storage | null {
@@ -328,7 +325,8 @@ class LiveChartPreferencesStore {
       if (stored.available && stored.value === null) {
         const legacy = readStorage(storage, ANALYSIS_CHART_PREFERENCES_STORAGE_KEY);
         preferences = migrateLegacyLiveChartPreferences(legacy.available ? legacy.value : null);
-        writeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY, serializeLiveChartPreferences(preferences));
+        const serialized = serializeLiveChartPreferences(preferences);
+        if (serialized) writeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY, serialized);
       } else if (stored.available) {
         preferences = parseStoredLiveChartPreferences(stored.value);
       }
@@ -365,12 +363,14 @@ class LiveChartPreferencesStore {
 
   private setSnapshot(snapshot: LiveChartPreferencesV1): void {
     const preferences = parseLiveChartPreferences(snapshot);
+    const serialized = serializeLiveChartPreferences(preferences);
+    if (!serialized) return;
     this.hydrationSnapshot = {
       isHydrated: this.hydrationSnapshot.isHydrated,
       preferences,
     };
     const storage = this.storageOverride === undefined ? storageFromBrowser() : this.storageOverride;
-    writeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY, serializeLiveChartPreferences(preferences));
+    writeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY, serialized);
     this.notify();
   }
 
