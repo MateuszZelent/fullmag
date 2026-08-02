@@ -16,6 +16,7 @@ physical problem → continuous equations → FDM and FEM interpretations → im
 reproducible example.
 
 ```{toctree}
+:hidden:
 :maxdepth: 3
 
 foundations/index
@@ -28,6 +29,44 @@ interactions/index
 conventions
 geometry-and-materials
 ```
+
+## Explore the physics library
+
+The library is grouped by purpose so you can open only the branch you need. The complete
+Sphinx navigation remains available in the site sidebar and inside each section page.
+
+:::{dropdown} Foundations
+:class-container: fm-physics-menu__group
+
+Shared definitions used by every interaction and numerical backend:
+
+- {doc}`foundations/conventions-and-units` — SI conventions, reduced magnetization, and canonical quantities.
+- {doc}`foundations/micromagnetic-energy` — total energy functional and variational principle.
+- {doc}`foundations/effective-field` — effective field, direct torque, and interaction composition.
+- {doc}`foundations/llg-equation` — Landau–Lifshitz–Gilbert dynamics and overdamped relaxation.
+- {doc}`foundations/boundary-conditions` — exchange, DMI, periodic, airbox, and mechanical boundaries.
+- {doc}`foundations/observables` — fields, scalars, table output, and materialisation rules.
+:::
+
+:::{dropdown} Interactions
+:class-container: fm-physics-menu__group
+
+Physical energy and torque contributions. Open an interaction page to reach its solver-specific
+FDM/FEM and CPU/GPU branches.
+
+- {doc}`interactions/exchange/index` — exchange stiffness and discrete Laplacians.
+- {doc}`interactions/demagnetization/index` — FDM convolution, FEM Poisson, BEM, periodic demag, and validation.
+- {doc}`interactions/zeeman/index` — externally prescribed magnetic fields.
+- {doc}`interactions/anisotropy/index` — uniaxial and cubic anisotropy.
+- {doc}`interactions/dmi/index` — interfacial and bulk Dzyaloshinskii–Moriya interaction.
+- {doc}`interactions/thermal-noise/index` — thermal stochastic field and reproducibility policy.
+- {doc}`interactions/magnetoelastic/index` — magnetoelastic energy and strain coupling.
+- {doc}`interactions/oersted-field/index` — current-generated Oersted fields.
+- {doc}`interactions/spin-transfer-torque/index` — Zhang–Li and related spin-transfer terms.
+- {doc}`interactions/spin-orbit-torque/index` — spin Hall and other spin-orbit torque models.
+- {doc}`interactions/drift-diffusion-spin-torque/index` — drift–diffusion spin transport coupling.
+- {doc}`interactions/inter-region-couplings/index` — coupling terms across material regions.
+:::
 
 ## Publication rule
 

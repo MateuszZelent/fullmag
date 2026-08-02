@@ -119,6 +119,60 @@ main article span.math {
   opacity: 0.78;
 }
 
+/* Physics landing navigation: keep the overview compact while retaining the full hierarchy. */
+.fm-physics-menu-group {
+  margin-block: 0.9rem;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  overflow: clip;
+}
+
+.fm-physics-menu-group > .sd-summary-title {
+  min-height: 3.25rem;
+  padding: 0.85rem 1rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.fm-physics-menu-group > .sd-summary-title:hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.fm-physics-menu-group > .sd-summary-title:focus-visible {
+  outline: 0.18rem solid color-mix(in srgb, #2563eb 72%, transparent);
+  outline-offset: -0.18rem;
+}
+
+.fm-physics-menu-group > .sd-summary-content {
+  padding: 0.15rem 1.15rem 1rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.fm-physics-menu-group > .sd-summary-content > ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem 1.25rem;
+  margin: 0.65rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.fm-physics-menu-group > .sd-summary-content > ul li {
+  min-width: 0;
+  padding: 0.18rem 0;
+}
+
+.fm-physics-menu-group > .sd-summary-content > ul a {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48rem) {
+  .fm-physics-menu-group > .sd-summary-content > ul {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Public landing page: institutional identity first, concise content second. */
 .fm-home-masthead {
   display: grid;
