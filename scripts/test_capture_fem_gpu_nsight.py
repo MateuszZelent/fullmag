@@ -66,6 +66,10 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
         "fem.relax.armijo",
         "fem.demag.rhs",
         "fem.demag.hypre.apply",
+        "fullmag.demag.wait_in_enqueue",
+        "fullmag.demag.hypre_mult_host",
+        "fullmag.demag.hypre_device",
+        "fullmag.demag.wait_out_enqueue",
         "fem.demag.recovery",
         "fem.preview.snapshot",
         "fem.host.callback",
@@ -104,6 +108,17 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert '"-DFULLMAG_ENABLE_NVTX={}"' in sys_build
 
     exporter = (REPO_ROOT / "scripts/export_fem_gpu_runtime.sh").read_text(encoding="utf-8")
+    # The four HYPRE subranges are emitted by the native demag stage, not by
+    # the runtime exporter script.  Keep the exporter assertion limited to the
+    # ranges that this script itself owns; the combined source assertion above
+    # covers the native labels.
+    exporter_owned_ranges = required_ranges - {
+        "fullmag.demag.wait_in_enqueue",
+        "fullmag.demag.hypre_mult_host",
+        "fullmag.demag.hypre_device",
+        "fullmag.demag.wait_out_enqueue",
+    }
+    assert exporter_owned_ranges <= {name for name in exporter_owned_ranges if name in exporter}
     assert '-e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}"' in exporter
     assert "--cfg fullmag_enable_nvtx" in exporter
     assert '"nvtx_enabled"' in exporter
@@ -113,7 +128,9 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert exporter.index(clean) < exporter.index(build)
     assert "inherited RUSTFLAGS contains fullmag_enable_nvtx" in exporter
     assert "only_native_lib_dir" in exporter
-    assert "stale fullmag-fem-sys native artifacts remain after targeted clean" not in exporter
+    stale_guard = "stale fullmag-fem-sys native artifacts remain after targeted clean"
+    assert stale_guard in exporter
+    assert exporter.index(clean) < exporter.index(stale_guard) < exporter.index(build)
     assert "validate_nvtx_artifact" in exporter
     assert "validate_nvtx_symbol_contract" in exporter
     assert "nm -D --defined-only" in exporter
@@ -123,7 +140,7 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert "fullmag_fem_nvtx_range_end" in exporter
     assert 'combined_symbols="$(nm -D "$native_artifact" "$worker_artifact")"' in exporter
     assert 'nm -D "$native_artifact" "$worker_artifact" | grep' not in exporter
-    for range_name in required_ranges:
+    for range_name in exporter_owned_ranges:
         assert range_name in exporter
 
     interop = sources[
@@ -179,6 +196,8 @@ def test_preflight_marks_missing_tool_unavailable() -> None:
     def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         if command[0] == "nsys":
             return subprocess.CompletedProcess(command, 0, "NVIDIA Nsight Systems 2026.1", "")
+        if command[0] == "nvidia-smi":
+            return subprocess.CompletedProcess(command, 0, "RTX 4080 SUPER, 591.86\n", "")
         return subprocess.CompletedProcess(command, 127, "", "ncu: command not found")
 
     result = capture.preflight_tools(fake_run)
@@ -187,6 +206,33 @@ def test_preflight_marks_missing_tool_unavailable() -> None:
     assert result["tools"]["nsys"]["available"] is True
     assert result["tools"]["ncu"]["available"] is False
     assert result["blockers"] == ["ncu unavailable in managed fixture image"]
+    assert result["tools"]["ncu"]["reason"] == "missing_binary"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reason_prefix", "reason"),
+    (
+        ("NVIDIA-SMI has failed because no devices were found", "no CUDA device:", "no_cuda_device"),
+        ("ERR_NVGPUCTRPERM: permission denied", "permission:", "permission"),
+        ("NVIDIA driver/library version mismatch", "driver/tool mismatch:", "driver_tool_mismatch"),
+    ),
+)
+def test_preflight_records_fail_closed_cuda_reason(
+    stderr: str, reason_prefix: str, reason: str
+) -> None:
+    capture = load_capture_module()
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if command[0] in {"nsys", "ncu"}:
+            return subprocess.CompletedProcess(command, 0, f"{command[0]} 2026.1", "")
+        return subprocess.CompletedProcess(command, 1, "", stderr)
+
+    result = capture.preflight_tools(fake_run)
+
+    assert result["status"] == "unavailable"
+    assert reason in result["reasons"]
+    assert result["cuda_device"]["reason"] == reason
+    assert any(str(blocker).startswith(reason_prefix) for blocker in result["blockers"])
 
 
 def test_preflight_only_accepts_available_tools_with_default_off_bundle(
@@ -302,6 +348,10 @@ def test_run_group_has_distinct_headless_compute_and_interactive_host_passes(
         "fem.relax.armijo",
         "fem.demag.rhs",
         "fem.demag.hypre.apply",
+        "fullmag.demag.wait_in_enqueue",
+        "fullmag.demag.hypre_mult_host",
+        "fullmag.demag.hypre_device",
+        "fullmag.demag.wait_out_enqueue",
         "fem.demag.recovery",
     )
     assert capture.HOST_NVTX_RANGES == (

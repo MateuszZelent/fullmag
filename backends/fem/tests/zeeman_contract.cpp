@@ -289,6 +289,14 @@ void regional_drive_abi_layout_is_self_consistent() {
     check(layout.plan_desc_size == sizeof(fullmag_fem_plan_desc), "regional plan size");
     check(layout.plan_regional_field_drives_offset == offsetof(fullmag_fem_plan_desc, regional_field_drives), "regional plan pointer offset");
     check(layout.step_stats_drive_energy_joules_offset == offsetof(fullmag_fem_step_stats, drive_energy_joules), "drive energy offset");
+    check(
+        layout.step_stats_rk_transaction_capture_host_wall_time_ns_offset ==
+            offsetof(fullmag_fem_step_stats, rk_transaction_capture_host_wall_time_ns),
+        "RK transaction capture offset");
+    check(
+        layout.step_stats_demag_hypre_timed_solve_count_offset ==
+            offsetof(fullmag_fem_step_stats, demag_hypre_timed_solve_count),
+        "HYPRE timed solve offset");
 }
 
 void regional_drive_waveform_golden_values() {

@@ -592,6 +592,36 @@ def emit_summary(
             if final is not None
             else None
         ),
+        "demag_hypre_wait_in_enqueue_wall_time_ns": (
+            getattr(final, "demag_hypre_wait_in_enqueue_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_host_api_wall_time_ns": (
+            getattr(final, "demag_hypre_host_api_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_device_elapsed_time_ns": (
+            getattr(final, "demag_hypre_device_elapsed_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_wait_out_enqueue_wall_time_ns": (
+            getattr(final, "demag_hypre_wait_out_enqueue_wall_time_ns", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_event_wait_count": (
+            getattr(final, "demag_hypre_event_wait_count", None)
+            if final is not None
+            else None
+        ),
+        "demag_hypre_timed_solve_count": (
+            getattr(final, "demag_hypre_timed_solve_count", None)
+            if final is not None
+            else None
+        ),
         "demag_solver_setup_reused": (
             getattr(final, "demag_solver_setup_reused", None)
             if final is not None

@@ -1567,9 +1567,11 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU nonlinear-CG must consume accepted endpoint evaluations once while publishing one logical current-state record, every normal/recovery Armijo trial exactly once, and refinement evaluations");
     check(
-        nonlinear_cg_source.find("gpu_rk_capture_step_transaction_device(ctx, reason)") !=
+        nonlinear_cg_source.find(
+                "gpu_relax_capture_step_transaction_device_unprofiled(ctx, reason)") !=
                 std::string::npos &&
-            nonlinear_cg_source.find("gpu_rk_restore_step_transaction_device(ctx, restore_reason)") !=
+            nonlinear_cg_source.find(
+                "gpu_relax_restore_step_transaction_device_unprofiled(ctx, restore_reason)") !=
                 std::string::npos &&
             nonlinear_cg_source.find("restore_gpu_relax_ncg_accepted_evaluation(") !=
                 std::string::npos &&
@@ -2414,7 +2416,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
     check(
         ncg_source.find("gpu_relax_restore_previous_state_after_failure(") !=
                 std::string::npos &&
-            ncg_source.find("gpu_rk_restore_step_transaction_device(") !=
+            ncg_source.find(
+                "gpu_relax_restore_step_transaction_device_unprofiled(") !=
                 std::string::npos &&
             ncg_source.find("gpu_relax_restore_previous_direction(") !=
                 std::string::npos &&

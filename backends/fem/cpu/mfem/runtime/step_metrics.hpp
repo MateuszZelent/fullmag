@@ -40,6 +40,11 @@ void fill_demag_solver_stats(
     const Context &ctx,
     fullmag_fem_step_stats &stats);
 
+/* Publish profiler-only RK transaction and HYPRE stream timing counters. */
+void fill_step_profiler_timing_stats(
+    const Context &ctx,
+    fullmag_fem_step_stats &stats);
+
 /*
  * Fill common native FEM step metrics after an accepted or snapshot evaluation.
  *

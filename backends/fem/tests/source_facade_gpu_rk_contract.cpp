@@ -145,6 +145,97 @@ void gpu_rk_workspace_is_owned_by_cuda_rk_module() {
         "GPU RK stage sequences must use the RK workspace substate");
 }
 
+void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string transaction_header = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" /
+            "rk_step_transaction_device.hpp");
+    const std::string transaction_source = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" /
+            "rk_step_transaction_device.cu");
+    const std::string stats_source = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
+    const std::string publication_source = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" /
+            "rk_step_stats_publication.cpp");
+    const std::string nonlinear_cg_source = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "nonlinear_cg.cpp");
+    const std::string runtime_header = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
+
+    check(
+        runtime_header.find("GpuRkTransactionTelemetryRuntimeState") !=
+                std::string::npos &&
+            runtime_header.find("capture_event_pairs_created") !=
+                std::string::npos &&
+            runtime_header.find("restore_event_pairs_created") !=
+                std::string::npos,
+        "GPU runtime state must own bounded RK transaction event telemetry");
+    check(
+        transaction_header.find("gpu_rk_collect_step_transaction_timing(") !=
+                std::string::npos &&
+            transaction_header.find(
+                "gpu_relax_capture_step_transaction_device_unprofiled(") !=
+                std::string::npos &&
+            transaction_header.find(
+                "gpu_relax_restore_step_transaction_device_unprofiled(") !=
+                std::string::npos,
+        "GPU transaction header must separate RK telemetry from direct-minimizer rollback");
+    check(
+        transaction_source.find("cudaEventRecord") != std::string::npos &&
+            transaction_source.find("cudaEventElapsedTime") != std::string::npos &&
+            transaction_source.find("cudaEventSynchronize") == std::string::npos &&
+            transaction_source.find("cudaDeviceSynchronize") == std::string::npos &&
+            transaction_source.find("kMaxTransactionTimingEventPairs") !=
+                std::string::npos &&
+            transaction_source.find("13u * 3u") != std::string::npos &&
+            transaction_source.find("poisson_solution_full") != std::string::npos,
+        "GPU RK transaction telemetry must time exact D2D payloads without a new synchronization");
+    check(
+        transaction_source.find(
+            "reset_transaction_sample(ctx.gpu_state.rk_transaction_telemetry)") !=
+                std::string::npos &&
+            transaction_source.find(
+                "step_transaction_begin_count == 0") != std::string::npos,
+        "GPU RK transaction capture must reset only at the public-step boundary");
+    check(
+        transaction_source.find("cudaStreamSynchronize") != std::string::npos &&
+            transaction_source.find(
+                "if (restore) {\n        const auto rc = cudaStreamSynchronize") !=
+                std::string::npos,
+        "GPU transaction must retain only the existing rollback fence");
+    check(
+        transaction_source.rfind("GPU RK transaction restore timing readback") >
+            transaction_source.find("if (restore) {\n        const auto rc = cudaStreamSynchronize"),
+        "GPU rollback timing must be collected after the existing restore fence");
+    check(
+        nonlinear_cg_source.find(
+                "gpu_relax_capture_step_transaction_device_unprofiled(") !=
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "gpu_relax_restore_step_transaction_device_unprofiled(") !=
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "gpu_rk_capture_step_transaction_device(") ==
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "gpu_rk_restore_step_transaction_device(") ==
+                std::string::npos,
+        "nonlinear-CG rollback must not be counted as RK transaction telemetry");
+    check(
+        stats_source.find("gpu_rk_collect_step_transaction_timing(ctx, reason)") <
+                stats_source.find("collect_gpu_rk_phase_timing_events(ctx, stats, reason)") &&
+            stats_source.find("gpu_rk_collect_step_transaction_timing(ctx, reason)") <
+                stats_source.find("gpu_rk_publish_final_step_stats(ctx, scalars, stats)"),
+        "GPU transaction events must be collected after the existing scalar readback and before publication");
+    check(
+        publication_source.find("capture_device_elapsed_ns") != std::string::npos &&
+            publication_source.find("restore_device_elapsed_ns") != std::string::npos &&
+            publication_source.find("device_transaction.capture_bytes") !=
+                std::string::npos,
+        "GPU stats publication must expose device transaction elapsed time and bytes");
+}
+
 
 void gpu_exchange_kernels_are_owned_by_cuda_exchange_module() {
     const std::filesystem::path root = fem_source_root();
@@ -2048,6 +2139,7 @@ void gpu_frequency_domain_operator_parity_reports_stiffness_components() {
 
 int main() {
     gpu_rk_workspace_is_owned_by_cuda_rk_module();
+    gpu_rk_transaction_telemetry_is_profiled_without_new_sync();
     gpu_exchange_kernels_are_owned_by_cuda_exchange_module();
     gpu_rk_planning_is_owned_by_cuda_rk_module();
     gpu_rk_step_is_owned_by_cuda_rk_module();

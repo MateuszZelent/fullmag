@@ -437,6 +437,41 @@ pub struct StepStats {
     pub demag_solver_setup_wall_time_ns: u64,
     #[serde(default)]
     pub demag_solver_apply_wall_time_ns: u64,
+    /// Profiler-only RK transaction capture host wall time.
+    #[serde(default)]
+    pub rk_transaction_capture_host_wall_time_ns: u64,
+    /// Device elapsed time for RK transaction capture; zero when not sampled.
+    #[serde(default)]
+    pub rk_transaction_capture_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_capture_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_host_wall_time_ns: u64,
+    /// Device elapsed time for RK transaction restore; zero when not sampled.
+    #[serde(default)]
+    pub rk_transaction_restore_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_rollback_count: u64,
+    #[serde(default)]
+    pub rk_transaction_commit_count: u64,
+    /// Host time to enqueue the Fullmag→HYPRE dependency event.
+    #[serde(default)]
+    pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
+    /// CPU time spent inside the HYPRE host API call.
+    #[serde(default)]
+    pub demag_hypre_host_api_wall_time_ns: u64,
+    /// Device elapsed time measured on the borrowed HYPRE stream.
+    #[serde(default)]
+    pub demag_hypre_device_elapsed_time_ns: u64,
+    /// Host time to enqueue the HYPRE→Fullmag dependency event.
+    #[serde(default)]
+    pub demag_hypre_wait_out_enqueue_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_event_wait_count: u64,
+    #[serde(default)]
+    pub demag_hypre_timed_solve_count: u64,
     #[serde(default)]
     pub demag_solver_setup_reused: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -747,6 +782,20 @@ impl Default for StepStats {
             demag_solve_wall_time_ns: 0,
             demag_solver_setup_wall_time_ns: 0,
             demag_solver_apply_wall_time_ns: 0,
+            rk_transaction_capture_host_wall_time_ns: 0,
+            rk_transaction_capture_device_elapsed_time_ns: 0,
+            rk_transaction_capture_bytes: 0,
+            rk_transaction_restore_host_wall_time_ns: 0,
+            rk_transaction_restore_device_elapsed_time_ns: 0,
+            rk_transaction_restore_bytes: 0,
+            rk_transaction_rollback_count: 0,
+            rk_transaction_commit_count: 0,
+            demag_hypre_wait_in_enqueue_wall_time_ns: 0,
+            demag_hypre_host_api_wall_time_ns: 0,
+            demag_hypre_device_elapsed_time_ns: 0,
+            demag_hypre_wait_out_enqueue_wall_time_ns: 0,
+            demag_hypre_event_wait_count: 0,
+            demag_hypre_timed_solve_count: 0,
             demag_solver_setup_reused: false,
             demag_solver: None,
             demag_preconditioner: None,

@@ -3167,6 +3167,56 @@ verify-fem-gpu-demag-performance-benchmark:
         "${baseline_args[@]}" \
         "${demag_budget_args[@]}"'
 
+# T12: prove that profiled FEM GPU HYPRE solves publish separate host/device
+# timing, while the disabled profiler publishes no timing events. This is a
+# diagnostic gate, not a performance claim; both profiler states use the same
+# coarse/fine workload and exact demag policy.
+verify-fem-hypre-device-timing:
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports/task-12-hypre-device-timing
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
+      -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        report_dir=.fullmag/reports/task-12-hypre-device-timing; \
+        mesh_cache="$report_dir/mesh-cache"; \
+        mkdir -p "$mesh_cache"; \
+        for profiler in off on; do \
+          if [ "$profiler" = on ]; then profile=1; profile_args=(--require-gpu-phase-timings); else profile=0; profile_args=(); fi; \
+          FULLMAG_FEM_STEP_PROFILE="$profile" python3 scripts/analysis/fem_gpu_benchmark.py \
+            --meshes coarse,fine \
+            --scenarios box500_airbox_exchange_demag \
+            --integrators heun \
+            --backends gpu \
+            --timestep-policies fixed \
+            --relax-algorithms nonlinear_cg \
+            --demag-solvers CG \
+            --demag-preconditioners AMG \
+            --demag-rtols 1e-12 \
+            --demag-amg-relax-types 6 \
+            --demag-amg-coarsenings 8 \
+            --demag-amg-interpolations 6 \
+            --demag-amg-aggressive-coarsenings 1 \
+            --steps 2 \
+            --dt 1e-13 \
+            --repeat 1 \
+            --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+            --gpu-warmup \
+            --reuse-generated-domain-mesh \
+            --generated-domain-mesh-cache-dir "$mesh_cache" \
+            --require-demag-converged \
+            --require-zero-strict-gpu-global-sync \
+            --require-gpu-strict-residency \
+            --output "$report_dir/profiler-$profiler.csv" \
+            --quiet-json-summary \
+            "${profile_args[@]}"; \
+        done; \
+        python3 scripts/validate_fem_hypre_device_timing.py \
+          --input "$report_dir/profiler-off.csv" "$report_dir/profiler-on.csv" \
+          --output "$report_dir/summary.json"'
+
 bench-fem-gpu-demag-amg-profile-sweep:
     just ensure-managed-fem-runtime
     just verify-fem-demag-poisson-contract

@@ -439,6 +439,30 @@ fn run_json_summary(
         "wall_time_ns": result.steps.last().map(|step| step.wall_time_ns),
         "exchange_wall_time_ns": result.steps.last().map(|step| step.exchange_wall_time_ns),
         "demag_wall_time_ns": result.steps.last().map(|step| step.demag_wall_time_ns),
+        "demag_hypre_wait_in_enqueue_wall_time_ns": result
+            .steps
+            .last()
+            .map(|step| step.demag_hypre_wait_in_enqueue_wall_time_ns),
+        "demag_hypre_host_api_wall_time_ns": result
+            .steps
+            .last()
+            .map(|step| step.demag_hypre_host_api_wall_time_ns),
+        "demag_hypre_device_elapsed_time_ns": result
+            .steps
+            .last()
+            .map(|step| step.demag_hypre_device_elapsed_time_ns),
+        "demag_hypre_wait_out_enqueue_wall_time_ns": result
+            .steps
+            .last()
+            .map(|step| step.demag_hypre_wait_out_enqueue_wall_time_ns),
+        "demag_hypre_event_wait_count": result
+            .steps
+            .last()
+            .map(|step| step.demag_hypre_event_wait_count),
+        "demag_hypre_timed_solve_count": result
+            .steps
+            .last()
+            .map(|step| step.demag_hypre_timed_solve_count),
         "rhs_wall_time_ns": result.steps.last().map(|step| step.rhs_wall_time_ns),
         "extra_energy_wall_time_ns": result.steps.last().map(|step| step.extra_energy_wall_time_ns),
         "snapshot_wall_time_ns": result.steps.last().map(|step| step.snapshot_wall_time_ns),
@@ -847,6 +871,12 @@ mod tests {
                 },
                 fullmag_runner::StepStats {
                     demag_solver_apply_wall_time_ns: 99,
+                    demag_hypre_wait_in_enqueue_wall_time_ns: 7,
+                    demag_hypre_host_api_wall_time_ns: 11,
+                    demag_hypre_device_elapsed_time_ns: 13,
+                    demag_hypre_wait_out_enqueue_wall_time_ns: 17,
+                    demag_hypre_event_wait_count: 19,
+                    demag_hypre_timed_solve_count: 23,
                     wall_time_ns: 601,
                     exchange_wall_time_ns: 101,
                     demag_wall_time_ns: 211,
@@ -876,6 +906,12 @@ mod tests {
         assert_eq!(payload["rhs_wall_time_ns"], 307);
         assert_eq!(payload["extra_energy_wall_time_ns"], 13);
         assert_eq!(payload["snapshot_wall_time_ns"], 17);
+        assert_eq!(payload["demag_hypre_wait_in_enqueue_wall_time_ns"], 7);
+        assert_eq!(payload["demag_hypre_host_api_wall_time_ns"], 11);
+        assert_eq!(payload["demag_hypre_device_elapsed_time_ns"], 13);
+        assert_eq!(payload["demag_hypre_wait_out_enqueue_wall_time_ns"], 17);
+        assert_eq!(payload["demag_hypre_event_wait_count"], 19);
+        assert_eq!(payload["demag_hypre_timed_solve_count"], 23);
     }
 
     fn shared_domain_fem_problem() -> ProblemIR {

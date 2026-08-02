@@ -10,11 +10,59 @@
 #include <utility>
 #include <vector>
 #include <new>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 
 namespace fullmag::fem {
 namespace {
 
 thread_local Context *active_step_transaction_context = nullptr;
+
+using SteadyClock = std::chrono::steady_clock;
+
+uint64_t elapsed_wall_time_ns(SteadyClock::time_point start,
+                              SteadyClock::time_point end)
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+}
+
+template <typename T>
+uint64_t vector_payload_bytes(const std::vector<T> &values)
+{
+    constexpr uint64_t max_value = std::numeric_limits<uint64_t>::max();
+    if (values.size() > max_value / sizeof(T)) {
+        return max_value;
+    }
+    return static_cast<uint64_t>(values.size()) * sizeof(T);
+}
+
+void add_payload_bytes(uint64_t &total, uint64_t value)
+{
+    const uint64_t max_value = std::numeric_limits<uint64_t>::max();
+    total = max_value - total < value ? max_value : total + value;
+}
+
+bool step_profile_enabled(const Context &ctx)
+{
+    const auto &timings = ctx.gpu_state.rk_phase_timings;
+    if (timings.override_configured) {
+        return timings.override_enabled;
+    }
+    const char *raw = std::getenv("FULLMAG_FEM_STEP_PROFILE");
+    if (raw == nullptr || *raw == '\0') {
+        return false;
+    }
+    return std::strcmp(raw, "1") == 0 ||
+        std::strcmp(raw, "true") == 0 ||
+        std::strcmp(raw, "TRUE") == 0 ||
+        std::strcmp(raw, "on") == 0 ||
+        std::strcmp(raw, "ON") == 0 ||
+        std::strcmp(raw, "yes") == 0 ||
+        std::strcmp(raw, "YES") == 0;
+}
 
 #if FULLMAG_HAS_MFEM_STACK
 std::vector<double> capture_vector(const mfem::Vector *vector)
@@ -170,8 +218,9 @@ void restore_phase_timings(
 } // namespace
 
 struct RkStepTransaction::Impl {
-    explicit Impl(Context &context)
+    explicit Impl(Context &context, bool profile_enabled)
         : ctx(context),
+          profile_enabled(profile_enabled),
           base_plan(context.base_plan),
           adaptive_dt(context.adaptive_dt),
           anisotropy(context.anisotropy),
@@ -213,6 +262,61 @@ struct RkStepTransaction::Impl {
             fem_bem_last_u2_residual = workspace->last_u2_residual;
         }
 #endif
+    }
+
+    uint64_t host_snapshot_payload_bytes() const
+    {
+        uint64_t bytes = 0;
+        const auto add = [&bytes](uint64_t value) { add_payload_bytes(bytes, value); };
+        add(vector_payload_bytes(state.m_xyz));
+        add(vector_payload_bytes(attempt_trace.records));
+        add(vector_payload_bytes(anisotropy.uniaxial_axis_x_field));
+        add(vector_payload_bytes(anisotropy.uniaxial_axis_y_field));
+        add(vector_payload_bytes(anisotropy.uniaxial_axis_z_field));
+        add(vector_payload_bytes(anisotropy.h_uniaxial_xyz));
+        add(vector_payload_bytes(anisotropy.h_cubic_xyz));
+        add(vector_payload_bytes(magnetoelastic.strain_voigt));
+        add(vector_payload_bytes(magnetoelastic.h_xyz));
+        add(vector_payload_bytes(exchange.h_xyz));
+        add(vector_payload_bytes(exchange.mfem.h_x));
+        add(vector_payload_bytes(exchange.mfem.h_y));
+        add(vector_payload_bytes(exchange.mfem.h_z));
+        add(vector_payload_bytes(exchange.mfem.component_tmp));
+        add(vector_payload_bytes(demag.h_xyz));
+        add(vector_payload_bytes(demag.h_visual_xyz));
+        add(vector_payload_bytes(demag.cached_xyz));
+        add(vector_payload_bytes(demag.cached_visual_xyz));
+        add(vector_payload_bytes(zeeman.h_ext_xyz));
+        add(vector_payload_bytes(zeeman.h_drive_xyz));
+        for (const auto &drive : zeeman.regional_drives) {
+            add(vector_payload_bytes(drive.target_element_markers));
+            add(vector_payload_bytes(drive.waveform.points));
+            add(vector_payload_bytes(drive.geometry_nodes));
+            add(vector_payload_bytes(drive.basis_h_xyz));
+        }
+        add(vector_payload_bytes(dmi.h_interfacial_xyz));
+        add(vector_payload_bytes(dmi.h_bulk_xyz));
+        add(vector_payload_bytes(effective_field.h_xyz));
+        add(vector_payload_bytes(effective_field.h_visual_xyz));
+        add(vector_payload_bytes(oersted.h_basis_per_ampere_xyz));
+        add(vector_payload_bytes(oersted.h_xyz));
+        add(vector_payload_bytes(thermal_brown.xi_xyz));
+        add(vector_payload_bytes(thermal_brown.h_xyz));
+        add(vector_payload_bytes(gpu_hybrid_stage_m));
+        add(vector_payload_bytes(gpu_hybrid_demag));
+        add(vector_payload_bytes(cpu_k0));
+        add(static_cast<uint64_t>(transfer_audit.hot_loop_violation_message.size()));
+#if FULLMAG_HAS_MFEM_STACK
+        add(vector_payload_bytes(poisson_solution));
+        add(vector_payload_bytes(periodic_solution));
+        add(vector_payload_bytes(poisson_grid_function));
+        add(vector_payload_bytes(fem_bem_u1));
+        add(vector_payload_bytes(fem_bem_u2));
+        add(vector_payload_bytes(fem_bem_total));
+        add(vector_payload_bytes(fem_bem_boundary));
+        add(vector_payload_bytes(fem_bem_rhs));
+#endif
+        return bytes;
     }
 
     void restore_host()
@@ -263,6 +367,7 @@ struct RkStepTransaction::Impl {
     }
 
     Context &ctx;
+    bool profile_enabled = false;
     FemBasePlanRuntimeState base_plan;
     AdaptiveDtRuntimeState adaptive_dt;
     AnisotropyRuntimeState anisotropy;
@@ -323,17 +428,39 @@ bool RkStepTransaction::begin(std::string &error)
     if (impl_ != nullptr && impl_->begun) {
         return true;
     }
+    const bool profile_enabled = step_profile_enabled(*ctx_);
+    const auto begin_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     try {
-        impl_ = std::make_unique<Impl>(*ctx_);
+        impl_ = std::make_unique<Impl>(*ctx_, profile_enabled);
     } catch (const std::bad_alloc &) {
         error = "RK step transaction host snapshot allocation failed";
         return false;
     }
+    const auto host_capture_done = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
+    const uint64_t host_payload_bytes = profile_enabled
+        ? impl_->host_snapshot_payload_bytes()
+        : 0;
 #if FULLMAG_HAS_CUDA_RUNTIME
+    const auto device_capture_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     if (!gpu_rk_capture_step_transaction_device(impl_->ctx, error)) {
         return false;
     }
+    if (profile_enabled) {
+        const auto device_capture_done = SteadyClock::now();
+        ctx_->stepper.transaction_telemetry.step_transaction_device_capture_enqueue_wall_time_ns +=
+            elapsed_wall_time_ns(device_capture_start, device_capture_done);
+    }
 #endif
+    if (profile_enabled) {
+        const auto begin_done = SteadyClock::now();
+        auto &telemetry = ctx_->stepper.transaction_telemetry;
+        telemetry.step_transaction_begin_count += 1;
+        telemetry.step_transaction_begin_wall_time_ns +=
+            elapsed_wall_time_ns(begin_start, begin_done);
+        telemetry.step_transaction_host_capture_wall_time_ns +=
+            elapsed_wall_time_ns(begin_start, host_capture_done);
+        telemetry.step_transaction_host_snapshot_payload_bytes += host_payload_bytes;
+    }
     impl_->begun = true;
     active_step_transaction_context = &impl_->ctx;
     return true;
@@ -344,14 +471,35 @@ bool RkStepTransaction::rollback(std::string &error)
     if (impl_ == nullptr || !impl_->begun || impl_->finished) {
         return true;
     }
+    const bool profile_enabled = impl_->profile_enabled;
+    const auto rollback_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     bool device_ok = true;
 #if FULLMAG_HAS_CUDA_RUNTIME
+    const auto device_restore_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     device_ok = gpu_rk_restore_step_transaction_device(impl_->ctx, error);
+    if (profile_enabled) {
+        const auto device_restore_done = SteadyClock::now();
+        ctx_->stepper.transaction_telemetry.step_transaction_device_restore_wall_time_ns +=
+            elapsed_wall_time_ns(device_restore_start, device_restore_done);
+    }
 #endif
+    const auto host_restore_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->restore_host();
+    const auto host_restore_done = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->finished = true;
     if (active_step_transaction_context == &impl_->ctx) {
         active_step_transaction_context = nullptr;
+    }
+    if (profile_enabled) {
+        const auto rollback_done = SteadyClock::now();
+        auto &telemetry = ctx_->stepper.transaction_telemetry;
+        telemetry.step_transaction_rollback_count += 1;
+        telemetry.step_transaction_rollback_wall_time_ns +=
+            elapsed_wall_time_ns(rollback_start, rollback_done);
+        telemetry.step_transaction_host_restore_wall_time_ns +=
+            elapsed_wall_time_ns(host_restore_start, host_restore_done);
+        telemetry.step_transaction_host_restore_payload_bytes +=
+            impl_->host_snapshot_payload_bytes();
     }
     return device_ok;
 }
@@ -361,9 +509,18 @@ void RkStepTransaction::commit()
     if (impl_ == nullptr) {
         return;
     }
+    const bool profile_enabled = impl_->profile_enabled;
+    const auto commit_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->finished = true;
     if (active_step_transaction_context == &impl_->ctx) {
         active_step_transaction_context = nullptr;
+    }
+    if (profile_enabled) {
+        const auto commit_done = SteadyClock::now();
+        auto &telemetry = ctx_->stepper.transaction_telemetry;
+        telemetry.step_transaction_commit_count += 1;
+        telemetry.step_transaction_commit_wall_time_ns +=
+            elapsed_wall_time_ns(commit_start, commit_done);
     }
 }
 
@@ -381,8 +538,9 @@ bool rk_restore_active_step_device_checkpoint(Context &ctx, std::string &error)
 }
 
 struct RkAttemptCacheSnapshot::Impl {
-    explicit Impl(Context &context)
+    explicit Impl(Context &context, bool profile_enabled)
         : ctx(context),
+          profile_enabled(profile_enabled),
           anisotropy(context.anisotropy),
           magnetoelastic(context.magnetoelastic),
           exchange(context.exchange),
@@ -441,7 +599,55 @@ struct RkAttemptCacheSnapshot::Impl {
 #endif
     }
 
+    uint64_t snapshot_payload_bytes() const
+    {
+        uint64_t bytes = 0;
+        const auto add = [&bytes](uint64_t value) { add_payload_bytes(bytes, value); };
+        add(vector_payload_bytes(anisotropy.uniaxial_axis_x_field));
+        add(vector_payload_bytes(anisotropy.uniaxial_axis_y_field));
+        add(vector_payload_bytes(anisotropy.uniaxial_axis_z_field));
+        add(vector_payload_bytes(anisotropy.h_uniaxial_xyz));
+        add(vector_payload_bytes(anisotropy.h_cubic_xyz));
+        add(vector_payload_bytes(magnetoelastic.strain_voigt));
+        add(vector_payload_bytes(magnetoelastic.h_xyz));
+        add(vector_payload_bytes(exchange.h_xyz));
+        add(vector_payload_bytes(exchange.mfem.h_x));
+        add(vector_payload_bytes(exchange.mfem.h_y));
+        add(vector_payload_bytes(exchange.mfem.h_z));
+        add(vector_payload_bytes(exchange.mfem.component_tmp));
+        add(vector_payload_bytes(demag.h_xyz));
+        add(vector_payload_bytes(demag.h_visual_xyz));
+        add(vector_payload_bytes(demag.cached_xyz));
+        add(vector_payload_bytes(demag.cached_visual_xyz));
+        add(vector_payload_bytes(zeeman.h_ext_xyz));
+        add(vector_payload_bytes(zeeman.h_drive_xyz));
+        for (const auto &drive : zeeman.regional_drives) {
+            add(vector_payload_bytes(drive.target_element_markers));
+            add(vector_payload_bytes(drive.waveform.points));
+            add(vector_payload_bytes(drive.geometry_nodes));
+            add(vector_payload_bytes(drive.basis_h_xyz));
+        }
+        add(vector_payload_bytes(dmi.h_interfacial_xyz));
+        add(vector_payload_bytes(dmi.h_bulk_xyz));
+        add(vector_payload_bytes(effective_field.h_xyz));
+        add(vector_payload_bytes(effective_field.h_visual_xyz));
+        add(vector_payload_bytes(oersted.h_basis_per_ampere_xyz));
+        add(vector_payload_bytes(oersted.h_xyz));
+        add(vector_payload_bytes(gpu_hybrid_stage_m));
+        add(vector_payload_bytes(gpu_hybrid_demag));
+#if FULLMAG_HAS_MFEM_STACK
+        add(vector_payload_bytes(poisson_solution));
+        add(vector_payload_bytes(periodic_solution));
+        add(vector_payload_bytes(poisson_grid_function));
+        add(vector_payload_bytes(fem_bem_u1));
+        add(vector_payload_bytes(fem_bem_u2));
+        add(vector_payload_bytes(fem_bem_total));
+#endif
+        return bytes;
+    }
+
     Context &ctx;
+    bool profile_enabled = false;
     AnisotropyRuntimeState anisotropy;
     MagnetoelasticRuntimeState magnetoelastic;
     ExchangeRuntimeState exchange;
@@ -464,15 +670,36 @@ struct RkAttemptCacheSnapshot::Impl {
 };
 
 RkAttemptCacheSnapshot::RkAttemptCacheSnapshot(Context &ctx)
-    : impl_(std::make_unique<Impl>(ctx))
+    : impl_(nullptr)
 {
+    const bool profile_enabled = step_profile_enabled(ctx);
+    const auto capture_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
+    impl_ = std::make_unique<Impl>(ctx, profile_enabled);
+    if (profile_enabled) {
+        const auto capture_done = SteadyClock::now();
+        auto &telemetry = ctx.stepper.transaction_telemetry;
+        telemetry.attempt_cache_capture_count += 1;
+        telemetry.attempt_cache_capture_wall_time_ns +=
+            elapsed_wall_time_ns(capture_start, capture_done);
+        telemetry.attempt_cache_snapshot_payload_bytes += impl_->snapshot_payload_bytes();
+    }
 }
 
 RkAttemptCacheSnapshot::~RkAttemptCacheSnapshot() = default;
 
 void RkAttemptCacheSnapshot::restore_preserving_attempt_counters()
 {
+    const bool profile_enabled = impl_->profile_enabled;
+    const auto restore_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->restore();
+    if (profile_enabled) {
+        const auto restore_done = SteadyClock::now();
+        auto &telemetry = impl_->ctx.stepper.transaction_telemetry;
+        telemetry.attempt_cache_restore_count += 1;
+        telemetry.attempt_cache_restore_wall_time_ns +=
+            elapsed_wall_time_ns(restore_start, restore_done);
+        telemetry.attempt_cache_restore_payload_bytes += impl_->snapshot_payload_bytes();
+    }
 }
 
 } // namespace fullmag::fem

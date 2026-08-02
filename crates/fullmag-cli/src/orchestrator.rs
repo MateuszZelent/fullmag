@@ -10357,6 +10357,24 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         demag_solver_apply_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.demag_solver_apply_wall_time_ns),
+        demag_hypre_wait_in_enqueue_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_wait_in_enqueue_wall_time_ns),
+        demag_hypre_host_api_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_host_api_wall_time_ns),
+        demag_hypre_device_elapsed_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_device_elapsed_time_ns),
+        demag_hypre_wait_out_enqueue_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_wait_out_enqueue_wall_time_ns),
+        demag_hypre_event_wait_count: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_event_wait_count),
+        demag_hypre_timed_solve_count: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_timed_solve_count),
         demag_recover_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.demag_recover_wall_time_ns),

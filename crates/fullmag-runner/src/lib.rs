@@ -280,7 +280,8 @@ pub use solver_profile::{
     current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns, LivePublisherDiagnostics,
     RateMetric, SolverProfileAggregates, SolverProfileConfig, SolverProfileOverheadDiagnostics,
     SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
-    SolverProfileThreading, SolverRateDiagnostics,
+    SolverProfileThreading, SolverProfileTimingSemantic, SolverProfileTimingSemanticKind,
+    SolverRateDiagnostics,
 };
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
