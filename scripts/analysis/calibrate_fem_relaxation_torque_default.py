@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import struct
 import zlib
 from collections import defaultdict
@@ -118,6 +119,10 @@ def _row_problem_ir(row: Mapping[str, object]) -> str:
         row.get("problem_ir_sha256")
         or row.get("executed_problem_ir_sha256")
     )
+
+
+def _is_sha256(value: str) -> bool:
+    return re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 def _suite_meshes(suite: Mapping[str, object]) -> dict[str, str]:
@@ -285,9 +290,11 @@ def validate_calibration_suite(
             failures.append(f"row {index} does not match suite runtime_manifest_sha256")
         if _row_source_snapshot(row) != source_snapshot:
             failures.append(f"row {index} does not match suite source_snapshot_sha256")
-        expected_problem_ir = mesh_problem_hashes.get(mesh, problem_ir)
-        if _row_problem_ir(row) != expected_problem_ir:
-            failures.append(f"row {index} does not match suite problem_ir_sha256")
+        row_problem_ir = _row_problem_ir(row)
+        if not _is_sha256(row_problem_ir):
+            failures.append(
+                f"row {index} is missing a canonical executed ProblemIR SHA-256"
+            )
         expected_initial_state = scenario_initial_states.get(scenario, "")
         if _as_nonempty(row.get("initial_state_identity")) != expected_initial_state:
             failures.append(f"row {index} does not match scenario initial-state identity")
@@ -317,6 +324,19 @@ def validate_calibration_suite(
                 str(repeat),
             )
             row_groups[group_key].add(steps)
+
+    problem_identity_groups: dict[tuple[tuple[str, ...], int], set[str]] = defaultdict(set)
+    for row in rows:
+        steps = _as_int(row.get("step_budget") or row.get("steps"))
+        problem_identity = _row_problem_ir(row)
+        if steps is None or not problem_identity:
+            continue
+        problem_identity_groups[(calibration_case_key(row), steps)].add(problem_identity)
+    for key, identities in sorted(problem_identity_groups.items()):
+        if len(identities) != 1:
+            failures.append(
+                f"case={key} has different executed ProblemIR identities across backends/repeats"
+            )
 
     if not failures and not allow_incomplete_matrix:
         expected_budget_set = set(budgets)

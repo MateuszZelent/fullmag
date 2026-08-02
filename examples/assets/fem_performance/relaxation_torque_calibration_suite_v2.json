@@ -24,24 +24,30 @@
   "meshes": [
     {
       "id": "coarse",
-      "problem_ir_sha256": "17c673a497595c735bfaf1d159336ab294697dd49b7054539904c38b47670be0",
       "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json"
     },
     {
       "id": "medium",
-      "problem_ir_sha256": "d261d7c13df8d35a2c45906f58f0efd33f295eab9cc877532071df8e67df92e8",
       "solver_mesh_signature": "4d11de54405620b611a4a1221bd86bd4622d56d3c09142eac68bde6884e56fca",
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_medium_v2.mesh.json"
     },
     {
       "id": "fine",
-      "problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c",
       "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
       "solver_mesh_path": "box500_airbox_exchange_demag_v2.mesh.json"
     }
   ],
-  "problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c",
+  "problem_ir_reference": {
+    "algorithm": "projected_gradient_bb",
+    "dt_s": 1e-14,
+    "integrator": "none",
+    "mesh_id": "coarse",
+    "scenario": "box500_airbox_exchange_demag",
+    "step_budget": 128,
+    "timestep_policy": "budget"
+  },
+  "problem_ir_sha256": "0becac4fdbd070080595e4b63d274e020f4332713953ea75e82ee09812038fb7",
   "repeats": 3,
   "scenarios": [
     {

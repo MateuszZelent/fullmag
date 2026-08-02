@@ -8,6 +8,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).resolve().parent / "analysis" / "calibrate_fem_relaxation_torque_default.py"
+PROBLEM_HASH = "a" * 64
 
 
 def load_module():
@@ -23,7 +24,7 @@ def suite() -> dict[str, object]:
         "schema": "fullmag.relaxation_torque_calibration_suite.v2",
         "runtime_manifest_sha256": "runtime-v2",
         "source_snapshot_sha256": "source-v2",
-        "problem_ir_sha256": "problem-v2",
+        "problem_ir_sha256": PROBLEM_HASH,
         "meshes": [
             {"id": "coarse", "solver_mesh_signature": "mesh-coarse"},
             {"id": "medium", "solver_mesh_signature": "mesh-medium"},
@@ -69,7 +70,7 @@ def rows_for_suite(*, algorithm: str = "", include_all: bool = True) -> list[dic
                 "status": "ok",
                 "runtime_manifest_sha256": "runtime-v2",
                 "source_snapshot_sha256": "source-v2",
-                "problem_ir_sha256": "problem-v2",
+                "problem_ir_sha256": PROBLEM_HASH,
                 "backend": backend,
                 "relaxation_algorithm": algo,
                 "algorithm": algo,
@@ -179,3 +180,4 @@ def test_v2_recipe_mounts_runtime_and_uses_full_matrix_defaults() -> None:
     assert "--repeat \"$repeat_count\"" in recipe
     assert "--capture-final-magnetization" in recipe
     assert "relaxation_torque_calibration_suite_v2.json" in recipe
+    assert 'FULLMAG_TORQUE_CALIBRATION_SCOPE="${FULLMAG_TORQUE_CALIBRATION_SCOPE:-}"' in recipe
