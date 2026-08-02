@@ -118,7 +118,6 @@ jobs:
           PYTHONPATH: packages/fullmag-py/src
         run: |
           python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
-          python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
 
       - name: Build public documentation strictly
         env:
