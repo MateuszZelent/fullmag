@@ -263,6 +263,7 @@ fn resolve_timestep_execution_identity(
         (false, Fem, Cpu, Double) => ExplicitFixedFemCpuDouble,
         (false, Fem, Gpu, Double) => ExplicitFixedFemGpuDouble,
         (true, Fdm, Cpu, Double) => ExplicitAdaptiveFdmCpuDouble,
+        (true, Fdm, Cuda, Double) => ExplicitAdaptiveFdmCudaDouble,
         (true, Fem, Cpu, Double) => ExplicitAdaptiveFemCpuDouble,
         (true, Fem, Gpu, Double) => ExplicitAdaptiveFemGpuDouble,
         _ => {
@@ -1795,6 +1796,49 @@ pub(crate) fn require_resolved_runtime_sampling(
     Ok(())
 }
 
+fn runtime_outputs_with_table_autosave(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Vec<OutputIR> {
+    let mut outputs = plan.output_plan.outputs.clone();
+    let table = problem
+        .study
+        .sampling()
+        .table_autosave
+        .as_ref()
+        .or_else(|| {
+            problem
+                .study
+                .sampling()
+                .stage_autosave
+                .as_ref()
+                .and_then(|policy| policy.table.as_ref())
+        });
+    let Some(sample_period_s) = table.and_then(|table| {
+        table
+            .explicit_sample_period_s()
+            .or(table.resolved_sample_period_s)
+    }) else {
+        return outputs;
+    };
+    if !matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+        || !sample_period_s.is_finite()
+        || sample_period_s <= 0.0
+    {
+        return outputs;
+    }
+
+    // TableAutosave owns the complete scalar schema, but the solver still
+    // needs one executable scalar schedule to observe accepted states. `mx`
+    // also requests the global magnetization average before TableStore reads
+    // the remaining energy/torque columns from the same StepStats row.
+    outputs.push(OutputIR::Scalar {
+        name: "mx".to_string(),
+        every_seconds: sample_period_s,
+    });
+    outputs
+}
+
 fn validate_sampling_resolution_provenance(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -2018,6 +2062,7 @@ pub fn run_planned_problem(
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
+    let runtime_outputs = runtime_outputs_with_table_autosave(problem, plan);
 
     let cpu_threads = configured_cpu_threads(problem);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
@@ -2027,7 +2072,7 @@ pub fn run_planned_problem(
                 resolution.engine,
                 fdm,
                 until_seconds,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 None,
                 artifact_writer.clone(),
             )?;
@@ -2040,7 +2085,7 @@ pub fn run_planned_problem(
                 resolution.engine,
                 fdm,
                 until_seconds,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 None,
                 artifact_writer.clone(),
             )?;
@@ -2055,7 +2100,7 @@ pub fn run_planned_problem(
                     fem_engine_kind(resolution.engine),
                     fem,
                     until_seconds,
-                    &plan.output_plan.outputs,
+                    &runtime_outputs,
                     None,
                     artifact_writer.clone(),
                     plan.common.execution_mode,
@@ -2065,7 +2110,7 @@ pub fn run_planned_problem(
                     resolution.engine,
                     fem,
                     until_seconds,
-                    &plan.output_plan.outputs,
+                    &runtime_outputs,
                     None,
                     artifact_writer.clone(),
                     plan.common.execution_mode,
@@ -2331,6 +2376,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
+    let runtime_outputs = runtime_outputs_with_table_autosave(problem, plan);
 
     let cpu_threads = configured_cpu_threads(problem);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
@@ -2341,7 +2387,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                 resolution.engine,
                 fdm,
                 until_seconds,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 Some(types::LiveStepConsumer {
                     grid,
                     field_every_n,
@@ -2361,7 +2407,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                 resolution.engine,
                 fdm,
                 until_seconds,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 Some((
                     &fdm.common_cells,
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
@@ -2392,7 +2438,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
-                    &plan.output_plan.outputs,
+                    &runtime_outputs,
                     live,
                     artifact_writer.clone(),
                     plan.common.execution_mode,
@@ -2403,7 +2449,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
-                    &plan.output_plan.outputs,
+                    &runtime_outputs,
                     live,
                     artifact_writer.clone(),
                     plan.common.execution_mode,
@@ -2426,7 +2472,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 &mut progress_callback,
             )
         }
@@ -2733,6 +2779,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
         )?;
     let artifact_writer = Some(artifact_pipeline.sender());
+    let runtime_outputs = runtime_outputs_with_table_autosave(problem, plan);
 
     let cpu_threads = configured_cpu_threads(problem);
     let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
@@ -2744,7 +2791,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 resolution.engine,
                 fdm,
                 until_seconds,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 Some(types::LiveStepConsumer {
                     grid,
                     field_every_n,
@@ -2764,7 +2811,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 resolution.engine,
                 fdm,
                 until_seconds,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 Some((
                     &fdm.common_cells,
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
@@ -2800,7 +2847,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
-                    &plan.output_plan.outputs,
+                    &runtime_outputs,
                     live,
                     artifact_writer.clone(),
                     plan.common.execution_mode,
@@ -2811,7 +2858,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
-                    &plan.output_plan.outputs,
+                    &runtime_outputs,
                     live,
                     artifact_writer.clone(),
                     plan.common.execution_mode,
@@ -2834,7 +2881,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
-                &plan.output_plan.outputs,
+                &runtime_outputs,
                 &mut progress_callback,
             )
         }
@@ -5255,7 +5302,10 @@ mod tests {
                     },
                 ],
             },
-            provenance: fullmag_ir::ProvenancePlanIR { notes: Vec::new() },
+            provenance: fullmag_ir::ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         };
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)

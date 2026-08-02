@@ -35,7 +35,12 @@ def test_sp5_script_preserves_mumax_geometry_and_zl_parameters() -> None:
     torque = run_problem.spin_torques[0].to_ir_module()
     assert torque == {
         "kind": "zhang_li",
-        "formula_version": "zhang_li.legacy_fullmag.v0",
+        "schema_version": "zhang_li_torque.v1",
+        "id": "sp5_zhang_li",
+        "target": {"object_id": "plate"},
+        "formula_version": "zhang_li.mumax3.v1",
+        "operator_version": "zl_mumax3_central_v1",
+        "lande_g": 2.0,
         "degree": 1.0,
         "beta": 0.05,
         "current_density": [1e12, 0.0, 0.0],

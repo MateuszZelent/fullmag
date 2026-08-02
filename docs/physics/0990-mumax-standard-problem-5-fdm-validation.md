@@ -1,6 +1,6 @@
 # MuMax3 Standard Problem 5 as a Fullmag FDM validation contract
 
-- Status: frozen source-to-IR reproduction; numerical parity is not yet qualified
+- Status: frozen source-to-IR reproduction; fresh MuMax3/Fullmag CUDA trajectory is executed but not qualified
 - Owners: Fullmag FDM validation
 - Last updated: 2026-08-02
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
@@ -98,11 +98,12 @@ bit-for-bit.
 | $t$ | physical time | $\mathrm{s}$ |
 | $\mathbf J_c$ | signed charge-current density | $\mathrm{A\,m^{-2}}$ |
 | $\mathbf u$ | Zhang--Li advection velocity | $\mathrm{m\,s^{-1}}$ |
-| $g$ | electron g factor | $1$ |
+| $g$ | Landé-factor provenance; fixed to 2.0 by the MuMax3-compatible source operator | $1$ |
 | $\mu_B$ | Bohr magneton | $\mathrm{J\,T^{-1}}$ |
 | $P$ | current spin polarization (`degree`) | $1$ |
 | $e$ | elementary charge magnitude | $\mathrm C$ |
 | $\beta$ | Zhang--Li non-adiabaticity (`xi`) | $1$ |
+| $b$ | MuMax3 Zhang--Li source prefactor | $\mathrm{m^3\,A^{-1}\,s^{-1}}$ |
 | $\Delta x,\Delta y,\Delta z$ | FDM cell sizes | $\mathrm m$ |
 | $N_x$ | grid counts | $1$ |
 | $N_y$ | grid counts | $1$ |
@@ -160,8 +161,10 @@ study.exchange()
 study.demag()
 
 # %%
-study.spin_torque(fm.ZhangLiSTT(current_density=(1e12, 0.0, 0.0),
-                                degree=1.0, xi=0.05))
+study.spin_torque(fm.ZhangLiSTT(
+    current_density=(1e12, 0.0, 0.0), degree=1.0, xi=0.05,
+    id="sp5_zhang_li", target=fm.RegionRef("plate"), lande_g=2.0,
+    operator_version="zl_mumax3_central_v1"))
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                         tolT=1e-6, max_steps=100000, relax_alpha=1.0)
 study.stages.add_run(1e-9, stage_id="current_run")
@@ -183,6 +186,10 @@ switch, not a production qualification setting.
 | `ZhangLiSTT.current_density` | `vec3` | required | $\mathrm{A\,m^{-2}}$ | finite signed vector | CIP charge current | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].current_density` |
 | `ZhangLiSTT.degree` | `float` | `1.0` | $1$ | finite polarization degree | current polarization | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].degree` |
 | `ZhangLiSTT.xi` | `float` | required | $1$ | finite; alias of beta | non-adiabaticity | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].beta` |
+| `ZhangLiSTT.id` | `str` | required for canonical operator | $1$ | non-empty | torque identity | FDM CPU/GPU MuMax3; FEM rejects MuMax3 | `spin_torque_modules[].id` |
+| `ZhangLiSTT.target` | `RegionRef` | required for canonical operator | $1$ | existing object/region | target mask ownership | FDM CPU/GPU MuMax3; FEM central reference | `spin_torque_modules[].target` |
+| `ZhangLiSTT.lande_g` | `float` | required for canonical operator | $1$ | exactly `2.0` for `zhang_li.mumax3.v1`; finite and positive for `zhang_li.fullmag.v1` | explicit Landé-factor provenance | FDM CPU/GPU MuMax3 source identity; FEM central reference | `spin_torque_modules[].lande_g` |
+| `ZhangLiSTT.operator_version` | `str` | `zl_mumax3_central_v1` for SP5 | $1$ | `zl_mumax3_central_v1` | spatial/formula realization | FDM CPU/GPU | `spin_torque_modules[].operator_version` |
 | `add_relax.tolT` | `float` | `1e-6` | $\mathrm T$ | positive finite; exclusive with `tolA` | maximum relaxation torque | FDM CPU reference; GPU diagnostic | `study.stop.torque_tolerance_apm` |
 | `add_run.until` | `float` | required | $\mathrm s$ | positive finite | physical observation horizon | FDM CPU reference; GPU diagnostic | `stage.default_until_seconds` |
 
@@ -199,7 +206,12 @@ The run-stage normalized fragment is:
   "energy_terms": [{"kind": "exchange"}, {"kind": "demag", "realization": "auto"}],
   "spin_torque_modules": [{
     "kind": "zhang_li",
-    "formula_version": "zhang_li.legacy_fullmag.v0",
+    "schema_version": "zhang_li_torque.v1",
+    "id": "sp5_zhang_li",
+    "target": {"object_id": "plate"},
+    "formula_version": "zhang_li.mumax3.v1",
+    "operator_version": "zl_mumax3_central_v1",
+    "lande_g": 2.0,
     "degree": 1.0,
     "beta": 0.05,
     "current_density": [1e12, 0.0, 0.0]
@@ -238,27 +250,63 @@ The reference lane uses a regular cell-centered grid and double precision. The
 exchange operator is the FDM nearest-neighbour realization and demagnetization
 is the selected open-boundary FDM implementation. The default source-faithful
 time policy is adaptive RK45; the equilibrium stage is overdamped and stage
-local. A completed CPU adaptive run at the full one-nanosecond horizon is still
-required for qualification.
+local. The versioned MuMax3 central operator is executable in this CPU lane and
+has an independent one-cell/one-step algebraic oracle. A completed CPU adaptive
+run at the full one-nanosecond horizon is still required for trajectory
+qualification.
 
-The current legacy Fullmag Zhang--Li evaluator is not the same discrete
-operator as the vendored MuMax3 CUDA kernel. Fullmag selects an upwind neighbour
-from the sign of $J$ and uses `(m_i-m_{i-1})/\Delta x`; MuMax3's
-`zhangli2.cu` uses the centered numerator `(m_{i+1}-m_{i-1})` with the
-corresponding `1/(2\Delta x)` scale. The public parameter mapping is therefore
-valid, while trajectory parity remains open until a separately versioned
-MuMax-compatible central operator and one-step oracle are added. The benchmark
-must not silently relabel the existing `legacy_fullmag.v0` evaluator as
-MuMax3-equivalent.
+The legacy Fullmag Zhang--Li evaluator remains a separate compatibility
+operator. It selects an upwind neighbour from the sign of $J$ and uses
+`(m_i-m_{i-1})/\Delta x`; it is never relabelled as MuMax3. The reproduction
+therefore requests the explicit FDM operator
+`formula_version=zhang_li.mumax3.v1`, `operator_version=zl_mumax3_central_v1`.
+This is the source-compatible realization of
+`external_solvers/3/cuda/zhangli2.cu`:
+
+```{math}
+:label: sp5-zhang-li-mumax3
+b=\frac{P\mu_B}{2eM_s(1+\beta^2)},\qquad
+\mathbf v_i=b\sum_{a\in\{x,y,z\}}J_a
+\frac{\mathbf m_{i+\hat a}-\mathbf m_{i-\hat a}}{2\Delta a},
+```
+
+where each neighbour is clamped at an open boundary and wrapped on a periodic
+axis, exactly as MuMax3's `hclamp*`/`lclamp*` stencil. The direct RHS uses the
+single Gilbert projection
+
+```{math}
+:label: sp5-zhang-li-mumax3-rhs
+\mathbf T_{\mathrm{MuMax3}}=
+\frac{-(1+\alpha\beta)\,\mathbf m\times(\mathbf m\times\mathbf v)
+ +(\alpha-\beta)\,\mathbf m\times\mathbf v}{1+\alpha^2}.
+```
+
+The numerical constants are pinned to the external kernel
+($\mu_B=9.2740091523\times10^{-24}\,\mathrm{J/T}$ and
+$e=1.60217646\times10^{-19}\,\mathrm C$). CPU FDM and native CUDA carry the
+same discriminator; FEM rejects this MuMax3 realization and uses the separate
+`zhang_li.fullmag.v1` central P1 operator. The old
+`zhang_li.legacy_fullmag.v0` path is unchanged.
+
+`lande_g` is retained in the canonical Python/IR record for explicit physical
+provenance. It is required to be exactly `2.0` for this source-compatible
+MuMax3 operator because `external_solvers/3/cuda/zhangli2.cu` fixes
+`GAMMA0=1.7595e11` and does not expose a configurable Landé factor. Fullmag
+rejects another value at authoring/IR validation; it must not accept a value
+that the FDM kernels would ignore. A future configurable-`g` operator requires
+a new formula/version and an independent analytic and cross-solver oracle.
 
 ### 6.2 FDM GPU
 
-The executed diagnostic uses CUDA double precision and fixed Heun because the
-current planner rejects adaptive CUDA when it cannot attach an executable
-timestep capability identity. The diagnostic artifact records an NVIDIA
-GeForce RTX 4080 SUPER, compute capability 8.9, CUDA driver 13010, runtime
-12060, and cuFFT. Its `qualification.json` is intentionally
-`status=not_evaluated`.
+The native CUDA kernels carry the same explicit discriminator and central
+clamped/PBC stencil for FP64 and FP32. The single-grid v2 ABI now exposes an
+executable adaptive RK23/DP45 timestep identity for FDM CUDA double; the
+qualification registry still resolves it as `unvalidated` until a clean
+managed trajectory and trace are archived. The earlier SP5 diagnostic used
+CUDA double precision and fixed Heun. Its artifact records an NVIDIA GeForce
+RTX 4080 SUPER, compute capability 8.9, CUDA driver 13010, runtime 12060, and
+cuFFT. That trajectory fails the MuMax3 tolerance, so `qualification.json`
+correctly remains `status=not_evaluated`.
 
 ### 6.3 FEM
 
@@ -279,11 +327,11 @@ $(\bar m_x,\bar m_y,\bar m_z)$ at $t=1\,\mathrm{ns}$:
 ```
 
 For the current diagnostic script, `m_final.json` is the authoritative field
-artifact for this calculation. The no-autosave path currently writes zeroes in
-the `mx`, `my`, and `mz` columns of `scalars.csv`; those columns must not be
-used as a comparison result until the accepted-sample publication path is
-fixed. The report records this as an artifact-contract defect rather than
-silently treating zero as a physical mean.
+artifact for this calculation. The CUDA final-output path now derives
+`mx,my,mz` from the same final magnetization snapshot; in the fresh SP5 run the
+scalar-to-field-mean differences are below `3e-17`. A scalar row is therefore
+usable for this run, while the CPU accepted-step publication still needs a full
+trajectory gate.
 
 (implementation-mapping)=
 ## 7. Implementation mapping
@@ -309,14 +357,20 @@ The external source expects:
 | $\bar m_y$ | `-0.09453578` | absolute error $\le 1\times10^{-4}$ |
 | $\bar m_z$ | `0.02296375` | absolute error $\le 1\times10^{-4}$ |
 
-The focused source-to-IR test passes. The first managed CUDA fixed-step run
-with `dt=1e-13 s` and relaxation threshold `1e-4 T` produced, from
-`m_final.json`,
-$(\bar m_x,\bar m_y,\bar m_z)=(-0.23433954,-0.09938201,0.02290157)$.
-The maximum component error is $4.85\times10^{-3}$, so the result fails the
-external tolerance and remains diagnostic. A longer relaxation changed the
-maximum error only to $4.84\times10^{-3}$; this does not close the temporal
-integrator/adaptive-RK gate.
+The focused source-to-IR test passes. A fresh MuMax3 `v3.11.2` execution on the
+RTX 4080 SUPER returned
+$(\bar m_x,\bar m_y,\bar m_z)=(-0.23488366603851318,
+-0.09453280270099640,0.022961989045143127)$, within the source golden
+tolerance. The fresh Fullmag managed CUDA fixed-step run with `dt=1e-13 s` and
+relaxation threshold `1e-6 T` returned
+$(\bar m_x,\bar m_y,\bar m_z)=(-0.11688508225706223,
+-0.04824011468041604,0.025794111784514084)$.
+The maximum component error is $1.1799858378\times10^{-1}$, about 1180 times
+the external tolerance, so the executed result remains diagnostic and not
+validated. The scalar row agrees with the volume mean to below `3e-17`.
+The CPU full trajectory was started but stopped during relaxation because the
+open-boundary demagnetization reference lane is too expensive for this gate;
+the one-step oracle does not substitute for that run.
 
 The required final matrix is: CPU adaptive RK45 at the source horizon; fixed
 step refinement; independent equilibrium convergence; GPU adaptive capability
@@ -327,12 +381,14 @@ identity and device-resident parity; then (only then) an FDM/FEM comparison.
 
 1. Complete and archive a CPU adaptive RK45 run with a qualified equilibrium
    and accepted-step mean samples.
-2. Fix or explicitly version the scalar artifact publisher so `mx/my/mz` agree
-   with the final field mean.
-3. Implement and qualify an executable CUDA adaptive controller before using
-   GPU adaptive results as evidence.
-4. Add timestep and grid convergence tables; the one diagnostic fixed-step
+2. Execute and qualify the newly identity-bound CUDA adaptive controller before
+   using GPU adaptive results as evidence; the identity alone is not a
+   scientific qualification.
+3. Add timestep and grid convergence tables; the one diagnostic fixed-step
    result is not a production tolerance claim.
+4. Isolate the central-v1 trajectory mismatch with independent equilibrium,
+   operator, demagnetization, and update-order controls before changing the
+   published equation.
 5. Add a FEM realization only after its own mesh, demag, and cross-backend
    convergence gates.
 
@@ -364,3 +420,7 @@ identity and device-resident parity; then (only then) an FDM/FEM comparison.
 | `sp5-python-add-run` | `packages/fullmag-py/src/fullmag/world.py` | `add_run` | physical-time stage lowering |
 | `sp5-python-zhangli` | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class ZhangLiSTT` | public Zhang--Li torque contract |
 | `sp5-python-loader` | `packages/fullmag-py/src/fullmag/runtime/loader.py` | `load_problem_from_script` | script capture and per-stage IR |
+| `sp5-mumax3-zhangli` | `external_solvers/3/cuda/zhangli2.cu` | `addzhanglitorque2` | external MuMax3 central clamped/PBC stencil and constants |
+| `sp5-cpu-mumax3` | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `zhang_li_mumax3_torque_at_with` | FDM CPU MuMax3 operator |
+| `sp5-cuda-mumax3` | `backends/fdm/gpu/cuda/integrators/llg_fp64.cu` | `zhang_li_neighbor_index` | native CUDA central/PBC neighbour realization |
+| `sp5-ir-mumax3` | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | execution provenance fields for formula/operator/target/Landé |

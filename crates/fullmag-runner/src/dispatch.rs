@@ -5144,9 +5144,11 @@ fn execute_cuda_fdm(
     let completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
+    let final_magnetization = backend.copy_m(cell_count)?;
     record_cuda_final_outputs(
         &backend,
         cell_count,
+        &final_magnetization,
         latest_stats,
         default_scalar_trace,
         &scalar_schedules,
@@ -5155,7 +5157,6 @@ fn execute_cuda_fdm(
         &mut artifacts,
     )?;
 
-    let final_magnetization = backend.copy_m(cell_count)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if cancelled {
         RunStatus::Cancelled
@@ -5969,6 +5970,7 @@ fn record_cuda_due_outputs(
 fn record_cuda_final_outputs(
     backend: &NativeFdmBackend,
     cell_count: usize,
+    final_magnetization: &[[f64; 3]],
     latest_stats: Option<StepStats>,
     default_scalar_trace: bool,
     scalar_schedules: &[OutputSchedule],
@@ -5992,7 +5994,7 @@ fn record_cuda_final_outputs(
                 .unwrap_or(true));
     if need_scalar {
         let mut final_stats = latest_stats.clone();
-        backend.apply_average_m_to_step_stats(&mut final_stats)?;
+        backend.apply_average_m_to_step_stats_from_values(&mut final_stats, final_magnetization);
         artifacts.record_scalar(&final_stats)?;
         steps.push(final_stats);
     }
@@ -6189,6 +6191,16 @@ mod tests {
             "native CUDA scalar rows must publish averaged magnetization components"
         );
 
+        let final_output_body = source
+            .split("fn record_cuda_final_outputs(")
+            .nth(1)
+            .expect("record_cuda_final_outputs should exist");
+        assert!(
+            final_output_body.contains("final_magnetization")
+                && final_output_body.contains("apply_average_m_to_step_stats_from_values"),
+            "native CUDA final scalar rows must reduce the same magnetization snapshot used by m_final"
+        );
+
         let execution = source
             .split("#[cfg(feature = \"cuda\")]\nfn execute_cuda_fdm(")
             .nth(1)
@@ -6199,6 +6211,11 @@ mod tests {
                 && execution.contains("if heavy_payload_due && !due_scalar_row")
                 && execution.contains("let magnetization = if heavy_payload_due"),
             "native CUDA live rows carrying a full magnetization payload must use the averaged stats"
+        );
+        assert!(
+            execution.contains("let final_magnetization = backend.copy_m(cell_count)?;")
+                && execution.contains("&final_magnetization,\n        latest_stats"),
+            "native CUDA final scalar publication must share the final m snapshot"
         );
     }
 

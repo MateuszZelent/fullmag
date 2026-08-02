@@ -175,12 +175,12 @@ verify-fem-mixed-prism-airbox-runtime:
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py prepare \
         "$canonical" "$bounded" --evidence "$run_dir/source.v1.json"; \
       python3 scripts/capture_source_snapshot_identity.py \
-        --repo-root "{{repo_root}}" --output "$run_dir/source-snapshot.v2.json"; \
+        --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$run_dir/source-snapshot.v2.json"; \
       cp "$bounded" "$run_dir/bounded_scenario.py"; \
       cp -L "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
       mkdir -p "$run_dir/cpu" "$run_dir/gpu"; \
       python3 scripts/capture_source_snapshot_identity.py \
-        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
+        --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$run_dir/source-snapshot.v2.json"; \
       FULLMAG_PYTHON="$managed_python" just fem-managed-headless cpu "$bounded" "$run_dir/cpu/artifacts" \
         2>&1 | tee "$run_dir/cpu/runtime.log"; \
       cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
@@ -191,7 +191,7 @@ verify-fem-mixed-prism-airbox-runtime:
         --source-snapshot "$run_dir/source-snapshot.v2.json" \
         --output "$run_dir/cpu/summary.v4.json"; \
       python3 scripts/capture_source_snapshot_identity.py \
-        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
+        --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$run_dir/source-snapshot.v2.json"; \
       FULLMAG_PYTHON="$managed_python" just fem-managed-headless gpu "$bounded" "$run_dir/gpu/artifacts" \
         2>&1 | tee "$run_dir/gpu/runtime.log"; \
       cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
@@ -202,7 +202,7 @@ verify-fem-mixed-prism-airbox-runtime:
         --source-snapshot "$run_dir/source-snapshot.v2.json" \
         --output "$run_dir/gpu/summary.v4.json"; \
       python3 scripts/capture_source_snapshot_identity.py \
-        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
+        --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$run_dir/source-snapshot.v2.json"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py compare \
         --cpu-summary "$run_dir/cpu/summary.v4.json" \
         --gpu-summary "$run_dir/gpu/summary.v4.json" \
@@ -256,6 +256,10 @@ verify-fdm-prescribed-sot-native-contract:
 verify-fdm-oersted-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-oersted-build && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target oersted_cuda_runtime && LD_LIBRARY_PATH="$build_dir/backends/fdm:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fdm/oersted_cuda_runtime"'
+
+verify-fdm-zhang-li-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-zhangli-build && cargo_target=/tmp/fullmag-fdm-zhangli-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm stt_pbc_contract && "$build_dir/backends/fdm/stt_pbc_contract" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" CARGO_TARGET_DIR="$cargo_target" cargo +nightly check -p fullmag-runner --features cuda'
 
 verify-fem-relaxation-source-contract:
     bash scripts/verify_fem_mesh_hot_loop_source_contract.sh
@@ -4006,7 +4010,7 @@ ensure-managed-fem-runtime:
     bash -euo pipefail -c '\
       identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
       trap '\''rm -f -- "$identity_file"'\'' EXIT; \
-      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --output "$identity_file"; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$identity_file"; \
       git_commit="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["head_commit_full"])'\'' "$identity_file")"; \
       worktree_state="$(python3 -c '\''import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")'\'' "$identity_file")"; \
       source_snapshot="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])'\'' "$identity_file")"; \
@@ -4036,7 +4040,7 @@ ensure-managed-fem-runtime:
               --runtime-root .fullmag/runtimes/fem-gpu-host; \
             runtime_reused_for_non_runtime_changes=1; \
           else \
-            FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
             runtime_rebuilt=1; \
           fi; \
         fi; \
@@ -4045,7 +4049,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}} and {{gpu_runtime_manifest}}" >&2; \
         exit 2; \
       fi; \
-      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --compare "$identity_file" --allow-source-drift; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$identity_file" --allow-source-drift; \
       if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then \
         bash scripts/prune_managed_fem_runtimes.sh; \
       fi; \

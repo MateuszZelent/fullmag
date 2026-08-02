@@ -9,6 +9,8 @@
   "equations": [
     {"id": "sp5-llg-gilbert", "symbols": ["m", "gamma0", "Heff", "alpha", "t", "TZL"], "sources": ["sp5-python-study", "sp5-python-zhangli"]},
     {"id": "sp5-zhang-li", "symbols": ["u", "g", "muB", "P", "e", "Ms", "Jc", "beta", "m"], "sources": ["sp5-source-file-run", "sp5-python-zhangli"]},
+    {"id": "sp5-zhang-li-mumax3", "symbols": ["b", "muB", "P", "e", "Ms", "Jc", "beta", "m"], "sources": ["sp5-mumax3-zhangli", "sp5-cpu-mumax3", "sp5-cuda-mumax3"]},
+    {"id": "sp5-zhang-li-mumax3-rhs", "symbols": ["alpha", "beta", "m", "u"], "sources": ["sp5-mumax3-zhangli", "sp5-cpu-mumax3", "sp5-cuda-mumax3"]},
     {"id": "sp5-effective-field", "symbols": ["Aex", "mu0", "Ms", "m", "Hdemag"], "sources": ["sp5-python-study", "sp5-source-file-cellsize"]},
     {"id": "sp5-mean-observable", "symbols": ["mbar", "Nx", "Ny", "Nz", "m"], "sources": ["sp5-source-file-run", "sp5-python-loader"]}
   ],
@@ -20,13 +22,14 @@
     {"id": "t", "latex": "t", "meaning": "physical time", "si_unit": "\\mathrm{s}"},
     {"id": "TZL", "latex": "\\mathbf T_{\\mathrm{ZL},G}", "meaning": "Gilbert-source Zhang--Li torque", "si_unit": "\\mathrm{s^{-1}}"},
     {"id": "u", "latex": "\\mathbf u", "meaning": "Zhang--Li advection velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
-    {"id": "g", "latex": "g", "meaning": "electron g factor", "si_unit": "1"},
+    {"id": "g", "latex": "g", "meaning": "Landé-factor provenance; fixed to 2.0 by the MuMax3-compatible source operator", "si_unit": "1"},
     {"id": "muB", "latex": "\\mu_B", "meaning": "Bohr magneton", "si_unit": "\\mathrm{J\\,T^{-1}}"},
     {"id": "P", "latex": "P", "meaning": "current spin polarization", "si_unit": "1"},
     {"id": "e", "latex": "e", "meaning": "elementary charge magnitude", "si_unit": "\\mathrm C"},
     {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "Jc", "latex": "\\mathbf J_c", "meaning": "signed charge-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
     {"id": "beta", "latex": "\\beta", "meaning": "Zhang--Li non-adiabaticity", "si_unit": "1"},
+    {"id": "b", "latex": "b", "meaning": "MuMax3 Zhang--Li source prefactor", "si_unit": "\\mathrm{m^3\\,A^{-1}\\,s^{-1}}"},
     {"id": "Aex", "latex": "A_{\\mathrm{ex}}", "meaning": "exchange stiffness", "si_unit": "\\mathrm{J\\,m^{-1}}"},
     {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
     {"id": "Hdemag", "latex": "\\mathbf H_{\\mathrm{demag}}", "meaning": "demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
@@ -45,7 +48,11 @@
     {"id": "sp5-python-add-relax", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_relax", "responsibility": "Lower the equilibrium stage."},
     {"id": "sp5-python-add-run", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_run", "responsibility": "Lower the physical-time stage."},
     {"id": "sp5-python-zhangli", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class ZhangLiSTT", "responsibility": "Define the public Zhang--Li torque and canonical IR fields."},
-    {"id": "sp5-python-loader", "path": "packages/fullmag-py/src/fullmag/runtime/loader.py", "symbol": "load_problem_from_script", "responsibility": "Capture the script and expose per-stage normalized IR."}
+    {"id": "sp5-python-loader", "path": "packages/fullmag-py/src/fullmag/runtime/loader.py", "symbol": "load_problem_from_script", "responsibility": "Capture the script and expose per-stage normalized IR."},
+    {"id": "sp5-mumax3-zhangli", "path": "external_solvers/3/cuda/zhangli2.cu", "symbol": "addzhanglitorque2", "responsibility": "Define the external MuMax3 central clamped/PBC stencil, constants, and Gilbert projection."},
+    {"id": "sp5-cpu-mumax3", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "zhang_li_mumax3_torque_at", "responsibility": "Execute the versioned MuMax3 operator in the FDM CPU reference lane."},
+    {"id": "sp5-cuda-mumax3", "path": "backends/fdm/gpu/cuda/integrators/llg_fp64.cu", "symbol": "zhang_li_neighbor_index", "responsibility": "Execute the versioned MuMax3 central stencil in native CUDA FP64/FP32 kernels."},
+    {"id": "sp5-ir-mumax3", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Carry formula, operator, target, and Landé provenance through FdmPlanIR."}
   ],
   "public_api": {"parameters": [
     {"python": "study.engine", "type": "str", "default": "required", "si_unit": "1", "validation": "`fdm` for this contract", "meaning": "requested solver family", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_selection.backend"},
@@ -58,6 +65,10 @@
     {"python": "ZhangLiSTT.current_density", "type": "vec3", "default": "required", "si_unit": "\\mathrm{A\\,m^{-2}}", "validation": "finite signed vector", "meaning": "CIP charge current", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].current_density"},
     {"python": "ZhangLiSTT.degree", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite polarization degree", "meaning": "current polarization", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].degree"},
     {"python": "ZhangLiSTT.xi", "type": "float", "default": "required", "si_unit": "1", "validation": "finite; alias of beta", "meaning": "non-adiabaticity", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].beta"},
+    {"python": "ZhangLiSTT.id", "type": "str", "default": "required for canonical operator", "si_unit": "1", "validation": "non-empty", "meaning": "torque identity", "backend_support": "FDM CPU/GPU MuMax3; FEM rejects MuMax3", "problem_ir": "spin_torque_modules[].id"},
+    {"python": "ZhangLiSTT.target", "type": "RegionRef", "default": "required for canonical operator", "si_unit": "1", "validation": "existing object/region", "meaning": "target mask ownership", "backend_support": "FDM CPU/GPU MuMax3; FEM central reference", "problem_ir": "spin_torque_modules[].target"},
+    {"python": "ZhangLiSTT.lande_g", "type": "float", "default": "required for canonical operator", "si_unit": "1", "validation": "exactly `2.0` for `zhang_li.mumax3.v1`; finite and positive for `zhang_li.fullmag.v1`", "meaning": "explicit Landé-factor provenance", "backend_support": "FDM CPU/GPU MuMax3 source identity; FEM central reference", "problem_ir": "spin_torque_modules[].lande_g"},
+    {"python": "ZhangLiSTT.operator_version", "type": "str", "default": "zl_mumax3_central_v1", "si_unit": "1", "validation": "zl_mumax3_central_v1", "meaning": "spatial/formula realization", "backend_support": "FDM CPU/GPU", "problem_ir": "spin_torque_modules[].operator_version"},
     {"python": "add_relax.tolT", "type": "float", "default": "1e-6", "si_unit": "\\mathrm T", "validation": "positive finite; exclusive with `tolA`", "meaning": "maximum relaxation torque", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "study.stop.torque_tolerance_apm"},
     {"python": "add_run.until", "type": "float", "default": "required", "si_unit": "\\mathrm s", "validation": "positive finite", "meaning": "physical observation horizon", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "stage.default_until_seconds"}
   ]}

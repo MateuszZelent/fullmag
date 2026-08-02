@@ -305,6 +305,12 @@
       "notes":"Existing legacy executable slices are not formula-v1 evidence."
     },
     {
+      "id":"spin_torque.zhang_li.mumax3.v1", "capability_id":"spin_torque.zhang_li", "formula_version":"zhang_li.mumax3.v1", "operator_versions":["zl_mumax3_central_v1"],
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"source_visible","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"},
+      "precision_scope":["double","single only after qualification"], "execution_mode_scope":["strict"], "workload_scope":"MuMax3 Standard Problem 5 and the central-stencil one-step oracle.", "validated_workloads":[],
+      "notes":"Python/IR/planner identity, CPU algebra, AoS/SoA parity, and native FP32/FP64 source branches are implemented. Managed CUDA rebuild, device runtime parity, and full SP5 trajectory qualification remain open. FEM fails closed because this is an FDM-only MuMax3 compatibility realization."
+    },
+    {
       "id": "spin_torque.slonczewski.fullmag.v2", "capability_id": "spin_torque.slonczewski", "formula_version": "slonczewski.fullmag.v2",
       "realization_versions":["slonczewski_thin_layer_homogenized.v1","slonczewski_interface_flux.v1"],
       "lanes": {"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"},

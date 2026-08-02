@@ -2451,7 +2451,7 @@ def _render_spin_torques(
                 kwargs.append(f"degree={_py_number(module.degree)}")
             if module.beta != 0.0:
                 kwargs.append(f"beta={_py_number(module.beta)}")
-            if module.formula_version == "zhang_li.fullmag.v1":
+            if module.formula_version in {"zhang_li.fullmag.v1", "zhang_li.mumax3.v1"}:
                 assert module.id is not None and module.target is not None
                 assert module.lande_g is not None
                 kwargs.append(f"id={_py_repr(module.id)}")
@@ -2461,6 +2461,10 @@ def _render_spin_torques(
                     f"region_id={'None' if module.target.region_id is None else _py_repr(module.target.region_id)})"
                 )
                 kwargs.append(f"lande_g={_py_number(module.lande_g)}")
+                if module.formula_version == "zhang_li.mumax3.v1":
+                    kwargs.append(
+                        f"operator_version={_py_repr(module.operator_version or 'zl_mumax3_central_v1')}"
+                    )
             lines.append(f"fm.ZhangLiSTT({', '.join(kwargs)})")
             continue
         if isinstance(module, InterfaceCppSTT):
@@ -2903,11 +2907,16 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             )
     if kind == "zhang_li":
         formula_version = entry.get("formula_version", "zhang_li.legacy_fullmag.v0")
-        if formula_version == "zhang_li.fullmag.v1":
+        if formula_version in {"zhang_li.fullmag.v1", "zhang_li.mumax3.v1"}:
             if _required_entry(entry, "schema_version", context=str(kind)) != "zhang_li_torque.v1":
                 raise ValueError("canonical zhang_li schema_version must be zhang_li_torque.v1")
-            if _required_entry(entry, "operator_version", context=str(kind)) != "zl_central_reference_v1":
-                raise ValueError("canonical zhang_li requires zl_central_reference_v1")
+            required_operator = (
+                "zl_mumax3_central_v1"
+                if formula_version == "zhang_li.mumax3.v1"
+                else "zl_central_reference_v1"
+            )
+            if _required_entry(entry, "operator_version", context=str(kind)) != required_operator:
+                raise ValueError(f"canonical zhang_li requires {required_operator}")
             kwargs.append(f"id={_py_repr(_required_nonempty_string(entry, 'id', context=str(kind)))}")
             target = _required_entry(entry, "target", context=str(kind))
             if not isinstance(target, Mapping):
@@ -2923,6 +2932,8 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             kwargs.append(
                 f"lande_g={_required_roundtrip_number(entry, 'lande_g', context=str(kind))}"
             )
+            if formula_version == "zhang_li.mumax3.v1":
+                kwargs.append("operator_version=\"zl_mumax3_central_v1\"")
         elif formula_version != "zhang_li.legacy_fullmag.v0":
             raise ValueError(f"unsupported zhang_li formula_version {formula_version!r}")
     return f"fm.{constructor}({', '.join(kwargs)})"

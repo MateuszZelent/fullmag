@@ -21,6 +21,19 @@
 namespace fullmag {
 namespace fdm {
 
+__device__ __forceinline__ int zhang_li_neighbor_index(
+    int coord, int dim, int stride, int idx, int delta, int periodic)
+{
+    int next = coord + delta;
+    if (periodic && dim > 1) {
+        if (next < 0) next = dim - 1;
+        if (next >= dim) next = 0;
+        return idx + (next - coord) * stride;
+    }
+    if (next < 0 || next >= dim) return idx;
+    return idx + delta * stride;
+}
+
 // Forward declarations from exchange_fp64.cu
 extern void launch_exchange_field_fp64(Context &ctx);
 extern double launch_exchange_energy_fp64(Context &ctx);
@@ -94,7 +107,6 @@ __global__ void llg_rhs_fp64_kernel(
         double uy = stt.stt_u_pf * jy;
         double uz = stt.stt_u_pf * jz;
 
-        // Upwind difference for (u.grad)m
         int nx = stt.nx, ny = stt.ny, nz = stt.nz;
         int z = idx / (ny * nx);
         int rem = idx - z * ny * nx;
@@ -102,6 +114,28 @@ __global__ void llg_rhs_fp64_kernel(
         int x = rem - y * nx;
 
         double dmx_u = 0.0, dmy_u = 0.0, dmz_u = 0.0;
+
+        if (stt.zhang_li_formula == FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1) {
+            const int xm = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
+            const int xp = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
+            const int ym = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
+            const int yp = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
+            const int zm = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
+            const int zp = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            const double inv_2dx = 0.5 / stt.dx;
+            const double inv_2dy = 0.5 / stt.dy;
+            const double inv_2dz = 0.5 / stt.dz;
+            dmx_u = ux * (mx[xp] - mx[xm]) * inv_2dx
+                  + uy * (mx[yp] - mx[ym]) * inv_2dy
+                  + uz * (mx[zp] - mx[zm]) * inv_2dz;
+            dmy_u = ux * (my[xp] - my[xm]) * inv_2dx
+                  + uy * (my[yp] - my[ym]) * inv_2dy
+                  + uz * (my[zp] - my[zm]) * inv_2dz;
+            dmz_u = ux * (mz[xp] - mz[xm]) * inv_2dx
+                  + uy * (mz[yp] - mz[ym]) * inv_2dy
+                  + uz * (mz[zp] - mz[zm]) * inv_2dz;
+        } else {
+        // Historical fullmag v0: sign-selected upwind difference for (u.grad)m.
         
         // x-derivative
         if (ux > 0.0 && x > 0) {
@@ -140,6 +174,7 @@ __global__ void llg_rhs_fp64_kernel(
             dmx_u += uz * (mx[next] - m0) / stt.dz;
             dmy_u += uz * (my[next] - m1) / stt.dz;
             dmz_u += uz * (mz[next] - m2) / stt.dz;
+        }
         }
 
         // m x (u.grad)m

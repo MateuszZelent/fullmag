@@ -10,7 +10,7 @@ use fullmag_engine::{
     ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, RegionalFieldDriveTerm,
     ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
-    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
+    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
@@ -195,6 +195,11 @@ fn build_zl_stt(plan: &FdmPlanIR) -> Option<ZhangLiSttConfig> {
         return None;
     }
     Some(ZhangLiSttConfig {
+        formula: match plan.zhang_li_formula_version.as_deref() {
+            Some("zhang_li.mumax3.v1") => ZhangLiFormula::Mumax3V1,
+            Some("zhang_li.fullmag.v1") => ZhangLiFormula::FullmagV1,
+            _ => ZhangLiFormula::LegacyFullmagV0,
+        },
         current_density: j,
         spin_polarization: p,
         non_adiabaticity: plan.stt_beta.unwrap_or(0.0),

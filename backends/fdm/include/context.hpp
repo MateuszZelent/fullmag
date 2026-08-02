@@ -189,6 +189,8 @@ struct Context {
     double stt_u_pf = 0.0;     // Precomputed coefficient: P * mu_B / (e * M_s * (1 + beta^2))
     double stt_degree = 0.0;   // P
     double stt_beta = 0.0;     // beta
+    fullmag_fdm_zhang_li_formula zhang_li_formula =
+        FULLMAG_FDM_ZHANG_LI_LEGACY_FULLMAG_V0;
 
     // Slonczewski STT (CPP / SOT)
     bool has_slonczewski_stt = false;
@@ -420,6 +422,7 @@ struct SttParams {
     double  stt_u_pf            = 0.0;
     double  stt_beta            = 0.0;
     double  stt_degree          = 0.0;
+    int     zhang_li_formula    = FULLMAG_FDM_ZHANG_LI_LEGACY_FULLMAG_V0;
     int     nx = 1, ny = 1, nz = 1;
     double  dx = 1.0, dy = 1.0, dz = 1.0;
     int     periodic_x = 0, periodic_y = 0, periodic_z = 0;
@@ -474,6 +477,7 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
     p.stt_u_pf          = ctx.stt_u_pf;
     p.stt_beta          = ctx.stt_beta;
     p.stt_degree        = ctx.stt_degree;
+    p.zhang_li_formula  = static_cast<int>(ctx.zhang_li_formula);
     p.nx = static_cast<int>(ctx.nx);
     p.ny = static_cast<int>(ctx.ny);
     p.nz = static_cast<int>(ctx.nz);

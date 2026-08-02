@@ -266,10 +266,23 @@ oriented face flux. Zhang–Li uses the advective, not conservative, operator
 v_perp = D_u m-m_K(m_K dot D_u m).
 ```
 
-Production baseline `zl_upwind_first_order_v1` selects the upwind state and
-must define inflow, zero-gradient outflow, mask boundary, and PBC per axis.
-`zl_central_reference_v1` is the smooth-interior accuracy oracle. A future
-MUSCL/TVD operator requires a new formula version.
+The compatibility baseline `zl_upwind_first_order_v1` selects the upwind state
+and must define inflow, zero-gradient outflow, mask boundary, and PBC per axis.
+The FEM/reference central oracle is `zl_central_reference_v1`. FDM additionally
+exposes the explicitly external-solver-matched
+`zhang_li.mumax3.v1`/`zl_mumax3_central_v1` realization: it uses
+`b=P mu_B/[2 e M_s (1+beta^2)]`, a centered `(m_{i+1}-m_{i-1})/(2 Delta x)`
+stencil, and MuMax3 clamped/PBC neighbours. It is FDM-only and cannot be
+silently substituted for the FEM central formula. A future MUSCL/TVD operator
+requires a new formula version.
+
+The MuMax3-compatible realization is source-compatible, not a general Landé-
+factor parameterization: the external kernel fixes `GAMMA0=1.7595e11` and the
+direct-rate prefactor cancels that constant, leaving the literal
+`mu_B/(2 e)` source factor. Consequently its canonical `lande_g` provenance
+must be exactly `2.0`; a different value is rejected during Python/IR
+validation rather than silently ignored. A configurable Landé factor belongs
+to a separately versioned Zhang--Li realization with its own numerical oracle.
 
 Here `V_K [m^3]` is cell volume, `A_f [m^2]` is face area, `n_Kf [1]` is
 the outward unit normal of cell `K`, `u_f [m/s]` is signed face drift velocity,

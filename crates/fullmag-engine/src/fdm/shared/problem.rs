@@ -359,11 +359,7 @@ impl ExchangeLlgProblem {
     pub fn observe(&self, state: &ExchangeLlgState) -> Result<EffectiveFieldObservables> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
-        Ok(self.observe_vectors_ws_at_time(
-            state.magnetization(),
-            &mut ws,
-            state.time_seconds,
-        ))
+        Ok(self.observe_vectors_ws_at_time(state.magnetization(), &mut ws, state.time_seconds))
     }
 
     /// Single step using a disposable FFT workspace.

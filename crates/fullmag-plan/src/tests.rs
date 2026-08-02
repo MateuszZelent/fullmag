@@ -166,6 +166,7 @@ fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> P
         resolved_sample_period_s: None,
         every_steps: None,
         quantities: vec!["t".into(), "my".into()],
+        expressions: vec![],
     });
     problem.study.sampling_mut().outputs = vec![
         OutputIR::FieldAuto {
@@ -5874,6 +5875,73 @@ fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
 }
 
 #[test]
+fn fdm_mumax3_zhang_li_plan_preserves_identity_and_operator() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some("sp5_zhang_li".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.mumax3.v1".to_string(),
+        operator_version: Some("zl_mumax3_central_v1".to_string()),
+        current_density: Some([1e12, 0.0, 0.0]),
+        current_source: None,
+        degree: 1.0,
+        beta: 0.05,
+        lande_g: Some(2.0),
+    }];
+
+    let planned = plan(&ir).expect("MuMax3 Zhang-Li FDM plan should be executable");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(
+        fdm.zhang_li_formula_version.as_deref(),
+        Some("zhang_li.mumax3.v1")
+    );
+    assert_eq!(
+        fdm.zhang_li_operator_version.as_deref(),
+        Some("zl_mumax3_central_v1")
+    );
+    assert_eq!(fdm.zhang_li_lande_g, Some(2.0));
+    assert_eq!(
+        fdm.zhang_li_target
+            .as_ref()
+            .map(|target| target.object_id.as_str()),
+        Some("strip")
+    );
+}
+
+#[test]
+fn fdm_canonical_fullmag_zhang_li_fails_closed_instead_of_using_legacy_stencil() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some("canonical_cip".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.fullmag.v1".to_string(),
+        operator_version: Some("zl_central_reference_v1".to_string()),
+        current_density: Some([1e12, 0.0, 0.0]),
+        current_source: None,
+        degree: 1.0,
+        beta: 0.05,
+        lande_g: Some(2.0),
+    }];
+
+    let err = plan(&ir).expect_err("FDM must not silently substitute the legacy stencil");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("zhang_li.fullmag.v1") && reason.contains("not executable on FDM")
+    }));
+}
+
+#[test]
 fn relaxation_rejects_time_dependent_and_unpaired_oersted_sources() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
@@ -6614,13 +6682,7 @@ fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_or_cuda_routes() {
             "runtime_selection".into(),
             serde_json::json!({"device": device}),
         );
-        let err = plan(&cuda)
-            .expect_err("adaptive FDM CUDA must fail before a runtime timestep identity exists");
-        assert!(err.reasons.iter().any(|reason| {
-            reason.contains("adaptive_timestep")
-                && reason.contains("CUDA")
-                && reason.contains("no executable timestep capability identity")
-        }));
+        plan(&cuda).expect("single-grid FDM CUDA adaptive has an executable v2 timestep identity");
     }
 }
 

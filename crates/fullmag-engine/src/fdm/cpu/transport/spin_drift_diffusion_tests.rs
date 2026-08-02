@@ -779,24 +779,27 @@ fn mixing_flux_balance_v2_resolves_longitudinal_absorbed_and_sml_channels() {
     assert_eq!(observation.incoming_longitudinal_a_per_m2, [0.0, 0.0, 2.0]);
     assert_eq!(observation.backflow_longitudinal_a_per_m2, [0.0, 0.0, 9.0]);
     assert_eq!(observation.absorbed_transverse_a_per_m2, [13.0, 1.0, 0.0]);
-    for (actual, expected) in observation
-        .spin_memory_loss_a_per_m2
-        .iter()
-        .zip([8.0 / 9.0, 16.0 / 9.0, 8.0 / 3.0])
+    for (actual, expected) in
+        observation
+            .spin_memory_loss_a_per_m2
+            .iter()
+            .zip([8.0 / 9.0, 16.0 / 9.0, 8.0 / 3.0])
     {
         assert_close(*actual, expected, 1.0e-14);
     }
-    for (actual, expected) in observation
-        .from_side_outgoing_a_per_m2
-        .iter()
-        .zip([131.0 / 9.0, 37.0 / 9.0, 47.0 / 3.0])
+    for (actual, expected) in
+        observation
+            .from_side_outgoing_a_per_m2
+            .iter()
+            .zip([131.0 / 9.0, 37.0 / 9.0, 47.0 / 3.0])
     {
         assert_close(*actual, expected, 1.0e-14);
     }
-    for (actual, expected) in observation
-        .to_side_transmitted_a_per_m2
-        .iter()
-        .zip([2.0 / 3.0, 4.0 / 3.0, 13.0])
+    for (actual, expected) in
+        observation
+            .to_side_transmitted_a_per_m2
+            .iter()
+            .zip([2.0 / 3.0, 4.0 / 3.0, 13.0])
     {
         assert_close(*actual, expected, 1.0e-14);
     }
@@ -863,17 +866,21 @@ fn sml_reservoir_closes_surface_balance_and_has_nonnegative_entropy() {
         .sml_reservoir
         .expect("v2 interface must publish reservoir observables");
     for component in 0..3 {
-        assert!((reservoir.normal_to_reservoir_a_per_m2[component]
-            + reservoir.ferromagnet_to_reservoir_a_per_m2[component]
-            - reservoir.reservoir_to_lattice_a_per_m2[component])
-            .abs()
-            < 1.0e-12);
-        assert!((observation.from_side_outgoing_a_per_m2[component]
-            - observation.to_side_transmitted_a_per_m2[component]
-            - observation.absorbed_transverse_a_per_m2[component]
-            - reservoir.reservoir_to_lattice_a_per_m2[component])
-            .abs()
-            < 1.0e-12);
+        assert!(
+            (reservoir.normal_to_reservoir_a_per_m2[component]
+                + reservoir.ferromagnet_to_reservoir_a_per_m2[component]
+                - reservoir.reservoir_to_lattice_a_per_m2[component])
+                .abs()
+                < 1.0e-12
+        );
+        assert!(
+            (observation.from_side_outgoing_a_per_m2[component]
+                - observation.to_side_transmitted_a_per_m2[component]
+                - observation.absorbed_transverse_a_per_m2[component]
+                - reservoir.reservoir_to_lattice_a_per_m2[component])
+                .abs()
+                < 1.0e-12
+        );
     }
     assert!(reservoir.surface_power_w_per_m2 >= 0.0);
 }

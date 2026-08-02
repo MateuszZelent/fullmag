@@ -218,13 +218,13 @@ fn resolved_fem_descriptor_contradiction(
         || descriptor.charge_definition.gauge != descriptor.charge_gauge
         || descriptor.charge_definition.solver != descriptor.charge_solver
         || descriptor.charge_definition.domain != descriptor.charge_domain.regions
-        || descriptor.charge_conductivity_spm_per_element.len() != mesh.elements.len()
-        || descriptor.charge_domain.element_mask.len() != mesh.elements.len()
-        || descriptor.spin_domain.element_mask.len() != mesh.elements.len()
+        || descriptor.charge_conductivity_spm_per_element.len() != mesh.cell_count()
+        || descriptor.charge_domain.element_mask.len() != mesh.cell_count()
+        || descriptor.spin_domain.element_mask.len() != mesh.cell_count()
         || descriptor.charge_domain.element_mask.iter().any(|selected| !selected)
         || descriptor.spin_domain.element_mask.iter().any(|selected| !selected)
         || descriptor.torque_target.as_ref().is_some_and(|target| {
-            target.element_mask.len() != mesh.elements.len()
+            target.element_mask.len() != mesh.cell_count()
                 || !target.element_mask.iter().any(|selected| *selected)
         })
         || transport_boundary_attributes(descriptor).any(|attribute| {

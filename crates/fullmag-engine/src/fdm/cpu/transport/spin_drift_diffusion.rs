@@ -1418,9 +1418,8 @@ impl SpinDriftDiffusionProblem {
         );
         let (spin_memory_loss, from_reservoir, to_reservoir, reservoir_observation) =
             if let Some(reservoir) = sml_reservoir {
-                let denominator = reservoir.g_n_s_per_m2
-                    + reservoir.g_f_s_per_m2
-                    + reservoir.g_lattice_s_per_m2;
+                let denominator =
+                    reservoir.g_n_s_per_m2 + reservoir.g_f_s_per_m2 + reservoir.g_lattice_s_per_m2;
                 let reservoir_potential = scale(
                     add(
                         scale(spin_potential[interface.from_cell], reservoir.g_n_s_per_m2),
@@ -1442,10 +1441,7 @@ impl SpinDriftDiffusionProblem {
                     ),
                     reservoir.g_f_s_per_m2,
                 );
-                let reservoir_to_lattice = scale(
-                    reservoir_potential,
-                    reservoir.g_lattice_s_per_m2,
-                );
+                let reservoir_to_lattice = scale(reservoir_potential, reservoir.g_lattice_s_per_m2);
                 let power = 0.5
                     * (reservoir.g_n_s_per_m2
                         * norm3(add(

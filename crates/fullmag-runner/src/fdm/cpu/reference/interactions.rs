@@ -2,8 +2,8 @@
 
 use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
-    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiFormula,
-    SlonczewskiSttConfig, SotConfig, SotFormula, ZhangLiSttConfig,
+    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiFormula, SlonczewskiSttConfig,
+    SotConfig, SotFormula, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::FdmPlanIR;
 
@@ -63,6 +63,11 @@ pub(super) fn build_zl_stt(plan: &FdmPlanIR) -> Option<ZhangLiSttConfig> {
         return None;
     }
     Some(ZhangLiSttConfig {
+        formula: match plan.zhang_li_formula_version.as_deref() {
+            Some("zhang_li.mumax3.v1") => ZhangLiFormula::Mumax3V1,
+            Some("zhang_li.fullmag.v1") => ZhangLiFormula::FullmagV1,
+            _ => ZhangLiFormula::LegacyFullmagV0,
+        },
         current_density: j,
         spin_polarization: p,
         non_adiabaticity: plan.stt_beta.unwrap_or(0.0),

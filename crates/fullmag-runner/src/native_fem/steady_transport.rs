@@ -176,9 +176,7 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
 }
 
 struct FlatBuffers {
-    nodes: Vec<f64>,
-    elements: Vec<u32>,
-    boundary_faces: Vec<u32>,
+    mesh: super::PackedNativeMesh,
     magnetization: Vec<f64>,
     charge_attributes: Vec<u32>,
     charge_values: Vec<f64>,
@@ -213,16 +211,16 @@ fn preflight(request: &NativeFemSteadyTransportRequest) -> Result<(), RunError> 
             message: "PeriodicSpin is unsupported by the FEM conforming-H1 M1 runtime".to_string(),
         });
     }
-    if request.mesh.element_markers.len() != request.mesh.elements.len() {
+    if request.mesh.element_markers.len() != request.mesh.cell_count() {
         return Err(RunError {
             message: format!(
                 "FEM steady transport element marker count {} differs from element count {}",
                 request.mesh.element_markers.len(),
-                request.mesh.elements.len()
+                request.mesh.cell_count()
             ),
         });
     }
-    if request.mesh.elements.len() != request.charge_conductivity_spm_per_element.len() {
+    if request.mesh.cell_count() != request.charge_conductivity_spm_per_element.len() {
         return Err(RunError {
             message: "FEM steady transport requires one charge conductivity per tetrahedron"
                 .to_string(),
@@ -234,7 +232,7 @@ fn preflight(request: &NativeFemSteadyTransportRequest) -> Result<(), RunError> 
                 .to_string(),
         });
     }
-    if request.mesh.boundary_faces.len() != request.mesh.boundary_markers.len() {
+    if request.mesh.facet_count() != request.mesh.boundary_markers.len() {
         return Err(RunError {
             message: "FEM steady transport boundary face/marker counts differ".to_string(),
         });
@@ -264,15 +262,7 @@ fn preflight(request: &NativeFemSteadyTransportRequest) -> Result<(), RunError> 
 
 fn flatten(request: &NativeFemSteadyTransportRequest) -> FlatBuffers {
     FlatBuffers {
-        nodes: request.mesh.nodes.iter().flatten().copied().collect(),
-        elements: request.mesh.elements.iter().flatten().copied().collect(),
-        boundary_faces: request
-            .mesh
-            .boundary_faces
-            .iter()
-            .flatten()
-            .copied()
-            .collect(),
+        mesh: super::PackedNativeMesh::new(&request.mesh),
         magnetization: request.magnetization.iter().flatten().copied().collect(),
         charge_attributes: request
             .charge_dirichlet
@@ -362,20 +352,7 @@ pub(crate) fn solve_native_fem_steady_transport(
         constitutive_version: constitutive.as_ptr(),
         operator_version: operator.as_ptr(),
         physical_residual_version: residual.as_ptr(),
-        mesh: ffi::fullmag_fem_mesh_desc {
-            nodes_xyz: const_ptr(&flat.nodes),
-            n_nodes: node_count as u32,
-            elements: const_ptr(&flat.elements),
-            n_elements: request.mesh.elements.len() as u32,
-            element_markers: const_ptr(&request.mesh.element_markers),
-            boundary_faces: const_ptr(&flat.boundary_faces),
-            n_boundary_faces: request.mesh.boundary_faces.len() as u32,
-            boundary_markers: const_ptr(&request.mesh.boundary_markers),
-            periodic_node_pairs: ptr::null(),
-            n_periodic_node_pairs: 0,
-            periodic_boundary_pair_markers: ptr::null(),
-            periodic_boundary_pair_count: 0,
-        },
+        mesh: flat.mesh.descriptor(&request.mesh),
         charge_conductivity_spm_per_element: const_ptr(&request.charge_conductivity_spm_per_element),
         charge_conductivity_spm_per_element_len: request.charge_conductivity_spm_per_element.len() as u64,
         magnetization_xyz: const_ptr(&flat.magnetization),
@@ -490,22 +467,22 @@ mod tests {
 
     fn request() -> NativeFemSteadyTransportRequest {
         NativeFemSteadyTransportRequest {
-            mesh: MeshIR {
-                mesh_name: "tet".to_string(),
-                nodes: vec![
+            mesh: MeshIR::from_legacy_tet4(
+                "tet".to_string(),
+                vec![
                     [0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
-                boundary_markers: vec![1, 1, 1, 1],
-                periodic_boundary_pairs: vec![],
-                periodic_node_pairs: vec![],
-                per_domain_quality: HashMap::new(),
-            },
+                vec![[0, 1, 2, 3]],
+                vec![1],
+                vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                vec![1, 1, 1, 1],
+                vec![],
+                vec![],
+                HashMap::new(),
+            ),
             execution: NativeFemSteadyTransportExecution::CpuDouble,
             interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
             gauge: NativeFemSteadyTransportGauge::BoundaryReference,
@@ -682,10 +659,10 @@ mod tests {
     fn flatten_preserves_row_major_mesh_and_qia_input_order() {
         let flat = flatten(&request());
         assert_eq!(
-            flat.nodes,
+            flat.mesh.nodes_xyz,
             vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         );
-        assert_eq!(flat.elements, vec![0, 1, 2, 3]);
+        assert_eq!(flat.mesh.cell_types, vec![ffi::FULLMAG_FEM_CELL_TET4]);
         assert_eq!(
             flat.magnetization,
             vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]

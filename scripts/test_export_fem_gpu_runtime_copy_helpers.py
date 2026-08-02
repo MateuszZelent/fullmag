@@ -480,6 +480,7 @@ def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None
     )[0]
 
     assert "capture_source_snapshot_identity.py" in ensure_recipe
+    assert "--ignore-non-runtime-dirty" in ensure_recipe
     assert '--require-source-snapshot-sha256 "$source_snapshot"' in ensure_recipe
     assert '! -path \\"*/tests/*\\"' not in ensure_recipe
     assert '! -name \\"tests.rs\\"' not in ensure_recipe
@@ -877,7 +878,8 @@ def test_export_uses_immutable_source_snapshot_when_host_worktree_drifts() -> No
     assert '--require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}"' in exporter
     assert '--source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
     assert '--require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
-    assert '--verify-materialized "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert '--verify-materialized-snapshot "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert "--ignore-non-runtime-dirty" in exporter
     assert '--allow-source-drift' in exporter
     assert "capture_source_snapshot_identity.py" in exporter
     source_capture = (
@@ -1709,6 +1711,10 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
     assert "if ! validate_current >/dev/null 2>&1; then" in ensure_recipe
     assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime" in ensure_recipe
+    assert (
+        "FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 "
+        "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime"
+    ) in ensure_recipe
     assert "runtime_rebuilt=1" in ensure_recipe
     assert "capture_source_snapshot_identity.py" in ensure_recipe
     assert '--compare "$identity_file"' in ensure_recipe

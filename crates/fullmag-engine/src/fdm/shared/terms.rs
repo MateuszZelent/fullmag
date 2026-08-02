@@ -124,12 +124,25 @@ pub struct CubicAnisotropyConfig {
 /// Zhang-Li (CIP) spin-transfer torque configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZhangLiSttConfig {
+    /// Versioned formula and spatial realization.
+    pub formula: ZhangLiFormula,
     /// Current density vector j [A/m²].
     pub current_density: Vector3,
     /// Spin polarization P (dimensionless, 0 < P ≤ 1).
     pub spin_polarization: f64,
     /// Non-adiabaticity parameter β (dimensionless).
     pub non_adiabaticity: f64,
+}
+
+/// Zhang-Li evaluator identities shared by FDM CPU/GPU and the FEM reference
+/// lane.  The legacy value is retained byte-for-byte; MuMax3 is an explicit
+/// source-compatible central-stencil realization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZhangLiFormula {
+    #[default]
+    LegacyFullmagV0,
+    FullmagV1,
+    Mumax3V1,
 }
 
 /// Slonczewski (CPP) spin-transfer torque configuration.

@@ -591,6 +591,10 @@ class ZhangLiSTT:
         Alias for ``beta`` (mumax3/amumax compatibility).  If both ``beta``
         and ``xi`` are specified with different non-zero values, raises
         ``ValueError``.
+    operator_version : str, optional
+        Explicit canonical spatial/formula realization.  Use
+        ``"zl_mumax3_central_v1"`` for the MuMax3-compatible FDM operator or
+        omit it for the legacy Fullmag evaluator.
     """
 
     current_density: tuple[float, float, float] | None
@@ -614,6 +618,7 @@ class ZhangLiSTT:
         id: str | None = None,
         target: RegionRef | None = None,
         lande_g: float | None = None,
+        operator_version: str | None = None,
     ) -> None:
         # Resolve xi / beta alias
         resolved_beta = beta
@@ -632,18 +637,40 @@ class ZhangLiSTT:
         object.__setattr__(self, "current_source", resolved_source)
         object.__setattr__(self, "degree", _validated_degree(degree))
         object.__setattr__(self, "beta", _validated_beta(resolved_beta))
-        canonical = id is not None or target is not None or lande_g is not None
+        if operator_version is not None and operator_version not in {
+            "zl_central_reference_v1",
+            "zl_mumax3_central_v1",
+        }:
+            raise ValueError(f"unsupported ZhangLiSTT operator_version {operator_version!r}")
+        canonical = (
+            id is not None
+            or target is not None
+            or lande_g is not None
+            or operator_version is not None
+        )
         if canonical:
             if id is None or target is None or lande_g is None:
                 raise ValueError("canonical ZhangLiSTT requires id, target, and lande_g")
             if not isinstance(target, RegionRef):
                 raise TypeError("target must be a RegionRef")
             require_positive(lande_g, "lande_g")
+            if operator_version == "zl_mumax3_central_v1" and lande_g != 2.0:
+                raise ValueError(
+                    "zl_mumax3_central_v1 is source-compatible with MuMax3's "
+                    "fixed g=2.0; use lande_g=2.0"
+                )
             object.__setattr__(self, "id", require_non_empty(id, "id"))
             object.__setattr__(self, "target", target)
             object.__setattr__(self, "lande_g", float(lande_g))
-            object.__setattr__(self, "formula_version", "zhang_li.fullmag.v1")
-            object.__setattr__(self, "operator_version", "zl_central_reference_v1")
+            resolved_operator = operator_version or "zl_central_reference_v1"
+            object.__setattr__(self, "operator_version", resolved_operator)
+            object.__setattr__(
+                self,
+                "formula_version",
+                "zhang_li.mumax3.v1"
+                if resolved_operator == "zl_mumax3_central_v1"
+                else "zhang_li.fullmag.v1",
+            )
         else:
             object.__setattr__(self, "id", None)
             object.__setattr__(self, "target", None)
@@ -658,7 +685,7 @@ class ZhangLiSTT:
             "degree": self.degree,
             "beta": self.beta,
         }
-        if self.formula_version == "zhang_li.fullmag.v1":
+        if self.formula_version in {"zhang_li.fullmag.v1", "zhang_li.mumax3.v1"}:
             assert self.id is not None and self.target is not None
             assert self.lande_g is not None and self.operator_version is not None
             ir.update({

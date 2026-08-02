@@ -6662,6 +6662,10 @@ mod tests {
                 bulk_dmi: None,
                 zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {
+                        formula: match stt_contract.map(|contract| contract.formula_version.as_str()) {
+                            Some("zhang_li.fullmag.v1") => fullmag_engine::ZhangLiFormula::FullmagV1,
+                            _ => fullmag_engine::ZhangLiFormula::LegacyFullmagV0,
+                        },
                         current_density: plan.current_density.expect("current density"),
                         spin_polarization: plan.stt_degree.expect("stt degree"),
                         non_adiabaticity: plan.stt_beta.unwrap_or(0.0),
