@@ -86,10 +86,11 @@ study.stages.add_relax(
                 "max_torque_T",
             ],
         ),
-        fields=[
-            fm.FieldAutosave("H_ex", every_steps=100),
-            fm.FieldAutosave("H_demag", every_steps=100),
-            fm.FieldAutosave("H_eff", every_steps=100),
-        ],
+        fields=[],
     )
+)
+study.stages.add_save_state(
+    artifact_name="relaxed_m.zarr",
+    format="zarr",
+    dataset="m",
 )

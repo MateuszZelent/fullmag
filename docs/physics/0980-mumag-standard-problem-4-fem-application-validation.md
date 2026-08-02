@@ -108,6 +108,18 @@ dynamic time `t = 0`, one constant field is applied:
 | $r_E$ | relative energy-comparison allowance | $1$ |
 | $E_a,E_b$ | the same energy observable from two compared runs | $\mathrm{J}$ |
 
+The final-state restriction adds the following symbols:
+
+| LaTeX token | Meaning | SI unit |
+|---|---|---|
+| $q_C$ | magnetic fraction of Cartesian voxel $C$ | $1$ |
+| $w_{C,i}$ | volume-normalized P1 weight of FEM node $i$ in voxel $C$ | $1$ |
+| $\Omega_m$ | magnetic FEM domain | $\mathrm{m^3}$ |
+| $C$ | one Cartesian FDM voxel | $\mathrm{m^3}$ |
+| $N_i$ | affine P1 shape function for FEM node $i$ | $1$ |
+| $\mathbf m_i$ | reduced magnetization at FEM node $i$ | $1$ |
+| $\bar{\mathbf m}_C$ | restricted reduced magnetization in voxel $C$ | $1$ |
+
 The material constants are $M_s=8.0\times10^5\,\mathrm{A\,m^{-1}}$,
 $A_{\mathrm{ex}}=1.3\times10^{-11}\,\mathrm{J\,m^{-1}}$, zero
 magnetocrystalline anisotropy, $\alpha=0.02$ in dynamics, and
@@ -368,12 +380,13 @@ study.stages.add_relax(
                 "e_total", "max_torque_T",
             ],
         ),
-        fields=[
-            fm.FieldAutosave("H_ex", every_steps=50_000),
-            fm.FieldAutosave("H_demag", every_steps=50_000),
-            fm.FieldAutosave("H_eff", every_steps=50_000),
-        ],
+        fields=[],
     )
+)
+study.stages.add_save_state(
+    artifact_name="relaxed_m.zarr",
+    format="zarr",
+    dataset="m",
 )
 ```
 
@@ -382,6 +395,70 @@ by the user-facing command. Its $(800,250,200)\,\mathrm{nm}$ air domain is not
 relabelled as a spatial-qualification point. The managed matrix uses the
 separately frozen baseline and expanded airboxes in Section 7.5 through
 `SP4RunRequest`/`build_study`; every report records which path produced it.
+
+### 3.4 Final relaxed-state artifact and FEM-to-FDM comparison
+
+The cross-solver comparison in this document is restricted to the final
+zero-field state after `minimize()` in MuMax3 and `projected_gradient_bb` (or
+another explicitly selected relaxation family) in Fullmag. It does not compare
+time trajectories, reversal dynamics, or the first $m_x=0$ crossing.
+
+Both solvers must publish one explicit, complete reduced-magnetization field:
+
+- MuMax3 executes `minimize(); save(m); tablesave()`. The saved Zarr field is
+  read as `(t,z,y,x,component)` and the final frame is retained only when the
+  bundle declares one final state. `tablesave()` supplies the scalar endpoint
+  and provenance row; it is not used to reconstruct the texture.
+- Fullmag executes a relaxation stage followed by
+  `study.stages.add_save_state(artifact_name="relaxed_m.zarr",
+  format="zarr", dataset="m")`. This is a single final state action, not a
+  periodic field autosave. The state contains every FEM node and all three
+  reduced-magnetization components in the mesh node order.
+
+The existing `film.save(...)` method is intentionally not used for this
+workflow: it serializes the currently loaded Python-side state, whereas the
+post-relaxation save-state stage serializes the state produced by the solver.
+
+The FEM field is compared to MuMax3 on a declared Cartesian grid. For a
+magnetic FEM cell $K$ and an FDM voxel $C$, define the magnetic coverage and
+the nodal restriction weights
+
+```{math}
+:label: sp4-fem-cartesian-restriction
+
+q_C=\frac{|C\cap\Omega_m|}{|C|},\qquad
+w_{C,i}=\frac{1}{|C|}\int_{C\cap\Omega_m}N_i(\mathbf r)\,dV,
+\qquad
+\bar{\mathbf m}_C=\frac{1}{q_C}\sum_i w_{C,i}\mathbf m_i
+\quad(q_C>0).
+```
+
+Here $N_i$ are the affine P1 shape functions and $\mathbf m_i$ are the FEM
+nodal values. The production SP4 certificate requires one uniform `prism6`
+layer aligned with the film's $z$ planes, so the intersection in the $x-y$
+plane is clipped exactly against each Cartesian rectangle and the thickness
+integral is analytic. The implementation must fail closed for non-prism cells,
+ambiguous magnetic markers, missing node-order metadata, or a non-unit-layer
+mesh; it must not silently nearest-neighbour sample FEM nodes. Cells with
+$q_C=0$ are masked and excluded from texture metrics.
+
+The comparison report records the grid bounds, `(z,y,x)` shape, component order,
+mesh and Zarr fingerprints, magnetic coverage statistics, and the following
+dimensionless metrics on the common valid mask:
+
+1. per-component mean absolute error, RMS error, maximum error, and 99th
+   percentile error;
+2. vector RMS and maximum norm error;
+3. cosine similarity and the fraction of voxels with norm error above the
+   declared threshold;
+4. volume-weighted mean vectors from both solvers and their difference;
+5. conservation checks for projected volume and each component's weighted
+   integral.
+
+The report must separate discretization restriction error from solver-state
+error: it publishes the raw FEM nodal state, the restricted FEM grid, and the
+MuMax grid fingerprints, and never calls a pointwise grid comparison an exact
+FEM/FDM equivalence proof.
 
 The validation-specific public parameters are exhaustive below. Generic Box,
 universe, material, demag, and autosave constructors retain their existing
@@ -479,6 +556,9 @@ the example and canonical IR excerpt.
 | `StageAutosave.format` | `str` | `"zarr"` | $1$ | `zarr`, `hdf5`, or `txt`; `txt` rejects fields | artifact format | FEM CPU/GPU | `study.sampling.stage_autosave.format` |
 | `StageAutosave.table` | `TableAutosave \| None` | `None` | $1$ | must be `TableAutosave`; at least a table or one field is required | scalar-output policy | FEM CPU/GPU | `study.sampling.stage_autosave.table` |
 | `StageAutosave.fields` | `Sequence[FieldAutosave]` | `()` | $1$ | only `FieldAutosave`, without duplicate quantities | field-output policies | FEM CPU/GPU | `study.sampling.stage_autosave.fields` |
+| `StudyStagesBuilder.add_save_state.artifact_name` | `str` | `"state_snapshot"` | $1$ | non-empty safe artifact name; `.zarr` is normalized to `.zarr.zip` on disk | explicit post-stage state artifact | FEM CPU/GPU | stage action `save_state.artifact_name` |
+| `StudyStagesBuilder.add_save_state.format` | `str \| None` | `None` | $1$ | `zarr`, `h5`, or `json` after runtime normalization | state serialization format | FEM CPU/GPU | stage action `save_state.format` |
+| `StudyStagesBuilder.add_save_state.dataset` | `str \| None` | `None` | $1$ | non-empty dataset path when supplied; SP4 requires `"m"` | state dataset identity | FEM CPU/GPU | stage action `save_state.dataset` |
 | `TableAutosave.t_sampl` | `float \| "auto" \| None` | `None` | $\mathrm s$ | exactly one of `t_sampl` and `every_steps` is required; positive finite seconds or `auto` | physical-time table cadence | FEM CPU/GPU run stages | `study.sampling.stage_autosave.table.sample_period_s` or `.sample_period_policy` |
 | `TableAutosave.every_steps` | `int \| None` | `None` | $1$ | exactly one of `every_steps` and `t_sampl` is required; positive non-boolean integer | accepted-step table cadence | FEM CPU/GPU relaxation stages | `study.sampling.stage_autosave.table.every_steps` |
 | `TableAutosave.quantities` | `Sequence[str] \| None` | `None` | mixed | supported non-empty canonical quantity IDs; `None` uses the default set | scalar columns | FEM CPU/GPU | `study.sampling.stage_autosave.table.quantities` |
@@ -497,6 +577,14 @@ the example and canonical IR excerpt.
 Persistent instructions remain readable for compatibility, but new SP4
 scenarios bind storage to the owning Relax or Run stage so settings cannot leak
 into later stages. Zarr with a continuous logical index is the default.
+
+The analysis entry point is `fullmag.analysis.compare_relaxed_states(...)`. It
+requires the MuMax3 Zarr bundle, the Fullmag `relaxed_m.zarr.zip` state, and
+the exact `.fullmag-mesh` artifact. It builds the restriction weights once,
+checks the two grids and source fingerprints, and returns a JSON-serializable
+report. `load_mumax_magnetization(..., require_single_frame=True)` is the
+fail-closed guard against accidentally comparing the old MuMax trajectory
+bundle.
 
 Every physical and numerical value is written directly in the scenario file.
 The scripts do not read solver, field, mesh, timestep, tolerance, or duration
@@ -581,16 +669,18 @@ executes current lowering and compares the fields shown here.
           "every_steps": 10,
           "quantities": ["step", "mx", "my", "mz", "e_ex", "e_demag", "e_total", "max_torque_T"]
         },
-        "fields": [
-          {"kind": "field_autosave", "quantity": "H_ex", "every_steps": 50000},
-          {"kind": "field_autosave", "quantity": "H_demag", "every_steps": 50000},
-          {"kind": "field_autosave", "quantity": "H_eff", "every_steps": 50000}
-        ]
+        "fields": []
       }
     }
   }
 }
 ```
+
+The ordered exported pipeline contains a following `flat_save_state` stage
+with action `{ "kind": "save_state", "artifact_name": "relaxed_m.zarr",
+"format": "zarr", "dataset": "m" }`. The runtime writes it as
+`artifacts/states/relaxed_m.zarr.zip` and preserves the preceding relax result
+as its continuation state.
 
 Dynamics scripts lower an ordered `flat_relax`, `flat_autosave`, `flat_run`
 pipeline. Their relaxation IR has no Zeeman term; the run IR has exactly one
@@ -881,6 +971,13 @@ evidence.
 | exact-layer prism authoring | `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | validate and lower prismatic thin-film controls | FEM CPU/GPU mixed-P1 | `test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer` | implemented and tested | pending publication SHA |
 | relaxation-stage authoring | `packages/fullmag-py/src/fullmag/world.py` | `add_relax` | validate algorithm, stopping, and stage-local controls | FEM CPU/GPU | relaxation scenario matrix tests | implemented and tested | pending publication SHA |
 | stage-local autosave representation | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | table and field output ownership | FEM CPU/GPU | public scenario lowering test | implemented and tested | pending publication SHA |
+| final-state save action | `packages/fullmag-py/src/fullmag/world.py` | `def save_state_stage` | lower one post-relaxation `m` state artifact without periodic field sampling | FEM CPU/GPU | `test_projected_gradient_bb_requests_only_final_m_state_save` | implemented and tested | pending publication SHA |
+| Cartesian grid definition | `packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py` | `class CartesianGrid` | define common bounds, `(z,y,x)` shape, and voxel volume | FEM-to-FDM analysis | `test_cartesian_restriction_is_exact_for_an_affine_prism_field` | implemented and tested | pending publication SHA |
+| MuMax3 final-state loading | `packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py` | `load_mumax_magnetization` | preserve the MuMax `(t,z,y,x,component)` Zarr contract and reject stale multi-frame input for comparison | FDM GPU reference | `test_mumax_loader_preserves_tzyxc_contract_and_rejects_old_trajectory` | implemented and tested | pending publication SHA |
+| Fullmag final-state loading | `packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py` | `load_fullmag_fem_magnetization` | bind the `(node,component)` state to the persisted FEM mesh and topology fingerprint | FEM CPU/GPU | `test_compare_relaxed_states_loads_fullmag_node_state_and_reports_provenance` | implemented and tested | pending publication SHA |
+| Equation {eq}`sp4-fem-cartesian-restriction` | `packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py` | `build_prism6_cartesian_restriction` | exact affine-P1 volume restriction from one aligned prism layer to a Cartesian grid | FEM-to-FDM analysis | `test_cartesian_restriction_is_exact_for_an_affine_prism_field`; `test_cartesian_restriction_masks_nonmagnetic_voxels` | implemented and tested | pending publication SHA |
+| final relaxed-state comparison metrics | `packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py` | `compare_relaxed_states` | restrict FEM, compare only the final common masked grid, and emit provenance plus component/vector metrics | FEM-to-FDM analysis | `test_compare_relaxed_states_loads_fullmag_node_state_and_reports_provenance` | implemented and tested | pending publication SHA |
+| comparison test fixture | `packages/fullmag-py/tests/test_magnetization_comparison.py` | `test_compare_relaxed_states_loads_fullmag_node_state_and_reports_provenance` | exercise loaders, restriction, metrics, and provenance on complete synthetic artifacts | FEM-to-FDM analysis | focused pytest | implemented and tested | pending publication SHA |
 | exact public mixed script lowering | `tests/standard_problems/mumag/sp4/fem/test_scenarios.py` | `test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer` | assert complete mesh entry and autosave IR | FEM CPU/GPU authoring | direct test execution | implemented and tested | pending publication SHA |
 | public mixed-prism scenario threshold | `tests/standard_problems/mumag/sp4/fem/test_scenarios.py` | `test_relaxation_scenario_exports_only_its_physically_applicable_policy` | execute the checked-in projected-gradient scenario and prove its `tolT=1e-6` lowering without changing legacy scenarios | FEM CPU/GPU authoring | direct test execution | implemented and tested | pending publication SHA |
 | dynamics pipeline lowering | `tests/standard_problems/mumag/sp4/fem/test_scenarios.py` | `test_dynamics_scenario_uses_common_mumax_like_relaxation_and_named_run_solver` | assert field, RK policy, stage order, outputs, and runtime intent | FEM CPU/GPU authoring | direct test execution | implemented and tested for all-tet scripts | pending publication SHA |

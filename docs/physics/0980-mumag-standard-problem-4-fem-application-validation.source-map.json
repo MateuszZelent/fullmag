@@ -56,6 +56,11 @@
       "id": "sp4-fem-energy-acceptance",
       "symbols": ["DeltaE", "Ea", "Eb", "aE", "rE"],
       "sources": ["energy-tolerance", "scalar-parity"]
+    },
+    {
+      "id": "sp4-fem-cartesian-restriction",
+      "symbols": ["qC", "wCi", "OmegaM", "C", "Ni", "mi", "mbarC"],
+      "sources": ["cartesian-grid", "cartesian-restriction"]
     }
   ],
   "symbols": [
@@ -84,7 +89,14 @@
     {"id": "aE", "latex": "a_E", "meaning": "absolute energy-comparison allowance", "si_unit": "\\mathrm{J}"},
     {"id": "rE", "latex": "r_E", "meaning": "relative energy-comparison allowance", "si_unit": "1"},
     {"id": "Ea", "latex": "E_a,E_b", "meaning": "the same energy observable from two compared runs", "si_unit": "\\mathrm{J}"},
-    {"id": "Eb", "latex": "E_a,E_b", "meaning": "the same energy observable from two compared runs", "si_unit": "\\mathrm{J}"}
+    {"id": "Eb", "latex": "E_a,E_b", "meaning": "the same energy observable from two compared runs", "si_unit": "\\mathrm{J}"},
+    {"id": "qC", "latex": "q_C", "meaning": "magnetic fraction of Cartesian voxel $C$", "si_unit": "1"},
+    {"id": "wCi", "latex": "w_{C,i}", "meaning": "volume-normalized P1 weight of FEM node $i$ in voxel $C$", "si_unit": "1"},
+    {"id": "OmegaM", "latex": "\\Omega_m", "meaning": "magnetic FEM domain", "si_unit": "\\mathrm{m^3}"},
+    {"id": "C", "latex": "C", "meaning": "one Cartesian FDM voxel", "si_unit": "\\mathrm{m^3}"},
+    {"id": "Ni", "latex": "N_i", "meaning": "affine P1 shape function for FEM node $i$", "si_unit": "1"},
+    {"id": "mi", "latex": "\\mathbf m_i", "meaning": "reduced magnetization at FEM node $i$", "si_unit": "1"},
+    {"id": "mbarC", "latex": "\\bar{\\mathbf m}_C", "meaning": "restricted reduced magnetization in voxel $C$", "si_unit": "1"}
   ],
   "sources": [
     {"id": "sp4-contract", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class SP4Contract", "responsibility": "Define canonical SI application constants, cases, mesh levels, and airboxes."},
@@ -117,7 +129,13 @@
     {"id": "zero-crossing", "path": "tests/standard_problems/mumag/sp4/common/metrics.py", "symbol": "find_first_zero_crossing", "responsibility": "Interpolate the first positive-to-nonpositive mean-mx crossing without extrapolation."},
     {"id": "vector-map-metrics", "path": "tests/standard_problems/mumag/sp4/common/metrics.py", "symbol": "vector_field_metrics", "responsibility": "Compare SP4 vector maps by component error and directional correlation."},
     {"id": "relaxation-verifier", "path": "tests/standard_problems/mumag/sp4/fem/verify.py", "symbol": "relaxation_matrix_metrics", "responsibility": "Require ready CPU/GPU relaxation artifacts and three-family basin agreement."},
-    {"id": "results-ledger", "path": "tests/standard_problems/mumag/sp4/fem/collect_results.py", "symbol": "collect_attempt", "responsibility": "Append run provenance and observables to the SP4 results ledger."}
+    {"id": "results-ledger", "path": "tests/standard_problems/mumag/sp4/fem/collect_results.py", "symbol": "collect_attempt", "responsibility": "Append run provenance and observables to the SP4 results ledger."},
+    {"id": "cartesian-grid", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "class CartesianGrid", "responsibility": "Define the common uniform Cartesian grid, bounds, axis order, and voxel volume."},
+    {"id": "cartesian-restriction", "path": "packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py", "symbol": "build_prism6_cartesian_restriction", "responsibility": "Compute exact affine-P1 volume weights for aligned magnetic prism6 cells."},
+    {"id": "mumax-state-loader", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "load_mumax_magnetization", "responsibility": "Load the MuMax3 tzyxc Zarr field and enforce final-frame provenance."},
+    {"id": "fullmag-state-loader", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "load_fullmag_fem_magnetization", "responsibility": "Load Fullmag's nodal final state together with its persisted FEM mesh."},
+    {"id": "relaxed-state-comparison", "path": "packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py", "symbol": "compare_relaxed_states", "responsibility": "Run the final-state FEM-to-FDM restriction and quantitative comparison."},
+    {"id": "comparison-tests", "path": "packages/fullmag-py/tests/test_magnetization_comparison.py", "symbol": "test_compare_relaxed_states_loads_fullmag_node_state_and_reports_provenance", "responsibility": "Exercise loaders, restriction, metrics, and provenance on a complete synthetic artifact pair."}
   ],
   "public_api": {
     "parameters": [
@@ -1090,6 +1108,36 @@
         "meaning": "accepted-step field cadence",
         "backend_support": "FEM CPU/GPU relaxation stages",
         "problem_ir": "`study.sampling.stage_autosave.fields[].every_steps`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_save_state.artifact_name",
+        "type": "str",
+        "default": "\"state_snapshot\"",
+        "si_unit": "1",
+        "validation": "non-empty safe artifact name; `.zarr` is normalized to `.zarr.zip` on disk",
+        "meaning": "explicit post-stage state artifact",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stage action `save_state.artifact_name`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_save_state.format",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`zarr`, `h5`, or `json` after runtime normalization",
+        "meaning": "state serialization format",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stage action `save_state.format`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_save_state.dataset",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty dataset path when supplied; SP4 requires `\"m\"`",
+        "meaning": "state dataset identity",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "stage action `save_state.dataset`"
       }
     ]
   }

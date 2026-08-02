@@ -56,7 +56,7 @@ use crate::runtime_registry::RuntimeRegistry;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::{apply_average_m_to_step_stats, scalar_row_due};
+use crate::scalar_metrics::{apply_average_m_to_step_stats_with_active_mask, scalar_row_due};
 #[cfg(feature = "cuda")]
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -4822,11 +4822,12 @@ fn execute_cuda_fdm(
                 if magnetization_cache.is_none() {
                     magnetization_cache = Some(backend.copy_m(cell_count)?);
                 }
-                apply_average_m_to_step_stats(
+                apply_average_m_to_step_stats_with_active_mask(
                     &mut sampled_stats,
                     magnetization_cache
                         .as_deref()
                         .expect("magnetization cache initialized"),
+                    plan.active_mask.as_deref(),
                 );
             }
             if let Some(live) = live.as_mut() {
@@ -4836,11 +4837,12 @@ fn execute_cuda_fdm(
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
                     }
-                    apply_average_m_to_step_stats(
+                    apply_average_m_to_step_stats_with_active_mask(
                         &mut sampled_stats,
                         magnetization_cache
                             .as_deref()
                             .expect("magnetization cache initialized"),
+                        plan.active_mask.as_deref(),
                     );
                 }
                 let display_selection = live.display_selection.map(|get| get());
@@ -4857,11 +4859,12 @@ fn execute_cuda_fdm(
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
                     }
-                    apply_average_m_to_step_stats(
+                    apply_average_m_to_step_stats_with_active_mask(
                         &mut sampled_stats,
                         magnetization_cache
                             .as_deref()
                             .expect("magnetization cache initialized"),
+                        plan.active_mask.as_deref(),
                     );
                 }
                 let magnetization = if heavy_payload_due {
@@ -5701,10 +5704,9 @@ fn record_cuda_due_outputs(
     if scalar_due {
         let mut sampled_stats = stats.clone();
         if let Some(magnetization) = magnetization {
-            apply_average_m_to_step_stats(&mut sampled_stats, magnetization);
+            backend.apply_average_m_to_step_stats_from_values(&mut sampled_stats, magnetization);
         } else {
-            let magnetization = backend.copy_m(cell_count)?;
-            apply_average_m_to_step_stats(&mut sampled_stats, &magnetization);
+            backend.apply_average_m_to_step_stats(&mut sampled_stats)?;
         }
         artifacts.record_scalar(&sampled_stats)?;
         steps.push(sampled_stats);
@@ -5762,8 +5764,7 @@ fn record_cuda_final_outputs(
                 .unwrap_or(true));
     if need_scalar {
         let mut final_stats = latest_stats.clone();
-        let magnetization = backend.copy_m(cell_count)?;
-        apply_average_m_to_step_stats(&mut final_stats, &magnetization);
+        backend.apply_average_m_to_step_stats(&mut final_stats)?;
         artifacts.record_scalar(&final_stats)?;
         steps.push(final_stats);
     }

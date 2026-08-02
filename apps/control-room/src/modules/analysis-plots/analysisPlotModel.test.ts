@@ -153,9 +153,9 @@ describe("analysis plot scalar selection", () => {
   it("adapts a live scalar sample into a columnar window", () => {
     const resource = utils.tableRowsResourceFromScalarSample({
       columns: [
-        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
-        { column_id: "t", component: null, dimension: "time", label: "t", quantity_id: "t", reduction: null, unit: "s", value_type: "float" },
-        { column_id: "max_torque", component: null, dimension: "effective_field", label: "max torque", quantity_id: "max_torque_Apm", reduction: "max", unit: "A/m", value_type: "float" },
+        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer", scope: "global" },
+        { column_id: "t", component: null, dimension: "time", label: "t", quantity_id: "t", reduction: null, unit: "s", value_type: "float", scope: "global" },
+        { column_id: "max_torque", component: null, dimension: "effective_field", label: "max torque", quantity_id: "max_torque_Apm", reduction: "max", unit: "A/m", value_type: "float", scope: "global" },
       ],
       queryColumns: ["step", "t", "max_torque"],
       sample: { revision: 9, row: { max_torque_Apm: 0.4, step: 7, time: 0.2 } },
@@ -169,8 +169,8 @@ describe("analysis plot scalar selection", () => {
     const values = new Float64Array([1, 0.1, 2, 0.2]);
     const resource = utils.tableRowsResourceFromBinary({
       columns: [
-        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
-        { column_id: "mx", component: "x", dimension: "magnetization", label: "mx", quantity_id: "mx", reduction: "mean", unit: "1", value_type: "float" },
+        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer", scope: "global" },
+        { column_id: "mx", component: "x", dimension: "magnetization", label: "mx", quantity_id: "mx", reduction: "mean", unit: "1", value_type: "float", scope: "global" },
       ],
       decoded: { columnCount: 2, cursorEnd: 2, cursorStart: 1, resyncRequired: false, revision: 2, rowCount: 2, schemaRevision: 1, totalRows: 2, values },
       queryColumns: ["step", "mx"],
@@ -184,7 +184,7 @@ describe("analysis plot scalar selection", () => {
     const values = new Float64Array([1, 0.2, 0.1]);
     const resource = utils.tableRowsResourceFromBinary({
       columns: [
-        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
+        { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer", scope: "global" },
       ],
       decoded: { columnCount: 3, cursorEnd: 1, cursorStart: 1, resyncRequired: false, revision: 1, rowCount: 1, schemaRevision: 1, totalRows: 1, values },
       queryColumns: ["step", "pseudo_time_s", "active_runtime_s"],
