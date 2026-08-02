@@ -33,6 +33,7 @@ QUALIFICATION_SUITE_SCHEMA = (
     "fullmag.fem.relaxation_equilibrium_qualification_suite.v1"
 )
 SUPPORTED_BACKENDS = {"fem_cpu", "fem_gpu", "cpu", "gpu"}
+DIRECT_MINIMIZER_ALGORITHMS = {"projected_gradient_bb", "nonlinear_cg"}
 ENERGY_FIELDS = (
     "final_e_total_j",
     "final_e_ex_j",
@@ -433,6 +434,24 @@ def compare_equilibrium_states(
             "CPU/GPU resolved torque tolerance mismatch: "
             f"cpu={cpu_target:.16g} gpu={gpu_target:.16g}"
         )
+    cpu_algorithm = _first(cpu, "relaxation_algorithm", "reported_relaxation_algorithm")
+    gpu_algorithm = _first(gpu, "relaxation_algorithm", "reported_relaxation_algorithm")
+    if (
+        cpu_algorithm in DIRECT_MINIMIZER_ALGORITHMS
+        or gpu_algorithm in DIRECT_MINIMIZER_ALGORITHMS
+    ):
+        cpu_direction_policy = _first(cpu, "resolved_relaxation_direction_policy")
+        gpu_direction_policy = _first(gpu, "resolved_relaxation_direction_policy")
+        if not cpu_direction_policy or not gpu_direction_policy:
+            failures.append(
+                "CPU/GPU direct-minimizer direction policy is missing: "
+                f"cpu={cpu_direction_policy!r} gpu={gpu_direction_policy!r}"
+            )
+        elif cpu_direction_policy != gpu_direction_policy:
+            failures.append(
+                "CPU/GPU direct-minimizer direction policy mismatch: "
+                f"cpu={cpu_direction_policy!r} gpu={gpu_direction_policy!r}"
+            )
     cpu_schema = _first(cpu, "solver_mesh_signature_schema")
     gpu_schema = _first(gpu, "solver_mesh_signature_schema")
     if cpu_schema is not None and gpu_schema is not None and cpu_schema != gpu_schema:

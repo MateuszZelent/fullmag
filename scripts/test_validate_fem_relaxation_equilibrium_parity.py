@@ -97,6 +97,7 @@ def state_row(*, backend: str, steps: int = 11, stop_reason: str = "torque") -> 
         "final_magnetization_node_count": 2,
         "final_magnetization_sha256": final_magnetization_sha256(steps),
         "final_magnetization_values_json": "[[1.0,0.0,0.0],[0.0,1.0,0.0]]",
+        "resolved_relaxation_direction_policy": "exchange_plus_mass_tangent_gradient",
     }
 
 
@@ -153,6 +154,48 @@ def test_comparator_accepts_different_step_counts_and_reports_metrics() -> None:
     assert comparison.rms_component_difference == 0.0
     assert comparison.p99_vector_difference == 0.0
     assert comparison.mean_vector_difference == 0.0
+
+
+def test_comparator_rejects_different_direction_contracts() -> None:
+    validator = load_validator()
+    cpu = state_row(backend="fem_cpu")
+    gpu = state_row(backend="fem_gpu", steps=29)
+    gpu["resolved_relaxation_direction_policy"] = "device_tangent_gradient"
+
+    comparison = validator.compare_equilibrium_states(
+        cpu, gpu, validator.EquilibriumThresholds()
+    )
+
+    assert comparison.passed is False
+    assert any("direction policy mismatch" in failure for failure in comparison.failures)
+
+
+def test_comparator_accepts_any_shared_direction_contract() -> None:
+    validator = load_validator()
+    cpu = state_row(backend="fem_cpu")
+    gpu = state_row(backend="fem_gpu")
+    cpu["resolved_relaxation_direction_policy"] = "device_tangent_gradient"
+    gpu["resolved_relaxation_direction_policy"] = "device_tangent_gradient"
+
+    comparison = validator.compare_equilibrium_states(
+        cpu, gpu, validator.EquilibriumThresholds()
+    )
+
+    assert comparison.passed is True
+
+
+def test_comparator_rejects_missing_direction_contract() -> None:
+    validator = load_validator()
+    cpu = state_row(backend="fem_cpu")
+    gpu = state_row(backend="fem_gpu")
+    gpu.pop("resolved_relaxation_direction_policy")
+
+    comparison = validator.compare_equilibrium_states(
+        cpu, gpu, validator.EquilibriumThresholds()
+    )
+
+    assert comparison.passed is False
+    assert any("direction policy is missing" in failure for failure in comparison.failures)
 
 
 def test_comparator_rejects_signature_drift_and_field_drift() -> None:
