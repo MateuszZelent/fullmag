@@ -667,6 +667,33 @@ bool cuda_ok(cudaError_t status, char *error_message, unsigned long long error_l
     return false;
 }
 
+bool cuda_device_available(char *error_message, unsigned long long error_len)
+{
+    int device_count = 0;
+    const cudaError_t status = cudaGetDeviceCount(&device_count);
+    if (status != cudaSuccess) {
+        if (error_message != nullptr && error_len > 0u) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_len),
+                "CUDA modal K0 runtime unavailable: %s",
+                cudaGetErrorString(status));
+        }
+        // Clear the sticky runtime error so a subsequent managed call can
+        // report its own device state rather than inheriting this probe.
+        cudaGetLastError();
+        return false;
+    }
+    if (device_count <= 0) {
+        copy_error(
+            error_message,
+            static_cast<std::size_t>(error_len),
+            "CUDA modal K0 runtime unavailable: no CUDA device is present");
+        return false;
+    }
+    return true;
+}
+
 template <typename T>
 bool allocate_device(T **out, std::uint64_t count, char *error_message, unsigned long long error_len)
 {
@@ -1005,6 +1032,24 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_device_krylov(
         return FrequencyDomainStatus::validation_error;
     }
     *out_result = PoissonAirboxModalEigenResult{};
+    char runtime_error[256]{};
+    if (!cuda_device_available(runtime_error, sizeof(runtime_error))) {
+        out_result->status = FrequencyDomainStatus::unavailable;
+        copy_error(out_result->error_message, sizeof(out_result->error_message), runtime_error);
+        write_gpu_diagnostics(
+            problem,
+            *out_result,
+            "unavailable",
+            "cuda_runtime_unavailable",
+            0u,
+            0u,
+            0u,
+            0u,
+            0u,
+            0u,
+            out_result);
+        return out_result->status;
+    }
     if (!cuda_modal_problem_supported(problem, out_result)) {
         write_gpu_diagnostics(problem, *out_result, "validation_error", "gpu_modal_device_krylov_scope_mismatch", 0u, 0u, 0u, 0u, 0u, 0u, out_result);
         out_result->status = FrequencyDomainStatus::validation_error;
