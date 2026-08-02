@@ -2549,15 +2549,20 @@ verify-fem-relaxation-equilibrium-parity:
     TMPDIR=/tmp/fullmag-fem-t4-test-tmp PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q scripts/test_validate_fem_relaxation_equilibrium_parity.py --capture=sys
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/fem-relaxation-equilibrium-parity
-    scope="${FULLMAG_EQUILIBRIUM_SCOPE:-coarse,medium,fine}"; \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
+      scope="${FULLMAG_EQUILIBRIUM_SCOPE:-coarse,medium,fine}"; \
       repeat="${FULLMAG_EQUILIBRIUM_REPEAT:-5}"; \
       timeout="${FULLMAG_EQUILIBRIUM_CASE_TIMEOUT_S:-3600}"; \
       case "$scope" in coarse|coarse,medium,fine) ;; *) echo "FULLMAG_EQUILIBRIUM_SCOPE must be coarse or coarse,medium,fine" >&2; exit 2 ;; esac; \
       case "$repeat" in ''|*[!0-9]*) echo "FULLMAG_EQUILIBRIUM_REPEAT must be a positive integer" >&2; exit 2 ;; esac; \
       test "$repeat" -ge 1; \
       docker compose --profile fem-gpu run --rm \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
         -e FULLMAG_GMSH_THREADS=1 \
         fem-gpu bash -lc 'cd /workspace && \
           python3 scripts/analysis/fem_gpu_benchmark.py \

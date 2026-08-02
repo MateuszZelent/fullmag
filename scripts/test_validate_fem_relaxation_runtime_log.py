@@ -2165,6 +2165,17 @@ def test_typed_fixture_v2_recipes_are_managed_and_strict() -> None:
     assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in verification
 
 
+def test_equilibrium_parity_recipe_mounts_managed_runtime() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(justfile, "verify-fem-relaxation-equilibrium-parity")
+
+    assert "just ensure-managed-fem-runtime" in recipe
+    assert 'runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"' in recipe
+    assert '"$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
+    assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in recipe
+    assert "--require-equilibrium-parity" in recipe
+
+
 def test_runtime_restore_manifest_rejects_library_hash_drift(tmp_path) -> None:
     benchmark = load_benchmark_module()
     bundle = tmp_path / "bundle"
