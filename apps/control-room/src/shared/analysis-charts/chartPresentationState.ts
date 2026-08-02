@@ -19,17 +19,33 @@ export type ChartDataPresentationState =
   | { kind: "error"; error: Error };
 
 export interface ChartResourceSnapshot<T> {
-  status: "idle" | "loading" | "ready" | "stale" | "error";
+  /**
+   * Empty is semantic payload metadata. It is intentionally not inferred from
+   * object shape: a decoded, zero-row table is still a valid resource payload.
+   */
+  content?: "empty";
+  status: "idle" | "loading" | "ready" | "stale" | "error" | "unsupported";
   data: T | null;
   visibleRevision: string | number | null;
   requestedRevision: string | number | null;
   error: Error | null;
+  /** Required by projections that report the non-resource state `unsupported`. */
+  unsupportedReason?: string | null;
 }
 
 export function deriveChartPresentationState<T>(
   snapshot: ChartResourceSnapshot<T>,
   options: { paused: boolean; latestKnownRevision: string | number | null },
 ): ChartDataPresentationState {
+  if (snapshot.status === "unsupported") {
+    return {
+      kind: "unsupported",
+      reason: snapshot.unsupportedReason ?? "Chart data is unsupported.",
+    };
+  }
+  if (snapshot.content === "empty") {
+    return { kind: "empty", revision: snapshot.visibleRevision ?? snapshot.requestedRevision };
+  }
   if (snapshot.data === null) {
     if (snapshot.status === "error") {
       return { kind: "error", error: snapshot.error ?? new Error("Chart data unavailable") };

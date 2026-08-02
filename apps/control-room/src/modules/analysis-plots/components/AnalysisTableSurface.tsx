@@ -44,6 +44,7 @@ export function AnalysisTableSurface({
   status,
   tableRowsRefresh,
   table,
+  unsupportedReason,
   xAxisId,
   xAxisLabel,
 }: {
@@ -59,6 +60,8 @@ export function AnalysisTableSurface({
   status: string;
   tableRowsRefresh?: Pick<ResourceResult<unknown>, "error" | "revision" | "status">;
   table: ChartTableWindow | null;
+  /** Reason supplied by the owning projection when this surface is unsupported. */
+  unsupportedReason?: string | null;
   xAxisId: string;
   xAxisLabel: string;
 }) {
@@ -103,10 +106,14 @@ export function AnalysisTableSurface({
     ? `cursor ${selectedPoint.label}: ${selectedTransform.formatValue(selectedPoint.point.y)}`
     : "cursor —";
   const presentation = deriveChartPresentationState({
+    content: table && tableWindowRowCount(table) === 0 ? "empty" : undefined,
     data: table,
     error: tableRowsRefresh?.error ?? (status === "error" ? new Error("Table samples unavailable") : null),
     requestedRevision: tableRowsRefresh?.revision ?? table?.revision ?? null,
     status: tableRowsRefresh?.status ?? resourceStatus(status),
+    unsupportedReason: status === "unsupported"
+      ? unsupportedReason ?? "Table samples are unsupported by the current runtime."
+      : null,
     visibleRevision: table?.revision ?? null,
   }, {
     latestKnownRevision: tableRowsRefresh?.revision ?? null,
@@ -164,8 +171,8 @@ export function AnalysisTableSurface({
   );
 }
 
-function resourceStatus(status: string): "idle" | "loading" | "ready" | "stale" | "error" {
-  return status === "loading" || status === "ready" || status === "stale" || status === "error"
+function resourceStatus(status: string): "idle" | "loading" | "ready" | "stale" | "error" | "unsupported" {
+  return status === "loading" || status === "ready" || status === "stale" || status === "error" || status === "unsupported"
     ? status
     : "idle";
 }

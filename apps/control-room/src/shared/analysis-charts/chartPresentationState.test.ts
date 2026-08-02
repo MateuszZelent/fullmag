@@ -63,4 +63,33 @@ describe("deriveChartPresentationState", () => {
       visibleRevision: "41",
     });
   });
+
+  it("reports a valid zero-row payload as empty from explicit content metadata", () => {
+    expect(
+      deriveChartPresentationState({
+        content: "empty",
+        data: { rowCount: 0 },
+        error: null,
+        requestedRevision: "42",
+        status: "ready",
+        visibleRevision: "42",
+      }, active),
+    ).toEqual({ kind: "empty", revision: "42" });
+  });
+
+  it("reports an explicitly unsupported chart before considering transport status", () => {
+    expect(
+      deriveChartPresentationState({
+        data: null,
+        error: null,
+        requestedRevision: null,
+        status: "unsupported",
+        unsupportedReason: "The current runtime does not provide table samples.",
+        visibleRevision: null,
+      }, active),
+    ).toEqual({
+      kind: "unsupported",
+      reason: "The current runtime does not provide table samples.",
+    });
+  });
 });

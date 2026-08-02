@@ -480,3 +480,32 @@ Both passed.
 - A failed refresh keeps the canvas and reports the error beside the visible
   revision.
 - `paused` retains the visible revision and adds no activity animation.
+
+## Follow-up — empty and unsupported table states
+
+The presentation projection now carries explicit semantic metadata rather than
+inferring emptiness from a decoded object. A valid `ChartTableWindow` with
+`rowCount: 0` projects as `empty` and renders `No table samples`; a non-empty
+retained window still projects as `refreshing` during a background refresh and
+keeps its canvas. `unsupported` is a distinct projection state with a supplied
+reason, so `AnalysisTableSurface` does not collapse it into `idle`.
+
+### RED
+
+Before the fix, the focused test command failed with three regressions:
+
+- an explicitly empty zero-row payload derived `ready`;
+- an `unsupported` snapshot derived `empty`;
+- the table surface rendered `No table samples` instead of the explicit
+  unsupported reason.
+
+### GREEN
+
+Focused tests: `chartPresentationState`, `EChartsCanvasSurface`, `ChartSection`,
+`EChartsSurface`, `ChartLegend.rowsBinary.integration`, and
+`AnalysisTableSurface` all passed: 6 files, 27 tests.
+
+The state-matrix tests cover both explicit states and the surface tests assert
+the visible empty and unsupported messages. The Control Room typecheck and
+`git diff --check` both passed. No resource hook, endpoint, polling policy, or
+resource ownership changed.
