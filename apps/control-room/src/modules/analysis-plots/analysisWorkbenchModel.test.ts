@@ -73,4 +73,27 @@ describe("buildFrequencyDomainWorkbenchSummary", () => {
     expect(buildFrequencyDomainCursorSummary(point, "FMR response sweep", series)?.xValue).toBe("9.5 THz");
     expect(buildFrequencyDomainCursorSummary(point, "FMR response sweep", series)?.yValue).toBe("0.5");
   });
+
+  it("keeps a zero-inclusive prefixed frequency range aligned with the chart axis", () => {
+    const series: ChartSeries[] = [{
+      id: "response",
+      label: "Response",
+      points: [
+        { rowIndex: 0, x: 0, y: 0 },
+        { rowIndex: 1, x: 9500, y: 0.5 },
+      ],
+      quantity: "response",
+      source: {
+        kind: "analysis.frequency_domain",
+        resourceKey: "analysis/frequency-domain/response-sweep",
+        tableId: "frequency-domain:response-sweep",
+      },
+      status: "ready",
+      unit: "1",
+      xUnit: "GHz",
+    }];
+
+    expect(buildFrequencyDomainWorkbenchSummary(series, "FMR response sweep", "ready").frequencyRange)
+      .toBe("0 THz-9.5 THz");
+  });
 });

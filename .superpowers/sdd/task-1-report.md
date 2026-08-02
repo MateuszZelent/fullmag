@@ -310,3 +310,46 @@ Generating route types...
 
 No new concerns. The prior React Doctor environment limitation remains recorded
 above and was not retried for this narrowly scoped follow-up.
+
+## Zero-inclusive frequency-range follow-up
+
+### RED
+
+Command:
+
+```sh
+env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/modules/analysis-plots/analysisWorkbenchModel.test.ts
+```
+
+Output (exit 1):
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 3 passed (4)
+Expected: "0 THz-9.5 THz"
+Received: "0 Hz-9.5000e+12 Hz"
+```
+
+The workbench range included zero in a hand-built minimum-magnitude extrema
+pair, which selected the `Hz` scale instead of the shared renderer scale.
+
+### GREEN
+
+`formatFrequencyDomainWorkbenchRange` now uses `chartValueExtrema([min, max])`.
+That policy ignores zero when finite nonzero frequency values are present, just
+as the renderer does.
+
+```text
+Test Files  1 passed (1)
+Tests  4 passed (4)
+Start at  19:39:33
+Duration  465ms
+```
+
+### Typecheck
+
+```sh
+corepack pnpm --dir apps/control-room typecheck
+```
+
+Output (exit 0): route types generated successfully.

@@ -161,10 +161,7 @@ function frequencyDomainFieldHandoff(tableId: string, chartTitle: string): strin
 function formatFrequencyDomainWorkbenchRange(min: number, max: number, firstSeries: ChartSeries | undefined): string {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return "not available";
   const unit = firstSeries?.source.tableId === "frequency-domain:response-sweep" ? firstSeries.xUnit : firstSeries?.unit;
-  const extrema: readonly [number, number] = [
-    Math.min(Math.abs(min), Math.abs(max)),
-    Math.max(Math.abs(min), Math.abs(max)),
-  ];
+  const extrema = chartValueExtrema([min, max]);
   return min === max
     ? formatPointValue(min, unit, extrema)
     : `${formatPointValue(min, unit, extrema)}-${formatPointValue(max, unit, extrema)}`;
