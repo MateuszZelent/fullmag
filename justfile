@@ -4642,18 +4642,25 @@ capture-fem-gpu-nsight:
           exit 2; \
       fi; \
       FULLMAG_ENABLE_NVTX=1 just rebuild-fem-runtime; \
+      runtime_root="$(readlink -f "$active")"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
       if ! docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only --runtime-root /workspace/.fullmag/runtime'; then \
           echo "status=unavailable: Nsight preflight failed in rebuilt managed fem-gpu fixture image" >&2; \
           exit 2; \
       fi; \
       docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py'
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --runtime-root /workspace/.fullmag/runtime'
 
 # Build and export one immutable, hash-addressed HYPRE memory-strategy bundle.
 # The exporter atomically selects the resulting bundle as fem-gpu-host only
