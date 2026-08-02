@@ -2173,6 +2173,7 @@ def test_equilibrium_parity_recipe_mounts_managed_runtime() -> None:
     assert 'runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"' in recipe
     assert '"$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
     assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in recipe
+    assert "FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY=raw_tangent_gradient" in recipe
     assert "--require-equilibrium-parity" in recipe
 
 

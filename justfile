@@ -2563,6 +2563,7 @@ verify-fem-relaxation-equilibrium-parity:
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
         -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+        -e FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY=raw_tangent_gradient \
         -e FULLMAG_GMSH_THREADS=1 \
         fem-gpu bash -lc 'cd /workspace && \
           python3 scripts/analysis/fem_gpu_benchmark.py \

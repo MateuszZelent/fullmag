@@ -350,17 +350,23 @@ TASK11_QUALIFICATION_ENVIRONMENT_SHA256 = (
 def relaxation_direction_policy_for_backend(
     backend_label: str,
     relaxation_algorithm: str | None,
+    *,
+    shared_tangent_gradient: bool = False,
 ) -> str | None:
     """Return the native direct-minimizer direction realization for a lane.
 
     The GPU preconditioner strategy is an experiment scoped to the CUDA
-    direct-minimizer kernels.  It must not be interpreted as a shared CPU/GPU
-    direction policy: production FEM CPU uses the exchange-plus-mass tangent
-    gradient, while the current CUDA kernels use the raw device tangent
-    gradient.
+    direct-minimizer kernels.  By default it must not be interpreted as a
+    shared CPU/GPU direction policy: production FEM CPU uses the
+    exchange-plus-mass tangent gradient, while the current CUDA kernels use
+    the raw device tangent gradient.  The explicit shared flag is reserved
+    for the same-tolerance parity gate, which deliberately compares the two
+    backends under the same raw tangent-gradient direction.
     """
     if relaxation_algorithm not in {"projected_gradient_bb", "nonlinear_cg"}:
         return None
+    if shared_tangent_gradient and backend_label in {"fem_cpu", "fem_gpu"}:
+        return "device_tangent_gradient"
     return {
         "fem_cpu": "exchange_plus_mass_tangent_gradient",
         "fem_gpu": "device_tangent_gradient",
@@ -7685,16 +7691,28 @@ def run_backend(
     }
     if backend_label == "fem_gpu" and observed_gpu_identity is not None:
         attach_observed_gpu_identity(row, observed_gpu_identity)
+    shared_tangent_gradient = (
+        extra_env.get("FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY")
+        == "raw_tangent_gradient"
+        or os.environ.get("FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY")
+        == "raw_tangent_gradient"
+    )
     direction_policy = relaxation_direction_policy_for_backend(
-        backend_label, relaxation_algorithm
+        backend_label,
+        relaxation_algorithm,
+        shared_tangent_gradient=shared_tangent_gradient,
     )
     if direction_policy is not None:
         row["resolved_relaxation_direction_policy"] = direction_policy
         row["relaxation_direction_policy_source"] = "native_backend_contract"
         row["relaxation_preconditioner_strategy_scope"] = (
-            "gpu_direct_minimizer_only"
-            if backend_label == "fem_gpu"
-            else "cpu_production_default"
+            "shared_raw_tangent_gradient"
+            if shared_tangent_gradient
+            else (
+                "gpu_direct_minimizer_only"
+                if backend_label == "fem_gpu"
+                else "cpu_production_default"
+            )
         )
     if qualification_case_manifest is not None:
         if problem_ir is None:

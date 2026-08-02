@@ -128,6 +128,16 @@ def test_equilibrium_rows_expose_backend_direction_realizations() -> None:
     ) is None
 
 
+def test_shared_tangent_policy_is_explicit_for_cpu_gpu_parity() -> None:
+    benchmark = load_benchmark()
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_cpu", "nonlinear_cg", shared_tangent_gradient=True
+    ) == "device_tangent_gradient"
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_gpu", "projected_gradient_bb", shared_tangent_gradient=True
+    ) == "device_tangent_gradient"
+
+
 def test_equilibrium_backend_env_cannot_leak_gpu_strategy_into_cpu() -> None:
     benchmark = load_benchmark()
     inherited = {
