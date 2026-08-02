@@ -97,3 +97,4 @@ def test_hypre_timing_recipe_mounts_the_resolved_runtime_bundle():
     assert '-v "$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
     assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in recipe
     assert "FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu" in recipe
+    assert 'rm -rf "$mesh_cache"; mkdir -p "$mesh_cache"' in recipe

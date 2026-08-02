@@ -3304,7 +3304,7 @@ verify-fem-hypre-device-timing:
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
         report_dir=.fullmag/reports/task-12-hypre-device-timing; \
         mesh_cache="$report_dir/mesh-cache"; \
-        mkdir -p "$mesh_cache"; \
+        rm -rf "$mesh_cache"; mkdir -p "$mesh_cache"; \
         for profiler in off on; do \
           if [ "$profiler" = on ]; then profile=1; profile_args=(--require-gpu-phase-timings); else profile=0; profile_args=(); fi; \
           FULLMAG_FEM_STEP_PROFILE="$profile" python3 scripts/analysis/fem_gpu_benchmark.py \
