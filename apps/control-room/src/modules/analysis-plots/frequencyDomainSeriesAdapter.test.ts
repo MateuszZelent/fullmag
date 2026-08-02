@@ -56,6 +56,23 @@ describe("frequencyDomainSeriesAdapter", () => {
       }),
     );
     expect(series[0]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 2 }]);
+    expect(series.slice(0, 1).map((entry) => ({
+      dataRevision: entry.dataRevision ?? null,
+      id: entry.id,
+      points: entry.points,
+      source: entry.source,
+      status: entry.status,
+      unit: entry.unit,
+      xUnit: entry.xUnit,
+    }))).toEqual([{
+      dataRevision: null,
+      id: "analysis.frequency-domain:response:amplitude",
+      points: [{ rowIndex: 0, x: 9.5, y: 2 }],
+      source: { kind: "analysis.frequency_domain", resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH, tableId: "frequency-domain:response-sweep" },
+      status: "ready",
+      unit: "a.u.",
+      xUnit: "GHz",
+    }]);
   });
 
   it("filters invalid chart points before handing data to chart primitives", () => {

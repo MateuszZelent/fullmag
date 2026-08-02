@@ -19,6 +19,18 @@ export interface ChartInteractionCallbacks {
   onRangeSelected?: (fromSI: number, toSI: number) => void;
 }
 
+export interface InteractiveChartSurfaceIdentity {
+  ariaLabel: string;
+  chartId: string;
+  presentationCopy: {
+    empty: string;
+    error: string;
+    hidden?: string;
+    loading: string;
+  };
+  provenance: NonNullable<ChartRenderModel["provenance"]>;
+}
+
 export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks {
   allSeries?: readonly ChartSeries[];
   dataStatus?: string;
@@ -33,6 +45,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
   presentation?: ChartDataPresentationState;
   requestedExportFormat?: "csv" | "tsv" | "png" | null;
   series: readonly ChartSeries[];
+  surface: InteractiveChartSurfaceIdentity;
   xAxisLabel?: string;
   onRequestedExportHandled?: () => void;
 }
@@ -49,13 +62,14 @@ export function InteractiveChartSurface({
   presentation,
   requestedExportFormat = null,
   series,
+  surface,
   xAxisLabel,
 }: InteractiveChartSurfaceProps) {
   const [isTableOpen, setIsTableOpen] = useState(false);
   const exportRef = useRef<ChartRendererOwner | null>(null);
   const model = useMemo(
-    () => chartSeriesRenderModel(series, allSeries ?? series, xAxisLabel, dataStatus, presentation),
-    [allSeries, dataStatus, presentation, series, xAxisLabel],
+    () => chartSeriesRenderModel(series, allSeries ?? series, surface, xAxisLabel, dataStatus, presentation),
+    [allSeries, dataStatus, presentation, series, surface, xAxisLabel],
   );
 
   useEffect(() => {
@@ -106,6 +120,7 @@ export function InteractiveChartSurface({
 export function chartSeriesRenderModel(
   series: readonly ChartSeries[],
   allSeries: readonly ChartSeries[],
+  surface: InteractiveChartSurfaceIdentity,
   xAxisLabel?: string,
   dataStatus?: string,
   presentation?: ChartDataPresentationState,
@@ -119,19 +134,9 @@ export function chartSeriesRenderModel(
     series.some((item) => item.points.length > 0),
   );
   return {
-    ariaLabel: "Analysis chart",
-    key: JSON.stringify([
-      xAxisLabel ?? "x",
-      presentation?.kind ?? dataStatus ?? "ready",
-      ...series.map((item) => [item.id, item.points.length, item.points.at(-1)?.rowIndex]),
-    ]),
-    provenance: {
-      dataRevision: series[0]?.dataRevision ?? null,
-      decimation: "minmax_lttb",
-      descriptorId: `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
-      query: JSON.stringify({ xAxisLabel, series: series.map((item) => item.id) }),
-      resourceKey: series[0]?.source.resourceKey ?? "data.table:default",
-    },
+    ariaLabel: surface.ariaLabel,
+    key: surface.chartId,
+    provenance: surface.provenance,
     series: series.map((item) => ({
       id: item.id,
       kind: "line" as const,
@@ -141,7 +146,13 @@ export function chartSeriesRenderModel(
       yAxis: Math.max(0, units.indexOf(item.unit)),
     })),
     status,
-    statusMessage: presentationMessage(presentation, status, allSeriesHaveSamples, dataStatus),
+    statusMessage: presentationMessage(
+      presentation,
+      status,
+      allSeriesHaveSamples,
+      dataStatus,
+      surface.presentationCopy,
+    ),
     xAxis: { label: xAxisLabel ?? "x", unit: xUnit },
     yAxes: (units.length > 0 ? units : [""]).map((unit) => ({
       label: quantityLabelForUnit(unit, allSeries),
@@ -205,9 +216,10 @@ function presentationMessage(
   status: ChartRenderModel["status"],
   allSeriesHaveSamples: boolean,
   dataStatus: string | undefined,
+  copy: InteractiveChartSurfaceIdentity["presentationCopy"],
 ): string | undefined {
   switch (presentation?.kind) {
-    case "initial-loading": return "Loading table samples";
+    case "initial-loading": return copy.loading;
     case "refreshing": return "Updating";
     case "stale": return `Refresh failed: ${presentation.error.message}`;
     case "paused": return "Paused";
@@ -216,12 +228,12 @@ function presentationMessage(
     default:
       return status === "empty"
         ? allSeriesHaveSamples
-          ? "All selected series are hidden"
-          : "No table samples"
+          ? copy.hidden ?? copy.empty
+          : copy.empty
         : status === "error"
-          ? "Table samples unavailable"
+          ? copy.error
           : dataStatus === "loading" || dataStatus === "stale"
-            ? "Loading table samples"
+            ? copy.loading
             : undefined;
   }
 }

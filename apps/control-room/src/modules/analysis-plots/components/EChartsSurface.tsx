@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -10,6 +10,7 @@ import {
 } from "@/shared/analysis-charts/InteractiveChartSurface";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
+import type { InteractiveChartSurfaceIdentity } from "@/shared/analysis-charts/InteractiveChartSurface";
 
 import {
   chartCursorPointFromEChartsClick,
@@ -53,6 +54,10 @@ export function EChartsSurface({
 }: EChartsSurfaceProps) {
   const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
+  const surface = useMemo(
+    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation),
+    [dataStatus, presentation, series, xAxisLabel],
+  );
 
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
   useEffect(() => {
@@ -87,6 +92,7 @@ export function EChartsSurface({
       presentation={presentation}
       requestedExportFormat={requestedExportFormat}
       series={series}
+      surface={surface}
       xAxisLabel={xAxisLabel}
       onPointSelected={(seriesId, pointIndex) => {
         const point = chartCursorPointFromEChartsClick(
@@ -104,4 +110,48 @@ export function EChartsSurface({
   );
 }
 
-export { chartSeriesRenderModel as tableSeriesRenderModel };
+function analysisChartSurfaceIdentity(
+  series: readonly ChartSeries[],
+  xAxisLabel: string | undefined,
+  dataStatus: string | undefined,
+  presentation: ChartDataPresentationState | undefined,
+): InteractiveChartSurfaceIdentity {
+  return {
+    ariaLabel: "Analysis chart",
+    chartId: JSON.stringify([
+      xAxisLabel ?? "x",
+      presentation?.kind ?? dataStatus ?? "ready",
+      ...series.map((item) => [item.id, item.points.length, item.points.at(-1)?.rowIndex]),
+    ]),
+    presentationCopy: {
+      empty: "No table samples",
+      error: "Table samples unavailable",
+      hidden: "All selected series are hidden",
+      loading: "Loading table samples",
+    },
+    provenance: {
+      dataRevision: series[0]?.dataRevision ?? null,
+      decimation: "minmax_lttb",
+      descriptorId: `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
+      query: JSON.stringify({ xAxisLabel, series: series.map((item) => item.id) }),
+      resourceKey: series[0]?.source.resourceKey ?? "data.table:default",
+    },
+  };
+}
+
+export function tableSeriesRenderModel(
+  series: readonly ChartSeries[],
+  allSeries: readonly ChartSeries[],
+  xAxisLabel?: string,
+  dataStatus?: string,
+  presentation?: ChartDataPresentationState,
+) {
+  return chartSeriesRenderModel(
+    series,
+    allSeries,
+    analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation),
+    xAxisLabel,
+    dataStatus,
+    presentation,
+  );
+}

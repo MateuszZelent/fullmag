@@ -47,6 +47,18 @@ describe("spinWaveGammaModel", () => {
     expect(spinWaveGammaResponseTraceSeries(seriesFixture)).toHaveLength(2);
     expect(spinWaveGammaResponseTraceSeries(seriesFixture)[0].unit).toBe("1");
     expect(spinWaveGammaSourceTraceSeries(seriesFixture)[0].unit).toBe("A/m");
+    expect(spinWaveGammaSeries(seriesFixture).map((entry) => ({
+      dataRevision: entry.dataRevision ?? null,
+      id: entry.id,
+      points: entry.points,
+      source: entry.source,
+      status: entry.status,
+      unit: entry.unit,
+      xUnit: entry.xUnit,
+    }))).toEqual([
+      { dataRevision: null, id: "gamma-response-psd", points: [{ rowIndex: 0, x: 0, y: 0 }, { rowIndex: 1, x: 1e9, y: 4 }], source: { kind: "analysis.spin_wave", resourceKey: "/v2/sessions/current/analysis/spin-wave/gamma.v1", tableId: "spin-wave-gamma" }, status: "ready", unit: "1²", xUnit: "Hz" },
+      { dataRevision: null, id: "gamma-source-psd", points: [{ rowIndex: 0, x: 0, y: 0 }, { rowIndex: 1, x: 1e9, y: 1 }], source: { kind: "analysis.spin_wave", resourceKey: "/v2/sessions/current/analysis/spin-wave/gamma.v1", tableId: "spin-wave-gamma" }, status: "ready", unit: "(A/m)²", xUnit: "Hz" },
+    ]);
     expect(spinWaveGammaSamplingSummary(seriesFixture)).toMatchObject({
       status: "ready",
       sampleCount: 2,

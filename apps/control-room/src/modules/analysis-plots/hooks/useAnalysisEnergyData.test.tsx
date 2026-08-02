@@ -35,7 +35,21 @@ describe("useAnalysisEnergyData adapter", () => {
 
     const series = buildSolverEnergyHistoryChartSeries(resource, "ready");
 
-    expect(series.length).toBeGreaterThan(0);
-    expect(series[0].id).toContain("simulation.solver.energies");
+    expect(series.map((entry) => ({
+      dataRevision: entry.dataRevision ?? null,
+      id: entry.id,
+      points: entry.points,
+      source: entry.source,
+      status: entry.status,
+      unit: entry.unit,
+      xUnit: entry.xUnit,
+    }))).toEqual([
+      { dataRevision: null, id: "simulation.solver.energies:exchange", points: [{ rowIndex: 0, x: 0, y: 2e-19 }, { rowIndex: 1, x: 1e-9, y: 2e-19 }], source: { kind: "simulation.solver.energies.history", resourceKey: "/v2/sessions/current/simulation/solver/energies/history", tableId: "solver-energies" }, status: "ready", unit: "J", xUnit: "s" },
+      { dataRevision: null, id: "simulation.solver.energies:demag", points: [{ rowIndex: 0, x: 0, y: 1e-19 }, { rowIndex: 1, x: 1e-9, y: 1e-19 }], source: { kind: "simulation.solver.energies.history", resourceKey: "/v2/sessions/current/simulation/solver/energies/history", tableId: "solver-energies" }, status: "ready", unit: "J", xUnit: "s" },
+      { dataRevision: null, id: "simulation.solver.energies:zeeman", points: [{ rowIndex: 0, x: 0, y: 0 }, { rowIndex: 1, x: 1e-9, y: 0 }], source: { kind: "simulation.solver.energies.history", resourceKey: "/v2/sessions/current/simulation/solver/energies/history", tableId: "solver-energies" }, status: "ready", unit: "J", xUnit: "s" },
+      { dataRevision: null, id: "simulation.solver.energies:anisotropy", points: [{ rowIndex: 0, x: 0, y: 0 }, { rowIndex: 1, x: 1e-9, y: 0 }], source: { kind: "simulation.solver.energies.history", resourceKey: "/v2/sessions/current/simulation/solver/energies/history", tableId: "solver-energies" }, status: "ready", unit: "J", xUnit: "s" },
+      { dataRevision: null, id: "simulation.solver.energies:dmi", points: [{ rowIndex: 0, x: 0, y: 0 }, { rowIndex: 1, x: 1e-9, y: 0 }], source: { kind: "simulation.solver.energies.history", resourceKey: "/v2/sessions/current/simulation/solver/energies/history", tableId: "solver-energies" }, status: "ready", unit: "J", xUnit: "s" },
+      { dataRevision: null, id: "simulation.solver.energies:total", points: [{ rowIndex: 0, x: 0, y: 3e-19 }, { rowIndex: 1, x: 1e-9, y: 3e-19 }], source: { kind: "simulation.solver.energies.history", resourceKey: "/v2/sessions/current/simulation/solver/energies/history", tableId: "solver-energies" }, status: "ready", unit: "J", xUnit: "s" },
+    ]);
   });
 });
