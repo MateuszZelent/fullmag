@@ -76,24 +76,69 @@ or with an explicit `AdaptiveTimestep`; executable adaptive stages require an ex
 `coupled_imex_ark2` is not a fourth relaxation algorithm: ProblemIR rejects it for a plain
 relaxation problem unless the transient spin-transport contract is also present.
 
-For an embedded method, let $e_k$ be the norm of the difference between its high- and low-order
-solutions and let $\rho_k=e_k/\mathrm{tol}$. A trial is accepted exactly when $\rho_k\leq1$.
-The controller proposes
+For an embedded method the implementation first forms a vector error at every active magnetic
+cell/node. If $k_{s,i}$ is the stage right-hand side at point $i$ and $b_s^{\mathrm{hi}}$ and
+$b_s^{\mathrm{lo}}$ are the two tableau weights, the error vector and its mixed tolerance scale
+are
+
+```{math}
+:label: eq-relax-llg-adaptive-error-norm
+\mathbf e_i
+=\Delta t\sum_{s=0}^{S-1}
+\left(b_s^{\mathrm{hi}}-b_s^{\mathrm{lo}}\right)\mathbf k_{s,i},
+\qquad
+\sigma_i
+=\mathrm{atol}+\mathrm{rtol}\,
+\max\!\left(\lVert\mathbf m_i^{\mathrm{old}}\rVert_2,
+\lVert\mathbf m_i^{\mathrm{high}}\rVert_2\right),
+\qquad
+\rho
+=\max_{i\in\mathcal A}\frac{\lVert\mathbf e_i\rVert_2}{\sigma_i}.
+```
+
+$\mathcal A$ is the active magnetic-node/cell mask; air or inactive FEM nodes do not enter the
+maximum. A trial is accepted exactly when $\rho\leq1$. When `rtol=0`, the scale is the absolute
+`atol` value. The optional `norm_tolerance` and `max_spin_rotation` guards are folded into the
+same acceptance metric by taking the maximum of their normalized defects. Non-finite vectors,
+non-positive scales, zero active norms, or a non-finite combined metric fail closed.
+
+The native FEM CPU/GPU and FDM CUDA controllers use the following shared scalar proposal. Let
+$\rho_{k-1}$ be the previous accepted non-zero error ratio, when history exists, and let
+$p$ be the embedded error-estimate order. The unclamped factor is
 
 ```{math}
 :label: eq-relax-llg-adaptive-controller
-\Delta t_{k+1}
-=\operatorname{clip}_{[\Delta t_{\min},\Delta t_{\max}]}
-\left(\Delta t_k\,s\,\rho_k^{-1/(p+1)}\right),
+\begin{aligned}
+q_k&=
+\begin{cases}
+q_{\max}, & \rho_k=0,\\
+s\,\rho_k^{-1/(p+1)}, & \rho_k>0\text{ and the trial is rejected, or no previous history exists},\\
+s\,\rho_k^{-0.7/(p+1)}\rho_{k-1}^{0.4/(p+1)},
+& \rho_k>0\text{ and the trial is accepted with previous history},
+\end{cases}
+\\
+\widehat q_k&=\operatorname{clip}_{[q_{\min},q_{\max}]}(q_k),
 \qquad
-\operatorname{clip\ factor}\in[q_{\min},q_{\max}],
+\Delta t_{k+1}&=\operatorname{clip}_{[\Delta t_{\min},\Delta t_{\max}]}
+\left(\Delta t_k\widehat q_k\right).
+\end{aligned}
 ```
 
-where $s$ is `safety`, $q_{\min}$ is `shrink_limit`, $q_{\max}$ is `growth_limit`, and $p$ is
-the order of the embedded error estimate. The FDM and FEM lanes may form their state norm using
-different vector storage and reduction kernels; the resolved policy, tolerances and actual lane
-must therefore be recorded together. A step rejected by the error test is retried with the
-smaller proposal and does not update the accepted-state stop history.
+Here $s$ is `safety`, $q_{\min}$ is `shrink_limit`, and $q_{\max}$ is `growth_limit`. A rejected
+trial is restored and retried with the smaller proposal; it does not update accepted-state stop
+history or previous-error history. If the error is still above one at `dt_min`, the attempt fails
+with `dt_min_exhausted`. Native FEM receives a rejection budget of 50 from the runner; FDM lanes
+use the shared typed `dt_min_exhausted` decision and do not expose a separate public rejection
+counter. The older Rust FEM reference engine has an internal 128-attempt guard and is documented
+as a reference path, not as the native FEM contract.
+
+The Rust helper `pi_controller_dt` is a stateless reference helper: it evaluates only the
+single-history-free branch. It is not a substitute for the native controller above. FDM CPU's
+engine implementation and native FEM/CUDA both retain the previous accepted error and use the
+history branch when available. FDM CPU's absolute-only mode compares the unscaled norm directly
+with `max_error`; its mixed mode uses the normalized $\rho$ definition above. The vector norm and
+reduction are lane-specific, but the resolved tolerance, controller branch, attempted/accepted
+steps, and actual backend/device must be recorded together.
 
 For the public stage builder, `solver=None` resolves to `rk23`; `solver="auto"` has the same
 resolution. An executable adaptive stage must provide an explicit `dt_min` and `dt_max`. The
@@ -126,6 +171,20 @@ combined with `adaptive_timestep` or fixed `dt` controls.
 | $\Delta t_{\max}$ | adaptive upper timestep bound | $\mathrm{s}$ |
 | $q_{\min}$ | minimum adaptive step-size factor | $1$ |
 | $q_{\max}$ | maximum adaptive step-size factor | $1$ |
+| $\mathbf e_i$ | embedded high-minus-low vector error | $1$ |
+| $\mathbf k_{s,i}$ | stage right-hand side | $\mathrm{s^{-1}}$ |
+| $b_s^{\mathrm{hi}}$ | high-order tableau weight | $1$ |
+| $b_s^{\mathrm{lo}}$ | low-order tableau weight | $1$ |
+| $S$ | number of stages in the embedded tableau | $1$ |
+| $\mathbf m_i^{\mathrm{old}}$ | state at the beginning of the attempted step | $1$ |
+| $\mathbf m_i^{\mathrm{high}}$ | high-order candidate state | $1$ |
+| $\mathrm{atol}$ | absolute normalized-state error scale | $1$ |
+| $\mathrm{rtol}$ | relative normalized-state error scale | $1$ |
+| $\sigma_i$ | mixed absolute/relative local error scale | $1$ |
+| $\mathcal A$ | active magnetic cell/node index set | $1$ |
+| $\rho_{k-1}$ | previous accepted non-zero error ratio | $1$ |
+| $q_k$ | raw adaptive step-size factor | $1$ |
+| $\widehat q_k$ | clamped adaptive step-size factor | $1$ |
 
 The reduced gyromagnetic ratio is `gamma` in the Python `LLG` object. The damping coefficient in
 the equation is the resolved stage-local `relax_alpha` when supplied; otherwise the material
@@ -378,13 +437,20 @@ and their line-search contracts are described separately.
 | LLG object and adaptive policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` / `class AdaptiveTimestep` / `class FieldRefreshPolicy` | validates integrator names, aliases, timestep bounds and serialized dynamics | public API | Python dynamics contract tests |
 | Adaptive FEM controller | `crates/fullmag-runner/src/fem/integrators/adaptive.rs` | `step_accepted` / `pi_controller_dt` | embedded-error acceptance and bounded next-step proposal | FEM CPU/GPU | integrator unit tests |
 | Fixed FEM controller | `crates/fullmag-runner/src/fem/integrators/fixed.rs` | `validate_fixed_dt` | fixed-step Heun/RK4 validation | FEM CPU/GPU | integrator unit tests |
-| FDM adaptive error policy | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` | FDM state error norm and adaptive bound | FDM CPU | engine integrator tests |
+| Native FEM adaptive error norm | `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `compute_adaptive_error_norm` | active-node mixed atol/rtol norm and fail-closed guards | FEM CPU | native FEM contract tests |
+| Native FEM adaptive controller | `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `adaptive_pi_step` | shared history-aware PI decision and rejection accounting | FEM CPU | native FEM adaptive tests |
+| Native FEM GPU adaptive error norm | `backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu` | `adaptive_error_norm_blocks_kernel` | device reduction of the same active-node error metric | FEM GPU | CUDA contract tests |
+| Native FEM GPU adaptive controller | `backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu` | `gpu_rk_adaptive_pi_step` | device-lane decision and previous-error history | FEM GPU | CUDA contract tests |
+| FDM adaptive scalar policy | `native/include/fullmag_adaptive_step_decision.hpp` | `decide` / `decide_adaptive_step` | shared history-aware accept/retry/dt-min decision | FDM CPU/GPU | FDM policy contract tests |
+| FDM adaptive error norm | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` / `max_error_norm_soa_buf` | AoS/SoA active-cell error norm, absolute or mixed mode | FDM CPU | engine integrator tests |
+| FDM GPU adaptive error reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `decide_adaptive_step` call site | CUDA reduction and typed dt-min failure | FDM GPU | CUDA policy contract tests |
+| Rust FEM reference adaptive loop | `crates/fullmag-engine/src/fem.rs` | `rk23_step_ws` / `rk45_step_ws` | legacy absolute `max_error` loop with 128-attempt guard | FEM reference | engine tests |
 | Native FDM integrator dispatch | `crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs` | `build_native_fdm_plan` | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
 | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_projected_gradient_bb` | FDM reference BB relaxation | FDM CPU/reference | Rust unit tests |
 | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_nonlinear_cg` | FDM reference NCG relaxation | FDM CPU/reference | Rust unit tests |
 | Shared pure-damping predicate | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | selects precession-disabled relaxation mode | FEM/FDM orchestration | runner tests |
 | Accepted-state convergence | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_converged` / `relaxation_stop_criteria_satisfied` | torque/energy conjunction | shared orchestration | runner tests |
-| Three-sample confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | requires three consecutive valid samples | shared orchestration | runner tests |
+| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | requires at least three consecutive accepted samples satisfying the combined predicate | shared orchestration | runner tests |
 | FEM LLG execution | `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs` | `execute_llg_overdamped` | native FEM loop, integrator and completion metrics | FEM CPU/GPU | native runtime tests |
 | FEM LLG policy | `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs` | `convergence_controller_policy` / `fill_provenance` | records resolved controller and integrator | FEM | provenance tests |
 | FDM CPU/reference LLG | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Cartesian reference relaxation dispatch | FDM CPU | runner tests |

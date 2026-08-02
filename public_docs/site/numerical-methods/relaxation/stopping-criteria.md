@@ -39,11 +39,12 @@ window $W_E$:
 \Delta E_{W_E}^{(k)}\leq\varepsilon_E.
 ```
 
-In the shared runner, $W_E$ is exactly 50 accepted energy samples. The torque predicate is then
-observed on fresh accepted states and must be true for exactly three consecutive samples before
-`torque_confirmed` becomes true. A failed sample resets that consecutive counter to zero. This
-confirmation is independent of output cadence: sparse saved output cannot change the authoritative
-completion record.
+In the shared runner, $W_E$ is exactly 50 accepted energy samples. The combined torque predicate
+(and, when configured, the energy-window predicate) is then observed on fresh accepted states.
+`torque_confirmed` becomes true after at least three consecutive accepted samples satisfy that
+combined predicate; the counter is not capped at three. A failed sample resets the consecutive
+counter to zero. This confirmation is independent of output cadence: sparse saved output cannot
+change the authoritative completion record.
 
 The logical completion rule is conjunction, not disjunction:
 
@@ -176,7 +177,7 @@ minimizers. Unsupported combinations are rejected instead of weakening the compl
 The result must identify requested intent, `converged`, `stop_reason`, `stop_metric`, `stop_value`, and
 `stop_threshold`; a budget-exhausted result is not a converged result.
 
-The authoritative completion reasons include `torque` (three-sample torque confirmation, plus any
+The authoritative completion reasons include `torque` (at-least-three-sample torque confirmation, plus any
 configured energy plateau), `max_steps`, `max_physical_time`, `gradient` for numerical stagnation,
 `backend_error`, `user_cancelled`, and an unset reason while a stage remains incomplete. The
 `energy` metric alone never produces convergence because torque is mandatory in the canonical stop
@@ -246,5 +247,5 @@ that the continuous functional has reached its global minimum.
 | Accepted-state completion | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_converged` | torque/energy conjunction and budget semantics | FDM/FEM orchestration | Rust tests |
 | Pure-damping mode selection | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | distinguishes overdamped LLG from full dynamics | FDM/FEM orchestration | runner tests |
 | Energy plateau window | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationEnergyPlateauWindow::record` | fixed 50-sample accepted-energy range | shared orchestration | runner tests |
-| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | three consecutive valid samples | shared orchestration | runner tests |
+| Torque confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | at least three consecutive accepted samples satisfying the combined predicate | shared orchestration | runner tests |
 | Final reason mapping | `crates/fullmag-runner/src/relaxation/convergence.rs` | `resolve_stage_completion` | maps torque, budgets, stagnation and backend status | shared orchestration | runner tests |

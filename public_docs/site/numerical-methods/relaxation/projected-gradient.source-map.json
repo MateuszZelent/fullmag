@@ -25,7 +25,7 @@
     {"id": "y", "latex": "\\mathbf y_k", "meaning": "gradient difference", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
     {"id": "c1", "latex": "c_1", "meaning": "Armijo sufficient-decrease constant", "si_unit": "1"},
-    {"id": "D", "latex": "D_k", "meaning": "energy directional derivative", "si_unit": "\\mathrm{J}"},
+    {"id": "D", "latex": "D_k", "meaning": "energy directional derivative with respect to $\\lambda$", "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"},
     {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
     {"id": "Ms", "latex": "M_{s,i}", "meaning": "local saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "V", "latex": "V_i", "meaning": "cell or nodal volume weight", "si_unit": "\\mathrm{m^3}"},

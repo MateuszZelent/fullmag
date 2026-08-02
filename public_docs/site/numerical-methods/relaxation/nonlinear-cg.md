@@ -156,9 +156,16 @@ The metric used by the FDM/shared implementation is
 :label: eq-relax-ncg-energy-metric
 \langle a,b\rangle_E
 =\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
-\qquad [\langle a,b\rangle_E]=\mathrm{J}
-\quad\text{for }[a]=[b]=\mathrm{A\,m^{-1}}.
+\qquad
+[\langle a,b\rangle_E]
+=\mathrm{J\,A^{-1}}[a][b].
 ```
+
+The metric weight $\mu_0M_{s,i}V_i$ is $\mathrm{J\,A^{-1}}$. Thus the Armijo slope
+$\langle g,p\rangle_E$ is $\mathrm{J\,A\,m^{-1}}$ for field-valued $g$ and $p$, and
+$\lambda\langle g,p\rangle_E$ is an energy. The displacement vectors $s$ are dimensionless,
+so the BB/PR products have different operand-dependent units; they must not be treated as a
+single unitless dot product.
 
 For FEM the same physical metric is realized by the MFEM mass/lumped-mass operators rather than
 Cartesian cell volumes. The line-search parameter has units $\mathrm{m\,A^{-1}}$ because it

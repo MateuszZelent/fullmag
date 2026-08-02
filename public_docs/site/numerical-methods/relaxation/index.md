@@ -67,8 +67,9 @@ The three algorithms share the same accepted-state observation but differ in the
    $\mathbf m-\lambda\mathbf g$, and apply the 20-rejection Armijo limit.
 4. For `nonlinear_cg`, transport the previous tangent vectors, form PR+, enforce a descent
    direction, retract $\mathbf m+\lambda\mathbf p$, and apply the 30-rejection Armijo limit.
-5. Commit only an accepted state. Update the 50-sample energy window and three-sample torque
-   confirmation, then resolve convergence or the applicable budget/failure reason.
+5. Commit only an accepted state. Update the 50-sample energy window and the at-least-three-
+   consecutive-sample torque confirmation, then resolve convergence or the applicable
+   budget/failure reason.
 
 Rejected trial states, failed field evaluations, non-finite metrics, and backend errors never
 become accepted relaxation states and never satisfy the completion contract.

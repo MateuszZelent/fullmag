@@ -120,7 +120,7 @@ it is required evidence when qualifying CPU/GPU parity.
 | $\mathbf p_i$ | tangent search direction | $\mathrm{A\,m^{-1}}$ |
 | $\lambda_k$ | minimizer step size | $\mathrm{m\,A^{-1}}$ |
 | $\mathcal R_{\mathbf m_i}$ | sphere retraction | $1$ |
-| $D_k$ | energy directional derivative | $\mathrm{J}$ |
+| $D_k$ | energy directional derivative with respect to $\lambda$ | $\mathrm{J\,A\,m^{-1}}$ |
 | $c_1$ | Armijo sufficient-decrease constant | $1$ |
 | $N$ | number of active cells or finite-element nodes | $1$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
@@ -135,9 +135,17 @@ The energy metric used by the FDM/shared policy is
 :label: eq-pgbb-energy-metric
 \langle a,b\rangle_E
 =\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
-\qquad [\langle a,b\rangle_E]=\mathrm{J}
-\quad\text{for }[a]=[b]=\mathrm{A\,m^{-1}}.
+\qquad
+[\langle a,b\rangle_E]
+=\mathrm{J\,A^{-1}}[a][b].
 ```
+
+The weight $\mu_0M_{s,i}V_i$ has units $\mathrm{J\,A^{-1}}$. Therefore
+$\langle g,p\rangle_E$ has units $\mathrm{J\,A\,m^{-1}}$ when both operands are fields in
+$\mathrm{A\,m^{-1}}$, while $\langle s,s\rangle_E$ has units $\mathrm{J\,A^{-1}}$ because
+$s$ is dimensionless. This is why $\lambda$ has units $\mathrm{m\,A^{-1}}$ and why
+$\lambda D_k$ is an energy. Treating the metric as joules for every operand type is dimensionally
+incorrect.
 
 For FEM, $V_i$ is replaced by the backend's mass/lumped-mass realization; the public equation is
 the same metric contract, but assembled weights and node ownership are backend-specific.
