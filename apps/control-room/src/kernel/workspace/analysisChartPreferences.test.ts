@@ -114,6 +114,17 @@ describe("validateDescriptorPreferences", () => {
     expect(validateDescriptorPreferences({ yAxisIds: ["response:mx"] }, "analysis:frequency-domain").selectedSeriesIds).toEqual(["analysis.frequency-domain:response:mx"]);
     expect(validateDescriptorPreferences({ selectedSeriesIds: [] }, "analysis:solver-energy-history").selectedSeriesIds).toEqual([]);
   });
+
+  it("replaces the historical shared table default for energy and frequency without weakening normalization", () => {
+    const legacy = { yAxisIds: ["mx", "my", "mz", "e_total"] };
+    expect(validateDescriptorPreferences(legacy, "analysis:solver-energy-history").selectedSeriesIds).toEqual(defaultDescriptorPreferences("analysis:solver-energy-history").selectedSeriesIds);
+    expect(validateDescriptorPreferences(legacy, "analysis:frequency-domain").selectedSeriesIds).toEqual([]);
+    const corrupted = Array.from({ length: 130 }, (_, index) => index % 2 ? "x".repeat(200) : "total");
+    const migrated = validateDescriptorPreferences({ yAxisIds: corrupted }, "analysis:solver-energy-history").selectedSeriesIds;
+    expect(migrated).toHaveLength(2);
+    expect(new Set(migrated).size).toBe(migrated.length);
+    expect(migrated.every((id) => id.length <= 160)).toBe(true);
+  });
 });
 
 describe("validateAnalysisChartPreferences", () => {

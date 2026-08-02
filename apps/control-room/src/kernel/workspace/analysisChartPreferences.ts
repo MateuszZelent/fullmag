@@ -160,11 +160,7 @@ export function validateDescriptorPreferences(
   return {
     displayUnits: validatedDisplayUnits(v["displayUnits"]),
     selectedSeriesIds: Array.isArray(v["selectedSeriesIds"])
-      ? (v["selectedSeriesIds"] as unknown[])
-          .filter((id): id is string => typeof id === "string")
-          .map((id) => id.slice(0, MAX_DESCRIPTOR_ID_LENGTH))
-          .filter((id, index, ids) => ids.indexOf(id) === index)
-          .slice(0, 100)
+      ? normalizeSelectedSeriesIds(v["selectedSeriesIds"])
       : legacySelectedSeriesIds(v, descriptorId, defaults),
     liveMode:
       v["liveMode"] === "following" || v["liveMode"] === "paused"
@@ -222,9 +218,14 @@ function legacySelectedSeriesIds(
   defaults: DescriptorPreferences,
 ): string[] {
   if (!Array.isArray(raw["yAxisIds"])) return defaults.selectedSeriesIds;
+  const legacy = normalizeSelectedSeriesIds(raw["yAxisIds"]);
+  if (
+    (descriptorId === "analysis:solver-energy-history" || descriptorId === "analysis:frequency-domain") &&
+    legacy.length === 4 &&
+    legacy.every((id, index) => id === ["mx", "my", "mz", "e_total"][index])
+  ) return defaults.selectedSeriesIds;
   const xAxisId = typeof raw["xAxisId"] === "string" ? raw["xAxisId"] : "step";
-  return (raw["yAxisIds"] as unknown[]).flatMap((id) => {
-    if (typeof id !== "string") return [];
+  return normalizeSelectedSeriesIds(legacy.flatMap((id) => {
     if (descriptorId === "analysis:solver-energy-history") {
       return [`simulation.solver.energies:${id}`];
     }
@@ -232,7 +233,15 @@ function legacySelectedSeriesIds(
       return [id.startsWith("analysis.frequency-domain:") ? id : `analysis.frequency-domain:${id}`];
     }
     return [`data.table:default:${xAxisId}:${id}`];
-  });
+  }));
+}
+
+function normalizeSelectedSeriesIds(value: readonly unknown[]): string[] {
+  return value
+    .filter((id): id is string => typeof id === "string")
+    .map((id) => id.slice(0, MAX_DESCRIPTOR_ID_LENGTH))
+    .filter((id, index, ids) => ids.indexOf(id) === index)
+    .slice(0, 100);
 }
 
 // ===== LRU helpers =====
