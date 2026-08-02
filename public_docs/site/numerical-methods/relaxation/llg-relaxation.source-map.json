@@ -9,7 +9,8 @@
   "equations": [
     {"id": "eq-relax-llg-damping", "symbols": ["m", "gamma0", "alpha", "H_eff"], "sources": ["physics-llg", "runner-mode"]},
     {"id": "eq-relax-llg-effective-field", "symbols": ["H_eff", "mu0", "Ms", "E", "tau"], "sources": ["physics-llg", "python-relaxation"]},
-    {"id": "eq-relax-llg-stop-metric", "symbols": ["tau", "tau_max", "epsilon_tau"], "sources": ["runner-completion"]}
+    {"id": "eq-relax-llg-stop-metric", "symbols": ["tau", "tau_max", "epsilon_tau"], "sources": ["runner-completion"]},
+    {"id": "eq-relax-llg-adaptive-controller", "symbols": ["dt", "safety", "rho", "p", "dt_min", "dt_max", "shrink_limit", "growth_limit"], "sources": ["fem-adaptive", "fdm-adaptive"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
@@ -23,7 +24,15 @@
     {"id": "tau", "latex": "\\boldsymbol\\tau_i", "meaning": "local effective-field torque residual", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "tau_max", "latex": "\\tau_{\\max}", "meaning": "maximum accepted-state torque", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "torque stopping threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"}
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "dt", "latex": "\\Delta t_k", "meaning": "attempted or proposed adaptive integration step", "si_unit": "\\mathrm{s}"},
+    {"id": "safety", "latex": "s", "meaning": "adaptive controller safety factor", "si_unit": "1"},
+    {"id": "rho", "latex": "\\rho_k", "meaning": "normalized local-error ratio", "si_unit": "1"},
+    {"id": "p", "latex": "p", "meaning": "order of the embedded error estimate", "si_unit": "1"},
+    {"id": "dt_min", "latex": "\\Delta t_{\\min}", "meaning": "adaptive lower timestep bound", "si_unit": "\\mathrm{s}"},
+    {"id": "dt_max", "latex": "\\Delta t_{\\max}", "meaning": "adaptive upper timestep bound", "si_unit": "\\mathrm{s}"},
+    {"id": "shrink_limit", "latex": "q_{\\min}", "meaning": "minimum adaptive step-size factor", "si_unit": "1"},
+    {"id": "growth_limit", "latex": "q_{\\max}", "meaning": "maximum adaptive step-size factor", "si_unit": "1"}
   ],
   "sources": [
     {"id": "physics-llg", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Canonical relaxation equilibrium payload and algorithm semantics."},
@@ -33,6 +42,8 @@
     {"id": "runner-mode", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "llg_overdamped_uses_pure_damping", "responsibility": "Resolves precession-disabled relaxation mode."},
     {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Evaluates accepted-state relaxation completion."},
     {"id": "runner-confirmation", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "observe", "responsibility": "Requires three consecutive accepted-state samples."},
+    {"id": "fem-adaptive", "path": "crates/fullmag-runner/src/fem/integrators/adaptive.rs", "symbol": "pi_controller_dt", "responsibility": "FEM adaptive acceptance and step-size controller."},
+    {"id": "fdm-adaptive", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_buf", "responsibility": "FDM adaptive error norm and bounded next-step proposal."},
     {"id": "fem-llg", "path": "crates/fullmag-runner/src/fem/relax/llg_overdamped.rs", "symbol": "execute_llg_overdamped", "responsibility": "Runs native FEM overdamped LLG and records resolved policy."},
     {"id": "fdm-cpu-llg", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_reference_fdm_with_coupled_checkpoint", "responsibility": "Dispatches the Cartesian FDM reference relaxation path."}
   ],

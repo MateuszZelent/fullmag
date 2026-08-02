@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md, docs/physics/0580-canonical-relaxation-equilibrium-contract.md
 ---
 
 (public-docs-numerical-methods-relaxation-nonlinear-cg)=
@@ -97,6 +98,30 @@ coefficient is clipped with $\max(0,\cdot)$; invalid or non-positive previous-gr
 norms give $\beta=0$. The next direction transports the previous direction to the new tangent
 plane and is reset to $-g$ if it is not a descent direction. Every 50th accepted step sets
 $\beta=0$. Backtracking multiplies $\lambda$ by $1/2$ and allows at most 30 rejected trials.
+
+(numerical-methods-relaxation-ncg-iteration)=
+## One nonlinear-CG iteration
+
+The accepted-step loop is:
+
+1. Assemble the current effective field, tangent gradient, energy and torque. Reject non-finite
+   quantities and classify an exactly degenerate gradient as numerical stagnation.
+2. Transport the previous gradient and direction into the current tangent plane. Compute PR+ with
+   the energy metric, force $\beta=0$ on the 50-step restart boundary, and replace any
+   non-descent direction by $-\mathbf g_k$.
+3. Start the line search at the bounded initial proposal, retract
+   $\mathcal R_{\mathbf m}(\lambda\mathbf p_k)$, and evaluate the complete trial energy. Apply
+   the Armijo inequality; halve and retry on rejection. The FDM/shared loop permits 30 rejected
+   trials. Native FEM recovery paths may consume additional restart trials, which are recorded as
+   rejected attempts rather than accepted steps.
+4. Commit only the accepted trial, preserve its field/energy snapshot for the next direction, and
+   increment `accepted_step`. Rejected trials never modify the accepted state.
+5. Feed the accepted torque and energy into the shared completion controller. The line search proves
+   sufficient decrease for one step; it does not prove equilibrium or a global minimum.
+
+Native FEM CPU and GPU implementations additionally evaluate a representable direct-energy
+difference and its roundoff bound before accepting a step. This is an implementation-level
+acceptance proof and must be reported separately from the shared torque/energy stop result.
 
 (numerical-methods-relaxation-ncg-symbols-and-si-units)=
 ## Symbols and SI units

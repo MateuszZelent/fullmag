@@ -132,12 +132,20 @@ study.stages.add_relax(
 | `fm.RelaxStop.energy_tolerance_j` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | optional accepted-energy range threshold | FDM/FEM lanes | `study.stop.energy_tolerance_j` |
 | `fm.RelaxStop.max_steps` | `int \| None` | $50,000$ | $1$ | positive integer when set | work budget | FDM/FEM lanes | `study.stop.max_steps` |
 | `fm.RelaxStop.max_relaxation_time_s` | `float \| None` | `None` | $\mathrm{s}$ | positive when set; LLG only | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `fm.RelaxStop(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must numerically agree with every other time alias; LLG only | same relaxation-coordinate ceiling, never a direct-minimizer time | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `fm.RelaxStop(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must numerically agree with every other time alias; LLG only | compatibility name for the same relaxation coordinate; not a physical experiment clock | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
 | `add_relax(tolT=...)` | `float` | $10^{-6}$ | $\mathrm{T}$ | exclusive with `tolA` | user-facing torque threshold | FDM/FEM lanes | normalized A/m stop field |
 | `add_relax(tolA=...)` | `float` | canonical default equivalent | $\mathrm{A\,m^{-1}}$ | exclusive with `tolT` | canonical field threshold | FDM/FEM lanes | normalized A/m stop field |
 
 The `stop=` object is the canonical grouped form. Scalar aliases are accepted on
 `study.stages.add_relax`, but mixing a scalar with a conflicting field in `RelaxStop` is rejected.
 The legacy `tol` parameter is removed and must not be documented as usable.
+
+`RelaxStop` accepts at least one criterion. Its default object contains both the canonical torque
+threshold and the default accepted-step budget, so an otherwise empty `add_relax` call is still
+bounded. `max_pseudotime_s` and `max_physical_time_s` are constructor aliases only; serialization
+always emits the single canonical `max_relaxation_time_s` key. Supplying two aliases with different
+values is a validation error rather than a precedence rule.
 
 (numerical-methods-relaxation-stopping-problem-ir)=
 ## ProblemIR
@@ -191,6 +199,13 @@ For direct minimizers, `max_steps` counts accepted minimizer steps; rejected Arm
 advance it. For LLG, `max_steps` counts accepted integration steps and the relaxation-time ceiling
 is checked against the stage relaxation coordinate. A failure or cancellation is mapped before any
 budget predicate, so it cannot be reclassified as converged.
+
+The FDM reference direct-minimizer loops contain an early torque-only exit before the first
+accepted step. When an energy tolerance is also requested, that internal `converged` flag does not
+constitute canonical completion because no 50-sample energy window exists yet; the shared
+`resolve_stage_completion` record remains authoritative and leaves the stage non-converged until
+the conjunction is actually evaluable. This distinction is intentional provenance: backend-local
+loop flags are not interchangeable with the public completion result.
 
 (numerical-methods-relaxation-stopping-implementation-mapping)=
 ## Implementation mapping
