@@ -1373,6 +1373,10 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 ..StepStats::default()
             };
             current_stats = latest_stats.clone();
+            // Preserve every accepted adaptive/fixed controller step for the
+            // solver diagnostics trace.  User-visible scalar schedules remain
+            // independent and may be sparse.
+            artifacts.record_solver_step(&latest_stats);
 
             final_coupled_checkpoint = spin_transport
                 .as_ref()
@@ -1569,6 +1573,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         &mut artifacts,
     )?;
 
+    let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut status = if paused {
         RunStatus::Paused
@@ -1620,6 +1625,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         .transpose()?
         .into_iter()
         .collect();
+    if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_trace) {
+        auxiliary_artifacts.push(trace);
+    }
     if let Some(checkpoint) = final_coupled_checkpoint {
         auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
             relative_path: "transport/coupled_checkpoint.json".to_string(),

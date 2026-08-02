@@ -3658,3 +3658,52 @@ od operatora Zhang–Li, zgodność demagnetyzacji i kolejności aktualizacji or
 niezależny artefakt kwalifikacyjny. Ocena pozostaje **84% implementacji / 58%
 gotowości produkcyjnej**; nie podnoszę jej za sam fakt wykonania jednego
 przebiegu.
+
+## 32.12. Rozdzielenie accepted-step telemetry od output cadence (2026-08-02)
+
+Świeży audyt artefaktu SP5 wykazał defekt obserwowalności, a nie brak samego
+kontrolera: `RunResult.steps` przechowuje wiersze wynikające z harmonogramu
+scalarów. Skrypt `examples/mumax_standard_problem_5_fdm.py` nie deklaruje
+takiego harmonogramu, dlatego `solver_steps.csv` i `solver_attempts.csv`
+mogły zawierać tylko końcowy snapshot i nie były dowodem przebiegu
+adaptive RK.
+
+### 32.12.1. Korekta implementacyjna
+
+Wprowadzono osobny ślad accepted-step w `ArtifactRecorder`:
+
+- każdy zaakceptowany krok natywnego FDM CUDA jest rejestrowany niezależnie od
+  próbkowania `scalars.csv`;
+- każdy zaakceptowany krok FDM CPU reference jest rejestrowany tą samą ścieżką;
+- ślad jest przenoszony przez wersjonowany artefakt
+  `solver/accepted_steps.v1.json` (`LLG-TD-ACCEPTED-TRACE-V1`);
+- generator `solver_steps.csv`, `solver_attempts.csv` i `qualification.json`
+  wybiera ten pełny ślad, a nie tylko publiczne output rows;
+- `scalars.csv`, harmonogramy pól, UI i semantyka `RunResult.steps` nie zostały
+  rozszerzone o ukryte wiersze diagnostyczne;
+- `metadata.json` publikuje `accepted_solver_steps`, a `m_final` używa czasu,
+  kroku i `dt` z ostatniego accepted-step, gdy pełny ślad jest dostępny.
+
+To jest korekta kontraktu obserwowalności. Nie jest jeszcze dowodem fizycznej
+zgodności SP5: accepted-step trace zawiera decyzje i residuale, ale nie nadaje
+automatycznie statusu `validated`.
+
+### 32.12.2. Dowody
+
+| Gate | Wynik | Granica dowodu |
+|---|---|---|
+| `cargo test -p fullmag-runner --lib accepted_solver_trace_roundtrips_independently_of_output_rows` | **PASS** | wersjonowany ślad serializuje/deserializuje accepted step i retry; test nie uruchamia GPU |
+| wcześniejszy `solver_diagnostics` runner subset | **PASS, 11 tests** | zachowany rozdział attempts/accepted rows; nie zastępuje runtime |
+| `just verify-fdm-zhang-li-native-contract` | **PASS** | managed CUDA/CMake FDM build, `stt_pbc_contract`, `cargo +nightly check -p fullmag-runner --features cuda`; brak pełnego SP5 |
+| CPU launcher rebuild `just build fullmag 1` | **PASS** | build artefaktów przez `/tmp/fullmag-zfn2-build/cargo-targets/fullmag-cli`, bez CUDA/FEM; nie jest device proof |
+| krótki CPU SP5 probe z nowym launcherem | **INTERRUPTED** | probe zatrzymał się na relaksacji przy kroku 20; nie wytworzył finalnego artefaktu i nie kwalifikuje trajektorii |
+
+### 32.12.3. Następna bramka
+
+Po tej zmianie należy powtórzyć SP5 na izolowanym GPU z pełnym accepted trace,
+`CUDA_LAUNCH_BLOCKING=1` dla reprodukcji 719 oraz osobny CPU run z kontrolowanym
+limitem. Dopiero wtedy można policzyć: liczbę accepted/rejected attempts,
+`dt`/grid sweep, CPU↔CUDA parity, rozdzielenie wpływu operatora
+Zhang–Li/demag/stanu relaksacji i ewentualnie wypełnić `qualification.json`.
+Ocena celu pozostaje **84% implementacji / 58% gotowości produkcyjnej** —
+telemetryka zamyka defekt artefaktu, lecz nie zwiększa kwalifikacji fizycznej.

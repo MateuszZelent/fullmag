@@ -22,6 +22,46 @@ use std::path::Path;
 
 const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
 
+pub(crate) const SOLVER_DIAGNOSTIC_TRACE_ARTIFACT: &str = "solver/accepted_steps.v1.json";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SolverDiagnosticTraceArtifact {
+    schema_version: String,
+    steps: Vec<StepStats>,
+}
+
+/// Preserve the accepted-step trace across the execution/artifact boundary.
+/// `RunResult.steps` is an output trace and may be sparse; this auxiliary
+/// artifact is consumed by `write_artifacts` when producing solver CSVs.
+pub(crate) fn solver_diagnostic_trace_artifact(
+    steps: Vec<StepStats>,
+) -> Option<crate::types::AuxiliaryArtifact> {
+    if steps.is_empty() {
+        return None;
+    }
+    let payload = SolverDiagnosticTraceArtifact {
+        schema_version: "LLG-TD-ACCEPTED-TRACE-V1".to_string(),
+        steps,
+    };
+    Some(crate::types::AuxiliaryArtifact {
+        relative_path: SOLVER_DIAGNOSTIC_TRACE_ARTIFACT.to_string(),
+        bytes: serde_json::to_vec(&payload).expect("solver diagnostic trace must serialize"),
+    })
+}
+
+fn solver_diagnostic_steps(executed: &ExecutedRun) -> Option<Vec<StepStats>> {
+    executed
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == SOLVER_DIAGNOSTIC_TRACE_ARTIFACT)
+        .and_then(|artifact| {
+            serde_json::from_slice::<SolverDiagnosticTraceArtifact>(&artifact.bytes)
+                .ok()
+                .filter(|trace| trace.schema_version == "LLG-TD-ACCEPTED-TRACE-V1")
+                .map(|trace| trace.steps)
+        })
+}
+
 fn execution_provenance_json(
     plan: &fullmag_ir::ExecutionPlanIR,
     execution_provenance: &crate::types::ExecutionProvenance,
@@ -1143,6 +1183,10 @@ pub(crate) fn write_artifacts(
     streamed: Option<&ArtifactPipelineSummary>,
 ) -> std::io::Result<()> {
     fs::create_dir_all(output_dir)?;
+    let diagnostic_steps = solver_diagnostic_steps(executed);
+    let accepted_steps = diagnostic_steps
+        .as_deref()
+        .unwrap_or(&executed.result.steps);
     let sampling_resolution = problem
         .problem_meta
         .runtime_metadata
@@ -1152,8 +1196,8 @@ pub(crate) fn write_artifacts(
     let requested_execution = requested_execution_metadata(problem);
     let runtime_threading = runtime_threading_summary(problem);
     let execution_provenance =
-        provenance_with_runtime_threading(problem, &executed.provenance, &executed.result.steps);
-    let demag_runtime = demag_runtime_metadata(plan, &execution_provenance, &executed.result.steps);
+        provenance_with_runtime_threading(problem, &executed.provenance, accepted_steps);
+    let demag_runtime = demag_runtime_metadata(plan, &execution_provenance, accepted_steps);
     let fem_cpu_relaxation_qualification = fem_cpu_relaxation_qualification_metadata(
         plan,
         &execution_provenance,
@@ -1173,7 +1217,7 @@ pub(crate) fn write_artifacts(
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
     if let Some(thermal) =
-        thermal_execution_provenance(plan, &executed.result.steps, &execution_provenance)
+        thermal_execution_provenance(plan, accepted_steps, &execution_provenance)
     {
         execution_provenance_json
             .as_object_mut()
@@ -1208,6 +1252,7 @@ pub(crate) fn write_artifacts(
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
+        "accepted_solver_steps": accepted_steps.len(),
         "field_snapshots": executed.field_snapshot_count,
         "artifact_pipeline": streamed.map(|summary| serde_json::json!({
             "scalar_rows_written": summary.scalar_rows_written,
@@ -1245,7 +1290,7 @@ pub(crate) fn write_artifacts(
             output_dir,
             plan,
             execution_provenance.timestep_policy.as_ref(),
-            &executed.result.steps,
+            accepted_steps,
         )?;
     }
 
@@ -1260,7 +1305,7 @@ pub(crate) fn write_artifacts(
         &executed.initial_magnetization,
     )?;
 
-    let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
+    let final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
         step: 0,
         time: 0.0,
         dt: 0.0,
@@ -4517,6 +4562,61 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(replay_root).unwrap();
+    }
+
+    #[test]
+    fn accepted_solver_trace_roundtrips_independently_of_output_rows() {
+        let mut accepted = StepStats {
+            step: 7,
+            time: 7.5e-12,
+            dt: 2.5e-13,
+            error_estimate: Some(0.25),
+            rejected_attempts: 2,
+            ..StepStats::default()
+        };
+        accepted.solver_attempts.push(SolverAttemptRecord {
+            attempt: 0,
+            target_step: 7,
+            time: 7.25e-12,
+            dt_attempt: 1.0e-12,
+            eta: 2.0,
+            decision: "retry".to_string(),
+            reason: "error_above_tolerance".to_string(),
+            dt_next: accepted.dt,
+            max_norm_defect: None,
+            max_spin_rotation: None,
+            demag_solves: 0,
+            demag_iterations: 0,
+            demag_residual: 0.0,
+            rhs_evals: 0,
+            estimator_order: 4,
+        });
+        let artifact = solver_diagnostic_trace_artifact(vec![accepted.clone()])
+            .expect("non-empty accepted trace must produce an artifact");
+        assert_eq!(artifact.relative_path, SOLVER_DIAGNOSTIC_TRACE_ARTIFACT);
+        let trace: SolverDiagnosticTraceArtifact =
+            serde_json::from_slice(&artifact.bytes).expect("trace JSON must decode");
+        assert_eq!(trace.schema_version, "LLG-TD-ACCEPTED-TRACE-V1");
+        assert_eq!(trace.steps.len(), 1);
+        assert_eq!(trace.steps[0].step, accepted.step);
+        assert_eq!(trace.steps[0].solver_attempts.len(), 1);
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: Vec::new(),
+                completion: None,
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: vec![artifact],
+            provenance: ExecutionProvenance::default(),
+        };
+        let selected = solver_diagnostic_steps(&executed).expect("trace must be selected");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].step, accepted.step);
+        assert!(solver_diagnostic_trace_artifact(Vec::new()).is_none());
     }
 
     #[test]

@@ -256,6 +256,18 @@ demagnetyzacji.
 5. Dopiero po przejściu tych punktów oznaczyć FDM CPU/GPU jako `validated`;
    obecny GPU fixed-step pozostaje `diagnostic-unqualified`.
 
+### 5.1. Korekta telemetryki accepted-step
+
+Wcześniejsze `solver_steps.csv` nie były wystarczającym śladem kontrolera,
+ponieważ `RunResult.steps` oznaczało wyłącznie wiersze wynikające z
+harmonogramu outputów. Dla tego skryptu harmonogram jest pusty, więc wiersz
+końcowy nie dowodził accepted/rejected steps. Runner zapisuje obecnie pełny,
+niezależny od output cadence ślad w
+`solver/accepted_steps.v1.json` (`LLG-TD-ACCEPTED-TRACE-V1`) i na jego podstawie
+generuje `solver_steps.csv`, `solver_attempts.csv` oraz `qualification.json`.
+Jest to naprawa obserwowalności i nie zmienia bieżącego statusu
+`not_evaluated` ani błędu parytetu.
+
 ## 6. Literatura
 
 - M. Najafi et al., “Proposal for a standard problem for micromagnetic

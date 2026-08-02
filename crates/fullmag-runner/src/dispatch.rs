@@ -4998,6 +4998,11 @@ fn execute_cuda_fdm(
                 continue;
             };
             ensure_single_object_scalars(&mut stats, "free");
+            // Keep accepted-step controller telemetry independent of the
+            // user-visible scalar cadence.  MuMax-compatible runs often have
+            // no scalar schedule, but qualification still requires every
+            // accepted step and its retry records.
+            artifacts.record_solver_step(&stats);
             current_time = stats.time;
             dt = crate::fdm::next_fdm_attempt_dt(
                 plan.adaptive_timestep.is_some(),
@@ -5157,7 +5162,12 @@ fn execute_cuda_fdm(
         &mut artifacts,
     )?;
 
+    let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let mut auxiliary_artifacts = Vec::new();
+    if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_trace) {
+        auxiliary_artifacts.push(trace);
+    }
     let status = if cancelled {
         RunStatus::Cancelled
     } else {
@@ -5186,7 +5196,7 @@ fn execute_cuda_fdm(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
+        auxiliary_artifacts,
         provenance,
     })
 }
