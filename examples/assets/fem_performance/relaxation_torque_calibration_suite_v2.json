@@ -23,17 +23,26 @@
   ],
   "meshes": [
     {
+      "airbox_hmax_m": 5e-7,
+      "domain_hmax_m": 2.5e-7,
       "id": "coarse",
+      "solver_mesh_sha256": "6db5b18ffb49a3dc486920e94a1356828c549e09ce0c6c7ee5638cd6c20b993b",
       "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json"
     },
     {
+      "airbox_hmax_m": 2.5e-7,
+      "domain_hmax_m": 1e-7,
       "id": "medium",
+      "solver_mesh_sha256": "e8b22e7942ab5d9ccbe77912359f83214486a6142ff1ef95d70095d84c7fb8ef",
       "solver_mesh_signature": "4d11de54405620b611a4a1221bd86bd4622d56d3c09142eac68bde6884e56fca",
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_medium_v2.mesh.json"
     },
     {
+      "airbox_hmax_m": 1e-7,
+      "domain_hmax_m": 5e-8,
       "id": "fine",
+      "solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
       "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
       "solver_mesh_path": "box500_airbox_exchange_demag_v2.mesh.json"
     }

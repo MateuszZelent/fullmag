@@ -2861,6 +2861,7 @@ calibrate-fem-relaxation-torque-default-v2:
             --relax-torque-tolerance-apm "$tolerance_apm" \
             --case-timeout-s "$timeout_s" \
             --output "$report_dir/raw-$steps.csv" \
+            --relaxation-torque-calibration-suite examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json \
             --generated-domain-mesh-cache-dir "$report_dir/mesh-cache" \
             --reuse-generated-domain-mesh \
             --require-stable-solver-mesh \

@@ -327,6 +327,9 @@ NATIVE_FEM_LIBRARY_NAMES = (
 )
 PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v2"
 PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v2"
+RELAXATION_TORQUE_CALIBRATION_SUITE_SCHEMA = (
+    "fullmag.relaxation_torque_calibration_suite.v2"
+)
 EQUILIBRIUM_PARITY_SCHEMA = "fullmag.fem.relaxation_equilibrium_parity.v1"
 EQUILIBRIUM_QUALIFICATION_SUITE_SCHEMA = (
     "fullmag.fem.relaxation_equilibrium_qualification_suite.v1"
@@ -2999,6 +3002,104 @@ def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
     return resolved
 
 
+def load_relaxation_torque_calibration_meshes(
+    path: Path,
+) -> dict[str, dict[str, object]]:
+    """Load the immutable typed-v2 solver meshes used by torque calibration."""
+
+    suite_path = path.resolve()
+    try:
+        payload = json.loads(suite_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"cannot read relaxation torque calibration suite: {suite_path}"
+        ) from exc
+    if not isinstance(payload, Mapping) or payload.get("schema") != RELAXATION_TORQUE_CALIBRATION_SUITE_SCHEMA:
+        raise ValueError(
+            "relaxation torque calibration suite must use schema v2"
+        )
+    entries = payload.get("meshes")
+    if not isinstance(entries, list):
+        raise ValueError("relaxation torque calibration suite is missing meshes")
+    resolved: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise ValueError("relaxation torque calibration mesh entry must be an object")
+        resolution = str(entry.get("id") or "").strip().lower()
+        if resolution in resolved:
+            raise ValueError(
+                f"relaxation torque calibration suite has duplicate mesh id: {resolution}"
+            )
+        if resolution not in {"coarse", "medium", "fine"}:
+            raise ValueError(
+                f"relaxation torque calibration suite has unsupported mesh id: {resolution}"
+            )
+        mesh_reference = str(entry.get("solver_mesh_path") or "").strip()
+        if not mesh_reference:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} is missing solver_mesh_path"
+            )
+        mesh_path = (suite_path.parent / mesh_reference).resolve()
+        if not mesh_path.is_file():
+            raise ValueError(
+                f"relaxation torque calibration mesh is missing: {mesh_path}"
+            )
+        try:
+            mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"relaxation torque calibration mesh is invalid: {mesh_path}"
+            ) from exc
+        if not isinstance(mesh_payload, Mapping):
+            raise ValueError(
+                f"relaxation torque calibration mesh must be an object: {mesh_path}"
+            )
+        typed_mesh_topology_counts(mesh_payload)
+        declared_signature = str(entry.get("solver_mesh_signature") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", declared_signature):
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} has invalid solver_mesh_signature"
+            )
+        actual_signature = solver_mesh_signature(mesh_payload)
+        if actual_signature != declared_signature:
+            raise ValueError(
+                f"relaxation torque calibration mesh signature mismatch: {mesh_path}"
+            )
+        declared_sha256 = str(entry.get("solver_mesh_sha256") or "")
+        actual_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
+        if declared_sha256 != actual_sha256:
+            raise ValueError(
+                f"relaxation torque calibration mesh sha256 mismatch: {mesh_path}"
+            )
+        try:
+            domain_hmax_m = float(entry["domain_hmax_m"])
+            airbox_hmax_m = float(entry["airbox_hmax_m"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} is missing hmax values"
+            ) from exc
+        if not math.isfinite(domain_hmax_m) or domain_hmax_m <= 0.0:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} has invalid domain_hmax_m"
+            )
+        if not math.isfinite(airbox_hmax_m) or airbox_hmax_m <= 0.0:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} has invalid airbox_hmax_m"
+            )
+        resolved[resolution] = {
+            "path": mesh_path,
+            "solver_mesh_signature": declared_signature,
+            "solver_mesh_sha256": declared_sha256,
+            "domain_hmax_m": domain_hmax_m,
+            "airbox_hmax_m": airbox_hmax_m,
+        }
+    if set(resolved) != {"coarse", "medium", "fine"}:
+        raise ValueError(
+            "relaxation torque calibration suite requires coarse, medium, and fine meshes"
+        )
+    return resolved
+
+
 def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
     """Validate the immutable same-tolerance CPU/GPU qualification contract."""
 
@@ -4339,6 +4440,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Generate the three-resolution FEM GPU AMG qualification fixture suite and exit",
+    )
+    parser.add_argument(
+        "--relaxation-torque-calibration-suite",
+        type=Path,
+        default=None,
+        help=(
+            "Use the signed typed-v2 solver meshes and hmax values from the "
+            "relaxation torque calibration suite"
+        ),
     )
     parser.add_argument(
         "--scenarios",
@@ -11487,6 +11597,18 @@ def main() -> None:
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
+    relaxation_torque_calibration_meshes: dict[str, dict[str, object]] | None = None
+    if args.relaxation_torque_calibration_suite is not None:
+        try:
+            relaxation_torque_calibration_meshes = (
+                load_relaxation_torque_calibration_meshes(
+                    args.relaxation_torque_calibration_suite
+                )
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(
+                f"invalid relaxation torque calibration suite: {exc}"
+            ) from exc
     equilibrium_suite: dict[str, object] | None = None
     if args.equilibrium_suite is not None:
         try:
@@ -11820,6 +11942,25 @@ def main() -> None:
         # managed runtime; do not let this opt-in affect solver-mesh identity.
         mesh_stats = load_mesh_stats(mesh_path, allow_legacy=True)
         case_mesh_env = task11_mesh_env(mesh_path)
+        if relaxation_torque_calibration_meshes is not None:
+            mesh_size = qualification_mesh_size(mesh_path)
+            if mesh_size is None:
+                raise SystemExit(
+                    "--relaxation-torque-calibration-suite requires coarse, medium, "
+                    f"or fine mesh presets; got {mesh_path}"
+                )
+            calibration_mesh = relaxation_torque_calibration_meshes[mesh_size]
+            case_mesh_env.update(
+                {
+                    "FULLMAG_BENCH_DOMAIN_MESH": str(calibration_mesh["path"]),
+                    "FULLMAG_BENCH_DOMAIN_HMAX": repr(
+                        float(calibration_mesh["domain_hmax_m"])
+                    ),
+                    "FULLMAG_BENCH_AIRBOX_HMAX": repr(
+                        float(calibration_mesh["airbox_hmax_m"])
+                    ),
+                }
+            )
         print(f"  {input_mesh_summary(mesh_stats)}")
         for scenario in scenarios:
             scenario_relaxation_algorithms: list[str | None] = (

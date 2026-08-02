@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from itertools import product
 from pathlib import Path
+import sys
 
 import pytest
 
 
 SCRIPT = Path(__file__).resolve().parent / "analysis" / "calibrate_fem_relaxation_torque_default.py"
+BENCHMARK_SCRIPT = Path(__file__).resolve().parent / "analysis" / "fem_gpu_benchmark.py"
 PROBLEM_HASH = "a" * 64
 
 
@@ -15,6 +18,15 @@ def load_module():
     spec = importlib.util.spec_from_file_location("relax_torque_calibration_v2", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_benchmark_module():
+    spec = importlib.util.spec_from_file_location("fem_gpu_benchmark_v2", BENCHMARK_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -180,4 +192,36 @@ def test_v2_recipe_mounts_runtime_and_uses_full_matrix_defaults() -> None:
     assert "--repeat \"$repeat_count\"" in recipe
     assert "--capture-final-magnetization" in recipe
     assert "relaxation_torque_calibration_suite_v2.json" in recipe
+    assert "--relaxation-torque-calibration-suite" in recipe
     assert 'FULLMAG_TORQUE_CALIBRATION_SCOPE="${FULLMAG_TORQUE_CALIBRATION_SCOPE:-}"' in recipe
+
+
+def test_v2_benchmark_resolves_signed_typed_solver_meshes() -> None:
+    module = load_benchmark_module()
+    suite_path = (
+        SCRIPT.parents[2]
+        / "examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json"
+    )
+    resolved = module.load_relaxation_torque_calibration_meshes(suite_path)
+    assert set(resolved) == {"coarse", "medium", "fine"}
+    assert [resolved[resolution]["path"].name for resolution in ("coarse", "medium", "fine")] == [
+        "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json",
+        "box500_airbox_exchange_demag_amg_medium_v2.mesh.json",
+        "box500_airbox_exchange_demag_v2.mesh.json",
+    ]
+    assert [
+        module.solver_mesh_signature(json.loads(resolved[resolution]["path"].read_text()))
+        for resolution in ("coarse", "medium", "fine")
+    ] == [
+        "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
+        "4d11de54405620b611a4a1221bd86bd4622d56d3c09142eac68bde6884e56fca",
+        "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+    ]
+    assert [
+        (resolved[resolution]["domain_hmax_m"], resolved[resolution]["airbox_hmax_m"])
+        for resolution in ("coarse", "medium", "fine")
+    ] == [
+        (250e-9, 500e-9),
+        (100e-9, 250e-9),
+        (50e-9, 100e-9),
+    ]
