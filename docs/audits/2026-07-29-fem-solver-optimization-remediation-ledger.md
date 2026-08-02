@@ -74,6 +74,15 @@ run therefore proves neither a new solver defect nor a performance result;
 repeat it only after the managed runtime is rebuilt from the restored
 `/zfn2/.../fullmag-native.ext4` mount.
 
+The second replay supplied on 2026-08-02 has the same representability
+signature: `current_energy_j=5.46810637290086942e-19`,
+`last_trial_energy_j=5.46810637290087038e-19`,
+`gradient_norm_sq=7.67763618169727893e-28`, and
+`last_trial_step=1.16712909512976660e-11`. Its error string still omits the
+current-source convergence fields, so it is additional stale-runtime evidence,
+not an independent Armijo failure. No tolerance or Armijo policy change is
+authorized by either replay.
+
 ## Task ledger
 
 Evidence paths are repository-relative and separated by `;`. A non-pending
