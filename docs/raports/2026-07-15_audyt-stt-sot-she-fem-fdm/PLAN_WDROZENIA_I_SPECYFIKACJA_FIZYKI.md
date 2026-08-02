@@ -4288,3 +4288,40 @@ Weryfikacja zamyka drift test–registry, ale nie kwalifikuje adaptive CUDA:
 brakuje nadal czystego artefaktu trajectory/trace, device residency, FP64
 parity i niezależnej naukowej tolerancji. Ogólna ocena pozostaje **84%
 implementacji / 58% gotowości produkcyjnej**.
+
+## 32.23. Pełna suita Python i naprawa smoke meshingu (2026-08-02)
+
+Pełna suita `packages/fullmag-py/tests` została uruchomiona z izolowanym
+`TMPDIR` i `PYTHONPATH=packages/fullmag-py/src`. Wynik bazowy:
+
+```text
+1403 passed, 47 failed, 2 skipped, 550 subtests passed
+```
+
+Nie traktuję tych 47 porażek jako jednego błędu fizyki. Klasyfikacja wskazuje
+kilka niezależnych rodzin driftu kontraktów: benchmark FEM oczekuje starszych
+statusów/legacy mesh i starego pola początkowego; testy GPU sprawdzają stare
+ścieżki własności modułów; persistence używa starej reprezentacji mesh; przykład
+periodic-antidot ma już jawnie zredukowany stage pipeline; dwa testy SP4 nie
+mają pakietu `tests.standard_problems` na tej ścieżce importu. Są to odrębne
+bramy i nie wolno ich zamazywać jedną zmianą testów.
+
+W tej iteracji naprawiono jeden rzeczywisty błąd właściciela źródłowego w
+`scripts/analysis/mesh_statistics_smoke.py`: smoke nadal wywoływał usunięty
+interfejs `MeshData(elements=..., boundary_faces=...)` i odczytywał usunięte
+klucze artefaktu `elements`. Konstrukcja korzysta teraz z jawnego adaptera
+`MeshData.from_legacy_tet4`, a artefakt schema-2 jest liczony przez
+`cell_types`. Dowód:
+
+```text
+TMPDIR=/tmp/fullmag-py-suite-20260802 \
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest -q packages/fullmag-py/tests/test_mesh_statistics_smoke.py
+4 passed
+```
+
+Naprawa nie promuje żadnego backendu ani nie zmienia fizyki transportu. Pełna
+suita Python pozostaje otwarta do osobnych, kontraktowo uzasadnionych poprawek;
+nie zmieniam przez to oceny SHE/BORIS ani capability matrix. Otwarte pozostają
+również wszystkie bramy wymienione w sekcji 32.22: GPU/device proof, OE-F1/OE-F2,
+SML produkcyjne, browser round-trip, `SHE-BORIS-001`, SP5 i cross-backend parity.
