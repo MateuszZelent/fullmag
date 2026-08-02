@@ -34,8 +34,8 @@ future task to refresh its scope before implementation.
 | T8 | GPU relaxation source contracts and transfer audit | task_update_required |
 | T9 | LLG qualification registry, exact artifact/runtime binding, runner identity, API/UI diagnostics | scope_refreshed |
 | T10 | managed runtime manifest and export scripts | task_update_required |
-| T11 | GPU relaxation/preconditioner owner and FEM contracts | task_update_required |
-| T12 | runtime selection, runner runtime info, managed scripts | task_update_required |
+| T11 | RK transaction owners, native step stats, GPU rollback contracts | scope_refreshed |
+| T12 | HYPRE stream interop, demag telemetry, Nsight preflight | scope_refreshed |
 | T13 | Nsight capture script and GPU runtime owner | task_update_required |
 | T14 | GPU Poisson policy and performance recipes | task_update_required |
 | T15 | planner capability/selection and runner artifacts | task_update_required |
@@ -76,8 +76,8 @@ at least one existing evidence path and cannot be blocked by measurement.
 | T8 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T9 | blocked | aa0e686a93b8e33c5dd79df1ede33c80193657e2 |  | benchmarks/fem-llg/qualification-registry-v1.json; scripts/validate_llg_qualification_registry.py; scripts/test_validate_llg_qualification_registry.py; crates/fullmag-runner/src/timestep_qualification.rs; crates/fullmag-runner/src/lib.rs; crates/fullmag-runner/src/artifacts.rs; crates/fullmag-api/src/schemas/diagnostics.rs; apps/control-room/src/modules/footer/FooterDiagnostics.tsx; docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md | blocked_by_measurement | aa0e686a93b8e33c5dd79df1ede33c80193657e2 | Fail-closed eight-lane registry, exact artifact/source binding, runner/API/UI provenance, and validators are implemented. Focused Python tests (`15`), Rust qualification tests (`6`), registry validation, and diff checks pass. All lanes remain intentionally `unvalidated`; the managed FEM runtime manifest is unavailable because the active alias is broken and `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4` is absent, so no device qualification or promotion is claimed. |
 | T10 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
-| T11 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
-| T12 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
+| T11 | in_progress | 5579cf5642d1810695cfe463fa915ba49aef17f8 |  | backends/fem/tests/rk_explicit_contract.cpp; backends/fem/tests/cuda_rk_guard_contract.cpp; crates/fullmag-runner/src/solver_profile.rs; scripts/test_capture_fem_gpu_nsight.py; scripts/test_export_fem_gpu_runtime_copy_helpers.py | blocked_by_measurement | 5579cf5642d1810695cfe463fa915ba49aef17f8 | Native transaction telemetry and ABI/profile plumbing are present, but the plan's dedicated fault-injection target, managed rejection smoke, and profiler-off runtime overhead proof are not complete. Focused source/Python tests pass; native/managed verification is blocked by the unavailable `/zfn2` build image and runtime. |
+| T12 | in_progress | 5579cf5642d1810695cfe463fa915ba49aef17f8 |  | backends/fem/tests/cuda_demag_timing_contract.cpp; scripts/validate_fem_hypre_device_timing.py; scripts/test_validate_fem_hypre_device_timing.py; scripts/analysis/capture_fem_gpu_nsight.py; scripts/test_capture_fem_gpu_nsight.py; justfile | blocked_by_measurement | 5579cf5642d1810695cfe463fa915ba49aef17f8 | HYPRE host/enqueue/device timing fields and fail-closed Nsight preflight are implemented; 105 focused Python tests across timing/provenance/preflight pass. Managed timing smoke, loaded ABI/native contracts, and authoritative Nsight capture remain unverified because the active runtime/storage path is unavailable. |
 | T13 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T14 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
 | T15 | pending |  |  |  |  |  | Refresh the overlapping owner scope before implementation. |
