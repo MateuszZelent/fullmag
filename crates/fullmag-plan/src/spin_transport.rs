@@ -1770,6 +1770,7 @@ fn resolve_interfaces(
                 g_r_spm2,
                 g_i_spm2,
                 g_sml_spm2,
+                spin_memory_loss,
                 formula_version,
                 ..
             } => (
@@ -1783,10 +1784,30 @@ fn resolve_interfaces(
                     g_r_spm2: *g_r_spm2,
                     g_i_spm2: *g_i_spm2,
                     g_sml_spm2: *g_sml_spm2,
+                    spin_memory_loss: spin_memory_loss.as_ref().map(|reservoir| {
+                        fullmag_ir::SpinMemoryLossReservoirIR {
+                            g_n_spm2: reservoir.g_n_spm2,
+                            g_f_spm2: reservoir.g_f_spm2,
+                            g_lattice_spm2: reservoir.g_lattice_spm2,
+                            formula_version: reservoir.formula_version.clone(),
+                        }
+                    }),
                     formula_version: formula_version.clone(),
                 },
             ),
         };
+        if matches!(
+            &law,
+            ResolvedSpinInterfaceLawIR::MixingConductance {
+                spin_memory_loss: Some(_),
+                ..
+            }
+        ) {
+            return Err(vec![format!(
+                "spin transport '{}' requests sml_reservoir.fullmag.v2, but the surface reservoir weak-form realization is not executable",
+                module.id
+            )]);
+        }
         let from_mask = resolve_region_mask(from_ref, context, "spin interface from-side")?;
         let to_mask = resolve_region_mask(to_ref, context, "spin interface to-side")?;
         let (axis, sign) = axis_and_sign(normal)?;
@@ -2079,6 +2100,52 @@ mod tests {
     }
 
     #[test]
+    fn sml_reservoir_v2_remains_fail_closed_until_surface_weak_form_is_ready() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let mut problem = problem(ExecutionDevice::Cpu);
+        problem.spin_transport_modules[0].interfaces = vec![SpinInterfaceIR::MixingConductance {
+            id: "sml".into(),
+            normal_to_ferromagnet: [1.0, 0.0, 0.0],
+            normal_side: RegionRefIR {
+                object_id: "strip".into(),
+                region_id: None,
+            },
+            ferromagnet_side: RegionRefIR {
+                object_id: "strip".into(),
+                region_id: None,
+            },
+            g_up_spm2: 2.0,
+            g_down_spm2: 3.0,
+            g_r_spm2: 4.0,
+            g_i_spm2: 0.0,
+            g_sml_spm2: 0.0,
+            spin_memory_loss: Some(fullmag_ir::SpinMemoryLossReservoirIR {
+                g_n_spm2: 2.0,
+                g_f_spm2: 3.0,
+                g_lattice_spm2: 4.0,
+                formula_version: "sml_reservoir.fullmag.v2".into(),
+            }),
+            absorption: "full".into(),
+            formula_version: "magnetoelectronic.fullmag.v2".into(),
+        }];
+
+        let error = resolve_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect_err("SML v2 must not silently lower to the legacy surface law");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("sml_reservoir.fullmag.v2")
+                && reason.contains("weak-form realization is not executable")
+        }), "{error:?}");
+    }
+
+    #[test]
     fn resolves_bidirectional_m2_to_separate_reciprocal_descriptor() {
         let owners = ["strip"];
         let region_mask = [0];
@@ -2167,7 +2234,7 @@ mod tests {
         spin.mode = SpinTransportModeIR::Transient;
         spin.materials[0].material.spin_capacitance_as_per_v_m3 = Some(2.5);
         spin.materials[0].material.capacitance_formula_version =
-            Some("dos_constant.fullmag.v1".into());
+            Some("dos_isotropic_nonmagnetic.fullmag.v1".into());
         let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
             unreachable!()
         };
@@ -2187,7 +2254,7 @@ mod tests {
         assert_eq!(descriptor.spin_capacitance_as_per_v_m3, [2.5]);
         assert_eq!(
             descriptor.capacitance_formula_versions,
-            ["dos_constant.fullmag.v1"]
+            ["dos_isotropic_nonmagnetic.fullmag.v1"]
         );
         assert_eq!(descriptor.integrator_version, "coupled_imex_ark2.v1");
         assert_eq!(
@@ -2204,7 +2271,7 @@ mod tests {
         );
         assert_eq!(
             provenance["fdm_cpu_double_transient"]["capacitance_formula_versions"][0],
-            "dos_constant.fullmag.v1"
+            "dos_isotropic_nonmagnetic.fullmag.v1"
         );
     }
 
@@ -2223,7 +2290,7 @@ mod tests {
         spin.requested_execution.device = ExecutionDevice::Gpu;
         spin.materials[0].material.spin_capacitance_as_per_v_m3 = Some(2.5);
         spin.materials[0].material.capacitance_formula_version =
-            Some("dos_constant.fullmag.v1".into());
+            Some("dos_isotropic_nonmagnetic.fullmag.v1".into());
         let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
             unreachable!()
         };
@@ -2704,6 +2771,7 @@ mod tests {
             g_r_spm2: 1.0,
             g_i_spm2: 0.0,
             g_sml_spm2: 0.0,
+            spin_memory_loss: None,
             absorption: "full".into(),
             formula_version: "mixing.v1".into(),
         }];

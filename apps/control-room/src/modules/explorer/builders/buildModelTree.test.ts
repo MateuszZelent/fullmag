@@ -4141,7 +4141,7 @@ describe("buildModelTree", () => {
             g_down_Spm2: 2,
             g_i_Spm2: 3,
             g_r_Spm2: 4,
-            g_sml_Spm2: 5,
+            spin_memory_loss: { formula_version: "sml_reservoir.fullmag.v2", g_n_Spm2: 1, g_f_Spm2: 2, g_lattice_Spm2: 3 },
             g_up_Spm2: 6,
             id: "nf",
             kind: "mixing_conductance",

@@ -62,7 +62,21 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
             "lambda_sf_m": 5.0e-9, "lambda_j_m": 1.0e-9,
             "lambda_phi_m": "disabled"
         }}],
-        "interfaces": [], "boundaries": [],
+        "interfaces": [{
+            "kind": "mixing_conductance", "id": "nf",
+            "normal_to_ferromagnet": [1.0, 0.0, 0.0],
+            "normal_side": {"object_id": "strip"},
+            "ferromagnet_side": {"object_id": "strip"},
+            "g_up_Spm2": 1.0, "g_down_Spm2": 1.0,
+            "g_r_Spm2": 1.0, "g_i_Spm2": 0.0,
+            "spin_memory_loss": {
+                "g_n_Spm2": 1.0, "g_f_Spm2": 2.0,
+                "g_lattice_Spm2": 3.0,
+                "formula_version": "sml_reservoir.fullmag.v2"
+            },
+            "absorption": "full_absorption",
+            "formula_version": "magnetoelectronic.fullmag.v2"
+        }], "boundaries": [],
         "solver": {"engine": "auto", "linear": {"relative_tolerance": 1.0e-8,
             "absolute_tolerance": 0.0, "max_iterations": 500},
             "physical_residual_version": "transport_balance_integrated_l2.v1",
@@ -101,7 +115,8 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
         ["spin_capacitance_As_per_V_m3"] = serde_json::json!(2.0);
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
-        ["capacitance_formula_version"] = serde_json::json!("dos_constant.fullmag.v1");
+        ["capacitance_formula_version"] =
+            serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
     let transient: ProblemIR =
         serde_json::from_value(transient_value.clone()).expect("transient M3 IR should decode");
     let mut transient = transient;
@@ -113,6 +128,28 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     transient
         .validate()
         .expect("transient M3 IR with the coupled integrator should validate semantically");
+
+    let mut unsupported_capacitance = transient.clone();
+    unsupported_capacitance.spin_transport_modules[0].materials[0]
+        .material
+        .capacitance_formula_version = Some("dos_constant.fullmag.v1".to_string());
+    assert!(unsupported_capacitance
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("unsupported capacitance_formula_version")));
+
+    let mut unsupported_sml = transient.clone();
+    if let SpinInterfaceIR::MixingConductance { formula_version, .. } =
+        &mut unsupported_sml.spin_transport_modules[0].interfaces[0]
+    {
+        *formula_version = "magnetoelectronic.fullmag.v1".to_string();
+    }
+    assert!(unsupported_sml
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("magnetoelectronic.fullmag.v2")));
 
     let mut explicit_transient = transient.clone();
     let StudyIR::TimeEvolution { dynamics, .. } = &mut explicit_transient.study else {

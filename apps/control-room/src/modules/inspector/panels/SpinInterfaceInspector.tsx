@@ -27,7 +27,9 @@ interface InterfaceDraft {
   gDown: string;
   gI: string;
   gR: string;
-  gSml: string;
+  gN: string;
+  gF: string;
+  gLattice: string;
   gUp: string;
   id: string;
   kind: "transparent" | "mixing_conductance";
@@ -45,11 +47,13 @@ const DEFAULT_INTERFACE: InterfaceDraft = {
   absorption: "transverse_absorption.fullmag.v1",
   ferromagnetObject: "",
   ferromagnetRegion: "",
-  formulaVersion: "magnetoelectronic.fullmag.v1",
+  formulaVersion: "magnetoelectronic.fullmag.v2",
   gDown: "0",
   gI: "0",
   gR: "0",
-  gSml: "0",
+  gN: "",
+  gF: "",
+  gLattice: "",
   gUp: "0",
   id: "interface",
   kind: "transparent",
@@ -92,7 +96,9 @@ function interfaceDraft(value: unknown): InterfaceDraft {
     gDown: text(item.g_down_Spm2),
     gI: text(item.g_i_Spm2),
     gR: text(item.g_r_Spm2),
-    gSml: text(item.g_sml_Spm2),
+    gN: text(record(item.spin_memory_loss)?.g_n_Spm2),
+    gF: text(record(item.spin_memory_loss)?.g_f_Spm2),
+    gLattice: text(record(item.spin_memory_loss)?.g_lattice_Spm2),
     gUp: text(item.g_up_Spm2),
     id: text(item.id),
     kind: item.kind,
@@ -130,9 +136,16 @@ function buildInterface(draft: InterfaceDraft): unknown {
     g_down_Spm2: finite(draft.gDown, "g_down"),
     g_r_Spm2: finite(draft.gR, "g_r"),
     g_i_Spm2: finite(draft.gI, "g_i"),
-    g_sml_Spm2: finite(draft.gSml, "g_sml"),
     formula_version: draft.formulaVersion,
     absorption: draft.absorption,
+    ...(draft.gN.trim() || draft.gF.trim() || draft.gLattice.trim() ? {
+      spin_memory_loss: {
+        g_n_Spm2: finite(draft.gN, "g_n"),
+        g_f_Spm2: finite(draft.gF, "g_f"),
+        g_lattice_Spm2: finite(draft.gLattice, "g_lattice"),
+        formula_version: "sml_reservoir.fullmag.v2",
+      },
+    } : {}),
   };
 }
 
@@ -248,7 +261,8 @@ function InterfaceFields({ draft, patch }: { draft: InterfaceDraft; patch: (valu
       <FormField label="Ferromagnet object" value={draft.ferromagnetObject} onChange={field("ferromagnetObject")} /><FormField label="Ferromagnet region" value={draft.ferromagnetRegion} onChange={field("ferromagnetRegion")} />
       <FormField label="Normal-to-ferromagnet orientation" value={draft.normalToFerromagnet} onChange={field("normalToFerromagnet")} />
       <FormField label="g_up" unit="S/m²" value={draft.gUp} onChange={field("gUp")} /><FormField label="g_down" unit="S/m²" value={draft.gDown} onChange={field("gDown")} />
-      <FormField label="g_r" unit="S/m²" value={draft.gR} onChange={field("gR")} /><FormField label="g_i" unit="S/m²" value={draft.gI} onChange={field("gI")} /><FormField label="g_sml" unit="S/m²" value={draft.gSml} onChange={field("gSml")} />
+      <FormField label="g_r" unit="S/m²" value={draft.gR} onChange={field("gR")} /><FormField label="g_i" unit="S/m²" value={draft.gI} onChange={field("gI")} />
+      <FormField label="SML g_n" unit="S/m²" value={draft.gN} onChange={field("gN")} /><FormField label="SML g_f" unit="S/m²" value={draft.gF} onChange={field("gF")} /><FormField label="SML g_lattice" unit="S/m²" value={draft.gLattice} onChange={field("gLattice")} />
       <FormField label="Formula version" value={draft.formulaVersion} onChange={field("formulaVersion")} /><FormField label="Absorption model" value={draft.absorption} onChange={field("absorption")} />
     </>}
   </>;

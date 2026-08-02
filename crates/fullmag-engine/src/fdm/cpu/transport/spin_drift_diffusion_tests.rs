@@ -1,8 +1,8 @@
 use super::{
     ChargeBoundaryCondition, ChargeBoundaryConditions, InternalSpinContact, OrientedSpinInterface,
     SpinBoundaryCondition, SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator,
-    SpinInterfaceLaw, SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
-    StructuredChargeProblem, StructuredSpinFace,
+    SpinInterfaceLaw, SpinMaterialFields, SpinMemoryLossReservoirLaw, SpinReactionLengths,
+    SpinSolverConfig, SpinTorqueTargets, StructuredChargeProblem, StructuredSpinFace,
 };
 use crate::fdm::shared::types::{CellSize, GridShape};
 
@@ -738,7 +738,7 @@ fn internal_structured_contact_executes_outward_flux_on_each_selected_side() {
 }
 
 #[test]
-fn mixing_flux_balance_v1_resolves_longitudinal_absorbed_and_sml_channels() {
+fn mixing_flux_balance_v2_resolves_longitudinal_absorbed_and_sml_channels() {
     let face = StructuredSpinFace {
         axis: 0,
         negative_cell: 0,
@@ -763,7 +763,12 @@ fn mixing_flux_balance_v1_resolves_longitudinal_absorbed_and_sml_channels() {
                 g_down_s_per_m2: 2.0,
                 g_r_s_per_m2: 3.0,
                 g_i_s_per_m2: 5.0,
-                g_sml_s_per_m2: 7.0,
+                g_sml_s_per_m2: 0.0,
+                sml_reservoir: Some(SpinMemoryLossReservoirLaw {
+                    g_n_s_per_m2: 2.0,
+                    g_f_s_per_m2: 3.0,
+                    g_lattice_s_per_m2: 4.0,
+                }),
                 magnetization: [0.0, 0.0, 1.0],
             },
         }],
@@ -774,9 +779,27 @@ fn mixing_flux_balance_v1_resolves_longitudinal_absorbed_and_sml_channels() {
     assert_eq!(observation.incoming_longitudinal_a_per_m2, [0.0, 0.0, 2.0]);
     assert_eq!(observation.backflow_longitudinal_a_per_m2, [0.0, 0.0, 9.0]);
     assert_eq!(observation.absorbed_transverse_a_per_m2, [13.0, 1.0, 0.0]);
-    assert_eq!(observation.spin_memory_loss_a_per_m2, [7.0, 14.0, 21.0]);
-    assert_eq!(observation.from_side_outgoing_a_per_m2, [20.0, 15.0, 32.0]);
-    assert_eq!(observation.to_side_transmitted_a_per_m2, [0.0, 0.0, 11.0]);
+    for (actual, expected) in observation
+        .spin_memory_loss_a_per_m2
+        .iter()
+        .zip([8.0 / 9.0, 16.0 / 9.0, 8.0 / 3.0])
+    {
+        assert_close(*actual, expected, 1.0e-14);
+    }
+    for (actual, expected) in observation
+        .from_side_outgoing_a_per_m2
+        .iter()
+        .zip([131.0 / 9.0, 37.0 / 9.0, 47.0 / 3.0])
+    {
+        assert_close(*actual, expected, 1.0e-14);
+    }
+    for (actual, expected) in observation
+        .to_side_transmitted_a_per_m2
+        .iter()
+        .zip([2.0 / 3.0, 4.0 / 3.0, 13.0])
+    {
+        assert_close(*actual, expected, 1.0e-14);
+    }
 
     let missing = simple_problem(
         GridShape::new(2, 1, 1).unwrap(),
@@ -793,6 +816,66 @@ fn mixing_flux_balance_v1_resolves_longitudinal_absorbed_and_sml_channels() {
         .unwrap_err()
         .to_string()
         .contains("explicit"));
+}
+
+#[test]
+fn sml_reservoir_closes_surface_balance_and_has_nonnegative_entropy() {
+    let face = StructuredSpinFace {
+        axis: 0,
+        negative_cell: 0,
+        positive_cell: 1,
+    };
+    let problem = simple_problem(
+        GridShape::new(2, 1, 1).unwrap(),
+        vec![0.0; 2],
+        vec![1.0; 2],
+        None,
+        SpinMaterialFields::nonmagnetic_isotropic(2, 1.0, 1.0),
+        SpinBoundaryConditions::default(),
+    )
+    .with_interfaces(
+        vec![1, 2],
+        vec![OrientedSpinInterface {
+            face,
+            from_cell: 0,
+            to_cell: 1,
+            law: SpinInterfaceLaw::MixingConductance {
+                g_up_s_per_m2: 0.0,
+                g_down_s_per_m2: 0.0,
+                g_r_s_per_m2: 0.0,
+                g_i_s_per_m2: 0.0,
+                g_sml_s_per_m2: 0.0,
+                sml_reservoir: Some(SpinMemoryLossReservoirLaw {
+                    g_n_s_per_m2: 2.0,
+                    g_f_s_per_m2: 3.0,
+                    g_lattice_s_per_m2: 4.0,
+                }),
+                magnetization: [0.0, 0.0, 1.0],
+            },
+        }],
+    )
+    .unwrap();
+    let observation = problem
+        .face_fluxes(&[[1.0, 2.0, 3.0], [0.0; 3]])
+        .unwrap()
+        .interface_observations[0];
+    let reservoir = observation
+        .sml_reservoir
+        .expect("v2 interface must publish reservoir observables");
+    for component in 0..3 {
+        assert!((reservoir.normal_to_reservoir_a_per_m2[component]
+            + reservoir.ferromagnet_to_reservoir_a_per_m2[component]
+            - reservoir.reservoir_to_lattice_a_per_m2[component])
+            .abs()
+            < 1.0e-12);
+        assert!((observation.from_side_outgoing_a_per_m2[component]
+            - observation.to_side_transmitted_a_per_m2[component]
+            - observation.absorbed_transverse_a_per_m2[component]
+            - reservoir.reservoir_to_lattice_a_per_m2[component])
+            .abs()
+            < 1.0e-12);
+    }
+    assert!(reservoir.surface_power_w_per_m2 >= 0.0);
 }
 
 #[test]
@@ -879,6 +962,7 @@ fn absorbed_mixing_flux_is_the_interface_gilbert_torque_source() {
                 g_r_s_per_m2: 3.0,
                 g_i_s_per_m2: 0.0,
                 g_sml_s_per_m2: 0.0,
+                sml_reservoir: None,
                 magnetization: [0.0, 0.0, 1.0],
             },
         }],

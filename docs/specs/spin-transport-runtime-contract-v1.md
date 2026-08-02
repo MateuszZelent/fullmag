@@ -291,9 +291,10 @@ SpinInterface =
   | {kind:"mixing_conductance", id, normal_to_ferromagnet,
      normal_side, ferromagnet_side,
      g_up_Spm2>=0, g_down_Spm2>=0, g_r_Spm2>=0, g_i_Spm2:finite,
-     g_sml_Spm2>=0,
+     spin_memory_loss?:{g_n_Spm2>=0, g_f_Spm2>=0,
+       g_lattice_Spm2>0, formula_version:"sml_reservoir.fullmag.v2"},
      absorption:"full_absorption",
-     formula_version:"magnetoelectronic.fullmag.v1"}
+     formula_version:"magnetoelectronic.fullmag.v2"}
 ```
 
 The normal is part of identity and provenance. Reversing it without swapping
@@ -1204,7 +1205,7 @@ category.
 
 | Category | Canonical identifiers |
 |---|---|
-| formula | `gilbert_transform.fullmag.v1`; `zhang_li.fullmag.v1`; `zhang_li.legacy_fullmag.v0`; `slonczewski.fullmag.v2`; `slonczewski.fullmag.v1` (read-only provenance); `prescribed_sot.fullmag.v1`; `prescribed_sot.legacy_fullmag.v0`; `transport_constitutive.one_way.fullmag.v1`; `transport_constitutive.reciprocal.fullmag.v1`; `conductivity_tensor_3d.fullmag.v1`; `magnetoelectronic.fullmag.v1`; `sml_surface_conductance.fullmag.v1`; `transport_absorption.fullmag.v1`; `current_transport.fullmag.v1`; `current_transport.prescribed_density.legacy_fullmag.v0` |
+| formula | `gilbert_transform.fullmag.v1`; `zhang_li.fullmag.v1`; `zhang_li.legacy_fullmag.v0`; `slonczewski.fullmag.v2`; `slonczewski.fullmag.v1` (read-only provenance); `prescribed_sot.fullmag.v1`; `prescribed_sot.legacy_fullmag.v0`; `transport_constitutive.one_way.fullmag.v1`; `transport_constitutive.reciprocal.fullmag.v1`; `conductivity_tensor_3d.fullmag.v1`; `magnetoelectronic.fullmag.v2`; `sml_reservoir.fullmag.v2`; `dos_isotropic_nonmagnetic.fullmag.v1`; `transport_absorption.fullmag.v1`; `current_transport.fullmag.v1`; `current_transport.prescribed_density.legacy_fullmag.v0` |
 | operator | `zl_upwind_first_order_v1`; `zl_central_reference_v1`; `fv_charge_face_flux.v1`; `fv_spin_upwind_v1`; `fv_spin_central_reference_v1`; `structured_cross_gradient_v1`; `fdm_face_to_cell_current.v1`; `fdm_oersted_cell_integrated_open.v1`; `fem_charge_spin_broken_h1_mortar.v1`; `fem_conservative_current_rt0_view.v1`; `fem_closed_current_extension.v1`; `fem_oersted_direct_tetra_quadrature.v1`; `fem_oersted_hcurl_h1_gauge.v1`; `fem_oersted_hcurl_h1_zero_mean_natural.v1`; `coupled_imex_ark2.v1`; `coupled_bdf2_small_oracle.v1` |
 | realization | `slonczewski_thin_layer_homogenized.v1`; `slonczewski_interface_flux.v1`; `oersted_analytic_cylinder.v1`; `oersted_direct_biot_savart.v1`; `oersted_analytic_return_additive.v1`; `oersted_fdm_fft_open.v1`; `oersted_fem_vector_potential.v1` |
 | engine | `fdm_charge_cg_matrix_free_v1`; `fdm_charge_cg_cuda_v1`; `fdm_spin_block_gmres_csr_v1`; `fdm_spin_block_gmres_cuda_v1`; `fdm_charge_spin_block_gmres_v1`; `fdm_charge_spin_block_gmres_cuda_v1`; `fem_charge_h1_hypre_v1`; `fem_charge_h1_hypre_device_v1`; `fem_spin_broken_h1_mortar_v1`; `fem_spin_broken_h1_mortar_device_v1`; `fem_charge_spin_block_gmres_v1`; `fem_charge_spin_block_gmres_device_v1`; `fdm_oersted_fft_open_v1`; `fdm_oersted_cufft_open_v1`; `fem_oersted_direct_tetra_cpu_v1`; `fem_oersted_hcurl_h1_gauge_v1`; `fem_oersted_hcurl_h1_gauge_device_v1` |

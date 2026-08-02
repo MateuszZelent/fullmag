@@ -35,6 +35,11 @@ pub const IR_VERSION: &str = "0.3.0";
 pub const CURRENT_IR_VERSION: &str = IR_VERSION;
 pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
+/// Canonical scalar spin-susceptibility adapter for the non-magnetic transient
+/// reduction.  Other strings are not enough to establish the DOS convention
+/// and therefore remain unsupported until a tensor/charge-spin contract exists.
+pub const DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA: &str =
+    "dos_isotropic_nonmagnetic.fullmag.v1";
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
 pub fn is_supported_ir_version_for_read(version: &str) -> bool {

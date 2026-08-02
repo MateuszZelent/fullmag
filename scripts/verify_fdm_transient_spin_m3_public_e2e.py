@@ -56,7 +56,7 @@ def canonical_problem_ir() -> dict[str, object]:
                     theta_sh=0.1,
                     lambda_sf_m=5.0e-9,
                     spin_capacitance_As_per_V_m3=2.0,
-                    capacitance_formula_version="dos_constant.fullmag.v1",
+                    capacitance_formula_version="dos_isotropic_nonmagnetic.fullmag.v1",
                 ),
             )
         ],

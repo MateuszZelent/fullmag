@@ -15832,6 +15832,16 @@
                   "type": "number"
                 },
                 "type": "array"
+              },
+              "spin_memory_loss": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneSpinMemoryLossReservoir"
+                  }
+                ]
               }
             },
             "required": [
@@ -15843,7 +15853,6 @@
               "g_down_Spm2",
               "g_r_Spm2",
               "g_i_Spm2",
-              "g_sml_Spm2",
               "absorption",
               "formula_version",
               "kind"
@@ -15851,6 +15860,32 @@
             "type": "object"
           }
         ]
+      },
+      "SceneSpinMemoryLossReservoir": {
+        "properties": {
+          "formula_version": {
+            "type": "string"
+          },
+          "g_f_Spm2": {
+            "format": "double",
+            "type": "number"
+          },
+          "g_lattice_Spm2": {
+            "format": "double",
+            "type": "number"
+          },
+          "g_n_Spm2": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "g_n_Spm2",
+          "g_f_Spm2",
+          "g_lattice_Spm2",
+          "formula_version"
+        ],
+        "type": "object"
       },
       "SceneSpinSolverPolicy": {
         "properties": {
@@ -16960,6 +16995,7 @@
       "SlonczewskiFormulaVersion": {
         "enum": [
           "slonczewski.fullmag.v2",
+          "slonczewski.fullmag.v1",
           "slonczewski.legacy_fullmag.v0"
         ],
         "type": "string"

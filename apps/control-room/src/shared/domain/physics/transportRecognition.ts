@@ -131,6 +131,18 @@ function isReactionLength(value: unknown): boolean {
   return isFiniteNumber(value) || value === "disabled";
 }
 
+function isSpinMemoryLossReservoir(value: unknown): boolean {
+  return isObject(value)
+    && hasOnlyKeys(value, ["formula_version", "g_f_Spm2", "g_lattice_Spm2", "g_n_Spm2"])
+    && value.formula_version === "sml_reservoir.fullmag.v2"
+    && isFiniteNumber(value.g_f_Spm2)
+    && value.g_f_Spm2 >= 0
+    && isFiniteNumber(value.g_n_Spm2)
+    && value.g_n_Spm2 >= 0
+    && isFiniteNumber(value.g_lattice_Spm2)
+    && value.g_lattice_Spm2 > 0;
+}
+
 function isSpinMaterialAssignment(value: unknown): boolean {
   if (!isObject(value) || !hasOnlyKeys(value, ["material", "region"]) || !isObject(value.material)) {
     return false;
@@ -177,23 +189,23 @@ function isSpinInterface(value: unknown): boolean {
       "g_down_Spm2",
       "g_i_Spm2",
       "g_r_Spm2",
-      "g_sml_Spm2",
       "g_up_Spm2",
       "id",
       "kind",
       "normal_side",
       "normal_to_ferromagnet",
+      "spin_memory_loss",
     ])
     && value.absorption === "full_absorption"
     && isRegionRef(value.ferromagnet_side)
-    && value.formula_version === "magnetoelectronic.fullmag.v1"
+    && value.formula_version === "magnetoelectronic.fullmag.v2"
     && isFiniteNumber(value.g_down_Spm2)
     && isFiniteNumber(value.g_i_Spm2)
     && isFiniteNumber(value.g_r_Spm2)
-    && isFiniteNumber(value.g_sml_Spm2)
     && isFiniteNumber(value.g_up_Spm2)
     && isRegionRef(value.normal_side)
-    && isVec3(value.normal_to_ferromagnet);
+    && isVec3(value.normal_to_ferromagnet)
+    && (value.spin_memory_loss === undefined || isSpinMemoryLossReservoir(value.spin_memory_loss));
 }
 
 function isSpinBoundary(value: unknown): boolean {

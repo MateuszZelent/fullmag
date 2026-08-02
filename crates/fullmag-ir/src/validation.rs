@@ -1408,6 +1408,13 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                         errors.push(format!(
                             "{prefix}.materials[{material_index}].capacitance_formula_version must be non-empty"
                         ));
+                    } else if version
+                        != crate::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+                    {
+                        errors.push(format!(
+                            "{prefix}.materials[{material_index}] unsupported capacitance_formula_version '{version}' (expected '{}')",
+                            crate::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+                        ));
                     }
                 }
                 (None, None) if module.mode == crate::SpinTransportModeIR::Steady => {}
@@ -1445,6 +1452,72 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                 errors.push(format!(
                     "{prefix}.materials[{material_index}] requires a matching charge material assignment"
                 ));
+            }
+        }
+        for (interface_index, interface) in module.interfaces.iter().enumerate() {
+            if let crate::SpinInterfaceIR::MixingConductance {
+                g_up_spm2,
+                g_down_spm2,
+                g_r_spm2,
+                g_i_spm2,
+                g_sml_spm2,
+                spin_memory_loss,
+                formula_version,
+                ..
+            } = interface
+            {
+                let interface_prefix = format!("{prefix}.interfaces[{interface_index}]");
+                if formula_version != "magnetoelectronic.fullmag.v2" {
+                    errors.push(format!(
+                        "{interface_prefix}.formula_version must be magnetoelectronic.fullmag.v2; v1 is read-only"
+                    ));
+                }
+                for (name, value) in [
+                    ("g_up_Spm2", *g_up_spm2),
+                    ("g_down_Spm2", *g_down_spm2),
+                    ("g_r_Spm2", *g_r_spm2),
+                    ("g_sml_Spm2", *g_sml_spm2),
+                ] {
+                    if !value.is_finite() || value < 0.0 {
+                        errors.push(format!(
+                            "{interface_prefix}.{name} must be finite and >= 0"
+                        ));
+                    }
+                }
+                if !g_i_spm2.is_finite() {
+                    errors.push(format!(
+                        "{interface_prefix}.g_i_Spm2 must be finite"
+                    ));
+                }
+                if *g_sml_spm2 > 0.0 {
+                    errors.push(format!(
+                        "{interface_prefix}.g_sml_Spm2 uses rejected sml_surface_conductance.fullmag.v1; author spin_memory_loss with sml_reservoir.fullmag.v2"
+                    ));
+                }
+                if let Some(reservoir) = spin_memory_loss {
+                    if reservoir.formula_version != "sml_reservoir.fullmag.v2" {
+                        errors.push(format!(
+                            "{interface_prefix}.spin_memory_loss.formula_version must be sml_reservoir.fullmag.v2"
+                        ));
+                    }
+                    for (name, value) in [
+                        ("g_n_Spm2", reservoir.g_n_spm2),
+                        ("g_f_Spm2", reservoir.g_f_spm2),
+                    ] {
+                        if !value.is_finite() || value < 0.0 {
+                            errors.push(format!(
+                                "{interface_prefix}.spin_memory_loss.{name} must be finite and >= 0"
+                            ));
+                        }
+                    }
+                    if !reservoir.g_lattice_spm2.is_finite()
+                        || reservoir.g_lattice_spm2 <= 0.0
+                    {
+                        errors.push(format!(
+                            "{interface_prefix}.spin_memory_loss.g_lattice_Spm2 must be finite and > 0"
+                        ));
+                    }
+                }
             }
         }
         let supported_operator = if reciprocal {

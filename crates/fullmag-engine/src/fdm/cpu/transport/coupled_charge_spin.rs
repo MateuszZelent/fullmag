@@ -1404,6 +1404,7 @@ fn validate_interface(law: SpinInterfaceLaw) -> Result<()> {
         g_r_s_per_m2,
         g_i_s_per_m2,
         g_sml_s_per_m2,
+        sml_reservoir,
         magnetization,
     } = law
     {
@@ -1415,6 +1416,25 @@ fn validate_interface(law: SpinInterfaceLaw) -> Result<()> {
             || (dot(magnetization, magnetization).sqrt() - 1.0).abs() > 1.0e-8
         {
             return Err(EngineError::new("invalid M2 mixing/backflow/SML interface"));
+        }
+        if let Some(reservoir) = sml_reservoir {
+            if reservoir.g_n_s_per_m2 < 0.0
+                || reservoir.g_f_s_per_m2 < 0.0
+                || reservoir.g_lattice_s_per_m2 <= 0.0
+                || [
+                    reservoir.g_n_s_per_m2,
+                    reservoir.g_f_s_per_m2,
+                    reservoir.g_lattice_s_per_m2,
+                ]
+                .iter()
+                .any(|value| !value.is_finite())
+            {
+                return Err(EngineError::new("invalid SML reservoir conductances"));
+            }
+        } else if g_sml_s_per_m2 > 0.0 {
+            return Err(EngineError::new(
+                "legacy g_sml conductance is rejected; use an explicit SML reservoir",
+            ));
         }
     }
     Ok(())
@@ -1468,6 +1488,7 @@ fn mixing_observation(
         g_r_s_per_m2,
         g_i_s_per_m2,
         g_sml_s_per_m2,
+        sml_reservoir,
         magnetization,
     } = interface.law
     else {
@@ -1488,9 +1509,54 @@ fn mixing_observation(
         ),
         scale(cross(delta_mu, magnetization), g_i_s_per_m2),
     );
-    let sml = scale(delta_mu, g_sml_s_per_m2);
-    let from = add(parallel, add(absorbed, sml));
-    let to = parallel;
+    let (sml, from_reservoir, to_reservoir, reservoir_observation) =
+        if let Some(reservoir) = sml_reservoir {
+            let denominator = reservoir.g_n_s_per_m2
+                + reservoir.g_f_s_per_m2
+                + reservoir.g_lattice_s_per_m2;
+            let reservoir_potential = scale(
+                add(
+                    scale(spin[interface.from_cell], reservoir.g_n_s_per_m2),
+                    scale(spin[interface.to_cell], reservoir.g_f_s_per_m2),
+                ),
+                1.0 / denominator,
+            );
+            let normal_to_reservoir = scale(
+                add(spin[interface.from_cell], scale(reservoir_potential, -1.0)),
+                reservoir.g_n_s_per_m2,
+            );
+            let ferromagnet_to_reservoir = scale(
+                add(spin[interface.to_cell], scale(reservoir_potential, -1.0)),
+                reservoir.g_f_s_per_m2,
+            );
+            let reservoir_to_lattice =
+                scale(reservoir_potential, reservoir.g_lattice_s_per_m2);
+            let power = 0.5
+                * (reservoir.g_n_s_per_m2
+                    * norm3(add(spin[interface.from_cell], scale(reservoir_potential, -1.0)))
+                        .powi(2)
+                    + reservoir.g_f_s_per_m2
+                        * norm3(add(spin[interface.to_cell], scale(reservoir_potential, -1.0)))
+                            .powi(2)
+                    + reservoir.g_lattice_s_per_m2 * norm3(reservoir_potential).powi(2));
+            (
+                reservoir_to_lattice,
+                normal_to_reservoir,
+                ferromagnet_to_reservoir,
+                Some(super::SpinMemoryLossFluxObservation {
+                    reservoir_potential_v: reservoir_potential,
+                    normal_to_reservoir_a_per_m2: normal_to_reservoir,
+                    ferromagnet_to_reservoir_a_per_m2: ferromagnet_to_reservoir,
+                    reservoir_to_lattice_a_per_m2: reservoir_to_lattice,
+                    surface_power_w_per_m2: power,
+                }),
+            )
+        } else {
+            let legacy = scale(delta_mu, g_sml_s_per_m2);
+            (legacy, legacy, [0.0; 3], None)
+        };
+    let from = add(parallel, add(absorbed, from_reservoir));
+    let to = add(parallel, scale(to_reservoir, -1.0));
     let from_negative = interface.from_cell == interface.face.negative_cell;
     let (negative, positive) = if from_negative {
         (from, to)
@@ -1503,6 +1569,7 @@ fn mixing_observation(
         backflow_longitudinal_a_per_m2: backflow,
         absorbed_transverse_a_per_m2: absorbed,
         spin_memory_loss_a_per_m2: sml,
+        sml_reservoir: reservoir_observation,
         from_side_outgoing_a_per_m2: from,
         to_side_transmitted_a_per_m2: to,
         negative_cell_flux_positive_axis_a_per_m2: negative,

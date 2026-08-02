@@ -1312,11 +1312,11 @@ fn validate_transient_descriptor(
             && (!descriptor.spin_capacitance_as_per_v_m3[cell].is_finite()
                 || descriptor.spin_capacitance_as_per_v_m3[cell] <= 0.0
                 || descriptor.capacitance_formula_versions[cell]
-                    .trim()
-                    .is_empty())
+                    != fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA)
         {
             return Err(run_error(format!(
-                "spin transport '{module_id}' transient capacitance/formula is invalid at active cell {cell}"
+                "spin transport '{module_id}' transient capacitance/formula is invalid at active cell {cell}; expected '{}'",
+                fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
             )));
         }
     }
@@ -1599,17 +1599,26 @@ fn materialize_interfaces(
                     g_r_spm2,
                     g_i_spm2,
                     g_sml_spm2,
+                    spin_memory_loss,
                     ..
-                } => SpinInterfaceLaw::MixingConductance {
-                    g_up_s_per_m2: *g_up_spm2,
-                    g_down_s_per_m2: *g_down_spm2,
-                    g_r_s_per_m2: *g_r_spm2,
-                    g_i_s_per_m2: *g_i_spm2,
-                    g_sml_s_per_m2: *g_sml_spm2,
-                    magnetization: *magnetization.get(to_cell).ok_or_else(|| {
-                        run_error("coupled interface target cell is outside the FDM grid")
-                    })?,
-                },
+                } => {
+                    if spin_memory_loss.is_some() {
+                        return Err(run_error(
+                            "sml_reservoir.fullmag.v2 is not executable in the FDM reference runner",
+                        ));
+                    }
+                    SpinInterfaceLaw::MixingConductance {
+                        g_up_s_per_m2: *g_up_spm2,
+                        g_down_s_per_m2: *g_down_spm2,
+                        g_r_s_per_m2: *g_r_spm2,
+                        g_i_s_per_m2: *g_i_spm2,
+                        g_sml_s_per_m2: *g_sml_spm2,
+                        sml_reservoir: None,
+                        magnetization: *magnetization.get(to_cell).ok_or_else(|| {
+                            run_error("coupled interface target cell is outside the FDM grid")
+                        })?,
+                    }
+                }
             };
             Ok(OrientedSpinInterface {
                 face: StructuredSpinFace {
@@ -2124,24 +2133,33 @@ fn materialize_one_way_problem(
                         g_r_spm2,
                         g_i_spm2,
                         g_sml_spm2,
+                        spin_memory_loss,
                         ..
-                    } => SpinInterfaceLaw::MixingConductance {
-                        g_up_s_per_m2: *g_up_spm2,
-                        g_down_s_per_m2: *g_down_spm2,
-                        g_r_s_per_m2: *g_r_spm2,
-                        g_i_s_per_m2: *g_i_spm2,
-                        g_sml_s_per_m2: *g_sml_spm2,
-                        magnetization: magnetization[interface.to_cell as usize],
+                    } => {
+                        if spin_memory_loss.is_some() {
+                            return Err(run_error(
+                                "sml_reservoir.fullmag.v2 is not executable in the FDM reference runner",
+                            ));
+                        }
+                        SpinInterfaceLaw::MixingConductance {
+                            g_up_s_per_m2: *g_up_spm2,
+                            g_down_s_per_m2: *g_down_spm2,
+                            g_r_s_per_m2: *g_r_spm2,
+                            g_i_s_per_m2: *g_i_spm2,
+                            g_sml_s_per_m2: *g_sml_spm2,
+                            sml_reservoir: None,
+                            magnetization: magnetization[interface.to_cell as usize],
+                        }
                     },
                 };
-                OrientedSpinInterface {
+                Ok(OrientedSpinInterface {
                     face,
                     from_cell: interface.from_cell as usize,
                     to_cell: interface.to_cell as usize,
                     law,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, RunError>>()?;
         spin_problem = spin_problem
             .with_interfaces(descriptor.region_ids.clone(), interfaces)
             .map_err(engine_error("spin interfaces"))?;
@@ -2588,7 +2606,7 @@ mod tests {
             descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
             steady_operator,
             spin_capacitance_as_per_v_m3: vec![2.0; count],
-            capacitance_formula_versions: vec!["dos_constant.fullmag.v1".into(); count],
+            capacitance_formula_versions: vec!["dos_isotropic_nonmagnetic.fullmag.v1".into(); count],
             transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
             integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
             integrator_version: "coupled_imex_ark2.v1".into(),
@@ -3322,7 +3340,7 @@ mod tests {
             descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
             steady_operator,
             spin_capacitance_as_per_v_m3: vec![2.0; count],
-            capacitance_formula_versions: vec!["dos_constant.fullmag.v1".into(); count],
+            capacitance_formula_versions: vec!["dos_isotropic_nonmagnetic.fullmag.v1".into(); count],
             transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
             integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
             integrator_version: "coupled_imex_ark2.v1".into(),
@@ -3414,7 +3432,7 @@ mod tests {
             descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
             steady_operator,
             spin_capacitance_as_per_v_m3: vec![2.0; count],
-            capacitance_formula_versions: vec!["dos_constant.fullmag.v1".into(); count],
+            capacitance_formula_versions: vec!["dos_isotropic_nonmagnetic.fullmag.v1".into(); count],
             transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
             integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
             integrator_version: "coupled_imex_ark2.v1".into(),

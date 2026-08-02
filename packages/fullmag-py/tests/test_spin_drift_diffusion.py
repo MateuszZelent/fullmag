@@ -69,6 +69,11 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         self.assertEqual(ir["requested_execution"]["precision"], "double")
 
     def test_mixing_interface_preserves_orientation_and_conductance_units(self) -> None:
+        reservoir = fm.SpinMemoryLossReservoir(
+            g_n_Spm2=0.2e15,
+            g_f_Spm2=0.3e15,
+            g_lattice_Spm2=0.4e15,
+        )
         interface = fm.MixingConductanceSpinInterface(
             id="mix",
             normal_to_ferromagnet=(0, 0, 1),
@@ -78,12 +83,25 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             g_down_Spm2=0.5e15,
             g_r_Spm2=2.0e15,
             g_i_Spm2=-0.1e15,
-            g_sml_Spm2=0.2e15,
+            spin_memory_loss=reservoir,
         )
         ir = interface.to_ir()
-        self.assertEqual(ir["formula_version"], "magnetoelectronic.fullmag.v1")
+        self.assertEqual(ir["formula_version"], "magnetoelectronic.fullmag.v2")
         self.assertEqual(ir["normal_to_ferromagnet"], [0.0, 0.0, 1.0])
         self.assertEqual(ir["absorption"], "full_absorption")
+        self.assertEqual(
+            ir["spin_memory_loss"]["formula_version"],
+            "sml_reservoir.fullmag.v2",
+        )
+        self.assertEqual(ir["spin_memory_loss"]["g_lattice_Spm2"], 0.4e15)
+
+    def test_sml_reservoir_requires_positive_lattice_conductance(self) -> None:
+        with self.assertRaisesRegex(ValueError, "g_lattice_Spm2"):
+            fm.SpinMemoryLossReservoir(
+                g_n_Spm2=1.0,
+                g_f_Spm2=1.0,
+                g_lattice_Spm2=0.0,
+            )
 
     def test_transport_torque_only_references_named_spin_solve(self) -> None:
         torque = fm.DriftDiffusionSpinTorque(
@@ -110,7 +128,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             theta_sh=0.0,
             lambda_sf_m=1.0,
             spin_capacitance_As_per_V_m3=2.0,
-            capacitance_formula_version="dos_constant.fullmag.v1",
+            capacitance_formula_version="dos_isotropic_nonmagnetic.fullmag.v1",
         )
         transient = fm.SpinDriftDiffusion(
             id="transient",
@@ -124,6 +142,15 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             transient.to_ir()["materials"][0]["material"]["spin_capacitance_As_per_V_m3"],
             2.0,
         )
+        with self.assertRaisesRegex(ValueError, "capacitance_formula_version"):
+            fm.SpinTransportMaterial(
+                sigma_s_Spm=5.0e6,
+                polarization_p=0.0,
+                theta_sh=0.0,
+                lambda_sf_m=5.0e-9,
+                spin_capacitance_As_per_V_m3=2.0,
+                capacitance_formula_version="dos_constant.fullmag.v1",
+            )
         with self.assertRaisesRegex(ValueError, "spin_capacitance"):
             fm.SpinDriftDiffusion(
                 id="bad",

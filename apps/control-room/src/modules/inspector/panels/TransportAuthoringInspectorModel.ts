@@ -225,6 +225,9 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
     if (hasVersion && (typeof version !== "string" || version.trim() === "")) {
       throw new Error(`Spin material ${index + 1}: capacitance_formula_version must be a non-empty string.`);
     }
+    if (hasVersion && version !== "dos_isotropic_nonmagnetic.fullmag.v1") {
+      throw new Error(`Spin material ${index + 1}: unsupported capacitance_formula_version; expected dos_isotropic_nonmagnetic.fullmag.v1.`);
+    }
   });
   return {
     boundaries: json(draft.boundaries, "Spin boundaries"),

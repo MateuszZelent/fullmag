@@ -227,8 +227,12 @@
       "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M2 Onsager and nonlinear reciprocal benchmark.", "validated_workloads":[], "notes":"PR-00 contract only."
     },
     {
-      "id":"transport.spin.mixing_conductance.fullmag.v1", "capability_id":"transport.spin.mixing_conductance", "formula_version":"magnetoelectronic.fullmag.v1",
-      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"mixing_flux_balance_v1 on an oriented two-trace interface.", "validated_workloads":[], "notes":"PR-00 contract only."
+      "id":"transport.spin.mixing_conductance.fullmag.v2", "capability_id":"transport.spin.mixing_conductance", "formula_version":"magnetoelectronic.fullmag.v2",
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"mixing_flux_balance_v2 on an oriented two-trace interface.", "validated_workloads":[], "notes":"Old magnetoelectronic.fullmag.v1 is read-only provenance; PR-00 contract only."
+    },
+    {
+      "id":"transport.spin.memory_loss.fullmag.v2", "capability_id":"transport.spin.memory_loss", "formula_version":"sml_reservoir.fullmag.v2",
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"unsupported","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"sml_reservoir_balance_v2 and sml_reservoir_entropy_v2.", "validated_workloads":[], "notes":"Authoring and IR are versioned, but the reservoir surface weak form is fail-closed until its balance and entropy gates pass."
     },
     {
       "id":"transport.spin.transient_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.transient_drift_diffusion", "operator_version":"coupled_imex_ark2.v1",

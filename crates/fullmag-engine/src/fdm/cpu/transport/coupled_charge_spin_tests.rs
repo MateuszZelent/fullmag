@@ -387,7 +387,12 @@ fn m2_mixing_interface_reports_backflow_absorption_and_sml_separately() {
             g_down_s_per_m2: 1.0,
             g_r_s_per_m2: 2.0,
             g_i_s_per_m2: 0.25,
-            g_sml_s_per_m2: 0.5,
+            g_sml_s_per_m2: 0.0,
+            sml_reservoir: Some(super::SpinMemoryLossReservoirLaw {
+                g_n_s_per_m2: 2.0,
+                g_f_s_per_m2: 3.0,
+                g_lattice_s_per_m2: 4.0,
+            }),
             magnetization: [0.0, 0.0, 1.0],
         },
     };
@@ -461,7 +466,12 @@ fn m2_mixing_interface_closes_nonzero_absorption_and_sml_with_torque_target() {
                 g_down_s_per_m2: 1.0,
                 g_r_s_per_m2: 2.0,
                 g_i_s_per_m2: 0.25,
-                g_sml_s_per_m2: 0.5,
+                g_sml_s_per_m2: 0.0,
+                sml_reservoir: Some(super::SpinMemoryLossReservoirLaw {
+                    g_n_s_per_m2: 2.0,
+                    g_f_s_per_m2: 3.0,
+                    g_lattice_s_per_m2: 4.0,
+                }),
                 magnetization: [0.0, 0.0, 1.0],
             },
         }],

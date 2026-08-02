@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SceneRegionRef {
     pub object_id: String,
@@ -166,6 +170,17 @@ pub struct SceneSurfaceRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneSpinMemoryLossReservoir {
+    #[serde(rename = "g_n_Spm2")]
+    pub g_n_spm2: f64,
+    #[serde(rename = "g_f_Spm2")]
+    pub g_f_spm2: f64,
+    #[serde(rename = "g_lattice_Spm2")]
+    pub g_lattice_spm2: f64,
+    pub formula_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SceneSpinInterface {
     Transparent {
@@ -187,8 +202,10 @@ pub enum SceneSpinInterface {
         g_r_spm2: f64,
         #[serde(rename = "g_i_Spm2")]
         g_i_spm2: f64,
-        #[serde(rename = "g_sml_Spm2")]
+        #[serde(default, skip_serializing_if = "is_zero_f64", rename = "g_sml_Spm2")]
         g_sml_spm2: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spin_memory_loss: Option<SceneSpinMemoryLossReservoir>,
         absorption: String,
         formula_version: String,
     },

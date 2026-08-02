@@ -99,6 +99,7 @@ from .spin_torque import (
 from .spin_transport import (
     DriftDiffusionSpinTorque,
     MixingConductanceSpinInterface,
+    SpinMemoryLossReservoir,
     PeriodicSpin,
     SpecifiedSpinFlux,
     SpecifiedSpinPotential,
@@ -155,6 +156,7 @@ __all__ = [
     "VoltageElectrode",
     "DriftDiffusionSpinTorque",
     "MixingConductanceSpinInterface",
+    "SpinMemoryLossReservoir",
     "PeriodicSpin",
     "SpecifiedSpinFlux",
     "SpecifiedSpinPotential",

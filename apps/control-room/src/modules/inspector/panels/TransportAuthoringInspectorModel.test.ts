@@ -63,7 +63,7 @@ describe("transport authoring drafts", () => {
     draft.mode = "transient";
     draft.materials = JSON.stringify([{
       material: {
-        capacitance_formula_version: "dos_constant.fullmag.v1",
+        capacitance_formula_version: "dos_isotropic_nonmagnetic.fullmag.v1",
         lambda_j_m: "disabled",
         lambda_phi_m: "disabled",
         lambda_sf_m: 1e-9,
@@ -77,7 +77,7 @@ describe("transport authoring drafts", () => {
 
     expect(buildSpinTransport(draft)).toMatchObject({
       materials: [{ material: {
-        capacitance_formula_version: "dos_constant.fullmag.v1",
+        capacitance_formula_version: "dos_isotropic_nonmagnetic.fullmag.v1",
         spin_capacitance_As_per_V_m3: 3.5,
       } }],
       mode: "transient",
@@ -100,6 +100,26 @@ describe("transport authoring drafts", () => {
     }]);
 
     expect(() => buildSpinTransport(draft)).toThrow(/transient mode requires spin_capacitance/);
+  });
+
+  it("rejects an unversioned transient DOS convention", () => {
+    const draft = spinTransportDraft();
+    draft.mode = "transient";
+    draft.materials = JSON.stringify([{
+      material: {
+        capacitance_formula_version: "dos_constant.fullmag.v1",
+        spin_capacitance_As_per_V_m3: 3.5,
+        lambda_j_m: "disabled",
+        lambda_phi_m: "disabled",
+        lambda_sf_m: 1e-9,
+        polarization_p: 0.4,
+        sigma_s_Spm: 2,
+        theta_sh: 0.1,
+      },
+      region: { object_id: "stack", region_id: "normal" },
+    }]);
+
+    expect(() => buildSpinTransport(draft)).toThrow(/unsupported capacitance_formula_version/);
   });
 
   it("classifies unknown records as read-only without rewriting payloads", () => {
@@ -157,11 +177,16 @@ describe("transport authoring drafts", () => {
     const mixing = {
       absorption: "full_absorption",
       ferromagnet_side: { object_id: "stack", region_id: "free" },
-      formula_version: "magnetoelectronic.fullmag.v1",
+      formula_version: "magnetoelectronic.fullmag.v2",
       g_down_Spm2: 2,
       g_i_Spm2: 3,
       g_r_Spm2: 4,
-      g_sml_Spm2: 5,
+      spin_memory_loss: {
+        formula_version: "sml_reservoir.fullmag.v2",
+        g_f_Spm2: 2,
+        g_lattice_Spm2: 3,
+        g_n_Spm2: 1,
+      },
       g_up_Spm2: 6,
       id: "nf",
       kind: "mixing_conductance",
@@ -200,7 +225,7 @@ describe("transport authoring drafts", () => {
     })).toBe(false);
     expect(isKnownSpinTransport({
       ...resource,
-      interfaces: [{ ...mixing, formula_version: "magnetoelectronic.fullmag.v2" }],
+      interfaces: [{ ...mixing, formula_version: "magnetoelectronic.fullmag.v1" }],
     })).toBe(false);
   });
 

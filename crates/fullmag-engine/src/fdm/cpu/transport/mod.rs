@@ -22,8 +22,9 @@ pub use spin_drift_diffusion::{
     InternalSpinContact, OrientedSpinFaceFluxes, OrientedSpinInterface, ReactionChannels,
     SpinBalanceDiagnostics, SpinBoundaryCondition, SpinBoundaryConditions,
     SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceFluxObservation, SpinInterfaceLaw,
-    SpinMaterialFields, SpinReactionLengths, SpinSolution, SpinSolverConfig, SpinSolverTelemetry,
-    SpinTorqueTargets, StructuredSpinFace, TransientSpinObservation,
+    SpinMaterialFields, SpinMemoryLossFluxObservation, SpinMemoryLossReservoirLaw,
+    SpinReactionLengths, SpinSolution, SpinSolverConfig, SpinSolverTelemetry, SpinTorqueTargets,
+    StructuredSpinFace, TransientSpinObservation,
 };
 pub use transient_spin::{
     TransientCoupledRestartIdentity, TransientCoupledState, TransientErrorControllerState,

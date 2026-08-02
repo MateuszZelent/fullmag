@@ -2933,7 +2933,7 @@ użycie go jako produkcyjnego dowodu. Ledger rozróżnia `source_visible`,
 - nie podnosić capability po merge bez świeżego post-merge gate na dokładnym
   commicie przeznaczonym do publikacji.
 
-## 27. Addendum — stan po implementacji OE-T0/OE-F1/OE-F2 i migracji Slonczewski v2 (2026-08-02)
+## 27. Addendum — stan po implementacji OE-T0/OE-F1/OE-F2, Slonczewski v2, C_s i SML v2 (2026-08-02)
 
 Ten rozdział jest nowszym źródłem stanu niż historyczne snapshoty w rozdziałach
 0 i 26. Wpisy z wcześniejszą gałęzią, SHA lub statusem muszą być czytane jako
@@ -2979,6 +2979,13 @@ wszystkich warstwach nowego runu:
 | `cargo test -p fullmag-authoring` | `46 pass` | Rust authoring validation; browser/UI nie zostały tym zastąpione |
 | `PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-pytest python3 -m pytest -q packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `21 pass, 45 subtests pass` | Python canonical v2 export/decode round-trip |
 | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-runner` | `pass` | Rust runner compiles; no execution/device proof |
+| `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/spin-transport-final cargo check -p fullmag-ir -p fullmag-authoring -p fullmag-plan -p fullmag-runner -p fullmag-engine -p fullmag-api` | `pass` | C_s whitelist, SML v2 schema and bounded engine algebra compile; no native weak-form proof |
+| `cargo test -p fullmag-plan sml_reservoir_v2_remains_fail_closed_until_surface_weak_form_is_ready` | `pass` | planner preserves fail-closed boundary; SML is not promoted to executable capability |
+| `cargo test -p fullmag-engine mixing_flux_balance` | `pass` | v2 interface balance algebra; reference lane only |
+| `cargo test -p fullmag-engine sml_reservoir_closes_surface_balance_and_has_nonnegative_entropy` | `pass` | local reservoir elimination, trace balance and nonnegative surface power; not a discretized weak form |
+| `cargo test -p fullmag-engine m2_mixing_interface` | `pass` | reciprocal reference observations retain backflow/absorption/SML channels |
+| `cargo test -p fullmag-ir --test ir_tests` | `132 pass` (fresh) | exact DOS formula whitelist and nested SML v2 validation; not runtime/device proof |
+| `cargo test -p fullmag-authoring` | `46 pass` (fresh) | authoring C_s/SML v2 validation; browser/UI remains unverified |
 | `just verify-fem-stt-native-contract` | `pass` | managed CUDA/MFEM build, native FEM STT contract and append-only ABI test; GPU STT remains fail-closed |
 | `just verify-fem-oersted-oet0-cpu-contract` | `pass` (earlier evidence) | managed CPU/MPI weighted RT0/KKT contract; TSAN runtime remains WSL-blocked |
 | `just verify-fem-oersted-oef1-cpu-contract` | `pass` (bounded) | direct tetra far/reference workload only; singular/on-face convergence is open |
@@ -2995,14 +3002,17 @@ not a passing race proof.
 
 ### 27.4. Re-estimated completion
 
-The weighted implementation estimate is **66%**. It counts the completed
-backend-neutral v2 contract, Python/IR/planner/runtime propagation, managed
-OE-T0, and bounded OE-F1/OE-F2 references, but does not count source stubs or
-semantic-only capability rows as production work. The production-readiness
-estimate is **38%** because the following independent gates remain open:
+The previous ledger value was **66% implementation / 38% production readiness**.
+After the verified C_s/DOS whitelist and SML v2 authoring/IR/planner contract
+plus bounded balance/entropy algebra, the current estimate is **69%
+implementation / 41% production readiness**. The increase is deliberately
+small: the SML weak-form runtime remains fail-closed and these algebra tests
+are reference evidence, not a production solver qualification. The estimate
+does not count source stubs or semantic-only capability rows as production
+work. The following independent gates remain open:
 
-1. SML reservoir v2, DOS/susceptibility-bounded `C_s`, and thermodynamic
-   production proof;
+1. production SML reservoir weak form, spatially coupled DOS/susceptibility
+   `C_s`, and thermodynamic production proof;
 2. singular/near-field OE-F1 quadrature, target projection, and FEM/FDM
    convergence;
 3. scalable OE-F2 `H_0(curl) x H1_0` solve with topology certificate,

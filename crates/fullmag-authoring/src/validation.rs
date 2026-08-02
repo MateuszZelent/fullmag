@@ -255,6 +255,13 @@ fn validate_spin_authoring(
                             "spin_transports[{index}].materials[{material_index}].capacitance_formula_version must be non-empty"
                         )));
                     }
+                    if version != fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_transports[{index}].materials[{material_index}] unsupported capacitance_formula_version '{}' (expected '{}')",
+                            version,
+                            fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+                        )));
+                    }
                 }
                 (None, None) if module.mode == SceneSpinTransportMode::Steady => {}
                 (None, None) => {
@@ -431,6 +438,7 @@ fn validate_scene_spin_interface(
             g_r_spm2,
             g_i_spm2,
             g_sml_spm2,
+            spin_memory_loss,
             absorption,
             formula_version,
         } => {
@@ -462,7 +470,37 @@ fn validate_scene_spin_interface(
             ] {
                 nonnegative(value, &format!("{path}.{name}"))?;
             }
-            finite(*g_i_spm2, &format!("{path}.g_i_Spm2"))
+            finite(*g_i_spm2, &format!("{path}.g_i_Spm2"))?;
+            if formula_version != "magnetoelectronic.fullmag.v2" {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.formula_version must be magnetoelectronic.fullmag.v2; v1 is read-only"
+                )));
+            }
+            if *g_sml_spm2 > 0.0 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.g_sml_Spm2 uses rejected sml_surface_conductance.fullmag.v1; author spin_memory_loss with sml_reservoir.fullmag.v2"
+                )));
+            }
+            if let Some(reservoir) = spin_memory_loss {
+                if reservoir.formula_version != "sml_reservoir.fullmag.v2" {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{path}.spin_memory_loss.formula_version must be sml_reservoir.fullmag.v2"
+                    )));
+                }
+                nonnegative(
+                    reservoir.g_n_spm2,
+                    &format!("{path}.spin_memory_loss.g_n_Spm2"),
+                )?;
+                nonnegative(
+                    reservoir.g_f_spm2,
+                    &format!("{path}.spin_memory_loss.g_f_Spm2"),
+                )?;
+                positive(
+                    reservoir.g_lattice_spm2,
+                    &format!("{path}.spin_memory_loss.g_lattice_Spm2"),
+                )?;
+            }
+            Ok(())
         }
     }
 }
@@ -1701,7 +1739,7 @@ mod tests {
                     "lambda_j_m": "disabled",
                     "lambda_phi_m": "disabled",
                     "spin_capacitance_As_per_V_m3": 2.0,
-                    "capacitance_formula_version": "dos_constant.fullmag.v1"
+                    "capacitance_formula_version": "dos_isotropic_nonmagnetic.fullmag.v1"
                 }
             }],
             "solver": {
@@ -1717,6 +1755,14 @@ mod tests {
         scene.spin_transports =
             serde_json::from_value(serde_json::json!([transient.clone()])).unwrap();
         validate_scene_document(&scene).expect("physical transient contract must validate");
+
+        let mut unsupported = transient.clone();
+        unsupported["materials"][0]["material"]["capacitance_formula_version"] =
+            serde_json::json!("dos_constant.fullmag.v1");
+        scene.spin_transports = serde_json::from_value(serde_json::json!([unsupported])).unwrap();
+        let error = validate_scene_document(&scene)
+            .expect_err("unversioned DOS convention must fail closed");
+        assert!(error.message.contains("unsupported capacitance_formula_version"), "{error}");
 
         let mut missing = transient;
         missing["materials"][0]["material"]

@@ -1,6 +1,10 @@
 use crate::{ExecutionDevice, ExecutionMode, ExecutionPrecision, RegionRefIR};
 use serde::{Deserialize, Serialize};
 
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TransportCouplingIR {
@@ -14,6 +18,17 @@ pub struct SurfaceRefIR {
     pub object_id: String,
     pub surface_id: String,
     pub orientation: [f64; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpinMemoryLossReservoirIR {
+    #[serde(rename = "g_n_Spm2")]
+    pub g_n_spm2: f64,
+    #[serde(rename = "g_f_Spm2")]
+    pub g_f_spm2: f64,
+    #[serde(rename = "g_lattice_Spm2")]
+    pub g_lattice_spm2: f64,
+    pub formula_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -184,8 +199,10 @@ pub enum SpinInterfaceIR {
         g_r_spm2: f64,
         #[serde(rename = "g_i_Spm2")]
         g_i_spm2: f64,
-        #[serde(rename = "g_sml_Spm2")]
+        #[serde(default, skip_serializing_if = "is_zero_f64", rename = "g_sml_Spm2")]
         g_sml_spm2: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spin_memory_loss: Option<SpinMemoryLossReservoirIR>,
         absorption: String,
         formula_version: String,
     },
@@ -423,8 +440,10 @@ pub enum ResolvedSpinInterfaceLawIR {
         g_r_spm2: f64,
         #[serde(rename = "g_i_Spm2")]
         g_i_spm2: f64,
-        #[serde(rename = "g_sml_Spm2")]
+        #[serde(default, skip_serializing_if = "is_zero_f64", rename = "g_sml_Spm2")]
         g_sml_spm2: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spin_memory_loss: Option<SpinMemoryLossReservoirIR>,
         formula_version: String,
     },
 }

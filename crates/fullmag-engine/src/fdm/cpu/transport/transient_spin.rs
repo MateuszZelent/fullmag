@@ -157,6 +157,15 @@ impl<'a> TransientSpinIntegrator<'a> {
                 "transient spin capacitance requires a non-empty physical formula version",
             ));
         }
+        if material.capacitance_formula_version
+            != fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+        {
+            return Err(EngineError::new(format!(
+                "unsupported capacitance formula version '{}'; expected '{}'",
+                material.capacitance_formula_version,
+                fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+            )));
+        }
         for (cell, (&capacitance, &active)) in material
             .spin_capacitance_as_per_v_m3
             .iter()
@@ -843,7 +852,7 @@ mod tests {
             problem,
             TransientSpinMaterial {
                 spin_capacitance_as_per_v_m3: vec![2.0],
-                capacitance_formula_version: "dos_constant_test.v1".to_string(),
+                capacitance_formula_version: "dos_isotropic_nonmagnetic.fullmag.v1".to_string(),
             },
             TransientSpinSolverConfig {
                 relative_tolerance: tolerance,
@@ -925,6 +934,24 @@ mod tests {
     }
 
     #[test]
+    fn transient_rejects_unversioned_dos_convention() {
+        let problem = decay_problem(1.0, 4.0);
+        let error = TransientSpinIntegrator::new(
+            &problem,
+            TransientSpinMaterial {
+                spin_capacitance_as_per_v_m3: vec![2.0],
+                capacitance_formula_version: "dos_constant_test.v1".to_string(),
+            },
+            TransientSpinSolverConfig::default(),
+        )
+        .err()
+        .expect("an arbitrary DOS string must not qualify transient spin");
+        assert!(error
+            .to_string()
+            .contains("unsupported capacitance formula version"));
+    }
+
+    #[test]
     fn ars232_spin_relaxation_has_second_order_temporal_convergence() {
         let problem = decay_problem(1.0, 4.0);
         let integrator = integrator(&problem, 1.0e-13);
@@ -984,7 +1011,7 @@ mod tests {
             &problem,
             TransientSpinMaterial {
                 spin_capacitance_as_per_v_m3: vec![capacitance; nx],
-                capacitance_formula_version: "dos_constant_test.v1".to_string(),
+                capacitance_formula_version: "dos_isotropic_nonmagnetic.fullmag.v1".to_string(),
             },
             TransientSpinSolverConfig {
                 relative_tolerance: 1.0e-13,

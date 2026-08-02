@@ -6991,8 +6991,8 @@ export interface components {
             g_i_Spm2: number;
             /** Format: double */
             g_r_Spm2: number;
-            /** Format: double */
-            g_sml_Spm2: number;
+            /** Historical read-only wire field; new authoring uses spin_memory_loss. */
+            g_sml_Spm2?: number;
             /** Format: double */
             g_up_Spm2: number;
             id: string;
@@ -7000,6 +7000,16 @@ export interface components {
             kind: "mixing_conductance";
             normal_side: components["schemas"]["SceneRegionRef"];
             normal_to_ferromagnet: number[];
+            spin_memory_loss?: components["schemas"]["SceneSpinMemoryLossReservoir"] | null;
+        };
+        SceneSpinMemoryLossReservoir: {
+            formula_version: string;
+            /** Format: double */
+            g_f_Spm2: number;
+            /** Format: double */
+            g_lattice_Spm2: number;
+            /** Format: double */
+            g_n_Spm2: number;
         };
         SceneSpinSolverPolicy: {
             default_external_boundary: string;
@@ -7278,7 +7288,7 @@ export interface components {
             thickness_percent?: number | null;
         };
         /** @enum {string} */
-        SlonczewskiFormulaVersion: "slonczewski.fullmag.v2" | "slonczewski.legacy_fullmag.v0";
+        SlonczewskiFormulaVersion: "slonczewski.fullmag.v2" | "slonczewski.fullmag.v1" | "slonczewski.legacy_fullmag.v0";
         SlonczewskiRealization: {
             kind: components["schemas"]["SlonczewskiRealizationKind"];
             realization_version: components["schemas"]["SlonczewskiRealizationVersion"];

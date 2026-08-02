@@ -10,6 +10,9 @@ from fullmag._validation import as_vector3, require_finite, require_non_empty, r
 from fullmag.model.spin_torque import RegionRef
 
 
+DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA = "dos_isotropic_nonmagnetic.fullmag.v1"
+
+
 def _unit_vector(value: Sequence[float], name: str) -> tuple[float, float, float]:
     vector = as_vector3(value, name)
     if not all(math.isfinite(component) for component in vector):
@@ -106,6 +109,11 @@ class SpinTransportMaterial:
                 "capacitance_formula_version",
                 require_non_empty(self.capacitance_formula_version, "capacitance_formula_version"),
             )
+            if self.capacitance_formula_version != DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA:
+                raise ValueError(
+                    "capacitance_formula_version must be "
+                    f"'{DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA}'"
+                )
 
     def to_ir(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -149,6 +157,40 @@ class TransparentSpinInterface:
 
 
 @dataclass(frozen=True, slots=True)
+class SpinMemoryLossReservoir:
+    """Statically eliminated SML reservoir with three dissipative branches."""
+
+    g_n_Spm2: float
+    g_f_Spm2: float
+    g_lattice_Spm2: float
+    formula_version: str = "sml_reservoir.fullmag.v2"
+
+    def __post_init__(self) -> None:
+        for name in ("g_n_Spm2", "g_f_Spm2"):
+            value = require_finite(getattr(self, name), name)
+            if value < 0.0:
+                raise ValueError(f"{name} must be >= 0")
+            object.__setattr__(self, name, value)
+        object.__setattr__(
+            self,
+            "g_lattice_Spm2",
+            require_positive(self.g_lattice_Spm2, "g_lattice_Spm2"),
+        )
+        version = require_non_empty(self.formula_version, "formula_version")
+        if version != "sml_reservoir.fullmag.v2":
+            raise ValueError("formula_version must be 'sml_reservoir.fullmag.v2'")
+        object.__setattr__(self, "formula_version", version)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "g_n_Spm2": self.g_n_Spm2,
+            "g_f_Spm2": self.g_f_Spm2,
+            "g_lattice_Spm2": self.g_lattice_Spm2,
+            "formula_version": self.formula_version,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class MixingConductanceSpinInterface:
     id: str
     normal_to_ferromagnet: tuple[float, float, float]
@@ -158,29 +200,33 @@ class MixingConductanceSpinInterface:
     g_down_Spm2: float
     g_r_Spm2: float
     g_i_Spm2: float
-    g_sml_Spm2: float = 0.0
+    spin_memory_loss: SpinMemoryLossReservoir | None = None
 
-    def __init__(self, *, id: str, normal_to_ferromagnet: Sequence[float], normal_side: RegionRef, ferromagnet_side: RegionRef, g_up_Spm2: float, g_down_Spm2: float, g_r_Spm2: float, g_i_Spm2: float, g_sml_Spm2: float = 0.0) -> None:
+    def __init__(self, *, id: str, normal_to_ferromagnet: Sequence[float], normal_side: RegionRef, ferromagnet_side: RegionRef, g_up_Spm2: float, g_down_Spm2: float, g_r_Spm2: float, g_i_Spm2: float, spin_memory_loss: SpinMemoryLossReservoir | None = None) -> None:
         object.__setattr__(self, "id", require_non_empty(id, "id"))
         object.__setattr__(self, "normal_to_ferromagnet", _unit_vector(normal_to_ferromagnet, "normal_to_ferromagnet"))
         object.__setattr__(self, "normal_side", normal_side)
         object.__setattr__(self, "ferromagnet_side", ferromagnet_side)
-        for name, value in (("g_up_Spm2", g_up_Spm2), ("g_down_Spm2", g_down_Spm2), ("g_r_Spm2", g_r_Spm2), ("g_sml_Spm2", g_sml_Spm2)):
+        for name, value in (("g_up_Spm2", g_up_Spm2), ("g_down_Spm2", g_down_Spm2), ("g_r_Spm2", g_r_Spm2)):
             finite = require_finite(value, name)
             if finite < 0.0:
                 raise ValueError(f"{name} must be >= 0")
             object.__setattr__(self, name, finite)
         object.__setattr__(self, "g_i_Spm2", require_finite(g_i_Spm2, "g_i_Spm2"))
+        object.__setattr__(self, "spin_memory_loss", spin_memory_loss)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "kind": "mixing_conductance", "id": self.id,
             "normal_to_ferromagnet": list(self.normal_to_ferromagnet),
             "normal_side": self.normal_side.to_ir(), "ferromagnet_side": self.ferromagnet_side.to_ir(),
             "g_up_Spm2": self.g_up_Spm2, "g_down_Spm2": self.g_down_Spm2,
-            "g_r_Spm2": self.g_r_Spm2, "g_i_Spm2": self.g_i_Spm2, "g_sml_Spm2": self.g_sml_Spm2,
-            "absorption": "full_absorption", "formula_version": "magnetoelectronic.fullmag.v1",
+            "g_r_Spm2": self.g_r_Spm2, "g_i_Spm2": self.g_i_Spm2,
+            "absorption": "full_absorption", "formula_version": "magnetoelectronic.fullmag.v2",
         }
+        if self.spin_memory_loss is not None:
+            value["spin_memory_loss"] = self.spin_memory_loss.to_ir()
+        return value
 
 
 @dataclass(frozen=True, slots=True)

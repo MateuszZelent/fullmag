@@ -7,7 +7,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { SpinInterfaceInspectorPanel } from "./SpinInterfaceInspector";
 
-const known = { id: "nf", kind: "mixing_conductance", normal_side: { object_id: "stack", region_id: "n" }, ferromagnet_side: { object_id: "stack", region_id: "f" }, normal_to_ferromagnet: [0, 0, 1], g_up_Spm2: 1, g_down_Spm2: 2, g_r_Spm2: 3, g_i_Spm2: 4, g_sml_Spm2: 5, formula_version: "mix.v1", absorption: "absorb.v1" };
+const known = { id: "nf", kind: "mixing_conductance", normal_side: { object_id: "stack", region_id: "n" }, ferromagnet_side: { object_id: "stack", region_id: "f" }, normal_to_ferromagnet: [0, 0, 1], g_up_Spm2: 1, g_down_Spm2: 2, g_r_Spm2: 3, g_i_Spm2: 4, spin_memory_loss: { formula_version: "sml_reservoir.fullmag.v2", g_n_Spm2: 1, g_f_Spm2: 2, g_lattice_Spm2: 3 }, formula_version: "magnetoelectronic.fullmag.v2", absorption: "full_absorption" };
 const opaque = { id: "future", kind: "vendor.interface.v9", exact: { preserve: true } };
 
 vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
@@ -37,7 +37,7 @@ describe("SpinInterfaceInspectorPanel", () => {
     expect(html).toContain("Normal-metal object");
     expect(html).toContain("Ferromagnet region");
     expect(html).toContain("S/m²");
-    expect(html).toContain("mix.v1");
+    expect(html).toContain("magnetoelectronic.fullmag.v2");
     expect(html).toContain("0, 0, 1");
   });
 

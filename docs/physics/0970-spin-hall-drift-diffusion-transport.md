@@ -7,8 +7,9 @@
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
   `transport_constitutive.reciprocal.fullmag.v1`,
-  `magnetoelectronic.fullmag.v1`,
-  `sml_surface_conductance.fullmag.v1`
+  `magnetoelectronic.fullmag.v2`,
+  `sml_reservoir.fullmag.v2`,
+  `dos_isotropic_nonmagnetic.fullmag.v1`
 - Operator versions: `fv_spin_upwind_v1`, `structured_cross_gradient_v1`,
   `fem_charge_spin_broken_h1_mortar.v1`
 
@@ -185,21 +186,28 @@ q_abs,perp = G_r m x (Delta mu_s x m)
              +G_i(Delta mu_s x m).
 ```
 
-All interface conductances have `S/m^2`. In `full_absorption`:
+All interface conductances have `S/m^2`. In `full_absorption`, the old
+`q_SML=G_SML Delta mu_s` wire law is rejected: it does not identify a
+reservoir or close the spin balance. The canonical reservoir law is:
 
 ```text
-n dot Q_N = q_s,parallel+q_abs,perp+q_SML,
-n dot Q_F = q_s,parallel,
-q_SML = G_SML Delta mu_s,
-G_SML >= 0,
-q_abs,perp = n dot Q_N-n dot Q_F-q_SML.
+q_NR = G_N (mu_s,N-mu_R),
+q_FR = G_F (mu_s,F-mu_R),
+q_RL = G_R mu_R,
+q_NR+q_FR=q_RL,
+mu_R=(G_N mu_s,N+G_F mu_s,F)/(G_N+G_F+G_R),
+n dot Q_N=q_s,parallel+q_abs,perp+q_NR,
+n dot Q_F=q_s,parallel-q_FR.
 ```
 
-Only `q_abs,perp` torques the magnet. `q_SML` goes to the lattice/interface
-reservoir and has nonnegative production proportional to
-`G_SML|Delta mu_s|^2`. Dimensionless literature `delta` requires an explicit
-adapter; reducing `G_r` is not an SML model. Incoming, backflow, absorbed, SML,
-and torque fluxes are separately observable and balance to solver tolerance.
+Only `q_abs,perp` torques the magnet; `q_RL` is delivered to the lattice. The
+surface production is
+`0.5*(G_N|mu_s,N-mu_R|^2+G_F|mu_s,F-mu_R|^2+G_R|mu_R|^2)>=0`, with `G_R>0`
+required for the name spin-memory loss. Dimensionless literature `delta`
+requires an explicit adapter. Incoming, backflow, absorbed, reservoir-arm,
+lattice, and torque fluxes are separately observable and balance to solver
+tolerance. `sml_reservoir.fullmag.v2` is currently an authoring/IR contract;
+the FDM/FEM production weak-form realization remains fail-closed.
 
 ### 2.6 Time coupling M1–M3
 
@@ -531,7 +539,7 @@ already-solved records and must not query the time-domain FEM preview ABI.
 | `spin_1d_diffusion_v1` | sinh/cosh profile |
 | `spin_relaxation_modes_v1` | reaction eigenvalues |
 | `she_1d_film_v1` | SHE profile with zero-flux/mixing BC |
-| `mixing_flux_balance_v1` | exact interface algebra and torque sign |
+| `mixing_flux_balance_v2` | reservoir interface algebra, entropy and torque sign |
 | `theta_sh_zero_v1` | no SHE source |
 | `lambda_limits_v1` | disabled-reaction limits |
 | M2 Onsager oracle | reciprocal signs and nonnegative dissipation |
