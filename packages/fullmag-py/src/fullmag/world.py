@@ -3047,8 +3047,12 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
             default_until_seconds=None,
         )
     if isinstance(stage_spec, SaveStateStageSpec):
+        previous_stage = _state._declared_stages[-1] if _state._declared_stages else None
         return CapturedStage(
-            problem=_build_problem(),
+            # A save-state action is a post-stage boundary.  Preserve the
+            # preceding solver IR so FEM planning does not reinterpret the
+            # synthetic action as a fresh default time-evolution problem.
+            problem=previous_stage.problem if previous_stage is not None else _build_problem(),
             entrypoint_kind="flat_save_state",
             default_until_seconds=None,
             action={

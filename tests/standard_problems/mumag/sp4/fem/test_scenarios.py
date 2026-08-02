@@ -310,6 +310,7 @@ def test_projected_gradient_bb_requests_only_final_m_state_save() -> None:
     relax_stage, save_state_stage = payload["stages"]
     relax_autosave = relax_stage["ir"]["study"]["sampling"]["stage_autosave"]
     assert relax_autosave["fields"] == []
+    assert save_state_stage["ir"]["study"]["kind"] == "relaxation"
     assert save_state_stage["action"] == {
         "kind": "save_state",
         "artifact_name": "relaxed_m.zarr",
