@@ -788,6 +788,20 @@ self-distance cutoff or deleted self term is permitted. Degenerate
 sub-tetrahedra fail validation. Deterministic element order and compensated
 componentwise accumulation are required.
 
+The current bounded CPU reference profile is FP64 with tetrahedral base order 4,
+segment/Duffy order increased by two per adaptive level, maximum subdivision
+depth 6, absolute field tolerance $10^{-9}\,\mathrm{A/m}$ and relative
+tolerance $10^{-5}$. These values are an executable small-problem envelope,
+not a production accuracy claim: a tighter requested tolerance must either
+provide a larger depth budget or fail closed with an unconverged-pair
+diagnostic. The direct implementation uses the same physical target point
+after barycentric classification; it does not delete a self cell or introduce
+a distance cutoff. A target inside/on a tetrahedron is split into
+positive-volume target-vertex tetrahedra and mapped with
+$r=\xi[(1-\eta)e_1+\eta(1-\zeta)e_2+\eta\zeta e_3]$, whose Jacobian is
+$|\det(e_1,e_2,e_3)|\xi^2\eta$; the radial $\xi^2$ factor cancels the
+$1/r^2$ singularity before Gauss integration.
+
 The resolved operator is `fem_oersted_direct_tetra_quadrature.v1`; it uses the
 existing realization family `oersted_direct_biot_savart.v1` and CPU engine
 `fem_oersted_direct_tetra_cpu_v1`. Its fixed FP64 profile records quadrature

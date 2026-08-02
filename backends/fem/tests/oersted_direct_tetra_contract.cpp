@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -78,12 +79,86 @@ void direct_tetra_signed_current_and_budget_contract()
         "direct tetrahedral Oersted did not reject an exceeded pair budget");
 }
 
+void direct_tetra_singular_target_contract()
+{
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::Vector vector(3);
+    vector = 0.0;
+    vector[0] = 4.0;
+    mfem::VectorConstantCoefficient coefficient(vector);
+    current.ProjectCoefficient(coefficient);
+
+    mfem::Array<int> vertices;
+    mesh.GetElementVertices(0, vertices);
+    require(vertices.Size() == 4,
+        "singular-target fixture must start from a tetrahedron");
+    std::array<std::array<double, 3>, 4> points{};
+    for (int local = 0; local < 4; ++local) {
+        const auto *coordinate = mesh.GetVertex(vertices[local]);
+        points[local] = {coordinate[0], coordinate[1], coordinate[2]};
+    }
+    const auto average = [&](std::initializer_list<int> indices) {
+        std::array<double, 3> result{0.0, 0.0, 0.0};
+        for (const int index : indices) {
+            for (int component = 0; component < 3; ++component) {
+                result[component] += points[index][component];
+            }
+        }
+        const double scale = 1.0 / static_cast<double>(indices.size());
+        for (double &component : result) component *= scale;
+        return result;
+    };
+
+    const std::vector<std::array<double, 3>> targets{
+        average({0, 1, 2, 3}), // interior
+        average({0, 1, 2}),    // face
+        average({0, 1}),        // edge
+    };
+    DirectTetraQuadratureOptions options;
+    options.base_quadrature_order = 8;
+    options.maximum_subdivision_depth = 6;
+    options.absolute_tolerance_apm = 1.0e-9;
+    options.relative_tolerance = 1.0e-5;
+    const auto result = DirectTetraQuadrature::EvaluateField(
+        mesh, current, targets, options);
+    require(result.diagnostics.unconverged_pair_count == 0,
+        "singular-target Oersted quadrature did not converge");
+    require(std::all_of(result.h_xyz_apm.begin(), result.h_xyz_apm.end(),
+            [](double value) { return std::isfinite(value); }),
+        "singular-target Oersted result contains a non-finite value");
+    require(result.diagnostics.refined_pairs > 0,
+        "singular-target Oersted did not exercise adaptive refinement");
+
+    auto bounded = options;
+    bounded.maximum_subdivision_depth = 0;
+    bool rejected = false;
+    try {
+        (void)DirectTetraQuadrature::EvaluateField(
+            mesh, current, {targets.front()}, bounded);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected,
+        "singular-target Oersted silently accepted an exhausted depth budget");
+
+    DirectTetraQuadratureOptions defaults;
+    const auto default_result = DirectTetraQuadrature::EvaluateField(
+        mesh, current, targets, defaults);
+    require(default_result.diagnostics.unconverged_pair_count == 0,
+        "default singular-target Oersted options did not converge");
+}
+
 } // namespace
 
 int main()
 {
     try {
         direct_tetra_signed_current_and_budget_contract();
+        direct_tetra_singular_target_contract();
         std::cout << "fem direct tetrahedral Oersted contract: PASS\n";
         return 0;
     } catch (const std::exception &error) {

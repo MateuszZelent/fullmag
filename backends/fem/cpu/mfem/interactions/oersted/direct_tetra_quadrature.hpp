@@ -20,9 +20,9 @@ namespace fullmag::fem::oersted {
  */
 struct DirectTetraQuadratureOptions {
     int base_quadrature_order = 4;
-    int maximum_subdivision_depth = 5;
-    double absolute_tolerance_apm = 1.0e-10;
-    double relative_tolerance = 1.0e-8;
+    int maximum_subdivision_depth = 6;
+    double absolute_tolerance_apm = 1.0e-9;
+    double relative_tolerance = 1.0e-5;
     std::uint64_t maximum_source_target_pairs = 1'000'000;
 };
 
