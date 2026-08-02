@@ -6633,6 +6633,7 @@ mod tests {
         fullmag_engine::StepReport,
     ) {
         let topology = MeshTopology::from_ir(&plan.mesh).expect("topology");
+        let stt_contract = plan.spin_torque_contract.as_ref();
         let material = MaterialParameters::new(
             plan.material.saturation_magnetisation,
             plan.material.exchange_stiffness,

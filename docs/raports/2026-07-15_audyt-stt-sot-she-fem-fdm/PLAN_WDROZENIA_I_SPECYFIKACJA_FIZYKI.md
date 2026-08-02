@@ -3754,3 +3754,66 @@ interfejsy N/F/T oraz Fullmag FDM/FEM.
 Ocena pozostaje **84% implementacji / 58% gotowości produkcyjnej**. Test
 analityczny potwierdza konwersję zmiennych i znaku w prostym limicie, ale nie
 jest dowodem wykonawczej zgodności solverów.
+
+## 32.14. Managed FEM M1 direct-SHE profile gate i korekta layoutu MFEM (2026-08-02)
+
+Po redukowanym oraclu źródłowym BORIS wykonano rzeczywisty native gate Fullmag
+M1 FEM CPU. Dodano do `backends/fem/tests/steady_transport_contract.cpp`
+jednorodny workload H1/P1 na siatce `4 x 4 x 32` heksaedrów. Dla stałego
+`E_x`, `lambda_sf`, `sigma`, `sigma_s` i `theta_SH` test wymaga:
+
+- `J_x = sigma E_x` z błędem poniżej `1e-10`;
+- zbieżności solve spinowego;
+- pełnego wektorowego profilu analitycznego poniżej `2e-3` w każdym węźle;
+- zgodności `mu_y` góra–dół z profilem `sinh/cosh` w tym samym limicie.
+
+W skończonej szerokości poprzecznej nie wystarcza sprawdzenie jednego kanału.
+Konstytutywny tensor SHE ma tu oba niezerowe wpisy `Q_zy` i `Q_yz`, więc
+oracle sprawdza jednocześnie:
+
+```text
+mu_y(z) = 2 theta_SH sigma E_x lambda_sf
+          / (sigma_s cosh(L_z/(2 lambda_sf)))
+          * sinh((z-L_z/2)/lambda_sf)
+
+mu_z(y) = -2 theta_SH sigma E_x lambda_sf
+          / (sigma_s cosh(L_y/(2 lambda_sf)))
+          * sinh((y-L_y/2)/lambda_sf)
+```
+
+Test ujawnił rzeczywisty błąd layoutu, wcześniej maskowany przez mały residual
+układu liniowego. `steady_transport.cpp` deklarował przestrzenie wektorową i
+tensorową jako `mfem::Ordering::byVDIM` (interleaved), podczas gdy indeksowanie
+operatora, `copy_by_vdim` i ABI zakładały układ blokowy
+`[component][node]`. C API używał tej samej niespójności dla magnetyzacji.
+Wszystkie te przestrzenie przełączono na `mfem::Ordering::byNODES`, zgodne z
+kontraktem publikacji pól. To korekta fizyczno-numeryczna (usuwa permutację
+składowych), a nie zmiana tolerancji, znaku ani prefaktora SHE.
+
+Świeża sekwencja:
+
+```text
+just verify-fem-steady-transport-native-contract
+```
+
+przeszła kodem `0`. Oprócz native C++/ABI obejmuje ona canonical quantity
+metadata, planner, preflight runnera, publikację transportowych pól scalar/vector/tensor,
+dispatch oraz v2 data-plane. Uzupełniono również wyłącznie testowe fixtures:
+aktualny konstruktor `MeshIR` i komplet czterech faset tetraedru; nie jest to
+zmiana modelu fizycznego.
+
+### Granica dowodu
+
+Zamknięty jest teraz signed direct-SHE dla **conforming FEM CPU reference
+slice**. Nie zamyka to milestone'u M1 ani bramy `SHE-BORIS-001`: nadal brak
+wykonywalnego BORIS CPU/CUDA, reciprocal `iSHA=SHA`, heterogenicznych
+materiałów, N/F/T mixing/SML, h-convergence i wspólnego FDM/FEM/GPU
+benchmarku. Capability pozostaje ograniczona do jawnego reference scope;
+nie wolno awansować ogólnego direct/inverse SHE do `validated`.
+
+Ocena celu pozostaje konserwatywnie **84% implementacji / 58% gotowości
+produkcyjnej**. Gate usuwa konkretny defekt komponentowego layoutu i zamyka
+jedną bramę referencyjną, ale nie dostarcza jeszcze cross-backend parity,
+GPU/device-residency ani produkcyjnego interfejsu SHE. Następne kroki to
+niezależny cross-check FDM, test trzech rozdzielczości z residualami i bilansami,
+a dopiero potem executable BORIS CPU/CUDA oraz reciprocal/interface workload.

@@ -458,7 +458,7 @@ int solve(
 
     mfem::H1_FECollection magnetization_collection(1, 3);
     mfem::FiniteElementSpace magnetization_space(
-        mesh.get(), &magnetization_collection, 3, mfem::Ordering::byVDIM);
+        mesh.get(), &magnetization_collection, 3, mfem::Ordering::byNODES);
     if (magnetization_space.GetNDofs() != static_cast<int>(mesh_view.n_nodes)) {
         throw std::runtime_error("magnetization P1 space DOF count does not equal n_nodes");
     }

@@ -24,7 +24,7 @@ W aktualnej macierzy capability:
 | Zakres | BORIS | Fullmag |
 |---|---|---|
 | charge + spin steady drift-diffusion | wykonywalne CPU/CUDA w module `STransport` | M1 FEM CPU ma wąski `reference_executable`; ogólny FDM/FEM GPU i M2 są `semantic_only` |
-| direct SHE | wykonywalny przez `SHA` i spinowy warunek Neumanna | kontrakt `transport.spin.direct_she`; kwalifikacja signed-profile i cross-backend pozostaje otwarta |
+| direct SHE | wykonywalny przez `SHA` i spinowy warunek Neumanna | conforming H1/P1 FEM CPU ma zielony signed-profile gate; executable BORIS parity i cross-backend pozostają otwarte |
 | inverse SHE | wykonywalny przez niezależny `iSHA` w równaniu dla `V` | w M2 zapisany jako reciprocal z tym samym blokiem; `semantic_only` |
 | interfejs N/F/T | ciągły kontakt albo `GInterface`, `Gi`, `Gmix`, osobny torque | transparentny interfejs jest w M1 CPU; mixing/SML i surface functional pozostają fail-closed |
 | solver | sekwencyjny SOR: najpierw `V`, potem `S` | M1 triangular; M2 block-GMRES/FGMRES z niezależnymi residualami |
@@ -208,8 +208,9 @@ interfejsowy i inverse SHE.
 - BORIS: **source-visible implementation reference**, bez uruchomionego
   `BorisLin`, twierdzenia o wersji release ani o kwalifikacji w tym checkoutcie.
 - Fullmag M1 FEM CPU: **wąski reference executable** dla conforming H1/P1,
-  transparent interface; signed analytic SHE i cross-backend convergence są
-  nadal otwarte.
+  transparent interface; signed analytic SHE jest zielony dla tego slice,
+  natomiast cross-backend convergence i executable BORIS parity są nadal
+  otwarte.
 - Fullmag M2 reciprocal direct/inverse SHE: **semantic_only**; nie ma podstaw
   do deklarowania zgodności z BORIS.
 - Fullmag FDM/GPU SHE: **semantic_only**; obecne kody SOT nie są solverem SHE.
@@ -263,6 +264,58 @@ czemu wynik można powiązać z konkretnym stanem ignorowanego katalogu.
 To zamyka tylko **reduced direct-SHE normalization gate**. Nie jest to jeszcze
 `SHE-BORIS-001`: nie ma wykonania BORIS CPU/CUDA, testu `iSHA=SHA`, profilu z
 niejednorodnym materiałem, interfejsu N/F/T ani porównania FDM/FEM.
+
+## 7.2. Wykonany managed FEM gate direct-SHE i korekta kolejności MFEM (2026-08-02)
+
+Poza redukowanym oraclem BORIS uruchomiono rzeczywisty, natywny gate Fullmag
+M1 FEM CPU dla signed direct-SHE. Test
+`backends/fem/tests/steady_transport_contract.cpp` używa jednorodnego filmu
+H1/P1 na siatce `4 x 4 x 32` heksaedrów, z `E_x`, relaksacją spinową i
+zerowym normalnym spin fluxem. Oracle jest dwuwymiarowy w przekroju: tensor
+SHE ma równocześnie `Q_zy` i `Q_yz`, dlatego oczekiwane są dwa profile
+`sinh/cosh`:
+
+```text
+mu_y(z) = 2 theta_SH sigma E_x lambda_sf
+          / (sigma_s cosh(L_z/(2 lambda_sf)))
+          * sinh((z-L_z/2)/lambda_sf)
+
+mu_z(y) = -2 theta_SH sigma E_x lambda_sf
+          / (sigma_s cosh(L_y/(2 lambda_sf)))
+          * sinh((y-L_y/2)/lambda_sf)
+```
+
+Gate wymaga średniego prądu ładunkowego `J_x = sigma E_x`, zbieżności solve,
+błędu wszystkich węzłów poniżej `2e-3` oraz zgodności różnicy góra–dół
+`mu_y` z tym samym limitem. Przejście obu komponentów jest istotne: test
+wykrywa jednocześnie znak, normalną, skalę i permutację komponentów, a nie
+tylko mały residual liniowy.
+
+W trakcie tego testu znaleziono i naprawiono błąd numeryczny w realizacji
+MFEM. Pola wektorowe, tensorowe i magnetyzacja były deklarowane jako
+`mfem::Ordering::byVDIM` (układ interleaved), podczas gdy assembler, kopiowanie
+ABI i publikacja pól indeksowały je jako bloki `[component][node]`. Zmieniono
+te przestrzenie na `mfem::Ordering::byNODES`, czyli układ zgodny z kontraktem
+ABI. Nie poluzowano tolerancji ani nie skorygowano znaku po wyniku; zmiana
+usuwała rzeczywistą zamianę składowych w operatorze.
+
+Świeży managed gate:
+
+```text
+just verify-fem-steady-transport-native-contract
+```
+
+zakończył się kodem `0`. W ramach sekwencji przeszły kontrakty C++ i ABI,
+canonical quantity metadata, planner, preflight runnera, publikacja skalarnego,
+wektorowego i tensorowego transportu oraz odczyt v2 data-plane. Naprawione
+zostały także wyłącznie testowe fixtures: pełne fasety tetraedru i aktualny
+`MeshIR`; nie zmieniają one fizyki runtime.
+
+Ten wynik podnosi status signed direct-SHE tylko dla **conforming FEM CPU
+reference slice**. Nie zamyka `SHE-BORIS-001`, ponieważ nadal brakuje
+wykonywalnego BORIS CPU/CUDA, testu reciprocal `iSHA=SHA`, heterogenicznych
+materiałów, N/F/T mixing/SML oraz wspólnego FDM/FEM/GPU benchmarku. Capability
+nie jest awansowana poza jawnie ograniczony zakres.
 
 ## 8. Źródła i mapowanie symboli
 

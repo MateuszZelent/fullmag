@@ -1892,6 +1892,7 @@ pub(crate) fn unix_time_millis_now() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn simulation_preparation(revision: u64) -> SimulationPreparationSnapshot {
         serde_json::from_value(json!({
