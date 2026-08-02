@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md
 ---
 
 (public-docs-numerical-methods-relaxation-projected-gradient)=
@@ -68,6 +69,19 @@ E(\mathbf m_{k+1})
 The direct minimizer stops only after the accepted state satisfies the canonical torque criterion;
 an energy decrease by itself is not convergence.
 
+The implementation policy is exact and bounded. The initial step is
+$\lambda_0=10^{-6}\ \mathrm{m\,A^{-1}}$. After an accepted step, `use_bb1=true` computes BB1
+when $\langle s,y\rangle_E$ is finite and positive; the next accepted update toggles to BB2.
+BB2 is $\langle s,y\rangle_E/\langle y,y\rangle_E$ when both denominators are finite and
+positive. Every accepted BB value is clamped to
+$[10^{-15},10^{-3}]\ \mathrm{m\,A^{-1}}$. If the selected curvature is invalid, the fallback is
+$10^{-6}/(r+1)$ clamped to the same interval, where $r$ is the consecutive fallback count. The
+source contains a defensive BB2 branch in the BB1 arm, but its repeated positive-curvature guard
+means it is unreachable when the first BB1 guard is false; the observable policy is BB1/BB2
+alternation with the fallback above. A trial is retracted as $\mathcal R_m(-\lambda g)$, its field
+and energy are recomputed, and $\lambda$ is halved after each rejection. At most 20 backtracks
+are attempted; exhaustion leaves the accepted state unchanged.
+
 (numerical-methods-relaxation-pgbb-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -86,6 +100,24 @@ an energy decrease by itself is not convergence.
 | $D_k$ | energy directional derivative | $\mathrm{J}$ |
 | $c_1$ | Armijo sufficient-decrease constant | $1$ |
 | $N$ | number of active cells or finite-element nodes | $1$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $M_{s,i}$ | local saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $V_i$ | cell or nodal volume weight | $\mathrm{m^3}$ |
+| $a_i$ | first vector in the energy metric | $\mathrm{A\,m^{-1}}$ |
+| $b_i$ | second vector in the energy metric | $\mathrm{A\,m^{-1}}$ |
+
+The energy metric used by the FDM/shared policy is
+
+```{math}
+:label: eq-pgbb-energy-metric
+\langle a,b\rangle_E
+=\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
+\qquad [\langle a,b\rangle_E]=\mathrm{J}
+\quad\text{for }[a]=[b]=\mathrm{A\,m^{-1}}.
+```
+
+For FEM, $V_i$ is replaced by the backend's mass/lumped-mass realization; the public equation is
+the same metric contract, but assembled weights and node ownership are backend-specific.
 
 (numerical-methods-relaxation-pgbb-assumptions-and-validity)=
 ## Assumptions and validity
@@ -140,6 +172,22 @@ study.stages.add_relax(
 | `StudyStagesBuilder.add_relax(tolA=...)` | `float` | canonical default equivalent | $\mathrm{A\,m^{-1}}$ | finite and positive; exclusive with `tolT` | field-residual threshold | FDM/FEM lanes | `study.stop.torque_tolerance_apm` |
 | `StudyStagesBuilder.add_relax(max_steps=...)` | `int` | $50,000$ | $1$ | positive integer | iteration budget | FDM/FEM lanes | `study.stop.max_steps` |
 | `RelaxStop.energy_tolerance_j` | `float \| None` | `None` | $\mathrm{J}$ | positive when configured | optional energy plateau criterion | FDM/FEM lanes | `study.stop.energy_tolerance_j` |
+| `StudyStagesBuilder.add_relax(tol=...)` | legacy object | unavailable | legacy | always rejected | removed tolerance spelling | none | none |
+| `StudyStagesBuilder.add_relax(energy_tolerance=...)` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | accepted-energy plateau threshold | FDM/FEM lanes | `study.stop.energy_tolerance_j` |
+| `StudyStagesBuilder.add_relax(max_relaxation_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | LLG-only relaxation-time ceiling | none | none |
+| `StudyStagesBuilder.add_relax(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | alias of LLG-only time ceiling | none | none |
+| `StudyStagesBuilder.add_relax(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | alias of LLG-only time ceiling | none | none |
+| `StudyStagesBuilder.add_relax(relax_alpha=...)` | `float \| None` | `None` | $1$ | rejected for direct minimizers | LLG damping override | none | none |
+| `StudyStagesBuilder.add_relax(solver=...)` | `str \| None` | `None` | $1$ | rejected for direct minimizers | LLG integrator selector | none | none |
+| `StudyStagesBuilder.add_relax(dt=...)` | positive float, `"auto"`, or `None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | LLG timestep | none | none |
+| `StudyStagesBuilder.add_relax(max_error=...)` | `float \| None` | `None` | $1$ | rejected for direct minimizers | LLG adaptive error alias | none | none |
+| `StudyStagesBuilder.add_relax(max_err=...)` | `float \| None` | `None` | $1$ | rejected for direct minimizers | LLG adaptive error | none | none |
+| `StudyStagesBuilder.add_relax(dt_min=...)` | `float \| None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | LLG lower step bound | none | none |
+| `StudyStagesBuilder.add_relax(dt_max=...)` | `float \| None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | LLG upper step bound | none | none |
+| `StudyStagesBuilder.add_relax(dt_initial=...)` | `float \| None` | `None` | $\mathrm{s}$ | rejected for direct minimizers | LLG initial step | none | none |
+| `StudyStagesBuilder.add_relax(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | mixed | rejected for direct minimizers | LLG adaptive policy | none | none |
+| `StudyStagesBuilder.add_relax(field_refresh=...)` | `FieldRefreshPolicy \| None` | `None` | mixed | rejected for direct minimizers | LLG field cadence | none | none |
+| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop \| None` | `None` | mixed | grouped stop; scalar conflicts rejected | canonical stop object | FDM/FEM lanes | `study.stop` |
 
 No public parameter controls $c_1$, the BB bounds, or the maximum number of Armijo backtracks yet;
 those are implementation policy constants and must not be presented as user controls.
@@ -164,6 +212,11 @@ The absence of `dynamics` is semantic: a direct minimizer has no RK solver or ph
 planner adds the resolved FDM/FEM execution lane, precision, field realization, and provenance
 outside this shared study payload.
 
+`sampling.outputs` is present even when it is empty. If output or table autosave is configured,
+those entries are serialized under `sampling`; they do not turn a direct minimizer into a
+physical-time stage. The resolved runtime publishes `accepted_step_m_per_A`, `time=0`, `dt=0`,
+`pseudo_time_s=null`, torque in A/m and T, and final energy/plateau metrics.
+
 (numerical-methods-relaxation-pgbb-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
@@ -186,6 +239,12 @@ to FEM CPU or `llg_overdamped`. Requested intent is stored separately from resol
 FDM uses cell volumes and Cartesian fields. FEM uses finite-element node values and the selected
 mass metric. These are different discrete inner products even though the continuum minimization
 problem is shared.
+
+FDM CPU uses the reference SoA/AoS grid loop. FDM GPU has a native CUDA direct-minimizer loop, but
+the public multilayer planner currently rejects direct minimizers with the explicit policy that
+only `llg_overdamped` is supported for that multilayer runner. FEM CPU owns MFEM vectors and native
+energy/field evaluation; FEM GPU owns device-resident state and reduction workspaces. Source
+presence is not executed-device qualification.
 
 (numerical-methods-relaxation-pgbb-implementation-mapping)=
 ## Implementation mapping
@@ -226,3 +285,7 @@ qualification. It has no physical-time interpretation.
 | FDM BB loop | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_projected_gradient_bb` | reference cellwise BB/Armijo implementation | FDM CPU/reference | Rust unit tests |
 | FEM CPU BB loop | `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp` | `run_projected_gradient_bb_step` | native FEM tangent/Armijo step | FEM CPU | source contract tests |
 | FEM GPU BB loop | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | device-resident FEM BB step | FEM GPU | source contract tests |
+| Shared metric and BB policy | `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `energy_metric_dot` / `projected_gradient_step_size_update` | weighted products, bounds and fallback | FDM CPU/GPU shared policy | Rust unit tests |
+| Shared line search | `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `projected_gradient_line_search` | normalized trial, Armijo and 20-backtrack limit | FDM CPU/GPU shared policy | Rust unit tests |
+| FDM CUDA loop | `crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs` | `execute_direct_minimizer` | native CUDA PG/NCG dispatch | FDM GPU | device-gated tests |
+| Completion policy | `crates/fullmag-runner/src/relaxation/convergence.rs` | `resolve_stage_completion` | torque confirmation, energy plateau and budget reasons | shared orchestration | runner tests |

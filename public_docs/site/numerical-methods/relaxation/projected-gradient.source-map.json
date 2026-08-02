@@ -10,7 +10,8 @@
     {"id": "eq-pgbb-tangent-gradient", "symbols": ["g", "H_eff", "m", "tau"], "sources": ["physics-pgbb", "fdm-pgbb"]},
     {"id": "eq-pgbb-retraction", "symbols": ["R", "m", "lambda", "p"], "sources": ["physics-pgbb", "fdm-pgbb"]},
     {"id": "eq-pgbb-step-selection", "symbols": ["lambda", "s", "y"], "sources": ["physics-pgbb", "fdm-policy"]},
-    {"id": "eq-pgbb-armijo", "symbols": ["E", "lambda", "c1", "D"], "sources": ["physics-pgbb", "fem-cpu-pgbb"]}
+    {"id": "eq-pgbb-armijo", "symbols": ["E", "lambda", "c1", "D"], "sources": ["physics-pgbb", "fem-cpu-pgbb"]},
+    {"id": "eq-pgbb-energy-metric", "symbols": ["mu0", "Ms", "V", "a", "b"], "sources": ["fdm-policy", "fem-cpu-pgbb", "fem-gpu-pgbb"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m_i", "meaning": "reduced magnetization at active cell/node $i$", "si_unit": "1"},
@@ -24,7 +25,12 @@
     {"id": "y", "latex": "\\mathbf y_k", "meaning": "gradient difference", "si_unit": "\\mathrm{A\\,m^{-1}}"},
     {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
     {"id": "c1", "latex": "c_1", "meaning": "Armijo sufficient-decrease constant", "si_unit": "1"},
-    {"id": "D", "latex": "D_k", "meaning": "energy directional derivative", "si_unit": "\\mathrm{J}"}
+    {"id": "D", "latex": "D_k", "meaning": "energy directional derivative", "si_unit": "\\mathrm{J}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "Ms", "latex": "M_{s,i}", "meaning": "local saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "V", "latex": "V_i", "meaning": "cell or nodal volume weight", "si_unit": "\\mathrm{m^3}"},
+    {"id": "a", "latex": "a_i", "meaning": "first vector in the energy metric", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "b", "latex": "b_i", "meaning": "second vector in the energy metric", "si_unit": "\\mathrm{A\\,m^{-1}}"}
   ],
   "sources": [
     {"id": "physics-pgbb", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "projected_gradient_armijo_accepts", "responsibility": "Shared projected-gradient Armijo acceptance contract."},

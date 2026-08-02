@@ -358,6 +358,10 @@ async function startFixtureServer() {
       writeJson(response, statusFixture());
       return;
     }
+    if (path === "/v2/sessions/current/simulation/preparation") {
+      writeJson(response, preparationFixture());
+      return;
+    }
     if (path === "/v2/sessions/current/model/scene") {
       writeJson(response, sceneFixture());
       return;
@@ -550,14 +554,31 @@ async function waitForEvaluate(functionSource) {
 }
 
 async function waitForVisible(selector) {
-  await waitForEvaluate(`() => {
-    const node = document.querySelector(${JSON.stringify(selector)});
-    if (!node) return false;
-    const style = getComputedStyle(node);
-    const rect = node.getBoundingClientRect();
-    return style.visibility !== "hidden" && style.display !== "none"
-      && rect.width > 0 && rect.height > 0;
-  }`);
+  try {
+    await waitForEvaluate(`() => {
+      const node = document.querySelector(${JSON.stringify(selector)});
+      if (!node) return false;
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none"
+        && rect.width > 0 && rect.height > 0;
+    }`);
+  } catch (error) {
+    const diagnostics = await evaluate(`() => ({
+      url: location.href,
+      title: document.title,
+      bodyText: (document.body?.innerText || "").slice(0, 4000),
+      explorerNodes: Array.from(document.querySelectorAll(".fm-explorer [data-node-id]"))
+        .map((node) => node.getAttribute("data-node-id")),
+      apiErrors: Array.from(document.querySelectorAll("[role=alert], .fm-feedback-banner"))
+        .map((node) => (node.textContent || "").trim())
+        .filter(Boolean),
+      resources: performance.getEntriesByType("resource")
+        .map((entry) => entry.name)
+        .slice(-40),
+    })`);
+    throw new Error(`${error.message} selector=${selector} browserErrors=${JSON.stringify(browserErrors)} diagnostics=${JSON.stringify(diagnostics)}`);
+  }
 }
 
 async function waitForText(selector, text) {
@@ -675,5 +696,59 @@ function statusFixture() {
       workspace_root: "/tmp/fullmag-transport-authoring-smoke",
     },
     solver: { state: "idle" },
+  };
+}
+
+function preparationFixture() {
+  const stageIds = [
+    "runtime_startup",
+    "script_materialization",
+    "validation",
+    "planning",
+    "domain_preparation",
+    "meshing",
+    "mesh_postprocessing",
+    "solver_initialization",
+    "ready",
+  ];
+  return {
+    preparation_id: "transport-authoring-smoke-preparation",
+    revision: 1,
+    status: "ready",
+    started_at_unix_ms: 0,
+    completed_at_unix_ms: 1,
+    active_stage_id: null,
+    requested_execution: {
+      backend: "fdm",
+      device: "cpu",
+      engine_id: "fullmag",
+      mode: "strict",
+      precision: "double",
+      runtime_family: "fixture",
+      worker: "fixture",
+    },
+    resolved_execution: {
+      backend: "fdm",
+      device: "cpu",
+      engine_id: "fullmag",
+      mode: "strict",
+      precision: "double",
+      runtime_family: "fixture",
+      worker: "fixture",
+    },
+    stages: stageIds.map((id) => ({
+      id,
+      label: id.replaceAll("_", " "),
+      detail: "Fixture stage completed.",
+      status: "completed",
+      progress_percent: 100,
+      progress_label: "Complete",
+      started_at_unix_ms: 0,
+      completed_at_unix_ms: 1,
+      duration_ms: 1,
+      clock_adjustment: null,
+    })),
+    log_tail: [],
+    failure: null,
   };
 }

@@ -2,7 +2,7 @@
 
 - Status: approved contract; implementation incomplete
 - Owners: Fullmag physics, planner, backend, API, and Control Room maintainers
-- Last updated: 2026-07-10
+- Last updated: 2026-08-02
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`,
   `docs/specs/resource-first-control-room-api-v2.md`,
@@ -559,6 +559,15 @@ outside their documented domains. An explicit `None` survives every facade and
 disables an optional diagnostic criterion; the mandatory convergence torque
 criterion cannot be disabled for a run that claims equilibrium.
 
+Adaptive timestep authoring is also part of the canonical contract. The
+`AdaptiveTimestep` constructor records whether `dt_min` was explicitly
+authored; an omitted value is therefore distinguishable from an explicit
+minimum and cannot silently satisfy the advanced-controller requirement.
+`run_while(..., relax=...)` forwards only optional relaxation controls that the
+caller actually supplied, while preserving authored `dt_min` and `dt_max`.
+This keeps Python-to-ProblemIR round trips lossless and prevents an internal
+unset sentinel from leaking into a backend relaxation call.
+
 Migration:
 
 - `torque_tolerance` remains a deprecated alias for
@@ -794,6 +803,8 @@ from the current runs.
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
+| `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | Preserves whether `dt_min` was explicitly authored. |
+| `packages/fullmag-py/src/fullmag/world.py` | `_relax_chunk_kwargs` | Forwards only authored optional relaxation controls during chunked execution. |
 | `scripts/validate_fem_relaxation_equilibrium_parity.py` | `compare_equilibrium_states` | Compares converged CPU/GPU states without requiring equal step counts. |
 | `scripts/analysis/fem_gpu_benchmark.py` | `equilibrium_parity_summary` | Produces the versioned parity summary from benchmark rows. |
 | `examples/bench_fem_gpu_long.py` | `solver_time_to_tolerance_evidence` | Computes native accepted-step time to the first torque-qualified state. |

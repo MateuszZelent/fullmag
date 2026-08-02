@@ -88,6 +88,16 @@ Rejected trials halve $\lambda$ and leave the accepted state unchanged. A lower 
 successful line search alone is not convergence; the shared accepted-state stop contract must
 also be satisfied.
 
+The implementation starts with $\mathbf p_0=-\mathbf g_0$ and
+$\lambda_0=\min(10^{-6},1/\lVert\mathbf p_0\rVert)$, with $10^{-6}$ in
+$\mathrm{m\,A^{-1}}$ and the norm computed by the unweighted vector product. Before each line
+search, a non-descent direction ($\langle p,g\rangle_E\geq0$) is replaced by $-g$. The
+Polak–Ribière+ numerator uses the trial tangent projection of the previous gradient. The
+coefficient is clipped with $\max(0,\cdot)$; invalid or non-positive previous-gradient metric
+norms give $\beta=0$. The next direction transports the previous direction to the new tangent
+plane and is reset to $-g$ if it is not a descent direction. Every 50th accepted step sets
+$\beta=0$. Backtracking multiplies $\lambda$ by $1/2$ and allows at most 30 rejected trials.
+
 (numerical-methods-relaxation-ncg-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -109,6 +119,25 @@ also be satisfied.
 | $k$ | accepted minimizer iteration | $1$ |
 | $\tau_{\max}$ | maximum accepted-state torque | $\mathrm{A\,m^{-1}}$ |
 | $\varepsilon_\tau$ | canonical torque threshold | $\mathrm{A\,m^{-1}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $M_{s,i}$ | local saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $V_i$ | cell or nodal volume weight | $\mathrm{m^3}$ |
+| $a_i$ | first vector in the energy metric | $\mathrm{A\,m^{-1}}$ |
+| $b_i$ | second vector in the energy metric | $\mathrm{A\,m^{-1}}$ |
+
+The metric used by the FDM/shared implementation is
+
+```{math}
+:label: eq-relax-ncg-energy-metric
+\langle a,b\rangle_E
+=\sum_i \mu_0 M_{s,i}V_i\,a_i\cdot b_i,
+\qquad [\langle a,b\rangle_E]=\mathrm{J}
+\quad\text{for }[a]=[b]=\mathrm{A\,m^{-1}}.
+```
+
+For FEM the same physical metric is realized by the MFEM mass/lumped-mass operators rather than
+Cartesian cell volumes. The line-search parameter has units $\mathrm{m\,A^{-1}}$ because it
+multiplies a field-valued direction.
 
 (numerical-methods-relaxation-ncg-assumptions-and-validity)=
 ## Assumptions and validity
@@ -173,6 +202,9 @@ study.stages.add_relax(
 | `StudyStagesBuilder.add_relax(field_refresh=...)` | FieldRefreshPolicy or None | None | $1$ | rejected for NCG | LLG field-refresh policy | none for NCG | `study.dynamics.field_refresh` |
 | `StudyStagesBuilder.add_relax(relax_alpha=...)` | float or None | None | $1$ | rejected for NCG | LLG damping override | none for NCG | resolved LLG provenance |
 | legacy tol=... | float | unavailable | legacy | always rejected | use tolT or tolA | none | none |
+| `StudyStagesBuilder.add_relax(max_pseudotime_s=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG-only alias | none | none |
+| `StudyStagesBuilder.add_relax(max_physical_time_s=...)` | float or None | None | $\mathrm{s}$ | rejected for NCG | LLG-only alias | none | none |
+| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop` or None | None | mixed | grouped stop; scalar conflicts rejected | canonical stopping object | FDM/FEM | `study.stop` |
 
 Line-search constants, restart interval, curvature guards and backend recovery limits are
 implementation policy, not user parameters. They must be included in resolved provenance when
@@ -222,7 +254,7 @@ silent fallback to another algorithm or device.
 | Solver | Device | Status | Realization and evidence boundary |
 |---|---|---|---|
 | FDM | CPU | source-backed | cellwise tangent gradient, energy-weighted products, retraction and reference Armijo loop |
-| FDM | GPU | source-backed with planner boundary | CUDA/reference sources exist; current public multilayer planner restriction must be resolved before claiming an executable lane |
+| FDM | GPU | source-backed with planner boundary | native CUDA direct-minimizer dispatcher exists; public multilayer planner currently permits only `llg_overdamped` |
 | FEM | CPU | source-backed | native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback and persistent direction |
 | FEM | GPU | source-backed | native CUDA device-resident gradients, reductions, retraction, rollback and persistent direction; executed-device qualification is separate |
 
@@ -230,6 +262,13 @@ The continuum algorithm is shared, but the discrete metric is not. FDM uses cell
 weights. FEM uses its finite-element mass/lumped-mass realization and native field operators.
 CPU/GPU comparison requires the same problem, mesh, precision, stop contract and resolved
 provenance.
+
+FDM CPU calls the reference grid loop; FDM GPU calls the native CUDA direct-minimizer dispatcher
+when the resolved plan permits direct minimization. The public multilayer FDM planner currently
+rejects PG/NCG for that runner, so “CUDA source exists” and “this multilayer script executes NCG on
+GPU” are different claims. FEM CPU performs native MFEM field/energy recovery and rollback; FEM
+GPU keeps direction, accepted field and reduction workspaces device-resident. Runtime qualification
+must identify the actual device and precision.
 
 (numerical-methods-relaxation-ncg-implementation-mapping)=
 ## Implementation mapping
@@ -274,5 +313,6 @@ has no physical-time interpretation.
 | NCG direction policy | `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `nonlinear_cg_next_direction` | tangent transport, PR+, restart and descent recovery | shared/FDM policy | Rust unit tests |
 | NCG line search | `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `nonlinear_cg_armijo_accepts` | Armijo acceptance predicate | shared/FDM policy | Rust unit tests |
 | FDM reference loop | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_nonlinear_cg` | cellwise NCG implementation | FDM CPU/reference | Rust unit tests |
+| FDM CUDA loop | `crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs` | `execute_direct_minimizer` | CUDA PG/NCG state, line search and metrics | FDM GPU | device-gated tests |
 | FEM CPU step | `backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp` | `run_nonlinear_cg_step` | MFEM gradient, energy decision, recovery and state update | FEM CPU | native source contract tests |
 | FEM GPU step | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_nonlinear_cg_step` | device-resident reductions, direction, retraction and rollback | FEM GPU | native source contract tests |

@@ -3201,3 +3201,72 @@ Nie wykonano jeszcze pushu do `origin/master`, browser/CDP smoke, pełnej suity
 Pythona ani device-residency/parity qualification GPU. Dlatego ocena celu
 pozostaje **82% implementacji / 58% gotowości produkcyjnej**; merge do lokalnego
 `master` nie zmienia granic kwalifikacji fizycznej.
+
+## 31. Addendum — post-merge browser smoke i pełna suita Python (2026-08-02)
+
+Ten wpis aktualizuje bramy z rozdziału 30 po świeżej weryfikacji na lokalnym
+`master`. Nie zmienia kwalifikacji backendów ani nie zastępuje niezależnego
+dowodu urządzenia GPU, zbieżności FEM/FDM lub produkcyjnego transportu SML.
+
+### 31.1. Tożsamość i zachowanie stanu
+
+| Pole | Wartość |
+|---|---|
+| `master` przed aktualizacją planu | `5e17012328648aef14498237baf95f6dea998958` |
+| zmiana | `5e170123` — stabilizacja CDP smoke transport authoring |
+| zachowana zmiana użytkownika | `external_solvers/3` pozostaje zmieniony i niestaged |
+| zachowany artefakt zewnętrzny | `docs/audits/2026-08-02-mumax3-fullmag-sp4-fdm-comparison.md` pozostaje untracked i nie został zmodyfikowany |
+| build storage | `/zfn2/mateuszz/git/fullmag`; ciężkie buildy nadal wyłącznie przez zarządzane receptury `just` |
+
+### 31.2. Zamknięte bramy UI
+
+| Gate | Wynik | Zakres i ograniczenie |
+|---|---|---|
+| `pnpm --dir apps/control-room exec vitest run scripts/smoke-transport-authoring-ui-runtime.test.mjs` | **PASS — 9/9** | kontrakt runtime smoke |
+| `node apps/control-room/scripts/smoke-transport-authoring-ui-cdp.mjs` | **PASS** | świeży Next.js na `localhost:3100`; authoring, CRUD, eksport stanu, `solve`, nawigacja Results i inspekcja pola `m` dla bieżącego transportu |
+| obserwacje przeglądarki | **bez błędów** | fixture przygotowania symulacji ma komplet etapów v2; poprawka zapisuje diagnostykę selektora, zasobów i błędów JS |
+
+Smoke nie pokrywa wszystkich parametrów v2 ani wszystkich wariantów FEM/FDM,
+GPU, field-drive i monitorów planarnych. Jest dowodem integracji wybranego
+łańcucha transportowego, nie pełnym browser qualification.
+
+### 31.3. Świeża pełna suita Python
+
+Polecenie:
+
+```text
+PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-pytest pytest -q packages/fullmag-py/tests
+```
+
+Wynik: **1385 passed, 59 failed, 3 skipped, 69 warnings, 549 subtests** w
+`670.09 s`. Wśród awarii są kontrakty wpływające na pozostałą kwalifikację
+łańcucha (eksport etapów SP4, round-trip zaawansowanego/adaptacyjnego relaksu,
+accepted-step autosave SP4, mesh persistence i część dokumentacji API), a także
+niezależne benchmarki FEM/GPU i historyczne testy meshingu. Dlatego nie wolno
+raportować pełnej suity jako zielonej ani traktować wszystkich 59 awarii jako
+awarii STT/SOT/SHE.
+
+Focused transport/round-trip i native gates z rozdziału 30 pozostają ważne,
+ale mają węższy zakres niż pełna suita.
+
+### 31.4. Ocena po świeżych dowodach
+
+Ocena pozostaje **82% implementacji / 58% gotowości produkcyjnej**. Smoke
+przeglądarki zamyka jedną wcześniej otwartą bramę integracyjną, lecz nie
+materializuje brakujących parametrów w browser qualification; pełna suita
+Pythona nadal ma 59 awarii. Brak nowego dowodu produkcyjnego oznacza, że
+podnoszenie drugiego procentu byłoby nieuzasadnione.
+
+Pozostają co najmniej następujące niezależne bramy:
+
+1. rozdzielić i naprawić lub formalnie sklasyfikować 59 awarii Python, w tym
+   kontrakty relaksacji/etapów i SP4 accepted-step table;
+2. rozszerzyć browser smoke na wszystkie parametry v2, field-drive, monitory
+   planarne oraz warianty execution/backend, z wizualnym dowodem UI;
+3. uzyskać świeży device identity/residency i FP64 parity dla GPU;
+4. dokończyć OE-F1 estimator/high-depth oracle i tabelę zbieżności FEM/FDM oraz
+   skalowalny OE-F2;
+5. zastąpić bounded SML/FDM reference lane produkcyjnym weak-form transportem,
+   przestrzennym `C_s`/DOS i dowodem termodynamicznym;
+6. zbudować aktualny launcher porównawczy i zamknąć raport z external solvers
+   bez mieszania starych artefaktów z dowodem bieżącego `master`.

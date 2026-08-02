@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md, docs/physics/0580-canonical-relaxation-equilibrium-contract.md
 ---
 
 (public-docs-numerical-methods-relaxation-llg-relaxation)=
@@ -53,6 +54,11 @@ The time integrator can be fixed-step or adaptive embedded RK23/RK45. The adapti
 is distinct from the physical torque criterion: the local vector error controls step acceptance,
 while $\tau_{\max}$ controls relaxation completion.
 
+For the public stage builder, `solver=None` resolves to `rk23`; `solver="auto"` has the same
+resolution. An executable adaptive stage must provide an explicit `dt_min` and `dt_max`. The
+deprecated `max_error` spelling is accepted only as an alias for `max_err`, and neither may be
+combined with `adaptive_timestep` or fixed `dt` controls.
+
 (numerical-methods-relaxation-llg-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -71,6 +77,11 @@ while $\tau_{\max}$ controls relaxation completion.
 | $\varepsilon_\tau$ | canonical torque stopping threshold | $\mathrm{A\,m^{-1}}$; a public `tolT` request is converted from tesla |
 | $\Delta t$ | attempted integration step | $\mathrm{s}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+
+The reduced gyromagnetic ratio is `gamma` in the Python `LLG` object. The damping coefficient in
+the equation is the resolved stage-local `relax_alpha` when supplied; otherwise the material
+damping is used. The stage default is `relax_alpha=1.0`, which is a numerical pure-damping
+choice, not a claim that the material's physical $\alpha$ has changed globally.
 
 (numerical-methods-relaxation-llg-assumptions-and-validity)=
 ## Assumptions and validity
@@ -138,6 +149,25 @@ study.stages.add_relax(
 | `StudyStagesBuilder.add_relax(tolA=...)` | `float` | canonical default equivalent | $\mathrm{A\,m^{-1}}$ | finite and positive; mutually exclusive with `tolT` | field-residual threshold | FEM/FDM relaxation lanes | `study.stop.torque_tolerance_apm` |
 | `StudyStagesBuilder.add_relax(max_steps=...)` | `int` | $50,000$ | $1$ | positive integer | hard iteration budget | FEM/FDM relaxation lanes | `study.stop.max_steps` |
 | `StudyStagesBuilder.add_relax(relax_alpha=...)` | `float \| None` | $1$ for overdamped LLG | $1$ | only `llg_overdamped`; `None` keeps material damping | stage-local damping override | FEM/FDM LLG relaxation | resolved LLG/material provenance |
+| `StudyStagesBuilder.add_relax(tol=...)` | legacy object | unavailable | legacy | always rejected | removed tolerance spelling; use `tolT` or `tolA` | none | none |
+| `StudyStagesBuilder.add_relax(energy_tolerance=...)` | `float \| None` | `None` | $\mathrm{J}$ | positive when set | 50-accepted-energy plateau threshold | FEM/FDM lanes | `study.stop.energy_tolerance_j` |
+| `StudyStagesBuilder.add_relax(max_relaxation_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | positive; LLG only | relaxation-coordinate ceiling | `llg_overdamped` only | `study.stop.max_relaxation_time_s` |
+| `StudyStagesBuilder.add_relax(max_pseudotime_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must agree with other time names | same LLG ceiling | `llg_overdamped` only | canonical relaxation time |
+| `StudyStagesBuilder.add_relax(max_physical_time_s=...)` | `float \| None` | `None` | $\mathrm{s}$ | alias; must agree with other time names | same LLG ceiling; not a physical experiment clock | `llg_overdamped` only | canonical relaxation time |
+| `StudyStagesBuilder.add_relax(dt=...)` | positive float, `"auto"`, or `None` | `None` | $\mathrm{s}$ | fixed step or `"auto"`; cannot mix with adaptive fields | fixed or automatic step mode | RK23/RK45 for auto; backend may support fixed RK | `dynamics.fixed_timestep` / resolved policy |
+| `StudyStagesBuilder.add_relax(max_error=...)` | `float \| None` | `None` | $1$ | positive; deprecated alias for `max_err`; adaptive only | absolute embedded error bound | RK23/RK45 | adaptive `atol`, mode `max_error` |
+| `StudyStagesBuilder.add_relax(max_err=...)` | `float \| None` | `None` | $1$ | positive; adaptive only | absolute embedded error bound | RK23/RK45 | adaptive `atol`, mode `max_error` |
+| `StudyStagesBuilder.add_relax(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | mixed | only RK23/RK45; explicit `dt_min` and `dt_max` required by executable stages | full adaptive policy | FEM/FDM lane-dependent | `dynamics.adaptive_timestep` |
+| `StudyStagesBuilder.add_relax(field_refresh=...)` | `FieldRefreshPolicy \| None` | `None` | mixed | positive cadence fields | expensive-field refresh cadence | backend-dependent | `dynamics.field_refresh` |
+| `StudyStagesBuilder.add_relax(stop=...)` | `RelaxStop \| None` | `None` | mixed | grouped stop; scalar aliases cannot conflict | canonical stopping object | FEM/FDM lanes | `study.stop` |
+
+`AdaptiveTimestep` itself has the complete fields `atol`, `rtol`, `dt_initial`, `dt_min`, `dt_max`,
+`safety`, `growth_limit`, `shrink_limit`, `max_spin_rotation`, and `norm_tolerance`. `atol` and
+`rtol` are dimensionless normalized-state error limits; `dt_*` are seconds; safety and growth or
+shrink limits are dimensionless; optional spin-rotation and norm limits are positive dimensionless
+guards. `dt_max` may not be below `dt_min`, and `dt_initial` must lie in the interval when set.
+`FieldRefreshPolicy.demag_interval_s` is a positive seconds cadence. These fields are not accepted
+by direct minimizer algorithms.
 
 (numerical-methods-relaxation-llg-problem-ir)=
 ## ProblemIR
@@ -200,6 +230,13 @@ FDM uses grid-local field evaluation. FEM uses the assembled finite-element fiel
 MFEM/CUDA operator path. The equation and stop metric are shared; interpolation, mass weighting,
 field-solve refresh, precision, and runtime ownership are not.
 
+The FDM CPU/reference lane evaluates the effective field on the Cartesian grid and advances the
+same damping-only RHS through its grid integrator. The FDM CUDA lane keeps the state and field
+updates in CUDA-owned buffers when the selected plan permits it. FEM CPU assembles/evaluates the
+MFEM field on the magnetic-node space; FEM GPU uses the native device operator and records device
+residency. None of these descriptions is a claim that all four lanes have identical tolerances,
+reductions, or runtime qualification.
+
 (numerical-methods-relaxation-llg-implementation-mapping)=
 ## Implementation mapping
 
@@ -239,4 +276,9 @@ and their line-search contracts are described separately.
 | Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `relax_stage` | maps stage arguments into `RelaxStageSpec` | public API | stage export tests |
 | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_projected_gradient_bb` | FDM reference BB relaxation | FDM CPU/reference | Rust unit tests |
 | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_nonlinear_cg` | FDM reference NCG relaxation | FDM CPU/reference | Rust unit tests |
-| FEM CPU pure-damping selection | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | selects precession-disabled relaxation mode | FEM/FDM orchestration | runner tests |
+| Shared pure-damping predicate | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | selects precession-disabled relaxation mode | FEM/FDM orchestration | runner tests |
+| Accepted-state convergence | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_converged` / `relaxation_stop_criteria_satisfied` | torque/energy conjunction | shared orchestration | runner tests |
+| Three-sample confirmation | `crates/fullmag-runner/src/relaxation/convergence.rs` | `RelaxationTorqueConfirmation::observe` | requires three consecutive valid samples | shared orchestration | runner tests |
+| FEM LLG execution | `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs` | `execute_llg_overdamped` | native FEM loop, integrator and completion metrics | FEM CPU/GPU | native runtime tests |
+| FEM LLG policy | `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs` | `convergence_controller_policy` / `fill_provenance` | records resolved controller and integrator | FEM | provenance tests |
+| FDM CPU/reference LLG | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Cartesian reference relaxation dispatch | FDM CPU | runner tests |

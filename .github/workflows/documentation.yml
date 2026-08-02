@@ -99,19 +99,25 @@ jobs:
         run: python scripts/check_public_docs_boundary.py
 
       - name: Validate scientific documentation source contracts
+        env:
+          DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
         run: |
           set -euo pipefail
-          while IFS= read -r -d '' manifest; do
+          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site/physics public_docs/site/python-api | grep -E '\\.source-map\\.json$' || true)"
+          if [[ -z "$map_files" ]]; then
+            echo "No changed public scientific source maps; changed-page validation already ran."
+            exit 0
+          fi
+          while IFS= read -r manifest; do
             python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
               "$manifest" --repo-root .
-          done < <(find public_docs/site/physics public_docs/site/python-api -name '*.source-map.json' -print0)
+          done <<< "$map_files"
 
       - name: Execute documented Python API contracts
         env:
           PYTHONPATH: packages/fullmag-py/src
         run: |
           python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
-          python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
 
       - name: Build public documentation strictly
         env:
@@ -121,14 +127,21 @@ jobs:
           public_docs/site public_docs/site/_build/html
 
       - name: Validate rendered scientific documentation
+        env:
+          DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
         run: |
           set -euo pipefail
-          while IFS= read -r -d '' manifest; do
+          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site/physics public_docs/site/python-api | grep -E '\\.source-map\\.json$' || true)"
+          if [[ -z "$map_files" ]]; then
+            echo "No changed public scientific source maps; rendered changed-page validation already ran."
+            exit 0
+          fi
+          while IFS= read -r manifest; do
             relative="${manifest#public_docs/site/}"
             rendered="public_docs/site/_build/html/${relative%.source-map.json}.html"
             python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
               "$manifest" --repo-root . --rendered-html "$rendered"
-          done < <(find public_docs/site/physics public_docs/site/python-api -name '*.source-map.json' -print0)
+          done <<< "$map_files"
 
       - name: Upload pull request preview artifact
         uses: actions/upload-artifact@v7

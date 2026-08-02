@@ -208,6 +208,26 @@ canonical interaction and material normalization without introducing a second Py
 workflow. The stage builder owns the complete physical request; the planner resolves its backend
 policy, installed capabilities, and execution context after the ordered stages are captured.
 
+### Object-level interaction fragment
+
+Use this small fragment when inspecting the canonical interaction and material records without
+constructing a second simulation workflow:
+
+```python
+# %% Inspect exchange and its material coefficients
+import fullmag as fm
+
+exchange = fm.Exchange()
+material = fm.Material(
+    name="Permalloy",
+    Ms=800.0e3,
+    A=13.0e-12,
+    alpha=0.01,
+)
+assert exchange.to_ir() == {"kind": "exchange"}
+print(material.to_ir())
+```
+
 ### Exchange-facing parameter reference
 
 #### `Exchange()`
