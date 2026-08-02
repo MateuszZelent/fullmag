@@ -1505,6 +1505,15 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must generate current energy/gradient finite flags on device for the packed current-state readback");
     check(
+        pgbb_current_metrics.find(
+            "gpu_rk_reduce_final_field_metric_terms(\n            ctx, stream, n, blocks, reason)") !=
+            std::string::npos &&
+            pgbb_current_metrics.find(
+                "gpu_rk_reduce_final_field_metric_terms(\n            ctx, stream, n, blocks, reason)") <
+                pgbb_current_metrics.find(
+                    "fullmag_cuda_relax_pgbb_current_metrics_finite_flags("),
+        "native FEM GPU projected-gradient BB must refresh current field metrics, including MaxTorque, before the torque completion gate reads the packed snapshot");
+    check(
         direct_energy_source.find("kDirectEnergyTailSlots = 12") !=
                 std::string::npos &&
             direct_energy_source.find(
@@ -1809,6 +1818,13 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             direct_energy_source.find("!metrics.gradient_norm_finite") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must reject invalid tangent-gradient reductions before Armijo");
+    check(
+        direct_energy_source.find(
+            "GPU projected-gradient BB produced a non-finite or negative current max torque") !=
+            std::string::npos &&
+            direct_energy_source.find("GpuFinalScalarSlot::MaxTorque") !=
+                std::string::npos,
+        "native FEM GPU projected-gradient BB must reject an invalid refreshed current torque before Armijo");
     check(
         pgbb_source.find("GPU projected-gradient BB produced invalid BB curvature scalars") !=
                 std::string::npos &&

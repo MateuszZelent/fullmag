@@ -16,6 +16,7 @@
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
+#include "gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
@@ -277,6 +278,14 @@ bool gpu_relax_compute_current_metrics(
                 kGpuPgbbCurrentProjectedGradientNormSlot,
             "launch GPU projected-gradient BB energy gradient norm reduction",
             reason)) {
+        return false;
+    }
+
+    // The energy reduction does not own MaxTorque. Refresh the field metrics
+    // here so the torque-only completion gate cannot consume the previous
+    // accepted step's scalar slot while the current gradient is already fresh.
+    if (!gpu_rk_reduce_final_field_metric_terms(
+            ctx, stream, n, blocks, reason)) {
         return false;
     }
 
