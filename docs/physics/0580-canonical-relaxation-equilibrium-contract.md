@@ -10,6 +10,7 @@
 - Supersedes: conflicting relaxation-time, direct-minimizer step-unit, torque,
   and capability statements in `0500`, `0510`, and `0530`
 
+(problem-statement)=
 ## 1. Problem statement
 
 Fullmag exposes several workflows under the public name `Relaxation`:
@@ -40,6 +41,7 @@ is incorrect even if an existing regression test accepts it.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Equilibrium problem
 
 For a magnetization direction field
@@ -310,6 +312,7 @@ used only when the identical realized field contributes to both `H_eff` and
 the Zeeman energy for every trial state. Until field-energy parity is proven
 for a lane, that lane rejects Oersted during relaxation.
 
+(symbols-and-si-units)=
 ### 2.5 Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -330,6 +333,7 @@ for a lane, that lane rejects Oersted during relaxation.
 | `max_rhs_norm_per_s` | maximum total dynamic RHS norm | `1/s` |
 | `relaxation_time_s` | LLG-relaxation stage-local clock | `s` |
 
+(assumptions-and-validity)=
 ### 2.6 Assumptions and validity limits
 
 - Magnetization is normalized at every accepted active magnetic degree of
@@ -346,6 +350,7 @@ for a lane, that lane rejects Oersted during relaxation.
 - Single precision needs algorithm- and workload-specific qualification. It
   must not silently reuse double-precision thresholds when roundoff dominates.
 
+(discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
@@ -442,8 +447,46 @@ cancellation, unsupported paths, and backend failures never set
 Completion is emitted from the state that owned the stop decision. It is not
 reconstructed from sparsely sampled output rows.
 
+### 3.5 Same-tolerance CPU/GPU equilibrium parity
+
+Execution coverage and equilibrium parity are separate claims. A fixed-budget
+CPU/GPU pair may have different trajectories and accepted-step counts. Step
+counts are reported as diagnostics and are not required to be equal. A pair is
+eligible for parity only when both rows use the same typed solver-mesh
+signature and each row has `converged=true`, `stop_reason="torque"`, the same
+finite `resolved_torque_tolerance_apm`, a final torque at or below that target,
+native `time_to_tolerance_seconds`, accepted-step and demagnetization-solve
+counts, all final energy components, a finite `norm_defect <= 1e-9`, and
+captured `m_final.json` evidence with its canonical content identity.
+
+The machine-readable comparison is
+`fullmag.fem.relaxation_equilibrium_parity.v1`. Its initial FP64 envelope is
+energy `rtol=1e-6`, `atol=1e-30 J`, maximum magnetization component difference
+`<=1e-9`, and norm defect `<=1e-9`. The report additionally records RMS
+component difference, p99 vector difference, mean-vector difference, and each
+energy-component difference. A solver-mesh mismatch, missing final field,
+`max_steps`/timeout/backend failure, nonconverged row, or final torque above
+the resolved threshold is a hard failure; it is never downgraded to
+`coverage_only`.
+
+`time_to_tolerance_seconds` starts after backend creation enters stage
+execution and stops at the first accepted state satisfying the torque
+criterion. It is the sum of native accepted-step diagnostics and excludes
+Python orchestration, scalar/table serialization, artifact-writer field
+copies, and report generation. Missing native timing is missing measurement,
+not a substitution with subprocess wall time. Qualification uses one warmup
+and five measured repeats per backend/fixture/algorithm; p50, p95, and
+standard deviation are retained for time, accepted steps, and demagnetization
+solve count.
+
+Parity status is one of `not_requested`, `not_qualified`, `checked`, or
+`failed`. `checked` is emitted only after the final-state comparator runs. No
+speedup or production-physics claim may consume a `coverage_only`, `max_steps`,
+timeout, or otherwise incomplete row.
+
 ## 4. API, IR, planner, runtime, and workspace impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 The default public torque threshold is `tolT=1e-6`, expressed in tesla to
@@ -485,6 +528,22 @@ fm.Relaxation(
 )
 ```
 
+The parity benchmark is authored through the same stage-first public surface:
+
+```python
+# %%
+import fullmag as fm
+
+# %%
+study = fm.study("equilibrium_parity")
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=50_000,
+    tolA=8_000.0,
+)
+```
+
 For `projected_gradient_bb`, `nonlinear_cg`, and development-only
 `tangent_plane_implicit`, `dynamics` must be `None`; integrator, fixed/adaptive
 step, damping override, and relaxation-time parameters are rejected.
@@ -511,6 +570,7 @@ Migration:
 - either legacy time field on a direct minimizer is an error;
 - conflicting canonical and legacy fields are an error.
 
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 `StudyIR::Relaxation` contains:
@@ -543,7 +603,12 @@ Runtime capability resources expose supported algorithms, supported LLG
 integrators, qualification state, and rejection/fallback diagnostics so Python
 and UI use the same vocabulary.
 
+(round-trip-and-failure-semantics)=
 ### 4.4 Runtime, completion, artifacts, and provenance
+
+The requested intent is preserved separately from the resolved execution;
+validation errors and unsupported combinations are returned before runtime
+selection and are never silently rewritten into a different backend.
 
 Runtime records:
 
@@ -611,7 +676,9 @@ Defaults come from one shared canonical contract and are tested against Python
 serialization. UI-local Tesla-derived or script-builder fallback defaults are
 forbidden.
 
+(implementation-mapping)=
 ## 5. Validation strategy
+(validation)=
 
 ### 5.1 Analytical checks
 
@@ -686,6 +753,7 @@ run through their repository-owned commands.
 - [x] Managed runtime verification
 - [x] Canonical physics contract
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 ### 7.1 Default torque calibration status
@@ -721,6 +789,16 @@ from the current runs.
 - Publication-scale standard problems remain required for backend qualification
   even after unit and contract tests pass.
 
+(source-code-index)=
+## Source-code index
+
+| Repository path | Stable symbol | Responsibility |
+|---|---|---|
+| `scripts/validate_fem_relaxation_equilibrium_parity.py` | `compare_equilibrium_states` | Compares converged CPU/GPU states without requiring equal step counts. |
+| `scripts/analysis/fem_gpu_benchmark.py` | `equilibrium_parity_summary` | Produces the versioned parity summary from benchmark rows. |
+| `examples/bench_fem_gpu_long.py` | `solver_time_to_tolerance_evidence` | Computes native accepted-step time to the first torque-qualified state. |
+
+(scientific-bibliography)=
 ## 8. References
 
 1. W. F. Brown Jr., *Micromagnetics*, Wiley, 1963.

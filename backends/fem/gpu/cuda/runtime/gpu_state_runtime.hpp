@@ -88,6 +88,31 @@ struct GpuRkPhaseTimingRuntimeState {
 };
 
 /*
+ * Optional profiler-only telemetry for the GPU portion of one outer RK
+ * transaction.  Event pairs are allocated lazily on the first profiled
+ * capture/restore and reused across attempts; profiler-off execution keeps
+ * both vectors empty.  The byte counters count only the D2D ranges enqueued
+ * by the transaction (component fields plus present Poisson solutions).
+ */
+struct GpuRkTransactionTelemetryRuntimeState {
+    struct EventPair {
+        void *start_event = nullptr;
+        void *stop_event = nullptr;
+    };
+
+    std::vector<EventPair> capture_events{};
+    std::vector<EventPair> restore_events{};
+    size_t capture_used = 0;
+    size_t restore_used = 0;
+    uint64_t capture_bytes = 0;
+    uint64_t restore_bytes = 0;
+    uint64_t capture_device_elapsed_ns = 0;
+    uint64_t restore_device_elapsed_ns = 0;
+    uint64_t capture_event_pairs_created = 0;
+    uint64_t restore_event_pairs_created = 0;
+};
+
+/*
  * Runtime owner for the native FEM GPU-state object.
  *
  * The concrete FemGpuState owns device buffers, residency metadata, hybrid
@@ -102,6 +127,7 @@ struct GpuStateRuntimeState {
     LegacyGpuExchangeRuntimeState legacy_exchange{};
     CudaRuntimeState cuda{};
     GpuRkPhaseTimingRuntimeState rk_phase_timings{};
+    GpuRkTransactionTelemetryRuntimeState rk_transaction_telemetry{};
 };
 
 /*

@@ -8,6 +8,7 @@ import type {
 import {
   buildCpuTelemetryPanelModel,
   buildSolverProfilePanelModel,
+  buildTimestepQualificationPanelModel,
   serializeSolverProfileRows,
 } from "./FooterDiagnostics";
 
@@ -225,6 +226,54 @@ const profile: SolverProfileResource = {
 };
 
 describe("FooterDiagnostics", () => {
+  it("warns when the exact LLG timestep lane is unvalidated", () => {
+    const model = buildTimestepQualificationPanelModel({
+      ...profile,
+      timestep_qualification: {
+        backend: "fem",
+        capability_id: "llg_td_policy_v1",
+        device: "gpu",
+        integrator: "rk45",
+        precision: "double",
+        qualification_id: "explicit_adaptive_fem_gpu_double",
+        qualification_registry_version:
+          "fullmag.llg_timestep_qualification_registry.v1",
+        timestep_policy: "adaptive",
+        validation_state: "unvalidated",
+      },
+    });
+
+    expect(model).toEqual({
+      detail: "No exact artifact/runtime-source binding.",
+      label: "LLG timestep: Unvalidated",
+      warning: true,
+    });
+  });
+
+  it("does not warn for a physics-validated LLG timestep lane", () => {
+    const model = buildTimestepQualificationPanelModel({
+      ...profile,
+      timestep_qualification: {
+        backend: "fem",
+        capability_id: "llg_td_policy_v1",
+        device: "cpu",
+        integrator: "rk45",
+        precision: "double",
+        qualification_id: "explicit_fixed_fem_cpu_double",
+        qualification_registry_version:
+          "fullmag.llg_timestep_qualification_registry.v1",
+        timestep_policy: "fixed",
+        validation_state: "physics_validated",
+      },
+    });
+
+    expect(model).toEqual({
+      detail: "Registry fullmag.llg_timestep_qualification_registry.v1.",
+      label: "LLG timestep: Physics validated",
+      warning: false,
+    });
+  });
+
   it("builds CPU telemetry rows from host and process samples", () => {
     const cpu: CpuTelemetryResource = {
       logical_cpus: 40,

@@ -111,6 +111,280 @@ def write_performance_fixture(
     return manifest
 
 
+def _typed_v2_test_mesh() -> dict[str, object]:
+    """Return a small typed mesh with one exterior and one interface facet."""
+    return {
+        "mesh_name": "typed-v2-test",
+        "nodes": [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        "cells": {
+            "types": ["tet4", "tet4"],
+            "offsets": [0, 4, 8],
+            "nodes": [0, 1, 2, 3, 0, 2, 1, 4],
+            "global_ordinals": [0, 1],
+        },
+        "element_markers": [1, 0],
+        "facets": {
+            "types": ["tri3", "tri3"],
+            "roles": ["material_interface", "exterior"],
+            "offsets": [0, 3, 6],
+            "nodes": [0, 1, 2, 0, 1, 3],
+            "global_ordinals": [0, 1],
+        },
+        "boundary_markers": [2, 3],
+    }
+
+
+def test_legacy_fixture_is_not_strict() -> None:
+    benchmark = load_benchmark_module()
+    mesh_path = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.mesh.json"
+    )
+    mesh = json.loads(mesh_path.read_text(encoding="utf-8"))
+    owners: dict[tuple[int, ...], int] = {}
+    for element in mesh["elements"]:
+        for face in (
+            (element[0], element[1], element[2]),
+            (element[0], element[1], element[3]),
+            (element[0], element[2], element[3]),
+            (element[1], element[2], element[3]),
+        ):
+            key = tuple(sorted(face))
+            owners[key] = owners.get(key, 0) + 1
+    owner_counts = [owners[tuple(sorted(face))] for face in mesh["boundary_faces"]]
+    assert owner_counts.count(2) == 64
+    assert any(count != 1 for count in owner_counts)
+    with pytest.raises(ValueError, match="typed performance fixture mesh"):
+        benchmark.typed_mesh_topology_counts(mesh)
+
+
+def test_typed_mesh_topology_counts_requires_exact_roles_and_owners() -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    assert benchmark.typed_mesh_topology_counts(mesh) == {
+        "node_count": 5,
+        "cell_count": 2,
+        "facet_count": 2,
+        "exterior_facet_count": 1,
+        "interface_facet_count": 1,
+    }
+
+    invalid = json.loads(json.dumps(mesh))
+    invalid["facets"]["roles"][0] = "exterior"
+    with pytest.raises(ValueError, match="exterior facet 0 has 2 owners"):
+        benchmark.typed_mesh_topology_counts(invalid)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing_cells_types", "missing cells.types"),
+        ("missing_facets_types", "missing facets.types"),
+        ("unknown_role", "unknown facet role"),
+        ("one_owner_interface", "interface facet 0 has 1 owners"),
+    ],
+)
+def test_typed_mesh_topology_counts_rejects_malformed_schema(
+    mutation: str, message: str
+) -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    if mutation == "missing_cells_types":
+        del mesh["cells"]["types"]
+    elif mutation == "missing_facets_types":
+        del mesh["facets"]["types"]
+    elif mutation == "unknown_role":
+        mesh["facets"]["roles"][0] = "invented"
+    elif mutation == "one_owner_interface":
+        mesh["facets"]["nodes"][:3] = [0, 1, 3]
+    else:  # pragma: no cover - parametrization protects this branch
+        raise AssertionError(mutation)
+    with pytest.raises(ValueError, match=message):
+        benchmark.typed_mesh_topology_counts(mesh)
+
+
+def test_typed_fixture_v2_manifest_preserves_topology_identity(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    mesh_path = tmp_path / "typed.mesh.json"
+    mesh_path.write_text(json.dumps(_typed_v2_test_mesh()), encoding="utf-8")
+    counts = benchmark.typed_mesh_topology_counts(
+        json.loads(mesh_path.read_text(encoding="utf-8"))
+    )
+    manifest = {
+        "schema": "fullmag.fem_gpu.performance_fixture.v2",
+        "solver_mesh_path": mesh_path.name,
+        "solver_mesh_sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
+        "solver_mesh_signature": benchmark.solver_mesh_signature(
+            _typed_v2_test_mesh()
+        ),
+        "problem_ir_sha256": "a" * 64,
+        **counts,
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "nonlinear_cg",
+        "demag_policy": {"solver": "CG", "preconditioner": "AMG", "rtol": 1e-12},
+        "stop_condition": {"kind": "torque_or_max_steps", "max_steps": 1},
+    }
+    manifest_path = tmp_path / "typed.fixture.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    fixture = benchmark.load_fixture_manifest(manifest_path)
+    assert fixture.node_count == counts["node_count"]
+    assert fixture.element_count == counts["cell_count"]
+
+
+def test_mesh_topology_stats_is_single_parser_and_legacy_requires_explicit_opt_in(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    typed_path = tmp_path / "typed.mesh.json"
+    typed_path.write_text(json.dumps(_typed_v2_test_mesh()), encoding="utf-8")
+
+    stats = benchmark.read_mesh_topology_stats(typed_path)
+    assert stats == benchmark.MeshTopologyStats(
+        node_count=5,
+        cell_count=2,
+        facet_count=2,
+        exterior_facet_count=1,
+        interface_facet_count=1,
+        schema_kind="typed_v2",
+    )
+
+    legacy_path = tmp_path / "legacy.mesh.json"
+    legacy_path.write_text(
+        json.dumps({"nodes": [[0.0, 0.0, 0.0]], "elements": [[0, 0, 0, 0]]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="legacy mesh requires explicit opt-in"):
+        benchmark.read_mesh_topology_stats(legacy_path)
+    legacy_stats = benchmark.read_mesh_topology_stats(
+        legacy_path, allow_legacy=True
+    )
+    assert legacy_stats.schema_kind == "legacy_v1"
+
+
+def test_mesh_topology_stats_rejects_conflicting_dual_schema(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    mesh["elements"] = [[0, 1, 2, 3]]
+    mesh["boundary_faces"] = [[0, 1, 2]]
+    path = tmp_path / "dual.mesh.json"
+    path.write_text(json.dumps(mesh), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="conflicting dual-schema"):
+        benchmark.read_mesh_topology_stats(path)
+
+
+def test_solver_mesh_signature_v2_covers_roles_markers_and_owner_connectivity() -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    baseline = benchmark.solver_mesh_signature(mesh)
+    assert baseline == benchmark.mesh_signature(mesh)
+
+    for mutate in (
+        lambda value: value["facets"]["roles"].__setitem__(0, "periodic_seam"),
+        lambda value: value["element_markers"].__setitem__(0, 7),
+        lambda value: value["boundary_markers"].__setitem__(0, 91),
+        lambda value: value["facets"]["global_ordinals"].__setitem__(0, 9),
+    ):
+        changed = json.loads(json.dumps(mesh))
+        mutate(changed)
+        assert benchmark.solver_mesh_signature(changed) != baseline
+
+
+def test_solver_mesh_signature_derives_current_ir_owners_and_rejects_partial_owner_arrays() -> None:
+    benchmark = load_benchmark_module()
+    mesh = _typed_v2_test_mesh()
+    derived = benchmark.solver_mesh_signature(mesh)
+    without_optional_owner_arrays = json.loads(json.dumps(mesh))
+    assert benchmark.solver_mesh_signature(without_optional_owner_arrays) == derived
+
+    partial = json.loads(json.dumps(mesh))
+    partial["facets"]["owner_offsets"] = [0, 2, 3]
+    with pytest.raises(ValueError, match="owner_offsets and owners"):
+        benchmark.solver_mesh_signature(partial)
+
+
+def test_execution_plan_mesh_stats_separates_input_and_solver_identity_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    input_path = tmp_path / "input.mesh.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "nodes": [[0.0, 0.0, 0.0]],
+                "elements": [[0, 0, 0, 0]],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    solver_mesh = _typed_v2_test_mesh()
+    solver_path = tmp_path / "solver.mesh.json"
+    solver_path.write_text(json.dumps(solver_mesh), encoding="utf-8")
+    metadata = {
+        "execution_plan": {
+            "backend_plan": {
+                "kind": "fem",
+                "mesh_name": "solver",
+                "mesh": solver_mesh,
+            }
+        }
+    }
+
+    stats = benchmark.execution_plan_mesh_stats(
+        metadata, input_mesh_path=input_path, solver_mesh_path=solver_path
+    )
+    assert stats["input_mesh_node_count"] == 1
+    assert stats["input_mesh_cell_count"] == 1
+    assert stats["solver_mesh_node_count"] == 5
+    assert stats["solver_mesh_cell_count"] == 2
+    assert stats["solver_mesh_facet_count"] == 2
+    assert stats["solver_mesh_exterior_facet_count"] == 1
+    assert stats["solver_mesh_interface_facet_count"] == 1
+    assert stats["solver_mesh_signature"] == benchmark.solver_mesh_signature(solver_mesh)
+
+    mismatched = json.loads(json.dumps(metadata))
+    mismatched["execution_plan"]["backend_plan"]["mesh"]["boundary_markers"][0] = 99
+    with pytest.raises(ValueError, match="solver mesh topology mismatch"):
+        benchmark.execution_plan_mesh_stats(
+            mismatched, input_mesh_path=input_path, solver_mesh_path=solver_path
+        )
+
+
+def test_typed_fixture_manifest_rejects_declared_solver_count_mismatch(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    mesh_path = tmp_path / "typed.mesh.json"
+    mesh_path.write_text(json.dumps(_typed_v2_test_mesh()), encoding="utf-8")
+    counts = benchmark.typed_mesh_topology_counts(
+        json.loads(mesh_path.read_text(encoding="utf-8"))
+    )
+    manifest = {
+        "schema": "fullmag.fem_gpu.performance_fixture.v2",
+        "solver_mesh_path": mesh_path.name,
+        "solver_mesh_sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
+        "solver_mesh_signature": benchmark.solver_mesh_signature(
+            _typed_v2_test_mesh()
+        ),
+        "problem_ir_sha256": "a" * 64,
+        **counts,
+        "cell_count": counts["cell_count"] + 1,
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "nonlinear_cg",
+        "demag_policy": {"solver": "CG", "preconditioner": "AMG", "rtol": 1e-12},
+        "stop_condition": {"kind": "torque_or_max_steps", "max_steps": 1},
+    }
+    manifest_path = tmp_path / "typed.fixture.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="cell_count differs"):
+        benchmark.load_fixture_manifest(manifest_path)
+
+
 def test_benchmark_summary_reports_distribution() -> None:
     benchmark = load_benchmark_module()
     summary = benchmark.summarize_distribution([10.0, 11.0, 12.0, 20.0, 30.0])
@@ -129,7 +403,7 @@ def task11_expected_qualification_identity() -> dict[str, object]:
         "environment_sha256": "e" * 64,
         "runtime_identity": {
             "runtime_manifest_sha256": "runtime-identity",
-            "source_manifest_sha256": "source-identity",
+            "runtime_source_inputs_sha256": "source-identity",
             "libfullmag_fem_sha256": "library-identity",
         },
         "gpu_identity": {
@@ -255,7 +529,7 @@ def task11_preconditioner_qualification_rows(
                     "phase2_compute_assertion_enabled": True,
                     "phase2_compute_hot_loop_sync_clean": True,
                     "runtime_manifest_sha256": "runtime-identity",
-                    "source_manifest_sha256": "source-identity",
+                    "runtime_source_inputs_sha256": "source-identity",
                     "libfullmag_fem_sha256": "library-identity",
                     "device_uuid": "GPU-task11-test",
                     "device_name": "NVIDIA GeForce RTX 4080 SUPER",
@@ -384,7 +658,7 @@ def task11_preconditioner_cpu_gpu_parity_rows() -> list[dict[str, object]]:
                     "hot_loop_control_scalar_host_sync_count": 51,
                     "total_rhs_evals": 32,
                     "runtime_manifest_sha256": "runtime-identity",
-                    "source_manifest_sha256": "source-identity",
+                    "runtime_source_inputs_sha256": "source-identity",
                     "libfullmag_fem_sha256": "library-identity",
                     "device_uuid": (
                         "GPU-task11-test" if backend == "fem_gpu" else None
@@ -1046,7 +1320,9 @@ def test_fixture_identity_rejects_full_contract_tamper(
         write_performance_fixture(tmp_path, benchmark)
     )
     row = {
-        "solver_mesh_signature": "fixture-mesh",
+        "solver_mesh_signature": benchmark.solver_mesh_signature(
+            _typed_v2_test_mesh()
+        ),
         "executed_problem_ir_sha256": "a" * 64,
         "reported_scenario": "box500_airbox_exchange_demag",
         "reported_relaxation_algorithm": "nonlinear_cg",
@@ -1867,6 +2143,21 @@ def test_fixture_generation_recipe_uses_managed_runtime() -> None:
     assert "--write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json" in recipe
 
 
+def test_typed_fixture_v2_recipes_are_managed_and_strict() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    generation = just_recipe_source(justfile, "generate-fem-performance-fixture-v2")
+    verification = just_recipe_source(justfile, "verify-fem-performance-fixture-v2")
+    assert "just ensure-managed-fem-runtime" in generation
+    assert "FULLMAG_GMSH_THREADS=1" in generation
+    assert "--demag-rtols 1e-12" in generation
+    assert "--demag-amg-relax-types 6" in generation
+    assert "box500_airbox_exchange_demag_v2.fixture.json" in generation
+    assert "amg_qualification_suite_v2.json" in generation
+    assert "--target fem_mixed_p1_contract" in verification
+    assert "FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu" in verification
+    assert "--list-amg-qualification-fixture-suite" in verification
+
+
 def test_runtime_restore_manifest_rejects_library_hash_drift(tmp_path) -> None:
     benchmark = load_benchmark_module()
     bundle = tmp_path / "bundle"
@@ -2636,12 +2927,17 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "native/build/backends/fem/fem_relaxation_source_contract" in justfile
     assert "verify-fem-relaxation-convergence:" in justfile
     assert "verify-fem-relaxation-cpu-gpu-consistency-smoke:" in justfile
+    assert "verify-fem-relaxation-consistency-semantics:" in justfile
     assert "verify-fem-relaxation-production-benchmark:" in justfile
     assert "verify-fem-gpu-demag-performance-benchmark:" in justfile
     assert "bench-fem-gpu-demag-amg-profile-sweep:" in justfile
     consistency_recipe = just_recipe_source(
         justfile,
         "verify-fem-relaxation-cpu-gpu-consistency-smoke",
+    )
+    semantics_recipe = just_recipe_source(
+        justfile,
+        "verify-fem-relaxation-consistency-semantics",
     )
     production_recipe = just_recipe_source(
         justfile,
@@ -2661,6 +2957,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
         assert "python3 scripts/analysis/fem_gpu_benchmark.py" in recipe
         assert "PYTHONPATH=/workspace/packages/fullmag-py/src" in recipe
         assert ".fullmag/reports/" in recipe
+    assert "python3 scripts/verify_fem_relaxation_consistency_semantics.py" in semantics_recipe
     for env_name in [
         "FULLMAG_BENCH_INTEGRATORS",
         "FULLMAG_BENCH_RELAX_ALGORITHMS",
@@ -3108,12 +3405,34 @@ def test_benchmark_harness_can_pin_one_runner_to_a_selected_runtime_root(
 
     runtime_root.mkdir()
     manifest = runtime_root / "manifest.json"
-    manifest.write_text('{"schema":2}\n', encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 3,
+                "source_provenance": {
+                    "git_commit": "a" * 40,
+                    "git_tree": "b" * 40,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "c" * 64,
+                    "source_input_manifest": (
+                        "scripts/managed_fem_runtime_source_inputs.v1.txt"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     assert benchmark.runtime_bundle_identity(runtime_root) == {
         "runtime_bundle_root": str(runtime_root.resolve()),
         "runtime_manifest_sha256": benchmark.hashlib.sha256(
             manifest.read_bytes()
         ).hexdigest(),
+        "runtime_git_commit": "a" * 40,
+        "runtime_git_tree": "b" * 40,
+        "runtime_source_inputs_sha256": "c" * 64,
+        "runtime_dirty": "false",
+        "runtime_dirty_patch_sha256": "",
     }
 
 
@@ -3146,7 +3465,11 @@ def task8_expected_qualification_identity() -> tuple[
     dict[str, object], list[dict[str, object]]
 ]:
     runtime_identity = {
-        "source_manifest_sha256": "a" * 64,
+        "runtime_git_commit": "a" * 40,
+        "runtime_git_tree": "b" * 40,
+        "runtime_source_inputs_sha256": "c" * 64,
+        "runtime_dirty": "false",
+        "runtime_dirty_patch_sha256": "",
         "runtime_manifest_sha256": "b" * 64,
         "libfullmag_fem_sha256": "c" * 64,
         "device_name": "NVIDIA GeForce RTX 4080",
@@ -3203,7 +3526,15 @@ def task8_qualification_row(
         "scenario": case_identity["case_id"],
         "reported_relaxation_algorithm": case_identity["relaxation_algorithm"],
         "repeat_index": repeat_index,
-        "source_manifest_sha256": runtime_identity["source_manifest_sha256"],
+        "runtime_git_commit": runtime_identity["runtime_git_commit"],
+        "runtime_git_tree": runtime_identity["runtime_git_tree"],
+        "runtime_source_inputs_sha256": runtime_identity[
+            "runtime_source_inputs_sha256"
+        ],
+        "runtime_dirty": runtime_identity["runtime_dirty"],
+        "runtime_dirty_patch_sha256": runtime_identity[
+            "runtime_dirty_patch_sha256"
+        ],
         "runtime_manifest_sha256": runtime_identity["runtime_manifest_sha256"],
         "libfullmag_fem_sha256": runtime_identity["libfullmag_fem_sha256"],
         "fixture_sha256": case_identity["fixture_sha256"],
@@ -3290,7 +3621,12 @@ def test_task8_qualification_accepts_exact_identity_complete_pairs_and_monotonic
 @pytest.mark.parametrize(
     ("backend", "row_field", "tampered_value", "failure_label"),
     [
-        ("fem_gpu", "source_manifest_sha256", "2" * 64, "source_manifest_sha256"),
+        (
+            "fem_gpu",
+            "runtime_source_inputs_sha256",
+            "2" * 64,
+            "runtime_source_inputs_sha256",
+        ),
         ("fem_gpu", "runtime_manifest_sha256", "3" * 64, "runtime_manifest_sha256"),
         ("fem_gpu", "libfullmag_fem_sha256", "4" * 64, "libfullmag_fem_sha256"),
         ("fem_gpu", "fixture_sha256", "5" * 64, "fixture_sha256"),
@@ -3462,7 +3798,7 @@ def test_task8_qualification_rejects_old_98f832_native_library_identity() -> Non
     runtime_identity, case_identities = task8_expected_qualification_identity()
     runtime_identity.update(
         {
-            "source_manifest_sha256": "3bf69a81294a5d4ae8bcd0d19359ae610032e992098e2c04d65071cba9f3ca56",
+            "runtime_source_inputs_sha256": "3bf69a81294a5d4ae8bcd0d19359ae610032e992098e2c04d65071cba9f3ca56",
             "runtime_manifest_sha256": "7aec841222232a1bfcd87e9a0ba6fc2e9501ccb99b6ccacd21d521bc8f439b69",
             "libfullmag_fem_sha256": "c34db964a116df422463a7dc2e96983e0589dd0cc9a50a4d82a9defe412be855",
         }
@@ -3471,7 +3807,7 @@ def test_task8_qualification_rejects_old_98f832_native_library_identity() -> Non
     for row in rows:
         row.update(
             {
-                "source_manifest_sha256": "2587f0134abd89ec0a30cc7c576ff6d9166356d7ada9d00362519b149f4e3c8c",
+                "runtime_source_inputs_sha256": "2587f0134abd89ec0a30cc7c576ff6d9166356d7ada9d00362519b149f4e3c8c",
                 "runtime_manifest_sha256": "98f832772d0d9a5c7c46b4823c5f5c5bf2e4ed823e0f143e53ffa9aa9843fff8",
                 "libfullmag_fem_sha256": "63547f779f2c88611382532c6bdfe827f2969f5634733794494247d00817c03e",
             }
@@ -3516,7 +3852,7 @@ def test_task8_qualification_rejects_missing_expected_case_identity_before_rows(
 @pytest.mark.parametrize(
     "field",
     [
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "runtime_manifest_sha256",
         "libfullmag_fem_sha256",
     ],
@@ -4200,7 +4536,17 @@ def test_task8_identity_capture_manifest_expected_device_rejects_observed_drift(
     (runtime_root / "manifest.json").write_text(
         json.dumps(
             {
-                "source_manifest_sha256": "a" * 64,
+                "schema": 3,
+                "source_provenance": {
+                    "git_commit": "a" * 40,
+                    "git_tree": "b" * 40,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "c" * 64,
+                    "source_input_manifest": (
+                        "scripts/managed_fem_runtime_source_inputs.v1.txt"
+                    ),
+                },
                 "native_libraries": {
                     "fullmag_fem": {"path": "lib/libfullmag_fem.so"}
                 },
@@ -4377,8 +4723,15 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
     runtime_library.parent.mkdir(parents=True)
     runtime_library.write_bytes(b"actual-native-library")
     runtime_manifest = {
-        "schema": 2,
-        "source_manifest_sha256": "a" * 64,
+        "schema": 3,
+        "source_provenance": {
+            "git_commit": "a" * 40,
+            "git_tree": "b" * 40,
+            "dirty": False,
+            "dirty_patch_sha256": None,
+            "source_inputs_sha256": "c" * 64,
+            "source_input_manifest": "scripts/managed_fem_runtime_source_inputs.v1.txt",
+        },
         "native_libraries": {
             "fullmag_fem": {
                 "path": "lib/libfullmag_fem.so.0.1.0",
@@ -4508,7 +4861,11 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
         )
     ).hexdigest()
     expected_shared = {
-        "source_manifest_sha256": "a" * 64,
+        "runtime_git_commit": "a" * 40,
+        "runtime_git_tree": "b" * 40,
+        "runtime_source_inputs_sha256": "c" * 64,
+        "runtime_dirty": "false",
+        "runtime_dirty_patch_sha256": "",
         "runtime_manifest_sha256": benchmark.hashlib.sha256(
             runtime_manifest_path.read_bytes()
         ).hexdigest(),
@@ -5358,7 +5715,7 @@ def _gpu_host_thread_qualification_rows() -> list[dict[str, object]]:
                             "backend": "fem_gpu",
                             "status": "ok",
                             "runtime_manifest_sha256": "1" * 64,
-                            "source_manifest_sha256": "2" * 64,
+                            "runtime_source_inputs_sha256": "2" * 64,
                             "libfullmag_fem_sha256": "3" * 64,
                             "device_uuid": "GPU-task12",
                             "device_name": "NVIDIA Task 12",
@@ -6168,7 +6525,7 @@ def test_stt_oersted_consistency_cases_exclude_all_relaxation_algorithms() -> No
     assert manifests == []
 
 
-def test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory() -> None:
+def test_direct_minimizer_consistency_is_coverage_only_not_a_pass() -> None:
     benchmark = load_benchmark_module()
     manifests = benchmark.cpu_gpu_case_manifests(
         scenarios=["box500_airbox_exchange_demag"],
@@ -6228,6 +6585,91 @@ def test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory
     )
 
     assert failures == []
+    summary = benchmark.cpu_gpu_consistency_summary(
+        [cpu_row, gpu_row],
+        case_manifests=manifests,
+        require_gpu_strict_residency=False,
+    )
+    assert summary["status"] == "coverage_only"
+    assert summary["consistency_status"] == "coverage_only"
+    assert summary["consistency_scope"] == "direct_minimizer_coverage"
+    assert summary["consistency_failure_count"] == 0
+    assert summary["equilibrium_parity_status"] == "not_requested"
+    report = benchmark.render_cpu_gpu_benchmark_report(
+        summary,
+        {"status": "pass", "gate_failure_count": 0, "group_failure_count": 0, "failures": []},
+    )
+    assert "- status: coverage_only" in report
+    assert "CPU/GPU consistency: pass" not in report
+    assert "execution coverage: coverage_only" in report
+    assert "equilibrium parity: not_requested" in report
+    assert "| box500_airbox_exchange_demag:nonlinear_cg | coverage_only |" in report
+
+
+def test_direct_minimizer_equilibrium_parity_gate_fails_closed() -> None:
+    benchmark = load_benchmark_module()
+    common = {
+        "scenario": "box500_airbox_exchange_demag",
+        "reported_relaxation_algorithm": "nonlinear_cg",
+        "relaxation_algorithm": "nonlinear_cg",
+        "integrator": "heun",
+        "timestep_policy": "fixed",
+        "dt_s": 1.0e-13,
+        "steps": 32,
+        "status": "ok",
+        "solver_mesh_signature": "mesh-a",
+        "executed_steps": 32,
+        "final_e_total_j": -1.0e-17,
+        "final_e_ex_j": 1.0e-22,
+        "final_e_demag_j": 2.0e-19,
+        "final_e_ext_j": -1.02e-17,
+        "final_torque_apm": 2.0e4,
+        "final_torque_t": 2.5e-2,
+    }
+    cpu = {
+        **common,
+        "backend": "fem_cpu",
+        "execution_engine": "fem_cpu_native",
+        "fem_execution_mode": "cpu_native",
+        "mfem_device": "cpu",
+        "uses_cuda_kernels": False,
+    }
+    gpu = {
+        **common,
+        "backend": "fem_gpu",
+        "execution_engine": "fem_native_gpu",
+        "fem_execution_mode": "all_in_gpu_legacy_sparse",
+        "mfem_device": "cuda",
+        "uses_cuda_kernels": True,
+    }
+    manifests = benchmark.cpu_gpu_case_manifests(
+        scenarios=["box500_airbox_exchange_demag"],
+        relaxation_algorithms=["nonlinear_cg"],
+        steps=32,
+        dt=1.0e-13,
+        energy_rtol=1.0e-6,
+        energy_atol=1.0e-30,
+        torque_rtol=1.0e-6,
+        torque_atol_apm=1.0e-9,
+        torque_atol_t=1.0e-15,
+        max_step_delta=0,
+    )
+    summary = benchmark.cpu_gpu_consistency_summary(
+        [cpu, gpu],
+        case_manifests=manifests,
+        require_equilibrium_parity=True,
+    )
+    assert summary["status"] == "failed"
+    assert summary["equilibrium_parity_status"] == "not_requested"
+    assert any(
+        failure == "direct minimizer equilibrium parity was not checked"
+        for failure in summary["failures"]
+    )
+
+    args = benchmark.parse_args(
+        ["--require-equilibrium-parity", "--capture-final-magnetization"]
+    )
+    assert args.require_equilibrium_parity is True
 
 
 def test_llg_consistency_still_rejects_numeric_mismatch() -> None:
@@ -6672,7 +7114,8 @@ def main() -> int:
         test_cpu_gpu_consistency_smoke_covers_active_relaxation_algorithms,
         test_cpu_gpu_consistency_coverage_is_per_relaxation_algorithm,
         test_stt_oersted_consistency_cases_exclude_all_relaxation_algorithms,
-        test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory,
+        test_direct_minimizer_consistency_is_coverage_only_not_a_pass,
+        test_direct_minimizer_equilibrium_parity_gate_fails_closed,
         test_llg_consistency_still_rejects_numeric_mismatch,
         test_stt_oersted_has_no_relaxation_consistency_manifest,
         test_run_json_summary_publishes_cumulative_rhs_telemetry,

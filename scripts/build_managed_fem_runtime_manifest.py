@@ -59,11 +59,75 @@ def nvcc_metadata(nvcc: str) -> tuple[str, str]:
     return match.group(1), output.splitlines()[-1]
 
 
+def source_provenance_from_host(
+    path: Path,
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("host source provenance payload must be an object")
+    provenance = payload.get("source_provenance")
+    build_inputs = payload.get("build_inputs")
+    if not isinstance(provenance, Mapping) or not isinstance(build_inputs, Mapping):
+        raise ValueError("host source provenance payload is incomplete")
+    expected_provenance = {
+        "git_commit",
+        "git_tree",
+        "dirty",
+        "dirty_patch_sha256",
+        "source_inputs_sha256",
+        "source_input_manifest",
+    }
+    if set(provenance) != expected_provenance:
+        raise ValueError("host source provenance fields do not match schema v3")
+    for field in ("git_commit", "git_tree"):
+        value = provenance[field]
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ValueError(f"host source provenance {field} is invalid")
+    value = provenance["source_inputs_sha256"]
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError("host source provenance source_inputs_sha256 is invalid")
+    if not isinstance(provenance["dirty"], bool):
+        raise ValueError("host source provenance dirty flag is invalid")
+    dirty_patch_sha256 = provenance["dirty_patch_sha256"]
+    if provenance["dirty"]:
+        if (
+            not isinstance(dirty_patch_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", dirty_patch_sha256) is None
+        ):
+            raise ValueError("dirty host source provenance requires dirty_patch_sha256")
+    elif dirty_patch_sha256 is not None:
+        raise ValueError("clean host source provenance must have null dirty_patch_sha256")
+    if provenance["source_input_manifest"] != "scripts/managed_fem_runtime_source_inputs.v1.txt":
+        raise ValueError("host source provenance input manifest is invalid")
+    expected_build_inputs = {
+        "justfile_sha256",
+        "dockerfile_sha256",
+        "source_input_manifest_sha256",
+    }
+    if set(build_inputs) != expected_build_inputs or any(
+        not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+        for value in build_inputs.values()
+    ):
+        raise ValueError("host source provenance build inputs are invalid")
+    return provenance, build_inputs
+
+
 def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
     runtime_root = args.runtime_root.resolve()
     manifest_path = runtime_root / "manifest.json"
     previous = json.loads(manifest_path.read_text(encoding="utf-8"))
     previous_manifest_sha256 = sha256(manifest_path)
+    source_provenance, source_build_inputs = source_provenance_from_host(
+        args.source_provenance_json
+    )
+    if source_provenance["git_commit"] != args.git_commit:
+        raise ValueError(
+            "host source provenance git_commit differs from managed build identity"
+        )
+    if source_provenance["git_tree"] != args.git_tree:
+        raise ValueError(
+            "host source provenance git_tree differs from managed build identity"
+        )
     binaries = previous.get("binaries")
     if not isinstance(binaries, Mapping):
         binaries = {
@@ -166,6 +230,8 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
     created_at = args.created_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     if re.fullmatch(r"[0-9a-f]{40}", args.git_commit) is None:
         raise ValueError("managed FEM build identity git commit must be 40 lowercase hex digits")
+    if re.fullmatch(r"[0-9a-f]{40}", args.git_tree) is None:
+        raise ValueError("managed FEM build identity git tree must be 40 lowercase hex digits")
     if args.worktree_state not in {"clean", "dirty"}:
         raise ValueError("managed FEM build identity worktree state must be clean or dirty")
     if re.fullmatch(r"[0-9a-f]{64}", args.source_snapshot_sha256) is None:
@@ -185,9 +251,11 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "drift_observed": observed_image_id != built_image_id,
         },
         "created_at": created_at,
-        "source_manifest_sha256": previous_manifest_sha256,
+        "parent_manifest_sha256": previous_manifest_sha256,
+        "source_provenance": dict(source_provenance),
         "build_identity": {
             "git_commit": args.git_commit,
+            "git_tree": args.git_tree,
             "worktree_state": args.worktree_state,
             "source_snapshot_sha256": args.source_snapshot_sha256,
         },
@@ -206,6 +274,7 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "cuda_compiler": cuda_compiler,
             "requested_cuda_architectures": args.requested_cuda_architectures,
             "effective_cuda_architectures": sorted(effective_architectures),
+            "source_inputs": dict(source_build_inputs),
             **hypre_build_metadata,
         },
         "runtime_diagnostics": {
@@ -230,6 +299,7 @@ def main() -> None:
     parser.add_argument("--variant", required=True)
     parser.add_argument("--requested-cuda-architectures", required=True)
     parser.add_argument("--hypre-build-metadata", type=Path, required=True)
+    parser.add_argument("--source-provenance-json", type=Path, required=True)
     parser.add_argument("--device-name")
     parser.add_argument("--compute-capability")
     parser.add_argument("--driver-version")
@@ -238,6 +308,7 @@ def main() -> None:
     parser.add_argument("--observed-docker-image-id")
     parser.add_argument("--created-at")
     parser.add_argument("--git-commit", required=True)
+    parser.add_argument("--git-tree", required=True)
     parser.add_argument("--worktree-state", required=True)
     parser.add_argument("--source-snapshot-sha256", required=True)
     parser.add_argument("--cuobjdump", default="cuobjdump")

@@ -170,11 +170,23 @@ pub async fn get_solver_profile(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     let body = snapshot.solver_profile.clone();
+    let qualification_etag = body
+        .timestep_qualification
+        .as_ref()
+        .map(|qualification| {
+            format!(
+                "{}:{}",
+                qualification.validation_state.as_str(),
+                qualification.qualification_registry_version
+            )
+        })
+        .unwrap_or_else(|| "not-applicable".to_string());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "solver-profile:{}:{}:{}",
+        "solver-profile:{}:{}:{}:{}",
         body.revision,
         body.latest_samples.len(),
-        body.state
+        body.state,
+        qualification_etag,
     ));
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }

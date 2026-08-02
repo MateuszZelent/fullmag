@@ -168,6 +168,22 @@ pub struct SolverProfilePhaseWindow {
     pub max_wall_time_ns: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverProfileTimingSemanticKind {
+    Exclusive,
+    Inclusive,
+    Overlapped,
+    EnqueueOnly,
+    DeviceElapsed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SolverProfileTimingSemantic {
+    pub id: String,
+    pub kind: SolverProfileTimingSemanticKind,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SolverProfileStepSample {
     pub step: u64,
@@ -196,6 +212,11 @@ pub struct SolverProfileStepSample {
     pub sample_kinds: Vec<SolverProfileSampleKind>,
     #[serde(default)]
     pub phase_windows: Vec<SolverProfilePhaseWindow>,
+    /// Semantics for timing counters that may overlap rather than forming a
+    /// sequential critical-path sum.  The values are intentionally explicit
+    /// so consumers do not infer blocking waits from event dependencies.
+    #[serde(default)]
+    pub timing_semantics: Vec<SolverProfileTimingSemantic>,
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,
@@ -212,6 +233,34 @@ pub struct SolverProfileStepSample {
     pub poisson_iterations: u32,
     pub poisson_final_residual: f64,
     pub demag_solver_setup_reused: bool,
+    #[serde(default)]
+    pub rk_transaction_capture_host_wall_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_capture_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_capture_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_host_wall_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_rollback_count: u64,
+    #[serde(default)]
+    pub rk_transaction_commit_count: u64,
+    #[serde(default)]
+    pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_host_api_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_wait_out_enqueue_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_event_wait_count: u64,
+    #[serde(default)]
+    pub demag_hypre_timed_solve_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_solver: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -283,6 +332,7 @@ impl SolverProfileStepSample {
             unprofiled_gap_per_step_ns: 0,
             sample_kinds: sample_kinds(stats, 0),
             phase_windows: Vec::new(),
+            timing_semantics: timing_semantics(),
             time: stats.time,
             dt: stats.dt,
             total_ns,
@@ -555,6 +605,26 @@ impl SolverProfileStepSample {
             poisson_iterations: stats.poisson_iterations,
             poisson_final_residual: stats.poisson_final_residual,
             demag_solver_setup_reused: stats.demag_solver_setup_reused,
+            rk_transaction_capture_host_wall_time_ns:
+                stats.rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns:
+                stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
+            rk_transaction_restore_host_wall_time_ns:
+                stats.rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns:
+                stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
+            rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
+            rk_transaction_commit_count: stats.rk_transaction_commit_count,
+            demag_hypre_wait_in_enqueue_wall_time_ns:
+                stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
+            demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns:
+                stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
+            demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver: stats.demag_solver.clone(),
             demag_preconditioner: stats.demag_preconditioner.clone(),
             field_copy_bytes: stats.field_copy_bytes,
@@ -662,6 +732,34 @@ fn native_solver_wall_time_ns(stats: &StepStats) -> u64 {
         .saturating_add(stats.relaxation_metric_wall_time_ns)
         .saturating_add(stats.relaxation_line_search_wall_time_ns)
         .saturating_add(stats.relaxation_update_wall_time_ns)
+}
+
+fn timing_semantics() -> Vec<SolverProfileTimingSemantic> {
+    [
+        ("native_solver_wall_time_ns", "inclusive"),
+        ("demag_solver_apply_wall_time_ns", "inclusive"),
+        ("rk_transaction_capture_host_wall_time_ns", "exclusive"),
+        ("rk_transaction_capture_device_elapsed_time_ns", "device_elapsed"),
+        ("rk_transaction_restore_host_wall_time_ns", "exclusive"),
+        ("rk_transaction_restore_device_elapsed_time_ns", "device_elapsed"),
+        ("demag_hypre_wait_in_enqueue_wall_time_ns", "enqueue_only"),
+        ("demag_hypre_host_api_wall_time_ns", "inclusive"),
+        ("demag_hypre_device_elapsed_time_ns", "device_elapsed"),
+        ("demag_hypre_wait_out_enqueue_wall_time_ns", "enqueue_only"),
+    ]
+    .into_iter()
+    .map(|(id, kind)| SolverProfileTimingSemantic {
+        id: id.to_string(),
+        kind: match kind {
+            "exclusive" => SolverProfileTimingSemanticKind::Exclusive,
+            "inclusive" => SolverProfileTimingSemanticKind::Inclusive,
+            "overlapped" => SolverProfileTimingSemanticKind::Overlapped,
+            "enqueue_only" => SolverProfileTimingSemanticKind::EnqueueOnly,
+            "device_elapsed" => SolverProfileTimingSemanticKind::DeviceElapsed,
+            _ => unreachable!("timing semantics table contains an invalid kind"),
+        },
+    })
+    .collect()
 }
 
 fn sample_kinds(stats: &StepStats, gap_total_ns: u64) -> Vec<SolverProfileSampleKind> {
@@ -1621,6 +1719,38 @@ mod tests {
             }),
             63
         );
+    }
+
+    #[test]
+    fn native_total_does_not_double_count_hypre_device_overlap() {
+        let stats = StepStats {
+            snapshot_wall_time_ns: 12_000_000,
+            demag_wall_time_ns: 12_000_000,
+            demag_solver_apply_wall_time_ns: 12_000_000,
+            demag_hypre_host_api_wall_time_ns: 2_000_000,
+            demag_hypre_device_elapsed_time_ns: 10_000_000,
+            ..StepStats::default()
+        };
+
+        assert_eq!(native_solver_wall_time_ns(&stats), 12_000_000);
+        let sample = SolverProfileStepSample::from_step_stats(&stats);
+        assert_eq!(sample.native_solver_wall_time_ns, 12_000_000);
+        assert!(sample
+            .timing_semantics
+            .iter()
+            .any(|entry| entry.id == "demag_hypre_host_api_wall_time_ns"
+                && matches!(
+                    entry.kind,
+                    super::SolverProfileTimingSemanticKind::Inclusive
+                )));
+        assert!(sample
+            .timing_semantics
+            .iter()
+            .any(|entry| entry.id == "demag_hypre_device_elapsed_time_ns"
+                && matches!(
+                    entry.kind,
+                    super::SolverProfileTimingSemanticKind::DeviceElapsed
+                )));
     }
 
     #[test]

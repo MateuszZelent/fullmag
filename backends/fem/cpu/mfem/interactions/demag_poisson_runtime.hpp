@@ -68,8 +68,15 @@ struct PoissonDemagRuntimeState {
     double last_residual = 0.0;
     uint64_t last_setup_wall_time_ns = 0;
     uint64_t last_solver_apply_wall_time_ns = 0;
+    uint64_t last_solver_apply_device_wall_time_ns = 0;
     uint64_t step_assemble_wall_time_ns = 0;
     uint64_t step_solver_apply_wall_time_ns = 0;
+    uint64_t step_solver_apply_device_wall_time_ns = 0;
+    uint64_t step_hypre_wait_in_enqueue_wall_time_ns = 0;
+    uint64_t step_hypre_host_api_wall_time_ns = 0;
+    uint64_t step_hypre_wait_out_enqueue_wall_time_ns = 0;
+    uint64_t step_hypre_event_wait_count = 0;
+    uint64_t step_hypre_timed_solve_count = 0;
     uint64_t step_recover_wall_time_ns = 0;
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;

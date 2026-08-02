@@ -297,7 +297,7 @@ GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS = (
 )
 GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS = (
     "runtime_manifest_sha256",
-    "source_manifest_sha256",
+    "runtime_source_inputs_sha256",
     "libfullmag_fem_sha256",
     "device_uuid",
     "device_name",
@@ -323,8 +323,14 @@ NATIVE_FEM_LIBRARY_NAMES = (
     "libfullmag_fem.dylib",
     "fullmag_fem.dll",
 )
-PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
-PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
+PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v2"
+PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v2"
+EQUILIBRIUM_PARITY_SCHEMA = "fullmag.fem.relaxation_equilibrium_parity.v1"
+EQUILIBRIUM_QUALIFICATION_SUITE_SCHEMA = (
+    "fullmag.fem.relaxation_equilibrium_qualification_suite.v1"
+)
+LEGACY_PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
+LEGACY_PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
 TASK11_QUALIFICATION_IDENTITY_SCHEMA = (
     "fullmag.fem_gpu.relaxation_preconditioner_qualification_identity.v1"
 )
@@ -344,6 +350,20 @@ PERFORMANCE_FIXTURE_RESOLUTIONS = (
     ("fine", 50e-9, 100e-9),
 )
 
+# These values are deliberately strings rather than a Python Enum because the
+# consistency summary is a public JSON/CSV-facing contract.  Keep the values
+# stable so downstream reports can distinguish execution coverage from an
+# actual numerical comparison.
+CONSISTENCY_STATUSES = frozenset(
+    {"not_requested", "coverage_only", "checked", "failed"}
+)
+CONSISTENCY_SCOPE_NONE = "none"
+CONSISTENCY_SCOPE_LLG_TRAJECTORY = "llg_trajectory"
+CONSISTENCY_SCOPE_DIRECT_MINIMIZER_COVERAGE = "direct_minimizer_coverage"
+CONSISTENCY_SCOPE_MIXED = (
+    "llg_trajectory+direct_minimizer_coverage"
+)
+
 
 @dataclass(frozen=True)
 class PerformanceFixture:
@@ -357,8 +377,235 @@ class PerformanceFixture:
     relaxation_algorithm: str
     node_count: int
     element_count: int
+    cell_count: int
+    facet_count: int
+    exterior_facet_count: int
+    interface_facet_count: int
+    schema_kind: str
     demag_policy: dict[str, object]
     stop_condition: dict[str, object]
+
+
+@dataclass(frozen=True)
+class MeshTopologyStats:
+    """Counts for one magnetic input or final typed solver mesh."""
+
+    node_count: int
+    cell_count: int
+    facet_count: int
+    exterior_facet_count: int
+    interface_facet_count: int
+    schema_kind: str
+
+
+@dataclass(frozen=True)
+class ConsistencyAssessment:
+    """Truthful CPU/GPU consistency classification.
+
+    ``coverage_only`` is intentionally not a pass: direct minimizers can run
+    on both devices while ending at different states when the run is bounded
+    by a fixed step budget.  A separate equilibrium-parity qualification is
+    required before such a run can be promoted.
+    """
+
+    status: str
+    scope: str
+    failures: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.status not in CONSISTENCY_STATUSES:
+            raise ValueError(f"unsupported consistency status: {self.status!r}")
+
+
+_PERFORMANCE_FIXTURE_CELL_FACES = {
+    "tet4": ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1)),
+    "prism6": ((0, 2, 1), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)),
+    "pyramid5": ((3, 2, 1, 0), (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)),
+    "hex8": (
+        (3, 2, 1, 0),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+        (4, 5, 6, 7),
+    ),
+}
+_PERFORMANCE_FIXTURE_CELL_ARITIES = {
+    "tet4": 4,
+    "prism6": 6,
+    "pyramid5": 5,
+    "hex8": 8,
+}
+_PERFORMANCE_FIXTURE_FACET_ARITIES = {"tri3": 3, "quad4": 4}
+
+
+def _typed_connectivity_items(
+    connectivity: Mapping[str, object],
+    *,
+    kind: str,
+    arities: Mapping[str, int],
+) -> list[tuple[str, tuple[int, ...]]]:
+    """Decode one canonical CSR connectivity block and validate its shape."""
+    types = connectivity.get("types")
+    offsets = connectivity.get("offsets")
+    nodes = connectivity.get("nodes")
+    if not isinstance(types, list):
+        raise ValueError(f"typed performance fixture mesh is missing {kind}.types")
+    if not isinstance(offsets, list) or len(offsets) != len(types) + 1:
+        raise ValueError(f"typed performance fixture mesh has invalid {kind}.offsets")
+    if not isinstance(nodes, list):
+        raise ValueError(f"typed performance fixture mesh is missing {kind}.nodes")
+    if offsets[:1] != [0] or offsets[-1:] != [len(nodes)]:
+        raise ValueError(f"typed performance fixture mesh has invalid {kind} CSR bounds")
+    if any(
+        not isinstance(value, int) or value < 0 for value in offsets + nodes
+    ) or any(left > right for left, right in zip(offsets, offsets[1:])):
+        raise ValueError(f"typed performance fixture mesh has invalid {kind} connectivity")
+
+    items: list[tuple[str, tuple[int, ...]]] = []
+    for index, item_type in enumerate(types):
+        if not isinstance(item_type, str) or item_type not in arities:
+            raise ValueError(
+                f"typed performance fixture mesh has unknown {kind} type {item_type!r}"
+            )
+        item_nodes = tuple(nodes[offsets[index] : offsets[index + 1]])
+        if len(item_nodes) != arities[item_type]:
+            raise ValueError(
+                f"typed performance fixture mesh {kind} {index} has invalid arity"
+            )
+        items.append((item_type, item_nodes))
+    return items
+
+
+def typed_mesh_topology_counts(mesh: Mapping[str, object]) -> dict[str, int]:
+    """Validate typed connectivity and return canonical topology role counts.
+
+    This deliberately accepts only the execution-plan typed representation. The
+    legacy ``elements``/``boundary_faces`` representation is not converted here;
+    strict-builder ownership semantics cannot be reconstructed from it.
+    """
+    nodes = mesh.get("nodes")
+    cells = mesh.get("cells")
+    facets = mesh.get("facets")
+    if not isinstance(nodes, list):
+        raise ValueError("typed performance fixture mesh is missing nodes")
+    if not isinstance(cells, Mapping):
+        raise ValueError("typed performance fixture mesh is missing cells")
+    if not isinstance(facets, Mapping):
+        raise ValueError("typed performance fixture mesh is missing facets")
+
+    cell_items = _typed_connectivity_items(
+        cells, kind="cells", arities=_PERFORMANCE_FIXTURE_CELL_ARITIES
+    )
+    facet_items = _typed_connectivity_items(
+        facets, kind="facets", arities=_PERFORMANCE_FIXTURE_FACET_ARITIES
+    )
+    if any(
+        node_index >= len(nodes)
+        for _, item_nodes in cell_items + facet_items
+        for node_index in item_nodes
+    ):
+        raise ValueError("typed performance fixture mesh connectivity exceeds node count")
+
+    roles = facets.get("roles")
+    if not isinstance(roles, list):
+        raise ValueError("typed performance fixture mesh is missing facets.roles")
+    if len(roles) != len(facet_items):
+        raise ValueError(
+            "typed performance fixture mesh facets.roles length differs from facets.types"
+        )
+
+    owner_counts: dict[tuple[int, ...], int] = {}
+    for cell_type, cell_nodes in cell_items:
+        for face in _PERFORMANCE_FIXTURE_CELL_FACES[cell_type]:
+            key = tuple(sorted(cell_nodes[index] for index in face))
+            owner_counts[key] = owner_counts.get(key, 0) + 1
+
+    exterior_count = 0
+    interface_count = 0
+    for index, ((_, facet_nodes), role) in enumerate(
+        zip(facet_items, roles, strict=True)
+    ):
+        owner_count = owner_counts.get(tuple(sorted(facet_nodes)), 0)
+        if role == "exterior":
+            if owner_count != 1:
+                raise ValueError(
+                    f"typed performance fixture exterior facet {index} has {owner_count} owners"
+                )
+            exterior_count += 1
+        elif role == "material_interface":
+            if owner_count != 2:
+                raise ValueError(
+                    f"typed performance fixture interface facet {index} has {owner_count} owners"
+                )
+            interface_count += 1
+        elif role == "periodic_seam":
+            if owner_count not in (1, 2):
+                raise ValueError(
+                    f"typed performance fixture periodic seam {index} has {owner_count} owners"
+                )
+        else:
+            raise ValueError(
+                f"typed performance fixture mesh has unknown facet role {role!r}"
+            )
+
+    return {
+        "node_count": len(nodes),
+        "cell_count": len(cell_items),
+        "facet_count": len(facet_items),
+        "exterior_facet_count": exterior_count,
+        "interface_facet_count": interface_count,
+    }
+
+
+def _mesh_payload_topology_stats(
+    mesh: Mapping[str, object], *, allow_legacy: bool
+) -> MeshTopologyStats:
+    """Parse exactly one mesh representation into the shared count contract."""
+    has_typed = "cells" in mesh or "facets" in mesh
+    has_legacy = "elements" in mesh or "boundary_faces" in mesh
+    if has_typed and has_legacy:
+        raise ValueError(
+            "conflicting dual-schema mesh payload: typed cells/facets and "
+            "legacy elements/boundary_faces cannot coexist"
+        )
+    if has_typed:
+        counts = typed_mesh_topology_counts(mesh)
+        return MeshTopologyStats(schema_kind="typed_v2", **counts)
+    if not has_legacy:
+        raise ValueError(
+            "mesh payload is missing typed cells/facets and legacy elements/boundary_faces"
+        )
+    if not allow_legacy:
+        raise ValueError("legacy mesh requires explicit opt-in")
+    nodes = mesh.get("nodes")
+    elements = mesh.get("elements")
+    boundary_faces = mesh.get("boundary_faces", [])
+    if not isinstance(nodes, list) or not isinstance(elements, list):
+        raise ValueError("legacy mesh is missing nodes or elements")
+    if not isinstance(boundary_faces, list):
+        raise ValueError("legacy mesh boundary_faces must be a list")
+    return MeshTopologyStats(
+        node_count=len(nodes),
+        cell_count=len(elements),
+        facet_count=len(boundary_faces),
+        exterior_facet_count=len(boundary_faces),
+        interface_facet_count=0,
+        schema_kind="legacy_v1",
+    )
+
+
+def read_mesh_topology_stats(
+    path: Path, *, allow_legacy: bool = False
+) -> MeshTopologyStats:
+    """Read one mesh file through the authoritative typed/legacy parser."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{path}: invalid mesh JSON: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{path}: mesh JSON must be an object")
+    return _mesh_payload_topology_stats(payload, allow_legacy=allow_legacy)
 
 
 def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
@@ -727,7 +974,7 @@ def gpu_host_thread_qualification_identity_failures(
 
     for field in (
         "runtime_manifest_sha256",
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "libfullmag_fem_sha256",
         "solver_mesh_signature",
         "executed_problem_ir_sha256",
@@ -1170,7 +1417,7 @@ def task11_qualification_identity_failures(
                 continue
             for field in (
                 "runtime_manifest_sha256",
-                "source_manifest_sha256",
+                "runtime_source_inputs_sha256",
                 "libfullmag_fem_sha256",
             ):
                 expected = str(runtime_identity.get(field) or "")
@@ -1182,8 +1429,6 @@ def task11_qualification_identity_failures(
                 "solver_mesh_sha256",
                 "solver_mesh_signature",
                 "executed_problem_ir_sha256",
-                "node_count",
-                "element_count",
             ):
                 expected = fixture.get(field)
                 actual = (
@@ -1192,6 +1437,26 @@ def task11_qualification_identity_failures(
                     else row.get(field)
                 )
                 if actual != expected:
+                    failures.append(
+                        f"{label}: {field} differs from the pinned {mesh_size} fixture"
+                    )
+            for field, aliases in (
+                (
+                    "solver_mesh_node_count",
+                    ("solver_mesh_node_count", "node_count"),
+                ),
+                (
+                    "solver_mesh_cell_count",
+                    ("solver_mesh_cell_count", "cell_count", "element_count"),
+                ),
+            ):
+                expected = next(
+                    (fixture[name] for name in aliases if name in fixture), None
+                )
+                actual = as_int(
+                    next((row.get(name) for name in aliases if name in row), None)
+                )
+                if actual != as_int(expected):
                     failures.append(
                         f"{label}: {field} differs from the pinned {mesh_size} fixture"
                     )
@@ -1404,7 +1669,7 @@ def task11_preconditioner_cpu_gpu_parity_summary(
 
     for field in (
         "runtime_manifest_sha256",
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "libfullmag_fem_sha256",
     ):
         identities = {str(row.get(field) or "") for row in rows}
@@ -1478,8 +1743,11 @@ def task11_preconditioner_cpu_gpu_parity_summary(
                 f"gpu=({gpu_row.get('converged')!r},{gpu_row.get('stop_reason')!r},{gpu_steps!r})"
             )
 
+        expected_fixture = expected_fixtures.get(mesh_size, {})
         expected_node_count = as_int(
-            expected_fixtures.get(mesh_size, {}).get("node_count")
+            expected_fixture.get(
+                "solver_mesh_node_count", expected_fixture.get("node_count")
+            )
         )
         for backend, row, executed_steps in (
             ("cpu", cpu_row, cpu_steps),
@@ -1542,7 +1810,9 @@ def task11_preconditioner_cpu_gpu_parity_summary(
                     f"mesh={mesh_size}: {backend} final magnetization content "
                     "SHA-256 mismatch"
                 )
-            row_node_count = as_int(row.get("node_count"))
+            row_node_count = as_int(
+                row.get("solver_mesh_node_count", row.get("node_count"))
+            )
             final_node_count = as_int(row.get("final_magnetization_node_count"))
             if (
                 expected_node_count is None
@@ -1678,7 +1948,7 @@ def relaxation_preconditioner_qualification_summary(
 
     for field in (
         "runtime_manifest_sha256",
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "libfullmag_fem_sha256",
     ):
         identities = {str(row.get(field) or "") for row in rows}
@@ -1704,7 +1974,7 @@ def relaxation_preconditioner_qualification_summary(
         field: next(iter(sorted({str(row.get(field) or "") for row in rows})), "")
         for field in (
             "runtime_manifest_sha256",
-            "source_manifest_sha256",
+            "runtime_source_inputs_sha256",
             "libfullmag_fem_sha256",
         )
     }
@@ -2548,7 +2818,8 @@ def load_fixture_manifest(
             f"expected {expected_manifest_sha256}, got {manifest_sha256}"
         )
     payload = json.loads(manifest_bytes)
-    if payload.get("schema") != PERFORMANCE_FIXTURE_SCHEMA:
+    schema = payload.get("schema")
+    if schema not in {PERFORMANCE_FIXTURE_SCHEMA, LEGACY_PERFORMANCE_FIXTURE_SCHEMA}:
         raise ValueError("unsupported FEM GPU performance fixture schema")
     mesh_path = (manifest_path.parent / str(payload["solver_mesh_path"])).resolve()
     actual_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
@@ -2557,6 +2828,73 @@ def load_fixture_manifest(
         raise ValueError(
             f"solver mesh sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
         )
+    topology = read_mesh_topology_stats(
+        mesh_path, allow_legacy=schema == LEGACY_PERFORMANCE_FIXTURE_SCHEMA
+    )
+    if schema == PERFORMANCE_FIXTURE_SCHEMA:
+        mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        declared_signature = payload.get("solver_mesh_signature")
+        if (
+            not isinstance(declared_signature, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", declared_signature)
+        ):
+            raise ValueError(
+                "fullmag.fem_gpu.performance_fixture.v2 requires a 64-character "
+                "lowercase solver_mesh_signature"
+            )
+        actual_signature = solver_mesh_signature(mesh_payload)
+        if declared_signature != actual_signature:
+            raise ValueError(
+                "solver mesh signature differs from canonical typed mesh"
+            )
+    topology_counts = {
+        "node_count": topology.node_count,
+        "cell_count": topology.cell_count,
+        "facet_count": topology.facet_count,
+        "exterior_facet_count": topology.exterior_facet_count,
+        "interface_facet_count": topology.interface_facet_count,
+    }
+    declared_aliases = {
+        "node_count": (
+            "node_count",
+            "solver_mesh_node_count",
+        ),
+        "cell_count": (
+            "cell_count",
+            "solver_mesh_cell_count",
+            "element_count",
+        ),
+        "facet_count": (
+            "facet_count",
+            "solver_mesh_facet_count",
+            "boundary_face_count",
+        ),
+        "exterior_facet_count": (
+            "exterior_facet_count",
+            "solver_mesh_exterior_facet_count",
+        ),
+        "interface_facet_count": (
+            "interface_facet_count",
+            "solver_mesh_interface_facet_count",
+        ),
+    }
+    for key, aliases in declared_aliases.items():
+        declared = [payload[name] for name in aliases if name in payload]
+        if declared and any(int(value) != topology_counts[key] for value in declared):
+            raise ValueError(
+                f"solver mesh typed topology {key} differs from fixture manifest"
+            )
+    if schema == PERFORMANCE_FIXTURE_SCHEMA:
+        missing = [
+            key
+            for key, aliases in declared_aliases.items()
+            if not any(name in payload for name in aliases)
+        ]
+        if missing:
+            raise ValueError(
+                "fullmag.fem_gpu.performance_fixture.v2 is missing typed topology counts: "
+                + ", ".join(missing)
+            )
     return PerformanceFixture(
         manifest_path=manifest_path,
         manifest_sha256=manifest_sha256,
@@ -2566,8 +2904,13 @@ def load_fixture_manifest(
         problem_ir_sha256=str(payload["problem_ir_sha256"]),
         scenario=str(payload["scenario"]),
         relaxation_algorithm=str(payload["relaxation_algorithm"]),
-        node_count=int(payload["node_count"]),
-        element_count=int(payload["element_count"]),
+        node_count=topology_counts["node_count"],
+        element_count=topology_counts["cell_count"],
+        cell_count=topology_counts["cell_count"],
+        facet_count=topology_counts["facet_count"],
+        exterior_facet_count=topology_counts["exterior_facet_count"],
+        interface_facet_count=topology_counts["interface_facet_count"],
+        schema_kind=topology.schema_kind,
         demag_policy=dict(payload["demag_policy"]),
         stop_condition=dict(payload["stop_condition"]),
     )
@@ -2575,7 +2918,11 @@ def load_fixture_manifest(
 
 def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema") != PERFORMANCE_FIXTURE_SUITE_SCHEMA:
+    schema = payload.get("schema")
+    if schema not in {
+        PERFORMANCE_FIXTURE_SUITE_SCHEMA,
+        LEGACY_PERFORMANCE_FIXTURE_SUITE_SCHEMA,
+    }:
         raise ValueError("unsupported FEM AMG qualification fixture suite schema")
     fixtures = payload.get("fixtures")
     if not isinstance(fixtures, list) or len(fixtures) != 3:
@@ -2605,14 +2952,101 @@ def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
                 f"FEM AMG qualification mesh sha256 mismatch: {mesh_path}"
             )
         mesh = json.loads(mesh_bytes)
-        if len(mesh.get("nodes", [])) != fixture.get("node_count") or len(
-            mesh.get("elements", [])
-        ) != fixture.get("element_count"):
-            raise ValueError(
-                f"FEM AMG qualification mesh size mismatch: {mesh_path}"
+        if schema == PERFORMANCE_FIXTURE_SUITE_SCHEMA:
+            counts = typed_mesh_topology_counts(mesh)
+            actual_signature = solver_mesh_signature(mesh)
+            if fixture.get("solver_mesh_signature") != actual_signature:
+                raise ValueError(
+                    f"FEM AMG qualification mesh solver signature mismatch: {mesh_path}"
+                )
+            fixture_aliases = {
+                "node_count": ("solver_mesh_node_count", "node_count"),
+                "cell_count": ("solver_mesh_cell_count", "cell_count", "element_count"),
+                "facet_count": ("solver_mesh_facet_count", "facet_count"),
+                "exterior_facet_count": (
+                    "solver_mesh_exterior_facet_count",
+                    "exterior_facet_count",
+                ),
+                "interface_facet_count": (
+                    "solver_mesh_interface_facet_count",
+                    "interface_facet_count",
+                ),
+            }
+            mismatch = any(
+                not any(name in fixture for name in aliases)
+                or counts[key]
+                != next(fixture[name] for name in aliases if name in fixture)
+                for key, aliases in fixture_aliases.items()
             )
+            if mismatch:
+                raise ValueError(
+                    f"FEM AMG qualification mesh typed topology mismatch: {mesh_path}"
+                )
+        else:
+            fixture_node_count = fixture.get(
+                "solver_mesh_node_count", fixture.get("node_count")
+            )
+            fixture_cell_count = fixture.get(
+                "solver_mesh_cell_count", fixture.get("element_count")
+            )
+            if len(mesh.get("nodes", [])) != fixture_node_count or len(
+                mesh.get("elements", [])
+            ) != fixture_cell_count:
+                raise ValueError(f"FEM AMG qualification mesh size mismatch: {mesh_path}")
         resolved.append({**fixture, "solver_mesh_path": str(mesh_path)})
     return resolved
+
+
+def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
+    """Validate the immutable same-tolerance CPU/GPU qualification contract."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or payload.get("schema") != EQUILIBRIUM_QUALIFICATION_SUITE_SCHEMA:
+        raise ValueError("unsupported FEM equilibrium qualification suite schema")
+    if payload.get("immutable") is not True:
+        raise ValueError("FEM equilibrium qualification suite must be immutable")
+    if payload.get("initial_state") != "same_unit_x_plus_y_normalized_v1":
+        raise ValueError("FEM equilibrium qualification initial state differs from v1")
+    if payload.get("max_steps") != 50_000 or payload.get("torque_tolerance_apm") != 8000.0:
+        raise ValueError("FEM equilibrium qualification stop contract differs from v1")
+    expected_demag_policy = {
+        "solver": "CG",
+        "preconditioner": "AMG",
+        "rtol": 1e-12,
+        "amg_relax_type": 6,
+        "amg_coarsening": 8,
+        "amg_interpolation": 6,
+        "amg_aggressive_coarsening": 1,
+    }
+    if payload.get("demag_policy") != expected_demag_policy:
+        raise ValueError("FEM equilibrium qualification demag policy differs from v1")
+    algorithms = payload.get("algorithms")
+    scenarios = payload.get("scenarios")
+    if algorithms != ["projected_gradient_bb", "nonlinear_cg"]:
+        raise ValueError("FEM equilibrium qualification algorithms differ from v1")
+    if scenarios != ["exchange_only", "exchange_demag"]:
+        raise ValueError("FEM equilibrium qualification scenarios differ from v1")
+    fixtures = payload.get("fixtures")
+    if not isinstance(fixtures, list) or [item.get("resolution") for item in fixtures] != ["coarse", "medium", "fine"]:
+        raise ValueError("FEM equilibrium qualification fixtures must be coarse, medium, fine")
+    resolved: dict[str, dict[str, object]] = {}
+    for fixture in fixtures:
+        if not isinstance(fixture, Mapping):
+            raise ValueError("FEM equilibrium qualification fixture must be an object")
+        resolution = str(fixture.get("resolution") or "")
+        signature = fixture.get("solver_mesh_signature")
+        if not resolution or not isinstance(signature, str) or len(signature) != 64:
+            raise ValueError("FEM equilibrium qualification fixture identity is invalid")
+        mesh_path = (path.parent / str(fixture.get("solver_mesh_path") or "")).resolve()
+        if not mesh_path.is_file():
+            raise ValueError(f"FEM equilibrium qualification mesh is missing: {mesh_path}")
+        resolved[resolution] = {**fixture, "solver_mesh_path": mesh_path}
+    return {
+        "path": path.resolve(),
+        "algorithms": tuple(algorithms),
+        "scenarios": tuple(scenarios),
+        "fixtures": resolved,
+    }
 
 
 def print_amg_qualification_fixture_suite(path: Path) -> None:
@@ -2743,9 +3177,20 @@ def verify_fixture_row(
             expected = as_int(expected)
         if actual != expected:
             failures.append(message)
-    if as_int(row.get("node_count")) != fixture.node_count:
+    solver_node_count = row.get("solver_mesh_node_count")
+    solver_cell_count = row.get("solver_mesh_cell_count")
+    if fixture.schema_kind == "legacy_v1":
+        solver_node_count = (
+            row.get("node_count") if solver_node_count is None else solver_node_count
+        )
+        solver_cell_count = (
+            row.get("element_count")
+            if solver_cell_count is None
+            else solver_cell_count
+        )
+    if as_int(solver_node_count) != fixture.node_count:
         failures.append("node_count differs from fixture")
-    if as_int(row.get("element_count")) != fixture.element_count:
+    if as_int(solver_cell_count) != fixture.element_count:
         failures.append("element_count differs from fixture")
     return failures
 
@@ -3059,13 +3504,21 @@ def task8_qualification_failures(
         expected_cases_by_base.setdefault((case_id, algorithm), []).append(case)
 
     runtime_hash_fields = (
-        "source_manifest_sha256",
+        "runtime_source_inputs_sha256",
         "runtime_manifest_sha256",
         "libfullmag_fem_sha256",
     )
     for field in runtime_hash_fields:
         if not valid_sha256(expected_runtime_identity.get(field)):
             failures.append(f"Task 8 expected runtime identity has invalid {field}")
+    for field in ("runtime_git_commit", "runtime_git_tree"):
+        value = expected_runtime_identity.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            failures.append(f"Task 8 expected runtime identity has invalid {field}")
+    if expected_runtime_identity.get("runtime_dirty") != "false":
+        failures.append("Task 8 qualification rejects a dirty runtime")
+    if expected_runtime_identity.get("runtime_dirty_patch_sha256") != "":
+        failures.append("Task 8 clean runtime must have no dirty patch hash")
     for field in ("device_name", "compute_capability", "precision"):
         value = expected_runtime_identity.get(field)
         if not isinstance(value, str) or not value:
@@ -3204,6 +3657,18 @@ def task8_qualification_failures(
                     )
 
         for field in runtime_hash_fields:
+            compare(
+                row,
+                label=field,
+                actual=row.get(field),
+                expected=expected_runtime_identity.get(field),
+            )
+        for field in (
+            "runtime_git_commit",
+            "runtime_git_tree",
+            "runtime_dirty",
+            "runtime_dirty_patch_sha256",
+        ):
             compare(
                 row,
                 label=field,
@@ -3410,9 +3875,26 @@ def runtime_bundle_identity(runtime_root: Path) -> dict[str, str]:
         "runtime_bundle_root": str(resolved_root),
         "runtime_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
     }
-    source_manifest_sha256 = manifest.get("source_manifest_sha256")
-    if isinstance(source_manifest_sha256, str):
-        identity["source_manifest_sha256"] = source_manifest_sha256
+    source_provenance = manifest.get("source_provenance")
+    if not isinstance(source_provenance, Mapping):
+        raise ValueError("runtime manifest is missing source provenance")
+    for manifest_field, identity_field in (
+        ("git_commit", "runtime_git_commit"),
+        ("git_tree", "runtime_git_tree"),
+        ("source_inputs_sha256", "runtime_source_inputs_sha256"),
+    ):
+        value = source_provenance.get(manifest_field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"runtime manifest source provenance has no {manifest_field}"
+            )
+        identity[identity_field] = value
+    dirty = source_provenance.get("dirty")
+    dirty_patch = source_provenance.get("dirty_patch_sha256")
+    if not isinstance(dirty, bool) or (dirty and not isinstance(dirty_patch, str)):
+        raise ValueError("runtime manifest has invalid dirty source provenance")
+    identity["runtime_dirty"] = str(dirty).lower()
+    identity["runtime_dirty_patch_sha256"] = "" if dirty_patch is None else dirty_patch
     native_libraries = manifest.get("native_libraries")
     if isinstance(native_libraries, Mapping):
         fullmag_fem = native_libraries.get("fullmag_fem")
@@ -4015,6 +4497,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fail unless matching FEM CPU/GPU rows agree on final energy, max torque, and relaxation step count",
     )
     parser.add_argument(
+        "--require-equilibrium-parity",
+        action="store_true",
+        help=(
+            "Fail unless CPU/GPU final equilibrium parity was explicitly checked; "
+            "fixed-budget direct-minimizer coverage is not sufficient"
+        ),
+    )
+    parser.add_argument(
         "--require-gpu-strict-residency",
         action="store_true",
         help="Fail unless completed FEM GPU rows report device source-of-truth and zero hot-loop compute host transfers/syncs",
@@ -4135,6 +4625,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Capture m_final.json values in each benchmark row for explicit "
             "CPU/GPU field parity qualification"
         ),
+    )
+    parser.add_argument(
+        "--equilibrium-parity-output",
+        type=Path,
+        default=None,
+        help="Optional fullmag.fem.relaxation_equilibrium_parity.v1 JSON output",
+    )
+    parser.add_argument(
+        "--equilibrium-suite",
+        type=Path,
+        default=None,
+        help="Immutable same-tolerance CPU/GPU equilibrium suite",
     )
     parser.add_argument(
         "--task11-relaxation-preconditioner-cpu-gpu-parity-sweep",
@@ -4415,7 +4917,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional persistent cache directory for generated shared-domain meshes used by --reuse-generated-domain-mesh",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.require_equilibrium_parity and not args.capture_final_magnetization:
+        parser.error(
+            "--require-equilibrium-parity requires --capture-final-magnetization"
+        )
+    return args
 
 
 def resolve_relax_torque_tolerance_apm(args: argparse.Namespace) -> float | None:
@@ -5131,15 +5638,26 @@ def qualification_mesh_size(mesh_path: Path) -> str | None:
     return None
 
 
-def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
+def load_mesh_stats(mesh_path: Path, *, allow_legacy: bool = False) -> dict[str, object]:
     payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{mesh_path}: mesh JSON must be an object")
+    topology = _mesh_payload_topology_stats(payload, allow_legacy=allow_legacy)
     return {
         "mesh_name": payload.get("mesh_name", mesh_path.stem),
         "mesh_path": str(mesh_path),
         "mesh_size": qualification_mesh_size(mesh_path),
-        "node_count": len(payload.get("nodes", [])),
-        "element_count": len(payload.get("elements", [])),
-        "boundary_face_count": len(payload.get("boundary_faces", [])),
+        "input_mesh_node_count": topology.node_count,
+        "input_mesh_cell_count": topology.cell_count,
+        "input_mesh_facet_count": topology.facet_count,
+        "input_mesh_exterior_facet_count": topology.exterior_facet_count,
+        "input_mesh_interface_facet_count": topology.interface_facet_count,
+        "mesh_schema_kind": topology.schema_kind,
+        # Deprecated aliases are retained for readers of historical benchmark
+        # CSVs. New writers and reports use the explicit input/solver names.
+        "node_count": topology.node_count,
+        "element_count": topology.cell_count,
+        "boundary_face_count": topology.facet_count,
         "periodic_boundary_pair_count": len(payload.get("periodic_boundary_pairs", [])),
         "periodic_node_pair_count": len(payload.get("periodic_node_pairs", [])),
     }
@@ -5148,8 +5666,8 @@ def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
 def input_mesh_summary(mesh_stats: Mapping[str, object]) -> str:
     return (
         f"input_mesh={mesh_stats['mesh_name']} "
-        f"input_nodes={mesh_stats['node_count']} "
-        f"input_elements={mesh_stats['element_count']} "
+        f"input_nodes={mesh_stats['input_mesh_node_count']} "
+        f"input_cells={mesh_stats['input_mesh_cell_count']} "
         "(solver mesh is reported per completed row)"
     )
 
@@ -5159,7 +5677,154 @@ def benchmark_scenario_requires_shared_domain(scenario: str) -> bool:
     return scenario in BOX500_AIRBOX_SCENARIO_ALIASES or "demag" in canonical
 
 
+SOLVER_MESH_SIGNATURE_DOMAIN = b"fullmag.fem.solver_mesh_signature.v2\0"
+
+
+def _canonical_ieee754_coordinates(nodes: Sequence[object]) -> list[list[str]]:
+    coordinates: list[list[str]] = []
+    for node_index, node in enumerate(nodes):
+        if not isinstance(node, list) or len(node) != 3:
+            raise ValueError(f"typed solver mesh node {node_index} must have 3 coordinates")
+        encoded_node: list[str] = []
+        for coordinate in node:
+            if isinstance(coordinate, bool):
+                raise ValueError("typed solver mesh coordinates must be numeric")
+            try:
+                value = float(coordinate)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("typed solver mesh coordinates must be numeric") from exc
+            if not math.isfinite(value):
+                raise ValueError("typed solver mesh coordinates must be finite")
+            encoded_node.append(struct.pack("<d", value).hex())
+        coordinates.append(encoded_node)
+    return coordinates
+
+
+def _typed_parallel_values(
+    values: object,
+    *,
+    field: str,
+    expected_length: int,
+) -> list[object]:
+    if not isinstance(values, list) or len(values) != expected_length:
+        raise ValueError(
+            f"typed solver mesh {field} must contain exactly {expected_length} values"
+        )
+    return list(values)
+
+
+def _typed_facet_owner_connectivity(
+    mesh: Mapping[str, object],
+    cell_items: Sequence[tuple[str, tuple[int, ...]]],
+    facet_items: Sequence[tuple[str, tuple[int, ...]]],
+) -> tuple[list[int], list[int]]:
+    facets = mesh["facets"]
+    assert isinstance(facets, Mapping)
+    explicit_offsets = facets.get("owner_offsets")
+    explicit_owners = facets.get("owners")
+    if (explicit_offsets is None) != (explicit_owners is None):
+        raise ValueError(
+            "typed solver mesh facet owner_offsets and owners must be provided together"
+        )
+    if explicit_offsets is not None:
+        if not isinstance(explicit_offsets, list) or not isinstance(explicit_owners, list):
+            raise ValueError("typed solver mesh facet owner connectivity must be lists")
+        offsets = list(explicit_offsets)
+        owners = list(explicit_owners)
+        if (
+            len(offsets) != len(facet_items) + 1
+            or offsets[:1] != [0]
+            or offsets[-1:] != [len(owners)]
+            or any(not isinstance(value, int) or value < 0 for value in offsets + owners)
+            or any(left > right for left, right in zip(offsets, offsets[1:]))
+            or any(owner >= len(cell_items) for owner in owners)
+        ):
+            raise ValueError("typed solver mesh facet owner connectivity is invalid")
+        return offsets, owners
+
+    cell_faces: dict[tuple[int, ...], list[int]] = {}
+    for cell_index, (cell_type, cell_nodes) in enumerate(cell_items):
+        for face in _PERFORMANCE_FIXTURE_CELL_FACES[cell_type]:
+            key = tuple(sorted(cell_nodes[index] for index in face))
+            cell_faces.setdefault(key, []).append(cell_index)
+    offsets = [0]
+    owners: list[int] = []
+    for _, facet_nodes in facet_items:
+        owners.extend(cell_faces.get(tuple(sorted(facet_nodes)), []))
+        offsets.append(len(owners))
+    return offsets, owners
+
+
+def solver_mesh_signature(mesh: Mapping[str, object]) -> str:
+    """Hash canonical typed solver topology, roles, markers, and owners."""
+    if not isinstance(mesh.get("cells"), Mapping) or not isinstance(
+        mesh.get("facets"), Mapping
+    ):
+        raise ValueError("solver mesh signature requires typed cells and facets")
+    nodes = mesh.get("nodes")
+    if not isinstance(nodes, list):
+        raise ValueError("solver mesh signature requires typed nodes")
+    cells = mesh["cells"]
+    facets = mesh["facets"]
+    assert isinstance(cells, Mapping) and isinstance(facets, Mapping)
+    cell_items = _typed_connectivity_items(
+        cells, kind="cells", arities=_PERFORMANCE_FIXTURE_CELL_ARITIES
+    )
+    facet_items = _typed_connectivity_items(
+        facets, kind="facets", arities=_PERFORMANCE_FIXTURE_FACET_ARITIES
+    )
+    counts = typed_mesh_topology_counts(mesh)
+    element_markers = _typed_parallel_values(
+        mesh.get("element_markers"),
+        field="element_markers",
+        expected_length=counts["cell_count"],
+    )
+    boundary_markers = _typed_parallel_values(
+        mesh.get("boundary_markers"),
+        field="boundary_markers",
+        expected_length=counts["facet_count"],
+    )
+    roles = _typed_parallel_values(
+        facets.get("roles"),
+        field="facets.roles",
+        expected_length=counts["facet_count"],
+    )
+    owner_offsets, owners = _typed_facet_owner_connectivity(
+        mesh, cell_items, facet_items
+    )
+    canonical = {
+        "schema": "fullmag.fem.solver_mesh_signature.v2",
+        "nodes_ieee754_le_f64": _canonical_ieee754_coordinates(nodes),
+        "cells": {
+            "types": [item_type for item_type, _ in cell_items],
+            "offsets": list(cells.get("offsets", [])),
+            "nodes": [node for _, item_nodes in cell_items for node in item_nodes],
+            "global_ordinals": list(cells.get("global_ordinals", [])),
+            "mesh_parts": list(cells.get("mesh_parts", [])),
+        },
+        "element_markers": element_markers,
+        "facets": {
+            "types": [item_type for item_type, _ in facet_items],
+            "roles": roles,
+            "offsets": list(facets.get("offsets", [])),
+            "nodes": [node for _, item_nodes in facet_items for node in item_nodes],
+            "global_ordinals": list(facets.get("global_ordinals", [])),
+            "owner_offsets": owner_offsets,
+            "owners": owners,
+        },
+        "boundary_markers": boundary_markers,
+        "periodic_boundary_pairs": mesh.get("periodic_boundary_pairs", []),
+        "periodic_node_pairs": mesh.get("periodic_node_pairs", []),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(SOLVER_MESH_SIGNATURE_DOMAIN + encoded).hexdigest()
+
+
 def mesh_signature(mesh: Mapping[str, object]) -> str:
+    if isinstance(mesh.get("cells"), Mapping) or isinstance(mesh.get("facets"), Mapping):
+        return solver_mesh_signature(mesh)
     payload = {
         key: mesh.get(key)
         for key in (
@@ -5193,12 +5858,22 @@ def task8_qualification_row_identity(
     solver_mesh = json.loads(solver_mesh_path.read_text(encoding="utf-8"))
     if not isinstance(solver_mesh, Mapping):
         raise ValueError("Task 8 solver mesh must be an object")
-    elements = solver_mesh.get("elements")
+    if isinstance(solver_mesh.get("cells"), Mapping) and isinstance(
+        solver_mesh.get("facets"), Mapping
+    ):
+        cells = solver_mesh["cells"]
+        assert isinstance(cells, Mapping)
+        typed_cells = _typed_connectivity_items(
+            cells, kind="cells", arities=_PERFORMANCE_FIXTURE_CELL_ARITIES
+        )
+        elements = [list(item_nodes) for _, item_nodes in typed_cells]
+    else:
+        elements = solver_mesh.get("elements")
     element_markers = solver_mesh.get("element_markers")
     if not isinstance(elements, list) or not isinstance(element_markers, list):
-        raise ValueError("Task 8 solver mesh is missing elements or element_markers")
+        raise ValueError("Task 8 solver mesh is missing typed cells or element_markers")
     if len(elements) != len(element_markers):
-        raise ValueError("Task 8 solver mesh element marker count differs from elements")
+        raise ValueError("Task 8 solver mesh element marker count differs from cells")
     magnetic_node_indices = sorted(
         {
             int(node_index)
@@ -5481,7 +6156,12 @@ def write_task8_qualification_identity(
     return payload
 
 
-def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str, object]:
+def execution_plan_mesh_stats(
+    metadata: Mapping[str, object] | None,
+    *,
+    input_mesh_path: Path | None = None,
+    solver_mesh_path: Path | None = None,
+) -> dict[str, object]:
     if metadata is None:
         return {}
     execution_plan = metadata.get("execution_plan")
@@ -5496,7 +6176,37 @@ def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str
     if not isinstance(mesh, Mapping):
         return {}
 
+    solver_topology = _mesh_payload_topology_stats(mesh, allow_legacy=False)
+    solver_signature = solver_mesh_signature(mesh)
+    if solver_mesh_path is not None:
+        try:
+            file_payload = json.loads(solver_mesh_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"solver mesh file could not be read for identity comparison: {solver_mesh_path}"
+            ) from exc
+        if not isinstance(file_payload, Mapping):
+            raise ValueError("solver mesh file identity payload must be an object")
+        file_topology = _mesh_payload_topology_stats(file_payload, allow_legacy=False)
+        file_signature = solver_mesh_signature(file_payload)
+        if file_topology != solver_topology or file_signature != solver_signature:
+            raise ValueError(
+                "solver mesh topology mismatch between execution plan payload and mesh file"
+            )
+
     stats: dict[str, object] = {}
+    if input_mesh_path is not None:
+        input_topology = read_mesh_topology_stats(input_mesh_path, allow_legacy=True)
+        stats.update(
+            {
+                "input_mesh_node_count": input_topology.node_count,
+                "input_mesh_cell_count": input_topology.cell_count,
+                "input_mesh_facet_count": input_topology.facet_count,
+                "input_mesh_exterior_facet_count": input_topology.exterior_facet_count,
+                "input_mesh_interface_facet_count": input_topology.interface_facet_count,
+                "input_mesh_schema_kind": input_topology.schema_kind,
+            }
+        )
     mesh_name = backend_plan.get("mesh_name") or mesh.get("mesh_name")
     if isinstance(mesh_name, str) and mesh_name:
         stats["mesh_name"] = mesh_name
@@ -5508,18 +6218,44 @@ def execution_plan_mesh_stats(metadata: Mapping[str, object] | None) -> dict[str
         has_air = any(marker == 0 for marker in element_markers)
         has_magnetic = any(marker != 0 for marker in element_markers)
         stats["solver_mesh_has_air"] = has_air and has_magnetic
-    stats["solver_mesh_signature"] = mesh_signature(mesh)
-    for source_key, output_key in (
-        ("nodes", "node_count"),
-        ("elements", "element_count"),
-        ("boundary_faces", "boundary_face_count"),
-        ("periodic_boundary_pairs", "periodic_boundary_pair_count"),
-        ("periodic_node_pairs", "periodic_node_pair_count"),
-    ):
-        value = mesh.get(source_key)
-        if isinstance(value, list):
-            stats[output_key] = len(value)
+    stats.update(
+        {
+            "solver_mesh_node_count": solver_topology.node_count,
+            "solver_mesh_cell_count": solver_topology.cell_count,
+            "solver_mesh_facet_count": solver_topology.facet_count,
+            "solver_mesh_exterior_facet_count": solver_topology.exterior_facet_count,
+            "solver_mesh_interface_facet_count": solver_topology.interface_facet_count,
+            "solver_mesh_schema_kind": solver_topology.schema_kind,
+            "solver_mesh_signature": solver_signature,
+        }
+    )
+    periodic_boundary_pairs = mesh.get("periodic_boundary_pairs")
+    periodic_node_pairs = mesh.get("periodic_node_pairs")
+    if isinstance(periodic_boundary_pairs, list):
+        stats["periodic_boundary_pair_count"] = len(periodic_boundary_pairs)
+    if isinstance(periodic_node_pairs, list):
+        stats["periodic_node_pair_count"] = len(periodic_node_pairs)
     return stats
+
+
+def execution_plan_typed_mesh(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    """Extract and validate the canonical typed FEM mesh from runtime metadata."""
+    if metadata is None:
+        raise ValueError("runtime did not publish execution-plan metadata")
+    execution_plan = metadata.get("execution_plan")
+    if not isinstance(execution_plan, Mapping):
+        raise ValueError("runtime metadata is missing execution_plan")
+    backend_plan = execution_plan.get("backend_plan")
+    if not isinstance(backend_plan, Mapping) or str(
+        backend_plan.get("kind", "")
+    ).lower() not in {"fem", "fem_eigen"}:
+        raise ValueError("runtime metadata is missing a canonical FEM execution plan")
+    mesh = backend_plan.get("mesh")
+    if not isinstance(mesh, Mapping):
+        raise ValueError("canonical FEM execution plan is missing its typed mesh")
+    typed_mesh = json.loads(json.dumps(mesh))
+    typed_mesh_topology_counts(typed_mesh)
+    return typed_mesh
 
 
 def parse_benchmark_result(output: str) -> dict[str, object] | None:
@@ -5876,6 +6612,7 @@ def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
     if values is None:
         return {}
     return {
+        "final_magnetization_present": True,
         "final_magnetization_observable": "m",
         "final_magnetization_unit": "1",
         "final_magnetization_step": step,
@@ -5892,6 +6629,67 @@ def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
             separators=(",", ":"),
         ),
     }
+
+
+def _load_equilibrium_parity_module():
+    """Load the stdlib-only equilibrium verifier without making scripts a package."""
+
+    module_name = "fullmag_fem_relaxation_equilibrium_parity"
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    verifier_path = REPO_ROOT / "scripts" / "validate_fem_relaxation_equilibrium_parity.py"
+    spec = importlib.util.spec_from_file_location(module_name, verifier_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load equilibrium parity verifier: {verifier_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def compare_equilibrium_states(
+    cpu: Mapping[str, object],
+    gpu: Mapping[str, object],
+    thresholds: object | None = None,
+) -> object:
+    """Compare final CPU/GPU states through the canonical Task 4 verifier."""
+
+    return _load_equilibrium_parity_module().compare_equilibrium_states(
+        cpu, gpu, thresholds
+    )
+
+
+def equilibrium_parity_summary(
+    results: Sequence[Mapping[str, object]],
+    *,
+    require_parity: bool = False,
+    output_path: str | Path | None = None,
+    expected_resolutions: Sequence[str] | None = None,
+    expected_scenarios: Sequence[str] | None = None,
+    expected_algorithms: Sequence[str] | None = None,
+    expected_repeat_count: int | None = None,
+    expected_fixture_signatures: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Build the versioned same-tolerance summary from benchmark rows."""
+
+    summary = _load_equilibrium_parity_module().validate_rows(
+        results,
+        require_parity=require_parity,
+        expected_resolutions=expected_resolutions,
+        expected_scenarios=expected_scenarios,
+        expected_algorithms=expected_algorithms,
+        expected_repeat_count=expected_repeat_count,
+        expected_fixture_signatures=expected_fixture_signatures,
+    )
+    if output_path is not None:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return summary
 
 
 def task11_cumulative_relaxation_evidence(
@@ -6237,8 +7035,13 @@ def load_task11_qualification_identity(
                 "executed_problem_ir_sha256": hashlib.sha256(
                     canonical_problem_ir_bytes(problem_ir)
                 ).hexdigest(),
-                "node_count": fixture["node_count"],
-                "element_count": fixture["element_count"],
+                "solver_mesh_node_count": fixture.get(
+                    "solver_mesh_node_count", fixture.get("node_count")
+                ),
+                "solver_mesh_cell_count": fixture.get(
+                    "solver_mesh_cell_count",
+                    fixture.get("cell_count", fixture.get("element_count")),
+                ),
             }
         )
     return {
@@ -6333,7 +7136,7 @@ def performance_fixture_mesh_path(manifest_path: Path, resolution: str) -> Path:
     if resolution == "fine":
         name = manifest_path.name.removesuffix(".fixture.json") + ".mesh.json"
     else:
-        name = f"box500_airbox_exchange_demag_amg_{resolution}_v1.mesh.json"
+        name = f"box500_airbox_exchange_demag_amg_{resolution}_v2.mesh.json"
     return manifest_path.parent / name
 
 
@@ -6346,7 +7149,7 @@ def write_performance_fixture_files(
         Path(args.write_fixture_manifest)
         if args.write_fixture_manifest is not None
         else Path(args.write_fixture_suite).parent
-        / "box500_airbox_exchange_demag_v1.fixture.json"
+        / "box500_airbox_exchange_demag_v2.fixture.json"
     )
     suite_path = (
         Path(args.write_fixture_suite)
@@ -6375,39 +7178,61 @@ def write_performance_fixture_files(
                 PERFORMANCE_FIXTURE_TORQUE_TARGET_APM
             ),
         }
-        export_generated_domain_mesh(
-            mesh_path=input_mesh_path,
-            scenario=PERFORMANCE_FIXTURE_SCENARIO,
-            integrator="heun",
-            steps=1,
-            dt=args.dt,
-            timestep_policy="fixed",
-            thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
-            extra_env=fixture_env,
-            output_path=mesh_path,
-            timeout_s=args.case_timeout_s,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix=f"fullmag_fem_fixture_{resolution}_", dir=manifest_path.parent
+        ) as temporary_dir:
+            generated_mesh_path = Path(temporary_dir) / "generated-domain.mesh.json"
+            export_generated_domain_mesh(
+                mesh_path=input_mesh_path,
+                scenario=PERFORMANCE_FIXTURE_SCENARIO,
+                integrator="heun",
+                steps=1,
+                dt=args.dt,
+                timestep_policy="fixed",
+                thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
+                extra_env=fixture_env,
+                output_path=generated_mesh_path,
+                timeout_s=args.case_timeout_s,
+            )
+            realization_row = run_backend(
+                backend_label="fem_cpu",
+                binary=FULLMAG_CPU,
+                mesh_path=input_mesh_path,
+                scenario=PERFORMANCE_FIXTURE_SCENARIO,
+                integrator="heun",
+                relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
+                steps=1,
+                dt=args.dt,
+                timestep_policy="fixed",
+                thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
+                timeout_s=args.case_timeout_s,
+                ui_surface=args.ui_surface,
+                extra_env={
+                    "FULLMAG_FEM_EXECUTION": "cpu",
+                    "FULLMAG_BENCH_DOMAIN_MESH": str(generated_mesh_path),
+                    **fixture_env,
+                },
+                canonical_mesh_output_path=mesh_path,
+            )
+        if realization_row.get("status") != "ok":
+            raise RuntimeError(
+                f"canonical typed mesh realization failed for {resolution}: "
+                f"{realization_row.get('error') or realization_row.get('returncode')}"
+            )
         mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        topology_counts = typed_mesh_topology_counts(mesh_payload)
+        if resolution == "fine" and topology_counts != {
+            "node_count": 1200,
+            "cell_count": 5138,
+            "facet_count": 1504,
+            "exterior_facet_count": 1440,
+            "interface_facet_count": 64,
+        }:
+            raise RuntimeError(
+                "blocked_by_measurement: canonical fine typed mesh identity differs "
+                f"from the approved fixture: {topology_counts}"
+            )
         mesh_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
-        realization_row = run_backend(
-            backend_label="fem_cpu",
-            binary=FULLMAG_CPU,
-            mesh_path=input_mesh_path,
-            scenario=PERFORMANCE_FIXTURE_SCENARIO,
-            integrator="heun",
-            relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
-            steps=1,
-            dt=args.dt,
-            timestep_policy="fixed",
-            thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
-            timeout_s=args.case_timeout_s,
-            ui_surface=args.ui_surface,
-            extra_env={
-                "FULLMAG_FEM_EXECUTION": "cpu",
-                "FULLMAG_BENCH_DOMAIN_MESH": str(mesh_path),
-                **fixture_env,
-            },
-        )
         fixture_problem_ir = canonical_problem_ir(
             mesh_path=input_mesh_path,
             domain_mesh_path=mesh_path,
@@ -6429,8 +7254,15 @@ def write_performance_fixture_files(
             "solver_mesh_sha256": mesh_sha256,
             "solver_mesh_signature": fixture_solver_mesh_signature(realization_row),
             "problem_ir_sha256": problem_ir_sha256,
-            "node_count": len(mesh_payload.get("nodes", [])),
-            "element_count": len(mesh_payload.get("elements", [])),
+            "solver_mesh_node_count": topology_counts["node_count"],
+            "solver_mesh_cell_count": topology_counts["cell_count"],
+            "solver_mesh_facet_count": topology_counts["facet_count"],
+            "solver_mesh_exterior_facet_count": topology_counts[
+                "exterior_facet_count"
+            ],
+            "solver_mesh_interface_facet_count": topology_counts[
+                "interface_facet_count"
+            ],
             "domain_hmax_m": domain_hmax,
             "airbox_hmax_m": airbox_hmax,
         }
@@ -6502,6 +7334,7 @@ def run_backend(
     capture_final_magnetization: bool = False,
     require_reported_execution_identity: bool = False,
     ui_surface: str = "headless",
+    canonical_mesh_output_path: Path | None = None,
 ) -> dict[str, object]:
     row = {
         "backend": backend_label,
@@ -6516,7 +7349,10 @@ def run_backend(
         "case_timeout_s": timeout_s,
         "ui_surface": ui_surface,
         **runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT),
-        **load_mesh_stats(mesh_path),
+        # The benchmark input presets are historical v1 mesh assets. Their
+        # legacy read is explicit; the final solver mesh is always validated as
+        # typed by execution_plan_mesh_stats below.
+        **load_mesh_stats(mesh_path, allow_legacy=True),
     }
     if backend_label == "fem_gpu" and observed_gpu_identity is not None:
         attach_observed_gpu_identity(row, observed_gpu_identity)
@@ -6739,7 +7575,15 @@ def run_backend(
             wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
-            row.update(execution_plan_mesh_stats(load_run_metadata(execution_dir)))
+            row.update(
+                execution_plan_mesh_stats(
+                    load_run_metadata(execution_dir),
+                    input_mesh_path=mesh_path,
+                    solver_mesh_path=Path(solver_mesh_path)
+                    if solver_mesh_path
+                    else None,
+                )
+            )
             row.update(
                 {
                     "status": "timeout",
@@ -6760,6 +7604,13 @@ def run_backend(
             - child_cpu_started.ru_stime
         )
         metadata = load_run_metadata(execution_dir)
+        if completed.returncode == 0 and canonical_mesh_output_path is not None:
+            canonical_mesh = execution_plan_typed_mesh(metadata)
+            canonical_mesh_output_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_mesh_output_path.write_text(
+                json.dumps(canonical_mesh, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         final_scalar_row = load_final_scalar_row(execution_dir)
         artifact_payload = load_authoritative_benchmark_payload(execution_dir)
         energy_monotonicity_evidence = load_energy_monotonicity_evidence(execution_dir)
@@ -6768,6 +7619,8 @@ def run_backend(
             if capture_final_magnetization
             else {}
         )
+        if capture_final_magnetization:
+            row["final_magnetization_present"] = bool(final_magnetization_evidence)
         if completed.returncode == 0 and executed_problem_ir_identity_path is not None:
             try:
                 row["executed_problem_ir_sha256"] = (
@@ -6831,7 +7684,13 @@ def run_backend(
     artifact_pipeline = metadata.get("artifact_pipeline", {}) if metadata else {}
     if not isinstance(artifact_pipeline, Mapping):
         artifact_pipeline = {}
-    row.update(execution_plan_mesh_stats(metadata))
+    row.update(
+        execution_plan_mesh_stats(
+            metadata,
+            input_mesh_path=mesh_path,
+            solver_mesh_path=Path(solver_mesh_path) if solver_mesh_path else None,
+        )
+    )
     row.update(energy_monotonicity_evidence)
     row.update(final_magnetization_evidence)
 
@@ -6914,6 +7773,12 @@ def run_backend(
                     final_scalar_row.get("E_dmi"),
                 ),
                 "stop_reason": qualification.get("stop_reason"),
+                "resolved_torque_tolerance_apm": first_present(
+                    qualification.get("stop_threshold")
+                    if qualification.get("stop_metric_kind") == "max_torque_apm"
+                    else None,
+                    payload.get("resolved_torque_tolerance_apm"),
+                ),
                 "final_torque_apm": first_present(
                     qualification.get("final_torque_apm"),
                     payload.get("max_torque_Apm"),
@@ -6926,6 +7791,24 @@ def run_backend(
                 ),
                 "norm_defect": qualification.get("norm_defect"),
                 "converged": qualification.get("converged"),
+                "time_to_tolerance_seconds": first_present(
+                    payload.get("time_to_tolerance_seconds"),
+                    payload.get("time_to_tolerance_s"),
+                    qualification.get("time_to_tolerance_seconds"),
+                ),
+                "time_to_tolerance_source": first_present(
+                    payload.get("time_to_tolerance_source"),
+                    qualification.get("time_to_tolerance_source"),
+                ),
+                "accepted_steps_to_tolerance": first_present(
+                    payload.get("accepted_steps_to_tolerance"),
+                    qualification.get("accepted_steps_to_tolerance"),
+                ),
+                "demag_solve_count_total": first_present(
+                    payload.get("demag_solve_count_total"),
+                    payload.get("cumulative_demag_solves"),
+                    payload.get("demag_solves"),
+                ),
                 "step_wall_time_ms": ns_to_ms(payload.get("wall_time_ns")),
                 "exchange_wall_time_ms": ns_to_ms(payload.get("exchange_wall_time_ns")),
                 "demag_wall_time_ms": ns_to_ms(payload.get("demag_wall_time_ns")),
@@ -8043,7 +8926,9 @@ def min_solver_node_failures(
         if row.get("status") != "ok":
             continue
         case = repeated_case_key(row)
-        node_count = as_int(row.get("node_count"))
+        node_count = as_int(
+            row.get("solver_mesh_node_count", row.get("node_count"))
+        )
         if node_count is None:
             failures.append(f"case={case} completed row is missing solver node_count")
         elif node_count < min_nodes:
@@ -8453,7 +9338,15 @@ def case_coverage_with_consistency_failures(
                 case_failures.append(failure)
         updated = dict(case)
         updated["failures"] = case_failures
-        updated["status"] = "pass" if not case_failures else "fail"
+        if case_failures:
+            updated["status"] = "fail"
+        elif is_direct_minimizer_relaxation_algorithm(relaxation_algorithm):
+            # A fixed-budget direct-minimizer pair proves execution coverage,
+            # not equality of the final equilibrium state.  Keep that truth
+            # visible in the case matrix as well as in the summary.
+            updated["status"] = "coverage_only"
+        else:
+            updated["status"] = "pass"
         coverage.append(updated)
     return coverage
 
@@ -8469,9 +9362,11 @@ def cpu_gpu_consistency_summary(
     torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
     torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+    require_equilibrium_parity: bool = False,
 ) -> dict[str, object]:
     pairs = cpu_gpu_consistency_pair_summaries(results)
-    failures = cpu_gpu_consistency_failures(
+    assessment = assess_cpu_gpu_consistency(
         results,
         case_manifests=case_manifests,
         require_gpu_strict_residency=require_gpu_strict_residency,
@@ -8481,7 +9376,9 @@ def cpu_gpu_consistency_summary(
         torque_atol_apm=torque_atol_apm,
         torque_atol_t=torque_atol_t,
         max_step_delta=max_step_delta,
+        allow_coverage_only=allow_coverage_only and not require_equilibrium_parity,
     )
+    failures = list(assessment.failures)
     case_coverage = case_coverage_with_consistency_failures(
         cpu_gpu_required_case_coverage(
             results,
@@ -8489,10 +9386,36 @@ def cpu_gpu_consistency_summary(
         ),
         failures,
     )
+    direct_minimizer_present = any(
+        is_direct_minimizer_relaxation_algorithm(
+            pair.get("relaxation_algorithm")
+        )
+        for pair in pairs
+    )
+    llg_present = any(
+        pair.get("relaxation_algorithm") == "llg_overdamped"
+        for pair in pairs
+    )
+    # LLG's existing final-observable comparison is a checked parity result.
+    # Direct minimizers intentionally remain unqualified until T4 compares
+    # converged final states at one tolerance.
+    equilibrium_parity_status = (
+        "not_requested"
+        if direct_minimizer_present or not llg_present
+        else "checked"
+    )
+    if require_equilibrium_parity and equilibrium_parity_status != "checked":
+        message = "direct minimizer equilibrium parity was not checked"
+        if message not in failures:
+            failures.append(message)
+        assessment = ConsistencyAssessment(
+            "failed", assessment.scope, tuple(failures)
+        )
     return {
         "case_manifests": case_manifests or [],
         "failed_count": sum(1 for row in results if row.get("status") != "ok"),
         "failure_count": len(failures),
+        "consistency_failure_count": len(failures),
         "failures": failures,
         "require_gpu_strict_residency": require_gpu_strict_residency,
         "ok_count": sum(1 for row in results if row.get("status") == "ok"),
@@ -8505,7 +9428,13 @@ def cpu_gpu_consistency_summary(
         ),
         "case_coverage": case_coverage,
         "row_count": len(results),
-        "status": "pass" if not failures else "fail",
+        # Keep ``status`` as the canonical machine-facing value.  In
+        # particular, direct-minimizer coverage is never serialized as
+        # ``pass`` because no final equilibrium state was compared.
+        "status": assessment.status,
+        "consistency_status": assessment.status,
+        "consistency_scope": assessment.scope,
+        "equilibrium_parity_status": equilibrium_parity_status,
     }
 
 
@@ -8520,6 +9449,8 @@ def emit_cpu_gpu_consistency_summary(
     torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
     torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+    require_equilibrium_parity: bool = False,
 ) -> None:
     print(
         "FEM_CPU_GPU_CONSISTENCY_SUMMARY="
@@ -8534,6 +9465,8 @@ def emit_cpu_gpu_consistency_summary(
                 torque_atol_apm=torque_atol_apm,
                 torque_atol_t=torque_atol_t,
                 max_step_delta=max_step_delta,
+                allow_coverage_only=allow_coverage_only,
+                require_equilibrium_parity=require_equilibrium_parity,
             ),
             sort_keys=True,
         )
@@ -8552,6 +9485,8 @@ def write_cpu_gpu_consistency_summary(
     torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
     torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+    require_equilibrium_parity: bool = False,
 ) -> dict[str, object]:
     summary = cpu_gpu_consistency_summary(
         results,
@@ -8563,6 +9498,8 @@ def write_cpu_gpu_consistency_summary(
         torque_atol_apm=torque_atol_apm,
         torque_atol_t=torque_atol_t,
         max_step_delta=max_step_delta,
+        allow_coverage_only=allow_coverage_only,
+        require_equilibrium_parity=require_equilibrium_parity,
     )
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -8861,6 +9798,7 @@ def cpu_gpu_not_requested_summary(results: list[dict[str, object]]) -> dict[str,
         "covered_case_count": sum(1 for case in case_coverage if int(case["row_count"]) > 0),
         "failed_count": sum(1 for row in results if row.get("status") != "ok"),
         "failure_count": 0,
+        "consistency_failure_count": 0,
         "failures": [],
         "ok_count": sum(1 for row in results if row.get("status") == "ok"),
         "pair_count": 0,
@@ -8869,6 +9807,9 @@ def cpu_gpu_not_requested_summary(results: list[dict[str, object]]) -> dict[str,
         "require_gpu_strict_residency": False,
         "row_count": len(results),
         "status": "not_requested",
+        "consistency_status": "not_requested",
+        "consistency_scope": CONSISTENCY_SCOPE_NONE,
+        "equilibrium_parity_status": "not_requested",
     }
 
 
@@ -8876,10 +9817,20 @@ def benchmark_report_status(
     cpu_gpu_summary: Mapping[str, object],
     pass_fail_summary: Mapping[str, object],
 ) -> str:
+    consistency_status = str(
+        cpu_gpu_summary.get(
+            "consistency_status",
+            cpu_gpu_summary.get("status", "-"),
+        )
+    )
     pass_fail_status = str(pass_fail_summary.get("status", "-"))
-    if pass_fail_status in {"pass", "fail"}:
+    if pass_fail_status == "fail":
         return pass_fail_status
-    return str(cpu_gpu_summary.get("status", "-"))
+    if consistency_status in {"coverage_only", "not_requested"}:
+        return consistency_status
+    if pass_fail_status == "pass":
+        return pass_fail_status
+    return consistency_status
 
 
 def benchmark_report_coverage_line(cpu_gpu_summary: Mapping[str, object]) -> str:
@@ -8909,10 +9860,12 @@ def render_cpu_gpu_benchmark_report(
         "# Fullmag FEM CPU/GPU Benchmark Report",
         "",
         f"- status: {benchmark_report_status(cpu_gpu_summary, pass_fail_summary)}",
-        f"- cpu/gpu consistency: {cpu_gpu_summary.get('status', '-')}",
+        f"- execution coverage: {cpu_gpu_summary.get('consistency_status', cpu_gpu_summary.get('status', '-'))}",
+        f"- consistency scope: {cpu_gpu_summary.get('consistency_scope', '-')}",
+        f"- equilibrium parity: {cpu_gpu_summary.get('equilibrium_parity_status', 'not_requested')}",
         f"- rows: {cpu_gpu_summary.get('row_count', 0)} total, {cpu_gpu_summary.get('ok_count', 0)} ok, {cpu_gpu_summary.get('failed_count', 0)} failed",
         benchmark_report_coverage_line(cpu_gpu_summary),
-        f"- failures: {cpu_gpu_summary.get('failure_count', 0)} consistency, {pass_fail_summary.get('gate_failure_count', 0)} gate, {pass_fail_summary.get('group_failure_count', 0)} group",
+        f"- failures: {cpu_gpu_summary.get('consistency_failure_count', cpu_gpu_summary.get('failure_count', 0))} consistency, {pass_fail_summary.get('gate_failure_count', 0)} gate, {pass_fail_summary.get('group_failure_count', 0)} group",
         f"- CPU compute total ms: {report_ms(cpu_total_ms)}",
         f"- GPU compute total ms: {report_ms(gpu_total_ms)}",
     ]
@@ -9071,7 +10024,12 @@ def print_cpu_gpu_benchmark_rich_report(
         f"{pass_fail_summary.get('gate_failure_count', 0)} gate, "
         f"{pass_fail_summary.get('group_failure_count', 0)} group"
     )
-    rich_console.print(f"cpu/gpu consistency: {cpu_gpu_summary.get('status', '-')}")
+    rich_console.print(
+        "execution coverage: "
+        f"{cpu_gpu_summary.get('consistency_status', cpu_gpu_summary.get('status', '-'))} | "
+        "equilibrium parity: "
+        f"{cpu_gpu_summary.get('equilibrium_parity_status', 'not_requested')}"
+    )
 
     cpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "cpu_average_timing_ms")
     gpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "gpu_average_timing_ms")
@@ -9366,6 +10324,77 @@ def cpu_gpu_consistency_failures(
                     case=key,
                 )
     return failures
+
+
+def assess_cpu_gpu_consistency(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None = None,
+    require_gpu_strict_residency: bool = False,
+    energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
+    energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+    torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
+    torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+    torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+    max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+    allow_coverage_only: bool = True,
+) -> ConsistencyAssessment:
+    """Classify CPU/GPU evidence without turning skipped comparisons into pass.
+
+    LLG rows are compared using the existing final-observable/step-count
+    contract.  Direct minimizers deliberately remain execution coverage until
+    T4's same-tolerance equilibrium comparator has run.  Qualification callers
+    set ``allow_coverage_only=False`` so a fixed-budget minimizer sweep fails
+    closed rather than being promoted as numerical parity.
+    """
+
+    failures = cpu_gpu_consistency_failures(
+        results,
+        case_manifests=case_manifests,
+        require_gpu_strict_residency=require_gpu_strict_residency,
+        energy_rtol=energy_rtol,
+        energy_atol=energy_atol,
+        torque_rtol=torque_rtol,
+        torque_atol_apm=torque_atol_apm,
+        torque_atol_t=torque_atol_t,
+        max_step_delta=max_step_delta,
+    )
+    pairs = cpu_gpu_consistency_pair_summaries(results)
+    algorithms = {
+        str(pair.get("relaxation_algorithm") or "")
+        for pair in pairs
+    }
+    has_direct_minimizer = any(
+        is_direct_minimizer_relaxation_algorithm(algorithm)
+        for algorithm in algorithms
+    )
+    has_llg_trajectory = "llg_overdamped" in algorithms
+    if has_direct_minimizer and has_llg_trajectory:
+        scope = CONSISTENCY_SCOPE_MIXED
+    elif has_direct_minimizer:
+        scope = CONSISTENCY_SCOPE_DIRECT_MINIMIZER_COVERAGE
+    elif has_llg_trajectory:
+        scope = CONSISTENCY_SCOPE_LLG_TRAJECTORY
+    else:
+        scope = CONSISTENCY_SCOPE_NONE
+
+    if has_direct_minimizer:
+        if not allow_coverage_only:
+            failures.append(
+                "direct minimizer equilibrium parity was not checked"
+            )
+        status = (
+            "coverage_only"
+            if allow_coverage_only and not failures
+            else "failed"
+        )
+    elif not pairs and not failures:
+        status = "not_requested"
+    elif failures:
+        status = "failed"
+    else:
+        status = "checked"
+    return ConsistencyAssessment(status, scope, tuple(failures))
 
 
 def solver_mesh_pass_fail_summary_rows(
@@ -10371,6 +11400,18 @@ def main() -> None:
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
+    equilibrium_suite: dict[str, object] | None = None
+    if args.equilibrium_suite is not None:
+        try:
+            equilibrium_suite = load_equilibrium_qualification_suite(
+                args.equilibrium_suite
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"invalid FEM equilibrium qualification suite: {exc}") from exc
+    if args.require_equilibrium_parity and equilibrium_suite is None:
+        raise SystemExit(
+            "--require-equilibrium-parity needs --equilibrium-suite"
+        )
     scenarios = resolve_scenarios(args.scenarios)
     integrators = resolve_integrators(args.integrators or ",".join(DEFAULT_INTEGRATORS))
     relaxation_algorithms = resolve_relaxation_algorithms(args.relax_algorithms)
@@ -10381,6 +11422,18 @@ def main() -> None:
     )
     timestep_policies = resolve_timestep_policies(args.timestep_policies)
     backends = resolve_backends(args.backends)
+    equilibrium_fixture_by_input_mesh: dict[Path, Mapping[str, object]] = {}
+    if equilibrium_suite is not None:
+        fixtures = equilibrium_suite["fixtures"]
+        assert isinstance(fixtures, Mapping)
+        for mesh_path in meshes:
+            resolution = qualification_mesh_size(mesh_path)
+            fixture_identity = fixtures.get(resolution) if resolution is not None else None
+            if not isinstance(fixture_identity, Mapping):
+                raise SystemExit(
+                    "--equilibrium-suite requires coarse, medium, and fine mesh presets"
+                )
+            equilibrium_fixture_by_input_mesh[mesh_path.resolve()] = fixture_identity
     if relaxation_preconditioner_strategies != ["none"] and (
         relaxation_algorithms != ["nonlinear_cg"] or backends != ["fem_gpu"]
     ):
@@ -10628,6 +11681,15 @@ def main() -> None:
                             runtime_fixture_mesh_path(fixture)
                         )
                     }
+                equilibrium_warmup_fixture = equilibrium_fixture_by_input_mesh.get(
+                    warmup_mesh.resolve()
+                )
+                if equilibrium_warmup_fixture is not None:
+                    warmup_domain_mesh_env = {
+                        "FULLMAG_BENCH_DOMAIN_MESH": str(
+                            equilibrium_warmup_fixture["solver_mesh_path"]
+                        )
+                    }
                 print(
                     f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} thread_count={warmup_thread_spec.label}:{warmup_thread_spec.env_value} demag_policy={warmup_solver}/{warmup_preconditioner} demag_rtol={warmup_rtol!r} demag_amg_profile={warmup_amg_profile}",
                     flush=True,
@@ -10666,7 +11728,9 @@ def main() -> None:
                     )
                     raise SystemExit(2)
     for mesh_path in meshes:
-        mesh_stats = load_mesh_stats(mesh_path)
+        # Input presets remain legacy assets until Task 1 can publish v2 from a
+        # managed runtime; do not let this opt-in affect solver-mesh identity.
+        mesh_stats = load_mesh_stats(mesh_path, allow_legacy=True)
         case_mesh_env = task11_mesh_env(mesh_path)
         print(f"  {input_mesh_summary(mesh_stats)}")
         for scenario in scenarios:
@@ -10699,6 +11763,15 @@ def main() -> None:
                                 domain_mesh_env = {
                                     "FULLMAG_BENCH_DOMAIN_MESH": str(
                                         runtime_fixture_mesh_path(fixture)
+                                    )
+                                }
+                            equilibrium_fixture = equilibrium_fixture_by_input_mesh.get(
+                                mesh_path.resolve()
+                            )
+                            if equilibrium_fixture is not None:
+                                domain_mesh_env = {
+                                    "FULLMAG_BENCH_DOMAIN_MESH": str(
+                                        equilibrium_fixture["solver_mesh_path"]
                                     )
                                 }
                             demag_policy_pairs = demag_policy_pairs_for_scenario(
@@ -10927,6 +12000,33 @@ def main() -> None:
                                                     results.append(row)
 
     write_csv(results, args.output)
+    equilibrium_summary: dict[str, object] | None = None
+    if equilibrium_suite is not None or args.require_equilibrium_parity:
+        if equilibrium_suite is None:
+            raise SystemExit(
+                "--require-equilibrium-parity needs --equilibrium-suite"
+            )
+        fixtures = equilibrium_suite["fixtures"]
+        assert isinstance(fixtures, Mapping)
+        expected_signatures = {
+            str(resolution): str(fixture["solver_mesh_signature"])
+            for resolution, fixture in fixtures.items()
+            if isinstance(fixture, Mapping)
+        }
+        equilibrium_summary = equilibrium_parity_summary(
+            results,
+            require_parity=args.require_equilibrium_parity,
+            output_path=args.equilibrium_parity_output,
+            expected_resolutions=tuple(str(mesh_size) for mesh_size in fixtures),
+            expected_scenarios=tuple(
+                str(value) for value in equilibrium_suite["scenarios"]
+            ),
+            expected_algorithms=tuple(
+                str(value) for value in equilibrium_suite["algorithms"]
+            ),
+            expected_repeat_count=repeat_count,
+            expected_fixture_signatures=expected_signatures,
+        )
     demag_residual_threshold = args.demag_convergence_residual
     best_policy_rows: list[dict[str, object]] = []
     if args.emit_best_demag_policy or args.require_best_demag_policy:
@@ -10949,12 +12049,20 @@ def main() -> None:
             torque_atol_apm=args.cpu_gpu_torque_atol_apm,
             torque_atol_t=args.cpu_gpu_torque_atol_t,
             max_step_delta=args.cpu_gpu_max_step_delta,
+            require_equilibrium_parity=(
+                args.require_equilibrium_parity and equilibrium_summary is None
+            ),
         )
         cpu_gpu_summary_for_report["performance_distributions"] = (
             performance_distribution_summary(results)
         )
         if best_policy_rows:
             cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
+        if equilibrium_summary is not None:
+            cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
+            cpu_gpu_summary_for_report["equilibrium_parity_status"] = equilibrium_summary.get(
+                "equilibrium_parity_status", "not_requested"
+            )
         summary_path = Path(args.cpu_gpu_summary_output)
         summary_path.write_text(
             json.dumps(cpu_gpu_summary_for_report, indent=2, sort_keys=True) + "\n",
@@ -10962,6 +12070,14 @@ def main() -> None:
         )
     gate_failures: list[str] = []
     gate_exit_code = 0
+    if equilibrium_summary is not None and args.require_equilibrium_parity:
+        equilibrium_failures = [
+            str(failure)
+            for failure in equilibrium_summary.get("failures", [])
+        ]
+        if equilibrium_failures:
+            gate_failures.extend(equilibrium_failures)
+            gate_exit_code = gate_exit_code or 20
     if args.task8_qualification_identity is not None:
         task8_gate = task8_qualification_gate(
             results,
@@ -11061,7 +12177,7 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 5
-    if args.require_cpu_gpu_consistency:
+    if args.require_cpu_gpu_consistency or args.require_equilibrium_parity:
         if cpu_gpu_summary_for_report is None:
             cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
                 results,
@@ -11073,6 +12189,14 @@ def main() -> None:
                 torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                 torque_atol_t=args.cpu_gpu_torque_atol_t,
                 max_step_delta=args.cpu_gpu_max_step_delta,
+                require_equilibrium_parity=(
+                    args.require_equilibrium_parity and equilibrium_summary is None
+                ),
+            )
+        if equilibrium_summary is not None:
+            cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
+            cpu_gpu_summary_for_report["equilibrium_parity_status"] = equilibrium_summary.get(
+                "equilibrium_parity_status", "not_requested"
             )
         if not args.quiet_json_summary:
             print(
@@ -11136,6 +12260,9 @@ def main() -> None:
                 torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                 torque_atol_t=args.cpu_gpu_torque_atol_t,
                 max_step_delta=args.cpu_gpu_max_step_delta,
+                require_equilibrium_parity=(
+                    args.require_equilibrium_parity and equilibrium_summary is None
+                ),
             )
         failures = gpu_demag_total_speedup_failures(
             cpu_gpu_summary_for_report,
@@ -11211,11 +12338,19 @@ def main() -> None:
                     torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                     torque_atol_t=args.cpu_gpu_torque_atol_t,
                     max_step_delta=args.cpu_gpu_max_step_delta,
+                    require_equilibrium_parity=(
+                        args.require_equilibrium_parity and equilibrium_summary is None
+                    ),
                 )
             else:
                 cpu_gpu_summary_for_report = cpu_gpu_not_requested_summary(results)
         if best_policy_rows:
             cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
+        if equilibrium_summary is not None:
+            cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
+            cpu_gpu_summary_for_report["equilibrium_parity_status"] = equilibrium_summary.get(
+                "equilibrium_parity_status", "not_requested"
+            )
         report_text = render_cpu_gpu_benchmark_report(
             cpu_gpu_summary_for_report,
             pass_fail_summary,

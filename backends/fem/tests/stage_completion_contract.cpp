@@ -435,24 +435,44 @@ void torque_confirmation_pending_is_torque_only_and_bounded() {
     ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
     ctx.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
 
+    ctx.stage_completion.relax_torque_confirmation_count = 0;
+    check(
+        fullmag::fem::relaxation_torque_confirmation_pending(ctx, 1.5),
+        "first low-torque sample is handled without an Armijo step");
+
     ctx.stage_completion.relax_torque_confirmation_count = 1;
     check(
         fullmag::fem::relaxation_torque_confirmation_pending(ctx, 1.5),
-        "first low-torque confirmation remains pending");
+        "second low-torque confirmation remains pending");
     ctx.stage_completion.relax_torque_confirmation_count = 2;
     check(
         fullmag::fem::relaxation_torque_confirmation_pending(ctx, 2.0),
-        "second low-torque confirmation remains pending at tolerance");
-
-    ctx.stage_completion.relax_torque_confirmation_count = 0;
-    check(
-        !fullmag::fem::relaxation_torque_confirmation_pending(ctx, 1.5),
-        "a first torque sample is not pending confirmation");
+        "third low-torque confirmation remains pending at tolerance");
     ctx.stage_completion.relax_torque_confirmation_count =
         fullmag::fem::RELAX_TORQUE_CONFIRMATION_STEPS;
     check(
         !fullmag::fem::relaxation_torque_confirmation_pending(ctx, 1.5),
         "completed torque confirmations are not pending");
+    fullmag::fem::Context sequence;
+    sequence.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    sequence.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
+    for (uint32_t expected = 0;
+         expected < fullmag::fem::RELAX_TORQUE_CONFIRMATION_STEPS;
+         ++expected) {
+        check(
+            fullmag::fem::relaxation_torque_confirmation_pending(sequence, 1.5),
+            "low-torque pending sample remains eligible until completion");
+        fullmag_fem_step_stats stats{};
+        stats.total_energy_joules = 10.0;
+        stats.max_torque_Apm = 1.5;
+        fullmag::fem::update_stage_completion_from_stats(sequence, stats);
+        check(
+            sequence.stage_completion.relax_torque_confirmation_count == expected + 1,
+            "zero-dt pending sample advances the torque confirmation counter");
+    }
+    check(
+        sequence.stage_completion.snapshot.has_reason != 0,
+        "the final zero-dt torque confirmation completes the stage");
     ctx.stage_completion.relax_torque_confirmation_count = 1;
     check(
         !fullmag::fem::relaxation_torque_confirmation_pending(ctx, 2.0 + 1.0e-12),

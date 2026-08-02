@@ -178,9 +178,20 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             "variant": "hypre-baseline",
             "created_at": "2026-07-29T12:00:00+00:00",
             "docker_image_id": "sha256:" + "d" * 64,
-            "source_manifest_sha256": "e" * 64,
+            "parent_manifest_sha256": "e" * 64,
+            "source_provenance": {
+                "git_commit": "a" * 40,
+                "git_tree": "b" * 40,
+                "dirty": False,
+                "dirty_patch_sha256": None,
+                "source_inputs_sha256": "e" * 64,
+                "source_input_manifest": (
+                    "scripts/managed_fem_runtime_source_inputs.v1.txt"
+                ),
+            },
             "build_identity": {
                 "git_commit": "a" * 40,
+                "git_tree": "b" * 40,
                 "worktree_state": "dirty",
                 "source_snapshot_sha256": snapshot["source_snapshot_sha256"],
             },

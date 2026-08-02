@@ -106,6 +106,7 @@ void gpu_rk_publish_final_step_stats(
         stats.demag_linear_iterations = 0;
         stats.demag_linear_residual = 0.0;
     }
+    fill_step_profiler_timing_stats(ctx, stats);
     stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
     stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
     stats.cpu_thread_cap_reason = ctx.cpu_threads.cap_reason;

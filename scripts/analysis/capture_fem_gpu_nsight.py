@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -38,13 +39,31 @@ REQUIRED_NVTX_RANGES = (
     "fem.relax.armijo",
     "fem.demag.rhs",
     "fem.demag.hypre.apply",
+    "fullmag.demag.wait_in_enqueue",
+    "fullmag.demag.hypre_mult_host",
+    "fullmag.demag.hypre_device",
+    "fullmag.demag.wait_out_enqueue",
     "fem.demag.recovery",
     "fem.preview.snapshot",
     "fem.host.callback",
     "fem.host.publish",
 )
-COMPUTE_NVTX_RANGES = REQUIRED_NVTX_RANGES[:5]
-HOST_NVTX_RANGES = REQUIRED_NVTX_RANGES[5:]
+COMPUTE_NVTX_RANGES = (
+    "fem.relax.ncg.step",
+    "fem.relax.armijo",
+    "fem.demag.rhs",
+    "fem.demag.hypre.apply",
+    "fullmag.demag.wait_in_enqueue",
+    "fullmag.demag.hypre_mult_host",
+    "fullmag.demag.hypre_device",
+    "fullmag.demag.wait_out_enqueue",
+    "fem.demag.recovery",
+)
+HOST_NVTX_RANGES = (
+    "fem.preview.snapshot",
+    "fem.host.callback",
+    "fem.host.publish",
+)
 NCU_SECTIONS = ("LaunchStats", "Occupancy", "SpeedOfLight", "WarpStateStats")
 NCU_TIMEOUT_SECONDS = 120
 
@@ -63,6 +82,7 @@ def _run_text(
 def preflight_tools(runner: Runner = subprocess.run) -> dict[str, object]:
     tools: dict[str, dict[str, object]] = {}
     blockers: list[str] = []
+    reasons: list[str] = []
     for tool in ("nsys", "ncu"):
         try:
             completed = _run_text(runner, [tool, "--version"])
@@ -74,12 +94,91 @@ def preflight_tools(runner: Runner = subprocess.run) -> dict[str, object]:
             "available": available,
             "version": output if available else None,
             "error": None if available else (output or f"{tool} --version failed"),
+            "reason": None if available else "missing_binary",
         }
         if not available:
             blockers.append(f"{tool} unavailable in managed fixture image")
+
+    # A tool version is not evidence that a CUDA device is visible.  Probe the
+    # device before any runtime rebuild or Nsight capture.  This command does
+    # not launch a workload and therefore cannot manufacture a trace.
+    device_command = [
+        "nvidia-smi",
+        "--query-gpu=name,driver_version",
+        "--format=csv,noheader,nounits",
+    ]
+    if shutil.which(device_command[0]) is None:
+        device = {
+            "available": False,
+            "driver": None,
+            "error": "nvidia-smi binary is missing",
+            "reason": "no_cuda_device",
+        }
+        reasons.append("no_cuda_device")
+        blockers.append("no CUDA device: nvidia-smi binary is missing")
+    else:
+        try:
+            completed = _run_text(runner, device_command)
+        except OSError as exc:
+            completed = subprocess.CompletedProcess(device_command, 127, "", str(exc))
+        output = "\n".join(
+            part.strip() for part in (completed.stdout, completed.stderr) if part.strip()
+        )
+        error_code = _ncu_error_code(output)
+        lowered = output.lower()
+        if completed.returncode != 0:
+            if error_code == "ERR_NVGPUCTRPERM" or "permission" in lowered:
+                reason = "permission"
+                reasons.append(reason)
+                blockers.append(
+                    f"permission: CUDA device probe failed ({error_code or output})"
+                )
+            elif "driver" in lowered and (
+                "mismatch" in lowered or "version" in lowered or "failed" in lowered
+            ):
+                reason = "driver_tool_mismatch"
+                reasons.append(reason)
+                blockers.append(
+                    f"driver/tool mismatch: CUDA device probe failed ({output})"
+                )
+            else:
+                reason = "no_cuda_device"
+                reasons.append(reason)
+                blockers.append(
+                    f"no CUDA device: nvidia-smi exited {completed.returncode}"
+                )
+            device = {
+                "available": False,
+                "driver": None,
+                "error": output or f"nvidia-smi exited {completed.returncode}",
+                "reason": reason,
+            }
+        else:
+            rows = [line.strip() for line in output.splitlines() if line.strip()]
+            if not rows:
+                reasons.append("no_cuda_device")
+                blockers.append("no CUDA device: nvidia-smi returned no GPUs")
+                device = {
+                    "available": False,
+                    "driver": None,
+                    "error": "nvidia-smi returned no GPUs",
+                    "reason": "no_cuda_device",
+                }
+            else:
+                device = {
+                    "available": True,
+                    "driver": rows[0].split(",", 1)[1].strip()
+                    if "," in rows[0]
+                    else None,
+                    "error": None,
+                    "reason": None,
+                    "gpu_count": len(rows),
+                }
     return {
         "status": "available" if not blockers else "unavailable",
         "tools": tools,
+        "cuda_device": device,
+        "reasons": reasons,
         "blockers": blockers,
     }
 
@@ -136,6 +235,36 @@ def _name_field(row: Mapping[str, object]) -> str:
     return str(_field(row, "Name", "Range", "Kernel Name") or "")
 
 
+def _fixture_mesh_counts(fixture: Mapping[str, object]) -> dict[str, int]:
+    aliases = {
+        "solver_mesh_node_count": ("solver_mesh_node_count", "node_count"),
+        "solver_mesh_cell_count": (
+            "solver_mesh_cell_count",
+            "cell_count",
+            "element_count",
+        ),
+        "solver_mesh_facet_count": ("solver_mesh_facet_count", "facet_count"),
+        "solver_mesh_exterior_facet_count": (
+            "solver_mesh_exterior_facet_count",
+            "exterior_facet_count",
+        ),
+        "solver_mesh_interface_facet_count": (
+            "solver_mesh_interface_facet_count",
+            "interface_facet_count",
+        ),
+    }
+    counts: dict[str, int] = {}
+    for output, candidates in aliases.items():
+        values = [fixture[name] for name in candidates if name in fixture]
+        if not values:
+            continue
+        parsed = [int(value) for value in values]
+        if any(value != parsed[0] for value in parsed[1:]):
+            raise ValueError(f"fixture has conflicting {output} aliases")
+        counts[output] = parsed[0]
+    return counts
+
+
 def _percentile(values: Sequence[int], percentile: float) -> int:
     if not values:
         return 0
@@ -174,6 +303,23 @@ def summarize_stats(
     hypre_apply = {
         "count": sum(_int_field(row, "Instances", "Num Calls") for row in hypre_rows),
         "total_time_ns": sum(_int_field(row, "Total Time (ns)") for row in hypre_rows),
+    }
+
+    def nvtx_range_summary(name: str) -> dict[str, int]:
+        rows = [row for row in nvtx_rows if _name_field(row) == name]
+        return {
+            "count": sum(_int_field(row, "Instances", "Num Calls") for row in rows),
+            "total_time_ns": sum(_int_field(row, "Total Time (ns)") for row in rows),
+        }
+
+    hypre_timing_ranges = {
+        name: nvtx_range_summary(name)
+        for name in (
+            "fullmag.demag.wait_in_enqueue",
+            "fullmag.demag.hypre_mult_host",
+            "fullmag.demag.hypre_device",
+            "fullmag.demag.wait_out_enqueue",
+        )
     }
     kernel_count = sum(_int_field(row, "Instances", "Num Calls") for row in kernel_rows)
     reduction_count = sum(
@@ -248,6 +394,7 @@ def summarize_stats(
         "cpu_launch_gaps_ns": gap_summary,
         "stream_waits": stream_waits,
         "hypre_apply": hypre_apply,
+        "hypre_timing_ranges": hypre_timing_ranges,
         "kernels": {
             "count": kernel_count,
             "reduction_count": reduction_count,
@@ -573,10 +720,19 @@ def collect_bundle_identity(runtime_root: Path) -> dict[str, object]:
         if isinstance(manifest.get("instrumentation"), Mapping)
         else {}
     )
+    provenance = (
+        manifest.get("source_provenance")
+        if isinstance(manifest.get("source_provenance"), Mapping)
+        else {}
+    )
     return {
         "runtime_root": str(runtime_root),
         "manifest_sha256": _sha256(manifest_path),
-        "source_manifest_sha256": manifest.get("source_manifest_sha256"),
+        "runtime_git_commit": provenance.get("git_commit"),
+        "runtime_git_tree": provenance.get("git_tree"),
+        "runtime_source_inputs_sha256": provenance.get("source_inputs_sha256"),
+        "runtime_dirty": provenance.get("dirty"),
+        "runtime_dirty_patch_sha256": provenance.get("dirty_patch_sha256"),
         "docker_image": manifest.get("docker_image"),
         "docker_image_id": manifest.get("docker_image_id"),
         "requested_cuda_architectures": build.get("requested_cuda_architectures"),
@@ -606,7 +762,9 @@ def write_summary_artifacts(output_dir: Path, payload: Mapping[str, object]) -> 
         lines.extend(
             [
                 f"- runtime manifest SHA-256: `{bundle.get('manifest_sha256', '')}`",
-                f"- source manifest SHA-256: `{bundle.get('source_manifest_sha256', '')}`",
+                f"- runtime Git commit: `{bundle.get('runtime_git_commit', '')}`",
+                f"- runtime source-input SHA-256: `{bundle.get('runtime_source_inputs_sha256', '')}`",
+                f"- runtime dirty: `{bundle.get('runtime_dirty', '')}`",
                 f"- requested CUDA architectures: `{bundle.get('requested_cuda_architectures', '')}`",
                 f"- effective CUDA architectures: `{bundle.get('effective_cuda_architectures', [])}`",
             ]
@@ -992,20 +1150,22 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
     output_dir = args.output_dir / args.run_id
     bundle = collect_bundle_identity(args.runtime_root)
     fixture_identity = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    fixture_block: dict[str, object] = {
+        "manifest": str(FIXTURE_MANIFEST.relative_to(REPO_ROOT)),
+        "manifest_sha256": _sha256(FIXTURE_MANIFEST),
+        "environment": str(FIXTURE_ENVIRONMENT.relative_to(REPO_ROOT)),
+        "environment_sha256": _sha256(FIXTURE_ENVIRONMENT),
+        "problem_ir_sha256": fixture_identity["problem_ir_sha256"],
+        "solver_mesh_sha256": fixture_identity["solver_mesh_sha256"],
+        "solver_mesh_signature": fixture_identity["solver_mesh_signature"],
+    }
+    fixture_block.update(_fixture_mesh_counts(fixture_identity))
     base: dict[str, object] = {
         "schema": "fullmag.fem_gpu.nsight_capture.v1",
         "run_id": args.run_id,
         "preflight": preflight,
         "bundle": bundle,
-        "fixture": {
-            "manifest": str(FIXTURE_MANIFEST.relative_to(REPO_ROOT)),
-            "manifest_sha256": _sha256(FIXTURE_MANIFEST),
-            "environment": str(FIXTURE_ENVIRONMENT.relative_to(REPO_ROOT)),
-            "environment_sha256": _sha256(FIXTURE_ENVIRONMENT),
-            "problem_ir_sha256": fixture_identity["problem_ir_sha256"],
-            "solver_mesh_sha256": fixture_identity["solver_mesh_sha256"],
-            "solver_mesh_signature": fixture_identity["solver_mesh_signature"],
-        },
+        "fixture": fixture_block,
     }
     if preflight.get("status") != "available":
         base.update(status="unavailable", blockers=preflight.get("blockers", []))

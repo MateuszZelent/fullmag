@@ -216,23 +216,68 @@ bool compute_device_demag_for_device_stage_impl(
     uint64_t solver_apply_wall_time_ns = 0;
     {
         FULLMAG_NVTX_RANGE("fem.demag.hypre.apply");
-        if (!hypre_wait_for_fullmag(workspace->stream_interop, stream, reason)) {
-            return false;
+        const uint64_t event_wait_count_before =
+            workspace->stream_interop.event_wait_count;
+        const auto solver_apply_start = FemSteadyClock::now();
+        {
+            FULLMAG_NVTX_RANGE("fullmag.demag.wait_in_enqueue");
+            if (!hypre_wait_for_fullmag(workspace->stream_interop, stream, reason)) {
+                return false;
+            }
+        }
+        if (timings.enabled) {
+            ctx.poisson_demag.step_hypre_wait_in_enqueue_wall_time_ns +=
+                workspace->stream_interop.last_wait_in_enqueue_wall_time_ns;
         }
         ctx.poisson_demag.event_wait_count =
             workspace->stream_interop.event_wait_count;
         ctx.poisson_demag.event_wait_count_current_step += 1;
-        const auto solve_start = FemSteadyClock::now();
-        workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
-        if (!fullmag_wait_for_hypre(workspace->stream_interop, stream, reason)) {
-            return false;
+
+        {
+            FULLMAG_NVTX_RANGE("fullmag.demag.hypre_device");
+            if (!begin_hypre_apply_device_timing(
+                    workspace->stream_interop, reason)) {
+                return false;
+            }
+            {
+                FULLMAG_NVTX_RANGE("fullmag.demag.hypre_mult_host");
+                const auto host_api_start = timings.enabled
+                    ? FemSteadyClock::now()
+                    : FemSteadyClock::time_point{};
+                workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+                if (timings.enabled) {
+                    ctx.poisson_demag.step_hypre_host_api_wall_time_ns +=
+                        elapsed_ns(host_api_start);
+                }
+            }
+            if (!end_hypre_apply_device_timing(
+                    workspace->stream_interop, reason)) {
+                return false;
+            }
+        }
+
+        {
+            FULLMAG_NVTX_RANGE("fullmag.demag.wait_out_enqueue");
+            if (!fullmag_wait_for_hypre(workspace->stream_interop, stream, reason)) {
+                return false;
+            }
+        }
+        if (timings.enabled) {
+            ctx.poisson_demag.step_hypre_wait_out_enqueue_wall_time_ns +=
+                workspace->stream_interop.last_wait_out_enqueue_wall_time_ns;
         }
         ctx.poisson_demag.event_wait_count =
             workspace->stream_interop.event_wait_count;
         ctx.poisson_demag.event_wait_count_current_step += 1;
+        if (timings.enabled) {
+            ctx.poisson_demag.step_hypre_event_wait_count +=
+                workspace->stream_interop.event_wait_count -
+                event_wait_count_before;
+        }
         ctx.poisson_demag.global_sync_count =
             workspace->stream_interop.global_sync_count;
-        solver_apply_wall_time_ns = elapsed_ns(solve_start);
+        /* Legacy field: inclusive host orchestration window, not GPU elapsed. */
+        solver_apply_wall_time_ns = elapsed_ns(solver_apply_start);
     }
     ctx.poisson_demag.last_solver_apply_wall_time_ns = solver_apply_wall_time_ns;
     ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns;

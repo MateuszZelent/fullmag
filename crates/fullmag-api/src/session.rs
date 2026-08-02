@@ -1115,6 +1115,9 @@ struct CurrentLiveApplyFlags {
 pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
     current.metadata = Some(metadata);
     if let Some(metadata) = current.metadata.as_ref() {
+        current.solver_profile.timestep_qualification = metadata
+            .get("timestep_qualification")
+            .map(|value| serde_json::from_value(value.clone()).unwrap_or_default());
         if let Some(value) = metadata.get("capabilities") {
             current.capabilities = serde_json::from_value(value.clone()).ok();
         }
@@ -1577,7 +1580,11 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
     }
-    if let Some(solver_profile) = req.solver_profile {
+    if let Some(mut solver_profile) = req.solver_profile {
+        if solver_profile.timestep_qualification.is_none() {
+            solver_profile.timestep_qualification =
+                current.solver_profile.timestep_qualification.clone();
+        }
         current.solver_profile = solver_profile;
     }
     apply_effective_field_source_delta(current, previous_field_sources);
@@ -1692,7 +1699,11 @@ pub(crate) fn apply_current_live_runtime_frame(
     if let Some(engine_log) = frame.engine_log {
         current.engine_log = engine_log;
     }
-    if let Some(solver_profile) = frame.solver_profile {
+    if let Some(mut solver_profile) = frame.solver_profile {
+        if solver_profile.timestep_qualification.is_none() {
+            solver_profile.timestep_qualification =
+                current.solver_profile.timestep_qualification.clone();
+        }
         current.solver_profile = solver_profile;
     }
     apply_effective_field_source_delta(current, previous_field_sources);
@@ -3231,6 +3242,41 @@ mod tests {
             solver_profile: None,
             fem_mesh: None,
         })
+    }
+
+    #[test]
+    fn live_metadata_publishes_fail_closed_timestep_qualification() {
+        let mut current = test_current_snapshot();
+        apply_current_live_metadata(
+            &mut current,
+            json!({
+                "timestep_qualification": {
+                    "capability_id": "llg_td_policy_v1",
+                    "qualification_id": "explicit_adaptive_fem_gpu_double",
+                    "backend": "fem",
+                    "device": "gpu",
+                    "precision": "double",
+                    "integrator": "rk45",
+                    "timestep_policy": "adaptive",
+                    "validation_state": "unvalidated",
+                    "qualification_registry_version": "fullmag.llg_timestep_qualification_registry.v1"
+                }
+            }),
+        );
+
+        let qualification = current
+            .solver_profile
+            .timestep_qualification
+            .expect("metadata should populate timestep qualification diagnostics");
+        assert_eq!(qualification.validation_state.as_str(), "unvalidated");
+        assert_eq!(qualification.integrator, "rk45");
+        assert_eq!(qualification.timestep_policy, "adaptive");
+        assert_eq!(
+            qualification.qualification_registry_version,
+            "fullmag.llg_timestep_qualification_registry.v1"
+        );
+        assert!(qualification.qualification_artifact_sha256.is_none());
+        assert!(qualification.validated_scope.is_none());
     }
 
     fn region_owned_scene_document(revision: u64) -> fullmag_authoring::SceneDocument {

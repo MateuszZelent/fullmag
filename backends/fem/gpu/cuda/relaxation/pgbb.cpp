@@ -16,6 +16,7 @@
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
+#include "gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
@@ -277,6 +278,14 @@ bool gpu_relax_compute_current_metrics(
                 kGpuPgbbCurrentProjectedGradientNormSlot,
             "launch GPU projected-gradient BB energy gradient norm reduction",
             reason)) {
+        return false;
+    }
+
+    // The energy reduction does not own MaxTorque. Refresh the field metrics
+    // here so the torque-only completion gate cannot consume the previous
+    // accepted step's scalar slot while the current gradient is already fresh.
+    if (!gpu_rk_reduce_final_field_metric_terms(
+            ctx, stream, n, blocks, reason)) {
         return false;
     }
 
@@ -782,6 +791,10 @@ int gpu_relax_projected_gradient_bb_step(
         }
         const double armijo_rhs =
             current_energy + last_armijo_increment_rhs_j;
+        const double torque_tolerance_apm =
+            ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0
+            ? ctx.stage_completion.relax_stop.torque_tolerance_apm
+            : std::numeric_limits<double>::quiet_NaN();
         const std::string original_error =
             "GPU projected-gradient BB failed Armijo line search after " +
             std::to_string(backtracks) +
@@ -818,6 +831,12 @@ int gpu_relax_projected_gradient_bb_step(
             " last_trial_step=" + format_gpu_relax_pgbb_scalar(trial_step) +
             " gradient_norm_sq=" +
             format_gpu_relax_pgbb_scalar(energy_gradient_norm_sq) +
+            " current_torque_apm=" +
+            format_gpu_relax_pgbb_scalar(current_torque_apm) +
+            " torque_tolerance_apm=" +
+            format_gpu_relax_pgbb_scalar(torque_tolerance_apm) +
+            " torque_confirmation_count=" +
+            std::to_string(ctx.stage_completion.relax_torque_confirmation_count) +
             " direct_delta_j=" +
             format_gpu_relax_pgbb_scalar(last_direct_difference.delta_joules) +
             " direct_delta_over_step_j_per_m_per_a=" +

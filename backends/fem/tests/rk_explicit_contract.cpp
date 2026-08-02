@@ -344,6 +344,38 @@ void workspace_allocates_common_buffers() {
     check(ws.err.size() == 9u, "adaptive error buffer allocated");
 }
 
+void rk_transaction_payload_inventory_covers_owned_vectors() {
+    const std::string transaction = read_text_file(
+        fem_source_root() / "cpu" / "mfem" / "integrators" / "rk_step_transaction.cpp");
+    for (const char *field : {
+             "state.m_xyz",
+             "anisotropy.uniaxial_axis_x_field",
+             "anisotropy.h_uniaxial_xyz",
+             "magnetoelastic.strain_voigt",
+             "exchange.h_xyz",
+             "exchange.mfem.h_x",
+             "demag.h_xyz",
+             "demag.cached_xyz",
+             "zeeman.h_ext_xyz",
+             "zeeman.regional_drives",
+             "attempt_trace.records",
+             "hot_loop_violation_message",
+             "dmi.h_interfacial_xyz",
+             "effective_field.h_xyz",
+             "oersted.h_basis_per_ampere_xyz",
+             "thermal_brown.xi_xyz",
+             "gpu_hybrid_stage_m",
+             "cpu_k0",
+             "poisson_solution",
+             "fem_bem_boundary",
+             "fem_bem_rhs",
+         }) {
+        check(
+            transaction.find(field) != std::string::npos,
+            "RK transaction payload inventory must name every owned dynamic vector");
+    }
+}
+
 void fsal_reuse_requires_matching_source_state() {
     const std::filesystem::path root = fem_source_root();
     const std::string rk_explicit_step =
@@ -454,6 +486,11 @@ fullmag::fem::Context make_oersted_only_rk_context(fullmag_fem_integrator integr
     ctx.anisotropy.h_cubic_xyz.assign(3u, 0.0);
     ctx.dmi.h_interfacial_xyz.assign(3u, 0.0);
     return ctx;
+}
+
+void set_step_profile(fullmag::fem::Context &ctx, bool enabled) {
+    ctx.gpu_state.rk_phase_timings.override_configured = true;
+    ctx.gpu_state.rk_phase_timings.override_enabled = enabled;
 }
 
 double reference_oersted_scale(const fullmag::fem::Context &ctx, double time_s) {
@@ -602,6 +639,7 @@ void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
 
 void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    set_step_profile(ctx, true);
     const auto &tableau = fullmag::fem::tableau_for_integrator(
         FULLMAG_FEM_INTEGRATOR_RK23_BS);
     fullmag_fem_step_stats stats{};
@@ -633,6 +671,7 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     const std::vector<double> m_before = ctx.state.m_xyz;
     const double time_before = ctx.state.current_time;
     const uint64_t step_before = ctx.state.step_count;
+    ctx.stepper.transaction_telemetry = {};
     check(
         fullmag::fem::context_step_explicit_rk_mfem(
             ctx, tableau, proposed_dt, stats, error),
@@ -642,6 +681,20 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
         ctx.stepper.attempt_trace.records.size() ==
             static_cast<size_t>(stats.rejected_attempts + 1u),
         "adaptive CPU RK must publish exactly one trace record per attempted step");
+    check(
+        ctx.stepper.transaction_telemetry.attempt_cache_capture_count ==
+            ctx.stepper.attempt_trace.records.size(),
+        "adaptive CPU RK must capture one cache snapshot per attempted step");
+    check(
+        ctx.stepper.transaction_telemetry.attempt_cache_restore_count ==
+            stats.rejected_attempts,
+        "adaptive CPU RK must restore one cache snapshot per rejected attempt");
+    check(
+        ctx.stepper.transaction_telemetry.attempt_cache_snapshot_payload_bytes > 0u,
+        "adaptive CPU RK must report cache snapshot payload bytes");
+    check(
+        ctx.stepper.transaction_telemetry.attempt_cache_restore_payload_bytes > 0u,
+        "adaptive CPU RK retries must report restored cache payload bytes");
     for (size_t attempt = 0; attempt < ctx.stepper.attempt_trace.records.size(); ++attempt) {
         const auto &record = ctx.stepper.attempt_trace.records[attempt];
         check(record.attempt == attempt, "adaptive CPU RK trace attempt indices must be contiguous");
@@ -863,6 +916,7 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
              fullmag::fem::RkStepFailurePoint::DuringFinalStatistics,
          }) {
         auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+        set_step_profile(ctx, true);
         fullmag::fem::stepper_workspace_allocate(ctx.stepper.workspace, 3u, 7);
         ctx.stepper.workspace.fsal_valid = true;
         ctx.stepper.workspace.k[0] = {1.0, 2.0, 3.0};
@@ -889,11 +943,31 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
         check(ctx.stepper.failure_injection.injected_count == 1u,
               "configured RK failpoint must execute exactly once");
         assert_published_rk_state_equal(ctx, before, "complete RK transaction rollback");
+        const auto &telemetry = ctx.stepper.transaction_telemetry;
+        check(telemetry.step_transaction_begin_count == 1u,
+              "failed RK step must report one outer transaction begin");
+        check(telemetry.step_transaction_commit_count == 0u,
+              "failed RK step must not report a transaction commit");
+        check(telemetry.step_transaction_rollback_count == 1u,
+              "failed RK step must report one transaction rollback");
+        check(stats.rk_transaction_rollback_count == 1u,
+              "public failed RK stats must include the transaction rollback");
+        check(telemetry.step_transaction_host_snapshot_payload_bytes > 0u,
+              "failed RK step must report host snapshot payload bytes");
+        check(
+            telemetry.step_transaction_host_restore_payload_bytes ==
+                telemetry.step_transaction_host_snapshot_payload_bytes,
+            "outer RK rollback must report the restored host snapshot payload");
+        check(telemetry.step_transaction_device_snapshot_payload_bytes == 0u,
+              "CPU RK transaction must not report a device snapshot payload");
+        check(telemetry.step_transaction_device_restore_payload_bytes == 0u,
+              "CPU RK transaction must not report a device restore payload");
     }
 }
 
 void cpu_rk_success_commits_state_and_completion_once() {
     auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    set_step_profile(ctx, true);
     ctx.stage_completion.relax_stop.has_max_steps = 1;
     ctx.stage_completion.relax_stop.max_steps = 100;
     const uint64_t step_before = ctx.state.step_count;
@@ -910,6 +984,46 @@ void cpu_rk_success_commits_state_and_completion_once() {
     check(
         ctx.stage_completion.relax_energy_window_count == completion_samples_before + 1u,
         "successful RK telemetry publishes one completion sample");
+    const auto &telemetry = ctx.stepper.transaction_telemetry;
+    check(telemetry.step_transaction_begin_count == 1u,
+          "successful RK step must report one outer transaction begin");
+    check(telemetry.step_transaction_commit_count == 1u,
+          "successful RK step must report one outer transaction commit");
+    check(telemetry.step_transaction_rollback_count == 0u,
+          "successful RK step must not report a transaction rollback");
+    check(stats.rk_transaction_commit_count == 1u,
+          "public successful RK stats must include the committed transaction");
+    check(stats.rk_transaction_rollback_count == 0u,
+          "public successful RK stats must include zero transaction rollbacks");
+    check(telemetry.step_transaction_host_snapshot_payload_bytes > 0u,
+          "successful RK step must report host snapshot payload bytes");
+    check(telemetry.step_transaction_host_restore_payload_bytes == 0u,
+          "successful RK step must not report restored host payload bytes");
+    check(
+        telemetry.step_transaction_host_capture_wall_time_ns <=
+            telemetry.step_transaction_begin_wall_time_ns,
+        "host snapshot time must be a bounded part of transaction begin time");
+}
+
+void profiler_off_does_not_collect_rk_transaction_telemetry() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    set_step_profile(ctx, false);
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::run_backend_step(ctx, 0.125, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    const auto &telemetry = ctx.stepper.transaction_telemetry;
+    check(telemetry.step_transaction_begin_count == 0u,
+          "profiler-off RK must not count transaction captures");
+    check(telemetry.step_transaction_commit_count == 0u,
+          "profiler-off RK must not count transaction commits");
+    check(telemetry.step_transaction_rollback_count == 0u,
+          "profiler-off RK must not count transaction rollbacks");
+    check(telemetry.step_transaction_host_snapshot_payload_bytes == 0u,
+          "profiler-off RK must not calculate host snapshot payload bytes");
+    check(telemetry.attempt_cache_snapshot_payload_bytes == 0u,
+          "profiler-off RK must not calculate attempt-cache payload bytes");
 }
 
 void cpu_relaxation_energy_rejection_rolls_back_until_stagnation() {
@@ -1017,6 +1131,7 @@ int main() {
     workspace_reallocates_when_stage_count_grows();
     workspace_invalidates_fsal_when_stage_count_shrinks();
     workspace_allocates_common_buffers();
+    rk_transaction_payload_inventory_covers_owned_vectors();
     fsal_reuse_requires_matching_source_state();
     rk_rhs_passes_explicit_stage_and_endpoint_times();
     gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal();
@@ -1027,6 +1142,7 @@ int main() {
     cpu_rk_guard_failures_preserve_committed_state();
     cpu_rk_failure_injection_rolls_back_complete_published_state();
     cpu_rk_success_commits_state_and_completion_once();
+    profiler_off_does_not_collect_rk_transaction_telemetry();
     cpu_relaxation_energy_rejection_rolls_back_until_stagnation();
 #endif
     return 0;

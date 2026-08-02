@@ -868,16 +868,20 @@ fn current_live_metadata(
     status: &str,
 ) -> serde_json::Value {
     let runtime_engine_info = fullmag_runner::resolve_planned_runtime_engine(problem, plan).ok();
-    let resolved_execution = fullmag_runner::resolve_session_runtime(problem)
-        .ok()
+    let resolved_session_runtime = fullmag_runner::resolve_session_runtime(problem).ok();
+    let timestep_qualification = resolved_session_runtime.as_ref().and_then(|runtime| {
+        fullmag_runner::timestep_qualification_for_plan(plan, &runtime.resolved_device)
+    });
+    let resolved_execution = resolved_session_runtime
+        .as_ref()
         .map(|runtime| {
             serde_json::json!({
-                "backend": runtime.resolved_backend,
-                "device": runtime.resolved_device,
-                "precision": runtime.resolved_precision,
-                "mode": runtime.resolved_mode,
-                "runtime_family": runtime.resolved_runtime_family,
-                "engine_id": runtime.resolved_engine_id,
+                "backend": &runtime.resolved_backend,
+                "device": &runtime.resolved_device,
+                "precision": &runtime.resolved_precision,
+                "mode": &runtime.resolved_mode,
+                "runtime_family": &runtime.resolved_runtime_family,
+                "engine_id": &runtime.resolved_engine_id,
                 "lossy_fallback_used": runtime.resolved_fallback.is_some(),
             })
         });
@@ -909,6 +913,7 @@ fn current_live_metadata(
         "execution_plan": plan,
         "runtime_engine": runtime_engine,
         "resolved_execution": resolved_execution,
+        "timestep_qualification": timestep_qualification,
         "capabilities": capabilities,
         "artifact_layout": current_artifact_layout(problem, plan),
         "meshing_capabilities": current_meshing_capabilities(plan),
@@ -10357,6 +10362,24 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         demag_solver_apply_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.demag_solver_apply_wall_time_ns),
+        demag_hypre_wait_in_enqueue_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_wait_in_enqueue_wall_time_ns),
+        demag_hypre_host_api_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_host_api_wall_time_ns),
+        demag_hypre_device_elapsed_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_device_elapsed_time_ns),
+        demag_hypre_wait_out_enqueue_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_wait_out_enqueue_wall_time_ns),
+        demag_hypre_event_wait_count: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_event_wait_count),
+        demag_hypre_timed_solve_count: aggregated_steps
+            .last()
+            .map(|step| step.demag_hypre_timed_solve_count),
         demag_recover_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.demag_recover_wall_time_ns),

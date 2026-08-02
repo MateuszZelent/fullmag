@@ -50,6 +50,8 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string hypre_stream_interop =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
+    const std::string hypre_stream_interop_header =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.hpp");
     const std::string gpu_rk_stats_publication =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
     const std::string gpu_rk_stats =
@@ -58,6 +60,8 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
     const std::string gpu_rk_demag_energy =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_energy_reductions.cu");
+    const std::string poisson_runtime = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_runtime.hpp");
 
     check(
         gpu_stage.find("ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns") !=
@@ -104,11 +108,68 @@ int main()
                 std::string::npos,
         "strict GPU demag stream adapter must be version-pinned and order the exact Hypre stream with CUDA events");
     check(
+        hypre_stream_interop_header.find("HypreApplyTimingEventPair") !=
+                std::string::npos &&
+            hypre_stream_interop_header.find("apply_timing_events") !=
+                std::string::npos &&
+            hypre_stream_interop_header.find("apply_device_elapsed_time_ns") !=
+                std::string::npos,
+        "strict GPU demag stream adapter must own a separate prepared HYPRE apply device-timing pool");
+    check(
+        hypre_stream_interop.find("cudaEventRecord(event.start_event, interop.hypre_stream)") !=
+                std::string::npos &&
+            hypre_stream_interop.find("cudaEventRecord(event.stop_event, interop.hypre_stream)") !=
+                std::string::npos &&
+            hypre_stream_interop.find("cudaEventElapsedTime(") !=
+                std::string::npos,
+        "strict GPU demag stream adapter must measure HYPRE apply device elapsed time on the borrowed HYPRE stream");
+    check(
+        gpu_stage.find("begin_hypre_apply_device_timing(") <
+                gpu_stage.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            gpu_stage.find("end_hypre_apply_device_timing(") >
+                gpu_stage.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)"),
+        "strict GPU demag stage must bracket HYPRE Mult with device timing events");
+    check(
+        gpu_stage.find("fullmag.demag.wait_in_enqueue") != std::string::npos &&
+            gpu_stage.find("fullmag.demag.hypre_mult_host") != std::string::npos &&
+            gpu_stage.find("fullmag.demag.hypre_device") != std::string::npos &&
+            gpu_stage.find("fullmag.demag.wait_out_enqueue") != std::string::npos,
+        "strict GPU demag stage must expose disjoint HYPRE enqueue, host and device ranges");
+    check(
+        hypre_stream_interop.find("const bool measure_enqueue = interop.apply_timing_enabled") !=
+                std::string::npos &&
+            hypre_stream_interop.find(
+                "interop.last_wait_in_enqueue_wall_time_ns = measure_enqueue") !=
+                std::string::npos &&
+            hypre_stream_interop.find(
+                "interop.last_wait_out_enqueue_wall_time_ns = measure_enqueue") !=
+                std::string::npos,
+        "HYPRE dependency timing must measure CPU enqueue calls only when profiling is enabled");
+    check(
         gpu_stage.find("cudaStreamSynchronize(hypre_stream)") == std::string::npos &&
             gpu_stage.find("cudaDeviceSynchronize") == std::string::npos &&
             hypre_stream_interop.find("cudaStreamSynchronize") == std::string::npos &&
             hypre_stream_interop.find("cudaDeviceSynchronize") == std::string::npos,
         "strict GPU demag solve and stream adapter must not use host-blocking HYPRE or device-wide synchronization");
+    check(
+        hypre_stream_interop.find("cudaEventSynchronize") == std::string::npos,
+        "strict GPU demag HYPRE device timing must be collected only after the existing final stats synchronization boundary");
+    for (const char *field : {
+             "step_hypre_wait_in_enqueue_wall_time_ns",
+             "step_hypre_host_api_wall_time_ns",
+             "step_solver_apply_device_wall_time_ns",
+             "step_hypre_wait_out_enqueue_wall_time_ns",
+             "step_hypre_event_wait_count",
+             "step_hypre_timed_solve_count",
+         }) {
+        check(
+            poisson_runtime.find(field) != std::string::npos,
+            "Poisson runtime must own every separated HYPRE timing counter");
+    }
+    check(
+        gpu_rk_stats.find("step_hypre_timed_solve_count = 0") != std::string::npos &&
+            gpu_rk_stats.find("context_hypre_apply_timed_solve_count(ctx)") != std::string::npos,
+        "profile-off reset and profile-on timed solve count must both be explicit");
     check(
         gpu_runtime.find("demag_assemble_events") != std::string::npos &&
             gpu_runtime.find("demag_recover_events") != std::string::npos &&
@@ -121,6 +182,7 @@ int main()
         "GPU RK timing preparation must allocate demag phase event pools before the hot loop");
     check(
         gpu_rk_stats.find("ctx.poisson_demag.step_assemble_wall_time_ns") != std::string::npos &&
+            gpu_rk_stats.find("ctx.poisson_demag.step_solver_apply_device_wall_time_ns") != std::string::npos &&
             gpu_rk_stats.find("ctx.poisson_demag.step_recover_wall_time_ns") != std::string::npos &&
             gpu_rk_stats.find("ctx.poisson_demag.step_energy_wall_time_ns") != std::string::npos,
         "GPU RK timing collection must publish demag subphase timings to Poisson runtime state");

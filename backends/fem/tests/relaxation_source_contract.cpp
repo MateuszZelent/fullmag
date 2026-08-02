@@ -778,6 +778,24 @@ void c_abi_exposes_native_relaxation_step() {
             tangent_plane.find("complete_stage_from_current_stats(ctx, current_stats)") !=
                 std::string::npos,
         "native FEM CPU direct minimizers must classify already-satisfied stop criteria before taking another accepted step");
+    const auto pgbb_torque_pending = projected_gradient.find(
+        "if (relaxation_torque_confirmation_pending(ctx, current_stats.max_torque_Apm))");
+    const auto pgbb_torque_pending_update =
+        pgbb_torque_pending == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find(
+                  "update_stage_completion_from_stats(ctx, out_stats)",
+                  pgbb_torque_pending);
+    const auto pgbb_torque_pending_return =
+        pgbb_torque_pending == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find("return FULLMAG_FEM_OK;", pgbb_torque_pending);
+    check(
+        pgbb_torque_pending != std::string::npos &&
+            pgbb_torque_pending_update != std::string::npos &&
+            pgbb_torque_pending_return != std::string::npos &&
+            pgbb_torque_pending_update < pgbb_torque_pending_return,
+        "native FEM CPU projected-gradient BB must advance torque confirmation state for zero-dt pending samples");
     check(
         relaxation_math.find("#include \"cpu/mfem/runtime/stage_completion.hpp\"") !=
                 std::string::npos &&
@@ -1487,6 +1505,15 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must generate current energy/gradient finite flags on device for the packed current-state readback");
     check(
+        pgbb_current_metrics.find(
+            "gpu_rk_reduce_final_field_metric_terms(\n            ctx, stream, n, blocks, reason)") !=
+            std::string::npos &&
+            pgbb_current_metrics.find(
+                "gpu_rk_reduce_final_field_metric_terms(\n            ctx, stream, n, blocks, reason)") <
+                pgbb_current_metrics.find(
+                    "fullmag_cuda_relax_pgbb_current_metrics_finite_flags("),
+        "native FEM GPU projected-gradient BB must refresh current field metrics, including MaxTorque, before the torque completion gate reads the packed snapshot");
+    check(
         direct_energy_source.find("kDirectEnergyTailSlots = 12") !=
                 std::string::npos &&
             direct_energy_source.find(
@@ -1567,9 +1594,11 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU nonlinear-CG must consume accepted endpoint evaluations once while publishing one logical current-state record, every normal/recovery Armijo trial exactly once, and refinement evaluations");
     check(
-        nonlinear_cg_source.find("gpu_rk_capture_step_transaction_device(ctx, reason)") !=
+        nonlinear_cg_source.find(
+                "gpu_relax_capture_step_transaction_device_unprofiled(ctx, reason)") !=
                 std::string::npos &&
-            nonlinear_cg_source.find("gpu_rk_restore_step_transaction_device(ctx, restore_reason)") !=
+            nonlinear_cg_source.find(
+                "gpu_relax_restore_step_transaction_device_unprofiled(ctx, restore_reason)") !=
                 std::string::npos &&
             nonlinear_cg_source.find("restore_gpu_relax_ncg_accepted_evaluation(") !=
                 std::string::npos &&
@@ -1790,6 +1819,13 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must reject invalid tangent-gradient reductions before Armijo");
     check(
+        direct_energy_source.find(
+            "GPU projected-gradient BB produced a non-finite or negative current max torque") !=
+            std::string::npos &&
+            direct_energy_source.find("GpuFinalScalarSlot::MaxTorque") !=
+                std::string::npos,
+        "native FEM GPU projected-gradient BB must reject an invalid refreshed current torque before Armijo");
+    check(
         pgbb_source.find("GPU projected-gradient BB produced invalid BB curvature scalars") !=
                 std::string::npos &&
             pgbb_source.find("!std::isfinite(s_dot_s)") !=
@@ -1843,6 +1879,9 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("armijo_rhs_j=") != std::string::npos &&
             pgbb_source.find("last_trial_step=") != std::string::npos &&
             pgbb_source.find("gradient_norm_sq=") != std::string::npos &&
+            pgbb_source.find("current_torque_apm=") != std::string::npos &&
+            pgbb_source.find("torque_tolerance_apm=") != std::string::npos &&
+            pgbb_source.find("torque_confirmation_count=") != std::string::npos &&
             pgbb_source.find("format_gpu_relax_pgbb_scalar(") != std::string::npos,
         "native FEM GPU projected-gradient BB exhausted Armijo failures must include actionable scientific line-search diagnostics");
     check(
@@ -2414,7 +2453,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
     check(
         ncg_source.find("gpu_relax_restore_previous_state_after_failure(") !=
                 std::string::npos &&
-            ncg_source.find("gpu_rk_restore_step_transaction_device(") !=
+            ncg_source.find(
+                "gpu_relax_restore_step_transaction_device_unprofiled(") !=
                 std::string::npos &&
             ncg_source.find("gpu_relax_restore_previous_direction(") !=
                 std::string::npos &&

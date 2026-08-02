@@ -710,6 +710,12 @@ bool gpu_unpack_pgbb_current_metrics(
         reason = "GPU projected-gradient BB produced a non-finite or negative J A/m energy-metric tangent-gradient norm";
         return false;
     }
+    const double max_torque =
+        metrics.energy_snapshot.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)];
+    if (!std::isfinite(max_torque) || max_torque < 0.0) {
+        reason = "GPU projected-gradient BB produced a non-finite or negative current max torque";
+        return false;
+    }
     return true;
 }
 

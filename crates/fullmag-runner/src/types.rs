@@ -437,6 +437,41 @@ pub struct StepStats {
     pub demag_solver_setup_wall_time_ns: u64,
     #[serde(default)]
     pub demag_solver_apply_wall_time_ns: u64,
+    /// Profiler-only RK transaction capture host wall time.
+    #[serde(default)]
+    pub rk_transaction_capture_host_wall_time_ns: u64,
+    /// Device elapsed time for RK transaction capture; zero when not sampled.
+    #[serde(default)]
+    pub rk_transaction_capture_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_capture_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_host_wall_time_ns: u64,
+    /// Device elapsed time for RK transaction restore; zero when not sampled.
+    #[serde(default)]
+    pub rk_transaction_restore_device_elapsed_time_ns: u64,
+    #[serde(default)]
+    pub rk_transaction_restore_bytes: u64,
+    #[serde(default)]
+    pub rk_transaction_rollback_count: u64,
+    #[serde(default)]
+    pub rk_transaction_commit_count: u64,
+    /// Host time to enqueue the Fullmag→HYPRE dependency event.
+    #[serde(default)]
+    pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
+    /// CPU time spent inside the HYPRE host API call.
+    #[serde(default)]
+    pub demag_hypre_host_api_wall_time_ns: u64,
+    /// Device elapsed time measured on the borrowed HYPRE stream.
+    #[serde(default)]
+    pub demag_hypre_device_elapsed_time_ns: u64,
+    /// Host time to enqueue the HYPRE→Fullmag dependency event.
+    #[serde(default)]
+    pub demag_hypre_wait_out_enqueue_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_hypre_event_wait_count: u64,
+    #[serde(default)]
+    pub demag_hypre_timed_solve_count: u64,
     #[serde(default)]
     pub demag_solver_setup_reused: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -747,6 +782,20 @@ impl Default for StepStats {
             demag_solve_wall_time_ns: 0,
             demag_solver_setup_wall_time_ns: 0,
             demag_solver_apply_wall_time_ns: 0,
+            rk_transaction_capture_host_wall_time_ns: 0,
+            rk_transaction_capture_device_elapsed_time_ns: 0,
+            rk_transaction_capture_bytes: 0,
+            rk_transaction_restore_host_wall_time_ns: 0,
+            rk_transaction_restore_device_elapsed_time_ns: 0,
+            rk_transaction_restore_bytes: 0,
+            rk_transaction_rollback_count: 0,
+            rk_transaction_commit_count: 0,
+            demag_hypre_wait_in_enqueue_wall_time_ns: 0,
+            demag_hypre_host_api_wall_time_ns: 0,
+            demag_hypre_device_elapsed_time_ns: 0,
+            demag_hypre_wait_out_enqueue_wall_time_ns: 0,
+            demag_hypre_event_wait_count: 0,
+            demag_hypre_timed_solve_count: 0,
             demag_solver_setup_reused: false,
             demag_solver: None,
             demag_preconditioner: None,
@@ -2463,16 +2512,32 @@ pub enum LlgTimestepQualificationId {
 #[serde(rename_all = "snake_case")]
 pub enum TimestepValidationState {
     Unvalidated,
+    AlgebraValidated,
+    PhysicsValidated,
+    ProductionQualified,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimestepExecutionIdentity {
     pub capability_id: LlgTimestepCapabilityId,
     pub qualification_id: LlgTimestepQualificationId,
     pub backend: TimestepBackend,
     pub device: TimestepDevice,
     pub precision: fullmag_ir::ExecutionPrecision,
+    pub integrator: fullmag_ir::IntegratorChoice,
+    pub timestep_policy: crate::timestep_qualification::TimestepPolicyKind,
     pub validation_state: TimestepValidationState,
+    pub qualification_registry_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_artifact_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_source_inputs_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validated_scope: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_validated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_validator_schema: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2899,7 +2964,16 @@ mod tests {
             backend: TimestepBackend::Fdm,
             device: TimestepDevice::Cpu,
             precision: ExecutionPrecision::Double,
+            integrator: IntegratorChoice::Heun,
+            timestep_policy: crate::timestep_qualification::TimestepPolicyKind::Fixed,
             validation_state: TimestepValidationState::Unvalidated,
+            qualification_registry_version:
+                "fullmag.llg_timestep_qualification_registry.v1".to_string(),
+            qualification_artifact_sha256: None,
+            runtime_source_inputs_sha256: None,
+            validated_scope: None,
+            qualification_validated_at: None,
+            qualification_validator_schema: None,
         }
     }
 

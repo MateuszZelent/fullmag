@@ -2,7 +2,7 @@
 
 - Status: approved for implementation
 - Owners: Fullmag core
-- Last updated: 2026-07-17
+- Last updated: 2026-07-31
 - Related audit:
   - `docs/audits/2026-07-16-llg-time-domain-solver-audit.md`
 - Related ADRs:
@@ -597,6 +597,45 @@ that state with pass/fail evidence.
 Attempt trace is not a coalesced table-autosave observable. Output samples do
 not redefine internal steps and may be interpolated only under an explicitly
 documented dense-output contract.
+
+### 4.6 Artifact-bound validation state and energy balance
+
+The LLG timestep validation state is owned by
+`benchmarks/fem-llg/qualification-registry-v1.json`. Its exact vocabulary is
+`unvalidated`, `algebra_validated`, `physics_validated`, and
+`production_qualified`. A registry row is selected only by the complete tuple
+
+```text
+capability ID, qualification ID, backend, device, precision,
+integrator, timestep policy
+```
+
+and a promotion additionally binds `artifact_sha256`,
+`runtime_source_inputs_sha256`, `validated_scope`, `validated_at`, and the
+validator schema. Missing rows, stale or mismatched hashes, dirty runtime
+sources, incomplete evidence, or absent prerequisite gates resolve to
+`unvalidated`. An engine name, executable capability, or qualification ID is
+never evidence by itself. FEM single precision cannot be promoted by the
+current registry. The initial registry intentionally leaves every lane
+`unvalidated` until fresh managed CPU, GPU, and parity artifacts carry the
+exact source-provenance schema and pass the registry validator.
+
+Every physics qualification artifact declares one energy-balance class and
+its exact validator:
+
+| `energy_balance_kind` | Required validator | Acceptance contract |
+|---|---|---|
+| `undriven_dissipative` | `undriven_dissipative_energy_balance.v1` | \(\Delta E \le \varepsilon_E\) |
+| `externally_driven` | `externally_driven_power_balance.v1` | \(|\Delta E-W_\mathrm{source}+E_\mathrm{diss}|\le\varepsilon_E\) |
+| `spin_torque_driven` | `spin_torque_power_balance.v1` | \(|\Delta E-W_\mathrm{source}-W_\mathrm{nc}+E_\mathrm{diss}|\le\varepsilon_E\) |
+
+Here all energies and works are in joules and `epsilon_E` is the recorded
+discretization, field-solve, and energy-evaluation budget. The driven
+validators require explicit source work and dissipated energy. The spin-torque
+validator additionally requires the nonconservative-work term. If a backend
+does not publish those observables, that scope remains unqualified; it is not
+tested with the autonomous monotonic-energy rule. CPU/GPU parity requires the
+same energy-balance class and validator on both lanes.
 
 ## 5. Validation strategy
 
