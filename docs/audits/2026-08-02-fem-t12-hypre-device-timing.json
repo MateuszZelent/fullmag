@@ -1,0 +1,128 @@
+{
+  "schema": "fullmag.fem.t12_hypre_device_timing.v1",
+  "status": "managed_timing_pass_nsight_compute_partial",
+  "source_commit": "6c1f028fce580909da88c5e2d206fa611d4fd87d",
+  "managed_gate": {
+    "command": "just verify-fem-hypre-device-timing",
+    "status": "pass",
+    "summary_path": ".fullmag/reports/task-12-hypre-device-timing/summary.json",
+    "runtime_manifest_sha256": "b0ac7282c0b899a619efa7b4f1ac557adef9fa2edf5c6dbf7f89b1ac82822d08",
+    "runtime_source_commit": "41337a1e3c2c85f99179297d271fb9837012b665",
+    "device": {
+      "name": "NVIDIA GeForce RTX 4080 SUPER",
+      "compute_capability": "8.9",
+      "driver": "591.86",
+      "mfem_device": "ceed-cuda:/gpu/cuda/shared",
+      "hypre_version": "3.1.0",
+      "mfem_version": "4.9"
+    },
+    "rows": [
+      {
+        "resolution": "coarse",
+        "profiler": "off",
+        "status": "ok",
+        "demag_solves": 1,
+        "demag_wall_time_ms": 11.127774,
+        "wall_time_ms": 2320.291,
+        "wait_in_enqueue_ms": 0.0,
+        "host_api_ms": 0.0,
+        "device_elapsed_ms": 0.0,
+        "wait_out_enqueue_ms": 0.0,
+        "event_wait_count": 0,
+        "timed_solve_count": 0,
+        "hot_loop_compute_sync_count": 0
+      },
+      {
+        "resolution": "fine",
+        "profiler": "off",
+        "status": "ok",
+        "demag_solves": 1,
+        "demag_wall_time_ms": 69.899149,
+        "wall_time_ms": 2999.744,
+        "wait_in_enqueue_ms": 0.0,
+        "host_api_ms": 0.0,
+        "device_elapsed_ms": 0.0,
+        "wait_out_enqueue_ms": 0.0,
+        "event_wait_count": 0,
+        "timed_solve_count": 0,
+        "hot_loop_compute_sync_count": 0
+      },
+      {
+        "resolution": "coarse",
+        "profiler": "on",
+        "status": "ok",
+        "demag_solves": 1,
+        "demag_wall_time_ms": 11.823633,
+        "wall_time_ms": 2068.142,
+        "wait_in_enqueue_ms": 0.00462,
+        "host_api_ms": 11.614357,
+        "device_elapsed_ms": 12.685472,
+        "wait_out_enqueue_ms": 0.00396,
+        "event_wait_count": 2,
+        "timed_solve_count": 1,
+        "hot_loop_compute_sync_count": 0
+      },
+      {
+        "resolution": "fine",
+        "profiler": "on",
+        "status": "ok",
+        "demag_solves": 1,
+        "demag_wall_time_ms": 68.017259,
+        "wall_time_ms": 2821.045,
+        "wait_in_enqueue_ms": 0.005033,
+        "host_api_ms": 67.800623,
+        "device_elapsed_ms": 74.001664,
+        "wait_out_enqueue_ms": 0.002979,
+        "event_wait_count": 2,
+        "timed_solve_count": 1,
+        "hot_loop_compute_sync_count": 0
+      }
+    ]
+  },
+  "nsight": {
+    "status": "compute_captured_host_blocked",
+    "run_id": "task12-direct-nsight-20260802-v2",
+    "runtime_manifest_sha256": "6e7ffc022a0b54dcbc8d30faaa7e7109926a9b0d05dbddc4d829e11e45713833",
+    "runtime_source_commit": "6a3cd3966116c7ccc12c67d974f6acaacc26764d",
+    "fixture_manifest": "examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json",
+    "fixture_manifest_sha256": "d40522cc13b255afa5dda7a09cf2aeb591eec02ae4c0629d38b283a047a2f591",
+    "fixture_solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
+    "fixture_solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+    "compute": {
+      "status": "captured",
+      "executed_steps": 64,
+      "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+      "problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c",
+      "trace": ".fullmag/reports/task-13-nsight/task12-direct-nsight-20260802-v2/compute-timeline.nsys-rep",
+      "observed_nvtx_ranges": [
+        "fem.relax.ncg.step",
+        "fem.relax.armijo",
+        "fem.demag.rhs",
+        "fem.demag.hypre.apply",
+        "fullmag.demag.wait_in_enqueue",
+        "fullmag.demag.hypre_mult_host",
+        "fullmag.demag.hypre_device",
+        "fullmag.demag.wait_out_enqueue",
+        "fem.demag.recovery"
+      ],
+      "hypre_device_range": {
+        "count": 67,
+        "total_ms": 4744.367044,
+        "last_ms": 75.123418
+      },
+      "last_step_profiler_device_elapsed_ms": 72.482336,
+      "last_step_nsight_vs_profiler_delta_percent": 3.6437594947,
+      "cuda_kernel_table": "unavailable: nsys trace contained no CUDA kernel data"
+    },
+    "host": {
+      "status": "blocked",
+      "reason": "built control room did not become ready on :8081; static Control Room is not built in this worktree",
+      "trace": ".fullmag/reports/task-13-nsight/task12-direct-nsight-20260802-v2/host-timeline.nsys-rep"
+    },
+    "not_claimed": [
+      "No complete compute-plus-host capture",
+      "No top-kernel Nsight Compute occupancy/bandwidth/stall qualification",
+      "No whole-solver speedup claim"
+    ]
+  }
+}
