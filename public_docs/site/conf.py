@@ -16,6 +16,7 @@ version = release
 
 extensions = [
     "myst_parser",
+    "sphinx_design",
     "sphinx_copybutton",
     "legacy_redirects",
     "responsive_tables",
