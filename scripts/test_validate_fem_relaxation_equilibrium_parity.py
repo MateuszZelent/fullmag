@@ -17,6 +17,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = REPO_ROOT / "scripts" / "validate_fem_relaxation_equilibrium_parity.py"
 SUITE_PATH = REPO_ROOT / "examples" / "assets" / "fem_performance" / "equilibrium_qualification_suite_v1.json"
+TYPED_SUITE_PATH = REPO_ROOT / "examples" / "assets" / "fem_performance" / "amg_qualification_suite_v2.json"
 
 
 def load_validator():
@@ -222,6 +223,20 @@ def test_immutable_qualification_suite_is_explicit() -> None:
     )
 
 
+def test_equilibrium_suite_signatures_match_current_typed_fixture_suite() -> None:
+    equilibrium = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+    typed = json.loads(TYPED_SUITE_PATH.read_text(encoding="utf-8"))
+    typed_by_resolution = {
+        fixture["resolution"]: fixture["solver_mesh_signature"]
+        for fixture in typed["fixtures"]
+    }
+    actual = {
+        fixture["resolution"]: fixture["solver_mesh_signature"]
+        for fixture in equilibrium["fixtures"]
+    }
+    assert actual == typed_by_resolution
+
+
 def test_required_matrix_does_not_accept_a_single_passing_pair() -> None:
     validator = load_validator()
     rows = [state_row(backend="fem_cpu"), state_row(backend="fem_gpu", steps=13)]
@@ -243,7 +258,7 @@ def test_suite_loader_exposes_immutable_fixture_signatures() -> None:
     suite = validator.load_qualification_suite(SUITE_PATH)
     assert suite["resolutions"] == ("coarse", "medium", "fine")
     assert suite["fixture_signatures"]["coarse"] == (
-        "0bcaf9731f36f911f8af210037eeadf1d6555446534e25cc977da6408b014412"
+        "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
     )
 
 

@@ -102,7 +102,7 @@ def main() -> int:
     assert suite["algorithms"] == ["projected_gradient_bb", "nonlinear_cg"]
     assert suite["scenarios"] == ["exchange_only", "exchange_demag"]
     assert loaded_suite["fixture_signatures"]["coarse"] == (
-        "0bcaf9731f36f911f8af210037eeadf1d6555446534e25cc977da6408b014412"
+        "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
     )
     print("FEM_RELAXATION_EQUILIBRIUM_PARITY_SEMANTICS=pass")
     return 0
