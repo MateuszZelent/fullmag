@@ -3276,6 +3276,13 @@ Pozostają co najmniej następujące niezależne bramy:
 Na podstawie `external_solvers/3/test/standardproblem5.mx3` dodano zwykły
 stage-first workflow FDM:
 
+### 32.0. Tożsamość dowodu
+
+Authoring, nota fizyczna, test i raport zostały zapisane w commitcie
+`5d4ec204` na lokalnym `master`. Ciężkie artefakty wykonania pozostają pod
+`/zfn2/mateuszz/git/fullmag/runs/`; istniejące, niezwiązane zmiany robocze nie
+zostały do tego commitu dołączone.
+
 - `examples/mumax_standard_problem_5_fdm.py` — literalne `32 x 32 x 4`,
   `100 x 100 x 10 nm`, `Ms=800 kA/m`, `Aex=13 pJ/m`, vortex `(1,1)`,
   Zhang–Li `J=(1e12,0,0) A/m²`, `degree=1`, `beta=xi=0.05`, `run=1 ns`;
