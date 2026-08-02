@@ -778,6 +778,24 @@ void c_abi_exposes_native_relaxation_step() {
             tangent_plane.find("complete_stage_from_current_stats(ctx, current_stats)") !=
                 std::string::npos,
         "native FEM CPU direct minimizers must classify already-satisfied stop criteria before taking another accepted step");
+    const auto pgbb_torque_pending = projected_gradient.find(
+        "if (relaxation_torque_confirmation_pending(ctx, current_stats.max_torque_Apm))");
+    const auto pgbb_torque_pending_update =
+        pgbb_torque_pending == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find(
+                  "update_stage_completion_from_stats(ctx, out_stats)",
+                  pgbb_torque_pending);
+    const auto pgbb_torque_pending_return =
+        pgbb_torque_pending == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find("return FULLMAG_FEM_OK;", pgbb_torque_pending);
+    check(
+        pgbb_torque_pending != std::string::npos &&
+            pgbb_torque_pending_update != std::string::npos &&
+            pgbb_torque_pending_return != std::string::npos &&
+            pgbb_torque_pending_update < pgbb_torque_pending_return,
+        "native FEM CPU projected-gradient BB must advance torque confirmation state for zero-dt pending samples");
     check(
         relaxation_math.find("#include \"cpu/mfem/runtime/stage_completion.hpp\"") !=
                 std::string::npos &&

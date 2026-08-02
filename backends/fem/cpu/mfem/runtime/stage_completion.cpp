@@ -225,7 +225,6 @@ bool relaxation_torque_confirmation_pending(
     return stage.snapshot.has_reason == 0 &&
         relax_stop.has_torque_tolerance_apm != 0 &&
         relax_stop.has_energy_tolerance_j == 0 &&
-        stage.relax_torque_confirmation_count > 0 &&
         stage.relax_torque_confirmation_count < RELAX_TORQUE_CONFIRMATION_STEPS &&
         std::isfinite(max_torque_apm) &&
         std::isfinite(relax_stop.torque_tolerance_apm) &&

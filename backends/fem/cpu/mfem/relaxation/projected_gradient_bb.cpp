@@ -167,6 +167,7 @@ int run_projected_gradient_bb_step(
         out_stats = current_stats;
         out_stats.dt_seconds = 0.0;
         out_stats.max_rhs_amplitude = 0.0;
+        update_stage_completion_from_stats(ctx, out_stats);
         return FULLMAG_FEM_OK;
     }
 
