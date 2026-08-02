@@ -22,7 +22,7 @@ minimizers operate on the constrained energy landscape without a physical-time c
 
 | Algorithm | Numerical role | Time-step controls | Current qualification boundary |
 |---|---|---|---|
-| `llg_overdamped` | precession-disabled damping descent | fixed or adaptive RK controls; optional relaxation-time ceiling | FDM and FEM lanes are implemented; runtime qualification is lane- and device-specific |
+| `llg_overdamped` | precession-disabled damping descent | fixed or adaptive explicit integrator; optional relaxation-time ceiling | FDM and FEM lanes are implemented; runtime qualification is lane- and device-specific |
 | `projected_gradient_bb` | tangent projected gradient with alternating BB1/BB2 step selection and Armijo backtracking | no physical or pseudo-time step | FDM reference and native FEM CPU/GPU implementations exist; planner/runtime evidence is separate |
 | `nonlinear_cg` | Polak–Ribière+ tangent-space conjugate minimization with Armijo backtracking and periodic restart | no physical or pseudo-time step | FDM reference and native FEM CPU/GPU implementations exist; planner/runtime evidence is separate |
 
@@ -31,6 +31,48 @@ CPU development implementation, but it is not one of the three algorithms docume
 executable public relaxation choice here.
 The planner must reject an unsupported solver/device combination instead of silently replacing the
 requested algorithm.
+
+## LLG integrator vocabulary (only for `llg_overdamped`)
+
+The `solver` keyword selects the integrator used by the damping-only LLG stage. It does not select
+one of the three relaxation algorithms. The Python DSL canonicalizes `dp54` to `rk45` and `bs23`
+to `rk23`; the canonical name is what is written to `ProblemIR` and provenance. `None` and
+`"auto"` resolve to `rk23` when the stage is lowered.
+
+| Canonical name | Family | Step policy | Embedded/error order | FEM CPU | FEM GPU | FDM CPU | FDM GPU |
+|---|---|---|---|---|---|---|---|
+| `heun` | explicit RK2 | fixed | none | supported | supported | supported | supported |
+| `rk4` | explicit RK4 | fixed | none | supported | supported | supported | supported |
+| `rk23` (alias `bs23`) | Bogacki–Shampine | fixed or adaptive | embedded lower-order estimate | supported | supported | supported | supported |
+| `rk45` (alias `dp54`) | Dormand–Prince | fixed or adaptive | embedded lower-order estimate | supported | supported | supported | supported |
+| `abm3` | Adams–Bashforth–Moulton 3 | fixed multistep | predictor/corrector history | reference path | not native | supported | supported |
+| `coupled_imex_ark2` | coupled spin-transport IMEX | adaptive coupled transport only | full-step/two-half-step transport estimate | not a plain relaxation integrator | not a plain relaxation integrator | only with a transient spin-transport module | only with a transient spin-transport module |
+
+`coupled_imex_ark2` is accepted by the shared dynamics vocabulary because it belongs to the
+transient spin-transport contract. A standalone relaxation stage without a transient
+`spin_transport` module is rejected by ProblemIR validation; it must not be presented as a fourth
+relaxation algorithm. `abm3` is available on FDM and reference FEM paths, but the native FEM GPU
+ABI deliberately rejects it. The exact resolved lane is part of execution provenance.
+
+## What one relaxation iteration means
+
+The three algorithms share the same accepted-state observation but differ in the state update:
+
+1. Refresh the effective field and evaluate the accepted-state torque. The torque threshold is
+   checked in A/m after converting a `tolT` request through $\mu_0$.
+2. For `llg_overdamped`, advance the pure-damping ODE with the requested fixed/adaptive
+   integrator. A rejected adaptive trial does not advance the relaxation clock or accepted-step
+   counter.
+3. For `projected_gradient_bb`, form a tangent gradient, choose the alternating BB step, retract
+   $\mathbf m-\lambda\mathbf g$, and apply the 20-rejection Armijo limit.
+4. For `nonlinear_cg`, transport the previous tangent vectors, form PR+, enforce a descent
+   direction, retract $\mathbf m+\lambda\mathbf p$, and apply the 30-rejection Armijo limit.
+5. Commit only an accepted state. Update the 50-sample energy window and the at-least-three-
+   consecutive-sample torque confirmation, then resolve convergence or the applicable
+   budget/failure reason.
+
+Rejected trial states, failed field evaluations, non-finite metrics, and backend errors never
+become accepted relaxation states and never satisfy the completion contract.
 
 ## Shared physical contract
 
@@ -59,7 +101,7 @@ time ceiling are budgets, never proofs of equilibrium.
 | Physical/pseudo-time | relaxation coordinate $t$ in seconds | none | none |
 | Trial state | RK stage | normalized $\mathbf m-\lambda\mathbf g$ | normalized $\mathbf m+\lambda\mathbf p$ |
 | Acceptance | integrator error policy | Armijo, $c_1=10^{-4}$, at most 20 backtracks | Armijo, $c_1=10^{-4}$, at most 30 backtracks |
-| Internal step policy | fixed or adaptive RK23/RK45 | BB1/BB2 alternation, $10^{-15}\leq\lambda\leq10^{-3}$ | initial $\min(10^{-6},1/\lVert p\rVert)$; restart every 50 accepted steps |
+| Internal step policy | Heun/RK4 fixed, RK23/RK45 adaptive-capable, ABM3 reference multistep | BB1/BB2 alternation, $10^{-15}\leq\lambda\leq10^{-3}$ | initial $\min(10^{-6},1/\lVert p\rVert)$; restart every 50 accepted steps |
 | Public controls | solver, `dt*`, adaptive policy, damping override | stop criteria only | stop criteria only |
 
 The constants in the table are implementation policy, not public keyword arguments. They are
@@ -91,6 +133,26 @@ This is an explanatory projection of `Relaxation.to_ir()`, not an alternative au
 Planner resolution (solver family, FDM/FEM, CPU/GPU, precision, mesh/grid and field policy) and
 runtime completion/provenance are separate records.
 
+### Lower-level `fm.Relaxation` model
+
+`study.stages.add_relax(...)` is the canonical user-facing construction path. The exported
+`fm.Relaxation` model is the typed semantic object that receives the same validation and lowers to
+the same `ProblemIR`; it is useful when inspecting or composing model data, not as a second
+simulation authoring style.
+
+| `fm.Relaxation` field | Type | Default | Contract | ProblemIR |
+|---|---|---|---|---|
+| `outputs` | sequence of `SaveField`/`SaveScalar`/`Snapshot` | empty in a stage | accepted-state sampling only; outputs do not create physical time for direct minimizers | `sampling.outputs` |
+| `algorithm` | `str` | `"llg_overdamped"` | one of the supported algorithm identifiers; `tangent_plane_implicit` remains reserved | `algorithm` |
+| `stop` | `fm.RelaxStop` | torque default plus `max_steps=50_000` | grouped torque/energy/budget contract; at least one criterion required | `stop` |
+| `dynamics` | `fm.LLG \| None` | auto-created for LLG; absent for direct minimizers | LLG-only integrator/timestep object; direct minimizers reject it | `dynamics` |
+| `table_autosave` | `fm.TableAutosave \| None` | `None` | optional scalar table sampling; it does not alter accepted-state semantics | `sampling.table_autosave` |
+
+Legacy constructor aliases (`torque_tolerance`, `energy_tolerance`, `max_steps` and the three
+relaxation-time spellings) are normalized into `RelaxStop`; new scripts should use `tolT`/`tolA`
+or an explicit `fm.RelaxStop` through the stage-first API. Private implementation fields are not
+part of the public contract.
+
 ## Four implementation lanes
 
 | Physics algorithm | FDM CPU/reference | FDM GPU/CUDA | FEM CPU/MFEM | FEM GPU/CUDA |
@@ -102,6 +164,23 @@ runtime completion/provenance are separate records.
 These are source/architecture statements, not blanket qualification claims. In particular, the
 public multilayer FDM planner currently allows only `llg_overdamped`; single-layer/native direct
 minimizer paths and executed GPU evidence must be checked separately.
+
+## What differs between FDM/FEM and CPU/GPU
+
+The equations and public algorithm names are shared, but the discrete owners are not:
+
+| Lane | State and metric owner | Field/energy evaluation | Relaxation-specific difference |
+|---|---|---|---|
+| FDM CPU | Cartesian cells; $\mu_0M_{s,i}V_i$ products | reference grid/FFT path | reference PG/NCG loops and CPU adaptive integrators |
+| FDM GPU | CUDA cell arrays and reductions | native CUDA field/energy path | direct-minimizer dispatcher and device reductions; multilayer planner restrictions apply |
+| FEM CPU | MFEM nodal vectors and mass/lumped-mass products | native MFEM operators | direct-energy Armijo proof, rollback and recovery state are CPU-native |
+| FEM GPU | device-resident MFEM/CUDA state and reductions | native CUDA operators | Armijo comparison/refinement, rollback and direction state remain on the device; ABM3 is rejected by the native ABI |
+
+Consequently, “the same algorithm” means the same constrained continuum contract and acceptance
+inequality, not bit-identical trajectories. A CPU/GPU parity claim must include mesh/grid identity,
+precision, interaction list, stop policy, field-refresh policy, accepted-step metrics and resolved
+device provenance. A source file or `to_ir()` result alone is not evidence that a GPU execution
+occurred.
 
 ## Workflow
 
