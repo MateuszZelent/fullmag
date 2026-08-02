@@ -2,16 +2,21 @@
   "schema_version": "fullmag.fem_llg_t9_managed_gate.v1",
   "status": "blocked_by_measurement",
   "source": {
-    "git_commit": "5079ccd8b6effd12afca3c6303fc378502cab46c",
-    "source_snapshot_sha256": "6a20508f0f1656eba017d6a62242db7871936c125979f239a18a41d467eebc85",
+    "git_commit": "bbbf2c627d5b6cbe27372ceb3f8b7cbf06ace794",
+    "source_snapshot_sha256": "b90fc21010995e796f41497c98b7a7bce0777112c1dbfd654d704dc1998d000b",
     "worktree_state": "clean"
   },
   "recipe": "just verify-fem-llg-time-domain-qualification-production",
   "runtime": {
     "container_execution": true,
-    "managed_runtime_manifest_sha256": null,
+    "managed_runtime_manifest_sha256": "20744e2dfe7198b42fd0593fcaec1d755368ca2a46f4c74f34aed3df38b5f339",
     "exact_managed_runtime_provenance": false,
-    "reason": "The container qualification gate passed, but its CMake runtime was not exported with a current managed runtime manifest. Registry promotion remains fail-closed."
+    "manifest_schema": 3,
+    "runtime_source_inputs_sha256": "daf75f9ed2e6d126b52bf5e6a0cff2bb6cd37baeedd547982380dd1d430b3984",
+    "runtime_git_commit": "bbbf2c627d5b6cbe27372ceb3f8b7cbf06ace794",
+    "runtime_source_snapshot_sha256": "b90fc21010995e796f41497c98b7a7bce0777112c1dbfd654d704dc1998d000b",
+    "runtime_worktree_state": "clean",
+    "reason": "The managed schema-v3 runtime is now exported and exact, and the CMake qualification rerun passes on the same source snapshot. The qualification JSON itself does not yet embed source/runtime identity and the harness does not execute the exported managed binary, so registry promotion remains fail-closed."
   },
   "artifacts": {
     "cpu": {
