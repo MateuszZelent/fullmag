@@ -127,6 +127,16 @@ export function setExplorerActiveTab(activeTab: ExplorerTabId): void {
   explorerStore.setState({ activeTab, keyboardRow: null });
 }
 
+export function shouldAutoRevealModelTab(
+  previousNodeId: string | null,
+  selectedNodeId: string | null,
+  activeTab: ExplorerTabId,
+): boolean {
+  return previousNodeId !== selectedNodeId
+    && selectedNodeId?.startsWith("model:") === true
+    && activeTab !== "model";
+}
+
 export function setExplorerFilterText(filterText: string): void {
   explorerStore.setState({ filterText });
 }

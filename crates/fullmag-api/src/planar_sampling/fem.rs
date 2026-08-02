@@ -47,12 +47,12 @@ pub(super) fn sample(
                 surface::sample_boundary(field, request, frame, *visibility_policy)
             }
             fullmag_ir::SurfaceBoundarySelectorIR::RegionBoundary { .. } => {
-                Err(ApiError::unprocessable_entity(
+                Err(ApiError::unprocessable(
                     "unsupported_region_boundary_projection: FEM region-boundary topology is not published",
                 ))
             }
             fullmag_ir::SurfaceBoundarySelectorIR::NamedSurface { .. } => {
-                Err(ApiError::unprocessable_entity(
+                Err(ApiError::unprocessable(
                     "unsupported_named_surface_projection: FEM named-surface topology is not published",
                 ))
             }

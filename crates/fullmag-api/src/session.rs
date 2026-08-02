@@ -1052,6 +1052,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         }),
         run: None,
         live_state: None,
+        coupled_checkpoint: req.coupled_checkpoint.clone(),
         runtime_status: build_runtime_status_view(&status),
         capabilities: None,
         metadata: None,
@@ -1545,6 +1546,9 @@ pub(crate) fn apply_current_live_snapshot(
         }
         current.live_state = Some(live_state);
     }
+    if let Some(coupled_checkpoint) = req.coupled_checkpoint {
+        current.coupled_checkpoint = Some(coupled_checkpoint);
+    }
     if let Some(fem_mesh) = req.fem_mesh {
         apply_fem_mesh_update(current, fem_mesh);
     }
@@ -1916,6 +1920,7 @@ mod tests {
             simulation_preparation: Some(simulation_preparation(7)),
             run: None,
             live_state: None,
+            coupled_checkpoint: None,
             latest_scalar_row: None,
             latest_fields: None,
             preview_fields: None,
@@ -2089,6 +2094,7 @@ mod tests {
     fn metadata_material_fields_use_canonical_preview_quantity_ids() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -2138,6 +2144,7 @@ mod tests {
     fn metadata_uniform_material_constants_publish_material_quantities() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -2370,6 +2377,7 @@ mod tests {
     fn scalar_frame_revisions_track_latest_replacements_not_stale_rows() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -2443,6 +2451,7 @@ mod tests {
             &mut current,
             CurrentLiveSnapshotRequest {
                 session_id: "test-session".to_string(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -2475,6 +2484,7 @@ mod tests {
             &mut current,
             CurrentLiveSnapshotRequest {
                 session_id: "test-session".to_string(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -2511,6 +2521,7 @@ mod tests {
     fn stage_execution_reconciliation_marks_matching_command_terminal() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -2958,6 +2969,7 @@ mod tests {
     fn session_frame_preserves_stage_checkpoint_linkage_for_same_command() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -3228,6 +3240,7 @@ mod tests {
     fn test_current_snapshot() -> SessionStateResponse {
         default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -3355,6 +3368,7 @@ mod tests {
             &mut current,
             CurrentLiveSnapshotRequest {
                 session_id: "test-session".to_string(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -3557,6 +3571,7 @@ mod tests {
 
         let req = CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,
@@ -3722,6 +3737,7 @@ mod tests {
                     finished: true,
                 },
             }),
+            coupled_checkpoint: None,
             latest_scalar_row: None,
             latest_fields: None,
             preview_fields: Some(vec![terminal.clone()]),
@@ -3984,6 +4000,7 @@ mod tests {
         // runner clears old cached fields.
         let req = CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
+            coupled_checkpoint: None,
             session: None,
             session_status: None,
             metadata: None,

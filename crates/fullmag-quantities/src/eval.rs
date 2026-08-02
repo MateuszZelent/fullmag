@@ -9,6 +9,8 @@ use crate::{QuantityReduction, QuantityShape};
 pub enum QuantityValue {
     /// A 3-component vector field, flat [vx,vy,vz, vx,vy,vz, ...].
     VectorField(Vec<f64>),
+    /// A fixed-component tensor field; component order comes from quantity metadata.
+    TensorField(Vec<f64>),
     /// A scalar per spatial location.
     SpatialScalar(Vec<f64>),
     /// A single global value.

@@ -3,6 +3,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::Vector3;
+
 // ── Error ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,7 +13,7 @@ pub struct EngineError {
 }
 
 impl EngineError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
+    pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -27,6 +29,52 @@ impl fmt::Display for EngineError {
 impl Error for EngineError {}
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// Dynamic terms supplied by a coupled solver for one explicit integrator
+/// stage. Both arrays use the canonical FDM cell ordering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalStageTerms {
+    /// Additional magnetic field in A/m, assembled before the Gilbert RHS.
+    pub additional_field_apm: Vec<Vector3>,
+    /// Direct contribution to `dm/dt` in 1/s, added after the Gilbert RHS.
+    pub direct_torque_per_s: Vec<Vector3>,
+}
+
+/// Stage identity emitted by the one canonical coupled ARS(2,3,2) tableau
+/// owner. Transport must solve only the indicated implicit stage and must not
+/// start a nested time-integrator step from this callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoupledImexArk2Stage {
+    ExplicitOrigin,
+    ImplicitStageOne,
+    ImplicitStageTwo,
+    AcceptedObservation,
+}
+
+/// Canonical ARS(2,3,2) additive tableau from physics note 0970.
+pub struct CoupledImexArk2Tableau;
+
+impl CoupledImexArk2Tableau {
+    pub const GAMMA: f64 = (2.0 - std::f64::consts::SQRT_2) / 2.0;
+    pub const DELTA: f64 = -2.0 * std::f64::consts::SQRT_2 / 3.0;
+    pub const EXPLICIT_A: [[f64; 3]; 3] = [
+        [0.0, 0.0, 0.0],
+        [Self::GAMMA, 0.0, 0.0],
+        [Self::DELTA, 1.0 - Self::DELTA, 0.0],
+    ];
+    pub const EXPLICIT_B: [f64; 3] = [0.0, 1.0 - Self::GAMMA, Self::GAMMA];
+    pub const IMPLICIT_A: [[f64; 2]; 2] = [[Self::GAMMA, 0.0], [1.0 - Self::GAMMA, Self::GAMMA]];
+    pub const IMPLICIT_B: [f64; 2] = [1.0 - Self::GAMMA, Self::GAMMA];
+}
+
+/// Embedded magnetic-step error available only for the corrected candidate.
+/// Coupled transport uses it to bound transport-induced torque error before
+/// either subsystem commits state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportStageErrorBudget {
+    pub dt_s: f64,
+    pub embedded_lte_m: f64,
+}
 
 // ── Grid & Cell ────────────────────────────────────────────────────────
 

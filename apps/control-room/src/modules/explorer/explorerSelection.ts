@@ -360,12 +360,54 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
-  if (node.kind === "physics.field-drive" && node.fieldDriveId) {
+  if (node.kind === "physics.spin-transports" || node.kind === "physics.spin-transport") {
     return {
-      fieldDriveId: node.fieldDriveId,
-      kind: "physics.field-drive",
+      kind: node.kind,
       nodeId: node.id,
-      type: "physics-field-drive",
+      ...(node.spinTransportId ? { spinTransportId: node.spinTransportId } : {}),
+      ...(node.spinTransportIndex !== undefined ? { spinTransportIndex: node.spinTransportIndex } : {}),
+      type: "spin-transport",
+    };
+  }
+
+  if (node.kind === "physics.current-transports" || node.kind === "physics.current-transport") {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.currentTransportId ? { currentTransportId: node.currentTransportId } : {}),
+      ...(node.currentTransportIndex !== undefined ? { currentTransportIndex: node.currentTransportIndex } : {}),
+      type: "current-transport",
+    };
+  }
+
+  if (node.kind === "physics.spin-interfaces" || node.kind === "physics.spin-interface") {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.spinInterfaceId ? { spinInterfaceId: node.spinInterfaceId } : {}),
+      ...(node.spinInterfaceIndex !== undefined ? { spinInterfaceIndex: node.spinInterfaceIndex } : {}),
+      ...(node.spinInterfaceOwnerId ? { spinInterfaceOwnerId: node.spinInterfaceOwnerId } : {}),
+      type: "spin-interface",
+    };
+  }
+
+  if (node.kind === "physics.spin-torques" || node.kind === "physics.spin-torque") {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.spinTorqueId ? { spinTorqueId: node.spinTorqueId } : {}),
+      ...(node.spinTorqueIndex !== undefined ? { spinTorqueIndex: node.spinTorqueIndex } : {}),
+      type: "spin-torque",
+    };
+  }
+
+  if (node.kind === "physics.oersted-fields" || node.kind === "physics.oersted-field") {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.oerstedFieldId ? { oerstedFieldId: node.oerstedFieldId } : {}),
+      ...(node.oerstedFieldIndex !== undefined ? { oerstedFieldIndex: node.oerstedFieldIndex } : {}),
+      type: "oersted-field",
     };
   }
 

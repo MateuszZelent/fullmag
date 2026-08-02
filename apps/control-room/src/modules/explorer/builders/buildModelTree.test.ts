@@ -4196,4 +4196,279 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({ label: "Run 2", status: "completed" });
   });
+
+  it("builds semantic typed and read-only spin transport nodes", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      spinTransports: [
+        { currentSourceId: "charge", id: "spin", index: 0, label: "spin", mode: "steady", supported: true },
+        { currentSourceId: null, id: "future", index: 1, label: "future", mode: null, supported: false },
+      ],
+    }));
+    expect(nodes.find((node) => node.kind === "physics.spin-transports")).toMatchObject({ badge: "2" });
+    expect(nodes.find((node) => node.spinTransportId === "spin")).toMatchObject({ badge: "steady · charge", status: "ready" });
+    expect(nodes.find((node) => node.spinTransportId === "future")).toMatchObject({ badge: "read-only", status: "unsupported" });
+    expect(nodes.find((node) => node.spinTransportId === "future")).not.toHaveProperty("spinTransportIndex");
+  });
+
+  it("keeps id-less unknown spin records addressable by their lossless list position", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      spinTransports: {
+        items: [{ future_kind: "spin_transport.v9", opaque: { coefficients: [1, 2] } }],
+        scene_revision: 4,
+      },
+    });
+
+    expect(snapshot.spinTransports).toEqual([{
+      currentSourceId: null,
+      id: null,
+      index: 0,
+      label: "Unknown spin transport 1",
+      mode: null,
+      supported: false,
+    }]);
+  });
+
+  it("uses the canonical transport classifier for future Explorer lookalikes", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      currentTransports: {
+        items: [{
+          future_key: { preserve: true },
+          kind: "current_transport",
+          model: "prescribed_density",
+          name: "future-current",
+        }],
+        scene_revision: 5,
+      },
+      spinTransports: {
+        items: [{
+          boundaries: [],
+          constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+          current_source_id: "charge",
+          domain: [],
+          id: "future-mixing",
+          interfaces: [{
+            absorption: "partial_absorption.v2",
+            ferromagnet_side: { object_id: "stack", region_id: "free" },
+            formula_version: "magnetoelectronic.fullmag.v2",
+            g_down_Spm2: 2,
+            g_i_Spm2: 3,
+            g_r_Spm2: 4,
+            spin_memory_loss: { formula_version: "sml_reservoir.fullmag.v2", g_n_Spm2: 1, g_f_Spm2: 2, g_lattice_Spm2: 3 },
+            g_up_Spm2: 6,
+            id: "nf",
+            kind: "mixing_conductance",
+            normal_side: { object_id: "stack", region_id: "normal" },
+            normal_to_ferromagnet: [1, 0, 0],
+          }],
+          materials: [],
+          mode: "steady",
+          requested_execution: {
+            device: "cpu",
+            discretization: "fdm",
+            execution_mode: "strict",
+            precision: "double",
+          },
+          schema_version: "spin_transport.v1",
+          solver: {
+            default_external_boundary: "spin_insulating",
+            engine: "gmres",
+            linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+            operator_version: "fv_spin_upwind_v1",
+            physical_residual_version: "transport_balance_integrated_l2.v1",
+          },
+        }],
+        scene_revision: 5,
+      },
+    });
+
+    expect(snapshot.currentTransports?.[0]?.supported).toBe(false);
+    expect(snapshot.spinTransports?.[0]?.supported).toBe(false);
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+    expect(nodes.find((node) => node.currentTransportId === "future-current")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.spinTransportId === "future-mixing")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+  });
+
+  it("builds parallel current transport collection and record nodes", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      currentTransports: {
+        items: [
+          { kind: "current_transport", model: "prescribed_density", name: "charge", current_density: [1, 0, 0] },
+          { future_kind: "charge.v9", opaque: { value: 1 } },
+          { future_kind: "charge.v10", opaque: { value: 2 } },
+        ],
+        scene_revision: 8,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(nodes.find((node) => node.kind === "physics.current-transports")).toMatchObject({ badge: "3" });
+    expect(nodes.find((node) => node.currentTransportId === "charge")).toMatchObject({
+      badge: "prescribed_density",
+      status: "ready",
+    });
+    expect(nodes.find((node) => node.currentTransportId === "charge")).not.toHaveProperty("currentTransportIndex");
+    const unknowns = nodes.filter((node) => node.kind === "physics.current-transport" && node.status === "unsupported");
+    expect(unknowns).toHaveLength(2);
+    expect(unknowns.map((node) => node.id)).toEqual([
+      "model:physics:current-transports:position:1",
+      "model:physics:current-transports:position:2",
+    ]);
+    expect(unknowns.map((node) => node.currentTransportIndex)).toEqual([1, 2]);
+    expect(new Set(unknowns.map((node) => node.id)).size).toBe(2);
+  });
+
+  it("routes blank transport identities positionally as unsupported", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      currentTransports: {
+        items: [{
+          current_density: [1, 0, 0],
+          kind: "current_transport",
+          model: "prescribed_density",
+          name: "   ",
+        }],
+        scene_revision: 9,
+      },
+      spinTransports: {
+        items: [{
+          boundaries: [],
+          constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+          current_source_id: "charge",
+          domain: [],
+          id: "",
+          interfaces: [],
+          materials: [],
+          mode: "steady",
+          requested_execution: {
+            device: "cpu",
+            discretization: "fdm",
+            execution_mode: "strict",
+            precision: "double",
+          },
+          schema_version: "spin_transport.v1",
+          solver: {
+            default_external_boundary: "spin_insulating",
+            engine: "gmres",
+            linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+            operator_version: "fv_spin_upwind_v1",
+            physical_residual_version: "transport_balance_integrated_l2.v1",
+          },
+        }],
+        scene_revision: 9,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(nodes.find((node) => node.kind === "physics.current-transport")).toMatchObject({
+      badge: "read-only",
+      currentTransportIndex: 0,
+      id: "model:physics:current-transports:position:0",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.kind === "physics.spin-transport")).toMatchObject({
+      badge: "read-only",
+      id: "model:physics:spin-transports:position:0",
+      spinTransportIndex: 0,
+      status: "unsupported",
+    });
+  });
+
+  it("keeps exact surrounding-whitespace transport identities collision-free", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      spinTransports: {
+        items: ["spin", " spin "].map((id) => ({
+          boundaries: [],
+          constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+          current_source_id: "charge",
+          domain: [],
+          id,
+          interfaces: [],
+          materials: [],
+          mode: "steady" as const,
+          requested_execution: {
+            device: "cpu" as const,
+            discretization: "fdm" as const,
+            execution_mode: "strict" as const,
+            precision: "double" as const,
+          },
+          schema_version: "spin_transport.v1",
+          solver: {
+            default_external_boundary: "spin_insulating",
+            engine: "gmres",
+            linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+            operator_version: "fv_spin_upwind_v1",
+            physical_residual_version: "transport_balance_integrated_l2.v1",
+          },
+        })),
+        scene_revision: 10,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot))
+      .filter((node) => node.kind === "physics.spin-transport");
+
+    expect(nodes.map((node) => node.spinTransportId)).toEqual(["spin", " spin "]);
+    expect(nodes.map((node) => node.id)).toEqual([
+      "model:physics:spin-transports:id:spin",
+      "model:physics:spin-transports:id:%20spin%20",
+    ]);
+  });
+
+  it("publishes five independent transport authoring surfaces with lossless unknown status", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      currentTransports: [],
+      spinTransports: [],
+      spinInterfaces: [{ id: null, index: 0, known: false, ownerId: "spin" }],
+      spinTorques: [{ id: "torque", index: 0, kind: "zhang_li", supported: true }],
+      oerstedFields: [{ id: null, index: 0, kind: "future_oersted", supported: false }],
+    }));
+
+    expect(nodes.filter((node) => [
+      "physics.current-transports",
+      "physics.spin-transports",
+      "physics.spin-interfaces",
+      "physics.spin-torques",
+      "physics.oersted-fields",
+    ].includes(node.kind)).map((node) => node.kind)).toEqual([
+      "physics.current-transports",
+      "physics.spin-transports",
+      "physics.spin-interfaces",
+      "physics.spin-torques",
+      "physics.oersted-fields",
+    ]);
+    expect(nodes.find((node) => node.kind === "physics.spin-interface")).toMatchObject({
+      spinInterfaceOwnerId: "spin",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.kind === "physics.oersted-field")).toMatchObject({ status: "unsupported" });
+  });
+
+  it("keeps malformed known-kind torque and Oersted records read-only", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      spinTorques: {
+        items: [{ id: "broken-torque", kind: "zhang_li" }],
+        scene_revision: 12,
+      },
+      oerstedFields: {
+        items: [{ current: 5, id: "broken-oersted", kind: "oersted_cylinder" }],
+        scene_revision: 12,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(snapshot.spinTorques?.[0]?.supported).toBe(false);
+    expect(snapshot.oerstedFields?.[0]?.supported).toBe(false);
+    expect(nodes.find((node) => node.spinTorqueId === "broken-torque")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.oerstedFieldId === "broken-oersted")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+  });
 });

@@ -135,6 +135,8 @@ pub struct ZhangLiSttConfig {
 /// Slonczewski (CPP) spin-transfer torque configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlonczewskiSttConfig {
+    /// Versioned evaluator contract.
+    pub formula: SlonczewskiFormula,
     /// Current density magnitude |j| [A/m²].
     pub current_density_magnitude: f64,
     /// Spin-polarization axis (unit vector p̂).
@@ -150,6 +152,19 @@ pub struct SlonczewskiSttConfig {
     /// Current sign from fixed-layer position: +1.0 for top, -1.0 for bottom.
     /// Equivalent to amumax `currentSignFromFixedLayerPosition`.
     pub current_sign: f64,
+    /// Optional resolved target mask; canonical v1 requires it.
+    pub active_mask: Option<Vec<bool>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlonczewskiFormula {
+    /// Corrected canonical SI evaluator. With the MuMax efficiency
+    /// definition epsilon=P*Lambda^2/denominator, Omega_J uses hbar/e.
+    FullmagV2,
+    /// Historical canonical evaluator kept only for read-only provenance.
+    /// It contains the additional 1/2 and is not accepted for new runs.
+    FullmagV1,
+    LegacyFullmagV0,
 }
 
 /// Spin-Orbit Torque (SOT) configuration.
@@ -158,7 +173,9 @@ pub struct SlonczewskiSttConfig {
 /// Both damping-like (DL) and field-like (FL) components are supported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SotConfig {
-    /// Charge current density magnitude |Je| [A/m²] in the HM layer.
+    /// Versioned evaluator contract.
+    pub formula: SotFormula,
+    /// Signed conventional charge-current density J [A/m²] in the HM layer.
     pub current_density: f64,
     /// Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH, dimensionless).
     pub xi_dl: f64,
@@ -168,6 +185,16 @@ pub struct SotConfig {
     pub sigma: Vector3,
     /// FM layer thickness t_F [m] (used in amplitude prefactor).
     pub thickness: f64,
+    /// Optional per-cell torque target mask, already intersected with the magnetic active mask.
+    pub active_mask: Option<Vec<bool>>,
+    /// Exact authored envelope. The M0 engine admits constant envelopes only.
+    pub envelope: Option<fullmag_ir::TimeEnvelopeIR>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SotFormula {
+    FullmagV1,
+    LegacyFullmagV0,
 }
 
 /// Oersted field configuration for infinite cylindrical conductor.

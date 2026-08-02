@@ -694,6 +694,7 @@ fn execute_reference_fem_impl(
                     None
                 };
                 let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: None,
                     stats: current_stats.clone(),
                     grid: live.grid,
                     fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -844,6 +845,7 @@ fn execute_reference_fem_impl(
                     );
                 }
                 let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: None,
                     stats: update_stats,
                     grid: live.grid,
                     fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -919,6 +921,7 @@ fn execute_reference_fem_impl(
                 );
             }
             let action = (live.on_step)(StepUpdate {
+                coupled_checkpoint: None,
                 stats: update_stats,
                 grid: live.grid,
                 fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -1137,7 +1140,12 @@ fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: select_field_values(&observables, &name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(select_field_values(&observables, &name)?),
             })?;
         }
         advance_due_schedules(field_schedules, state.time_seconds);
@@ -1239,7 +1247,12 @@ fn record_final_outputs(
             step,
             time: state.time_seconds,
             solver_dt,
-            values: select_field_values(&observables, &name)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_field_values(&observables, &name)?),
         })?;
     }
 
@@ -1654,6 +1667,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -1677,6 +1691,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -1837,6 +1852,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -1860,6 +1876,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -2026,6 +2043,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -2059,6 +2077,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,

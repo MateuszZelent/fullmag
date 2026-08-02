@@ -13,6 +13,13 @@
   - `docs/reports/16.05.2026/fullmag_fem_cpu_implementation_instructions.md`
   - `docs/reports/16.05.2026/fullmag_fem_cpu_validation_matrix.md`
 
+> **Spin-transport reconciliation (2026-07-15).** For STT, prescribed SOT,
+> spin drift-diffusion, and dynamic Oersted, this general operator standard is
+> specialized by physics notes 0960–0980. Those notes govern signs, SI units,
+> stage cadence, interface orientation, observables, and validation. Existing
+> STT/Oersted executability remains below `validated` unless its named workload
+> gates pass; prescribed SOT must not be labelled as solved SHE.
+
 ## 1. Problem Statement
 
 The native FEM backend must stop treating the MFEM bridge as the place where
@@ -65,6 +72,11 @@ An interaction must choose one of two paths:
 2. direct torque contribution added to `tau_direct`.
 
 It must not mix those paths without an explicit derivation.
+
+A spin torque is first represented as a Gilbert source `T_G` in `1/s`. The
+explicit integrator contribution is exactly
+`(T_G + alpha m x T_G)/(1 + alpha^2)`. A backend must not add an `A/m` field
+directly to `tau_direct`, apply this conversion twice, or erase signed current.
 
 ## 3. Energy to Field Contract
 
@@ -176,6 +188,9 @@ inside a bridge or context file.
 | Slonczewski STT | direct `1/s` torque or effective `A/m` field derivation, current sign, `1/(Ms*t)` scaling, macrospin switching |
 | Zhang-Li STT | exact explicit/Gilbert form, zero gradient test, 1D domain-wall velocity, current direction |
 | Oersted | analytic cylinder field inside/outside, arbitrary-axis rotation, envelope timing |
+| Prescribed SOT | signed-current involution, `gamma_e` SI prefactor, single Gilbert conversion, DL/FL macrospin vector oracle; no SHE-solver claim |
+| Steady spin drift-diffusion | charge conservation, 1D spin profile, direct-SHE sign, interface flux/torque balance, FDM/FEM convergence |
+| Dynamic Oersted | closed-circuit source, same `J_charge` as transport, direct-quadrature oracle, stage-time consistency, FEM airbox convergence |
 | Magnetoelastic | prescribed-vs-coupled scope, energy derivative if energy is reported, zero-strain and uniform-strain tests |
 
 ## 8. Demag Poisson Contract

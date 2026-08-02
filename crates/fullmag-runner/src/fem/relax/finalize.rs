@@ -128,17 +128,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     // Refresh device-resident component fields at the accepted final state
     // before any synchronous or asynchronous field snapshot selects H_eff.
     // This is required for strict GPU runs without device Poisson demag too.
-    if pending_preview_completed {
-        let refresh_started = std::time::Instant::now();
-        let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
-        eprintln!(
-            "[fullmag-runner] native-fem terminal preview phase: phase=backend_refresh completed=true wall_time_ns={} deadline_remaining_ms={}",
-            elapsed_ns(refresh_started),
-            terminal_preview_deadline
-                .saturating_duration_since(std::time::Instant::now())
-                .as_millis(),
-        );
-    }
+    let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
 
     if let Some(live) = live.as_mut() {
         if let Some(display_selection) = live.display_selection.map(|get| get()) {
@@ -273,7 +263,12 @@ pub(crate) fn finalize_native_fem_relaxation(
                     step: final_stats.step,
                     time: final_stats.time,
                     solver_dt: final_stats.dt,
-                    values,
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (final_stats.step as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(values),
                 });
             }
             finalization_field_copy_wall_time_ns =
@@ -291,7 +286,12 @@ pub(crate) fn finalize_native_fem_relaxation(
                 step: final_stats.step,
                 time: final_stats.time,
                 solver_dt: final_stats.dt,
-                values,
+               component_count: 3,
+               component_order: "xyz".into(),
+               location: "sample".into(),
+               scope: "full".into(),
+               revision: (final_stats.step as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }

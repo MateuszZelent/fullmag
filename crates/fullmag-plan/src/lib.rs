@@ -27,6 +27,7 @@ mod region_conflict;
 mod regional_field_drive;
 mod sampling;
 mod spin_torque;
+mod spin_transport;
 mod surface_selectors;
 mod util;
 mod validate;

@@ -25,7 +25,7 @@ namespace fdm {
 extern void launch_exchange_field_fp64(Context &ctx);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
-extern void launch_effective_field_fp64(Context &ctx);
+extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
@@ -62,12 +62,6 @@ __global__ void llg_rhs_fp64_kernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
-    if (stt.active_mask && stt.active_mask[idx] == 0) {
-        out_x[idx] = 0.0;
-        out_y[idx] = 0.0;
-        out_z[idx] = 0.0;
-        return;
-    }
 
     double m0 = mx[idx], m1 = my[idx], m2 = mz[idx];
     double h0 = hx[idx], h1 = hy[idx], h2 = hz[idx];
@@ -110,39 +104,39 @@ __global__ void llg_rhs_fp64_kernel(
         double dmx_u = 0.0, dmy_u = 0.0, dmz_u = 0.0;
         
         // x-derivative
-        if (ux > 0.0 && (x > 0 || stt.periodic_x)) {
-            int prev = (x > 0) ? idx - 1 : idx + nx - 1;
+        if (ux > 0.0 && x > 0) {
+            int prev = idx - 1;
             dmx_u += ux * (m0 - mx[prev]) / stt.dx;
             dmy_u += ux * (m1 - my[prev]) / stt.dx;
             dmz_u += ux * (m2 - mz[prev]) / stt.dx;
-        } else if (ux < 0.0 && (x < nx - 1 || stt.periodic_x)) {
-            int next = (x < nx - 1) ? idx + 1 : idx - nx + 1;
+        } else if (ux < 0.0 && x < nx - 1) {
+            int next = idx + 1;
             dmx_u += ux * (mx[next] - m0) / stt.dx;
             dmy_u += ux * (my[next] - m1) / stt.dx;
             dmz_u += ux * (mz[next] - m2) / stt.dx;
         }
 
         // y-derivative
-        if (uy > 0.0 && (y > 0 || stt.periodic_y)) {
-            int prev = (y > 0) ? idx - nx : idx + nx * (ny - 1);
+        if (uy > 0.0 && y > 0) {
+            int prev = idx - nx;
             dmx_u += uy * (m0 - mx[prev]) / stt.dy;
             dmy_u += uy * (m1 - my[prev]) / stt.dy;
             dmz_u += uy * (m2 - mz[prev]) / stt.dy;
-        } else if (uy < 0.0 && (y < ny - 1 || stt.periodic_y)) {
-            int next = (y < ny - 1) ? idx + nx : idx - nx * (ny - 1);
+        } else if (uy < 0.0 && y < ny - 1) {
+            int next = idx + nx;
             dmx_u += uy * (mx[next] - m0) / stt.dy;
             dmy_u += uy * (my[next] - m1) / stt.dy;
             dmz_u += uy * (mz[next] - m2) / stt.dy;
         }
 
         // z-derivative
-        if (uz > 0.0 && (z > 0 || stt.periodic_z)) {
-            int prev = (z > 0) ? idx - nx * ny : idx + nx * ny * (nz - 1);
+        if (uz > 0.0 && z > 0) {
+            int prev = idx - nx * ny;
             dmx_u += uz * (m0 - mx[prev]) / stt.dz;
             dmy_u += uz * (m1 - my[prev]) / stt.dz;
             dmz_u += uz * (m2 - mz[prev]) / stt.dz;
-        } else if (uz < 0.0 && (z < nz - 1 || stt.periodic_z)) {
-            int next = (z < nz - 1) ? idx + nx * ny : idx - nx * ny * (nz - 1);
+        } else if (uz < 0.0 && z < nz - 1) {
+            int next = idx + nx * ny;
             dmx_u += uz * (mx[next] - m0) / stt.dz;
             dmy_u += uz * (my[next] - m1) / stt.dz;
             dmz_u += uz * (mz[next] - m2) / stt.dz;
@@ -200,28 +194,31 @@ __global__ void llg_rhs_fp64_kernel(
         rhs_z += damping_like_scale * double_m_cross_pz + field_like_scale * m_cross_pz;
     }
 
-    // --- Spin-Orbit Torque (SOT) --- Manchon-Zhang DL + FL model
-    // `amp` is an effective field [A/m].  Convert it once through the
-    // Gilbert-form LLG inverse so the exported contribution is a RHS [1/s].
-    if (sot.has_sot) {
-        double m_dot_s = m0*sot.sx + m1*sot.sy + m2*sot.sz;
-        // FL term: m × σ̂
-        double fl_x = m1*sot.sz - m2*sot.sy;
-        double fl_y = m2*sot.sx - m0*sot.sz;
-        double fl_z = m0*sot.sy - m1*sot.sx;
-        // DL term: m × (m × σ̂) = (m·σ̂)m - σ̂
-        double dl_x = m_dot_s*m0 - sot.sx;
-        double dl_y = m_dot_s*m1 - sot.sy;
-        double dl_z = m_dot_s*m2 - sot.sz;
-        double raw_x = -sot.xi_dl*dl_x + sot.xi_fl*fl_x;
-        double raw_y = -sot.xi_dl*dl_y + sot.xi_fl*fl_y;
-        double raw_z = -sot.xi_dl*dl_z + sot.xi_fl*fl_z;
-        double m_cross_raw_x = m1 * raw_z - m2 * raw_y;
-        double m_cross_raw_y = m2 * raw_x - m0 * raw_z;
-        double m_cross_raw_z = m0 * raw_y - m1 * raw_x;
-        rhs_x += gamma_bar * sot.amp * (raw_x + alpha * m_cross_raw_x);
-        rhs_y += gamma_bar * sot.amp * (raw_y + alpha * m_cross_raw_y);
-        rhs_z += gamma_bar * sot.amp * (raw_z + alpha * m_cross_raw_z);
+    // --- Prescribed SOT v1: canonical Gilbert source converted exactly once. ---
+    if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_V1 &&
+        (!sot.has_active_mask || sot.active_mask[idx] != 0) &&
+        sot.has_target_mask && sot.target_mask[idx] != 0)
+    {
+        const auto sot_rhs = prescribed_sot_explicit_rhs(
+            PrescribedSotVector<double>{m0, m1, m2},
+            PrescribedSotVector<double>{sot.sx, sot.sy, sot.sz},
+            sot.amp, sot.xi_dl, sot.xi_fl, alpha);
+        rhs_x += sot_rhs.x;
+        rhs_y += sot_rhs.y;
+        rhs_z += sot_rhs.z;
+    } else if (sot.has_sot &&
+               sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
+               (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
+        const double m_dot_s = m0 * sot.sx + m1 * sot.sy + m2 * sot.sz;
+        const double fl_x = m1 * sot.sz - m2 * sot.sy;
+        const double fl_y = m2 * sot.sx - m0 * sot.sz;
+        const double fl_z = m0 * sot.sy - m1 * sot.sx;
+        const double dl_x = m_dot_s * m0 - sot.sx;
+        const double dl_y = m_dot_s * m1 - sot.sy;
+        const double dl_z = m_dot_s * m2 - sot.sz;
+        rhs_x += sot.amp * (-sot.xi_dl * dl_x + sot.xi_fl * fl_x);
+        rhs_y += sot.amp * (-sot.xi_dl * dl_y + sot.xi_fl * fl_y);
+        rhs_z += sot.amp * (-sot.xi_dl * dl_z + sot.xi_fl * fl_z);
     }
 
     out_x[idx] = rhs_x;
@@ -333,6 +330,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    const double step_start_time = ctx.current_time;
 
     // We need to save original m for the corrector step.
     // Use tmp as storage for original m.
@@ -347,7 +345,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp64(ctx);
     }
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, step_start_time);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 2: Compute k1 = RHS(m, H_eff) ---
@@ -387,7 +385,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp64(ctx);
     }
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, step_start_time + dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 5: Compute k2 = RHS(m_pred, H_eff_pred) ---
@@ -438,7 +436,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp64(ctx);
     }
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, step_start_time + dt);
 
     // Exchange energy
     double e_ex = 0.0;

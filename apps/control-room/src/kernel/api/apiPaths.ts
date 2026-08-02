@@ -519,6 +519,54 @@ export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
 );
 
+export const MODEL_CURRENT_TRANSPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/current-transports",
+);
+
+export const MODEL_CURRENT_TRANSPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/current-transports/{id}",
+);
+
+export const MODEL_SPIN_TRANSPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-transports",
+);
+
+export const MODEL_SPIN_TRANSPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-transports/{id}",
+);
+
+export const MODEL_SPIN_INTERFACES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-interfaces",
+);
+
+export const MODEL_TRANSPORT_VALIDATION_PATH = openApiV2Path(
+  "/v2/sessions/current/model/transport-validation",
+);
+
+export const MODEL_SPIN_TORQUES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-torques",
+);
+
+export const MODEL_SPIN_TORQUE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-torques/{id}",
+);
+
+export const MODEL_OERSTED_FIELDS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/oersted-fields",
+);
+
+export const MODEL_OERSTED_FIELD_PATH = openApiV2Path(
+  "/v2/sessions/current/model/oersted-fields/{id}",
+);
+
+export const MODEL_STUDY_PATH = openApiV2Path(
+  "/v2/sessions/current/model/study",
+);
+
+export const MODEL_SCRIPT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/script",
+);
+
 export const MODEL_PLANAR_MONITORS_PATH = openApiV2Path(
   "/v2/sessions/current/model/planar-monitors",
 );
@@ -529,14 +577,6 @@ export const MODEL_PLANAR_MONITOR_PATH = openApiV2Path(
 
 export const MODEL_PLANAR_MONITOR_DUPLICATE_PATH = openApiV2Path(
   "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate",
-);
-
-export const MODEL_STUDY_PATH = openApiV2Path(
-  "/v2/sessions/current/model/study",
-);
-
-export const MODEL_SCRIPT_PATH = openApiV2Path(
-  "/v2/sessions/current/model/script",
 );
 
 export const MODEL_TRANSACTIONS_PATH = openApiV2Path(

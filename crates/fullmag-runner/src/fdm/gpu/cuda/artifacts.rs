@@ -29,7 +29,12 @@ pub(crate) fn capture_initial_cuda_fields(
                 step: 0,
                 time: 0.0,
                 solver_dt: 0.0,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (0 as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }
@@ -78,7 +83,12 @@ pub(crate) fn record_cuda_due_outputs(
                 step: stats.step,
                 time: stats.time,
                 solver_dt: stats.dt,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (stats.step as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }
@@ -140,7 +150,12 @@ pub(crate) fn record_cuda_final_outputs(
                 step: latest_stats.step,
                 time: latest_stats.time,
                 solver_dt: latest_stats.dt,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (latest_stats.step as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }

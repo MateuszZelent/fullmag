@@ -207,6 +207,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -301,6 +302,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 latest_local_stats = Some(local_stats.clone());
             }
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -507,6 +509,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,
@@ -602,6 +605,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 latest_local_stats = Some(local_stats.clone());
             }
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh_generation_id: None,

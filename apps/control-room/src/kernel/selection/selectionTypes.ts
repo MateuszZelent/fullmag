@@ -205,8 +205,44 @@ export type SelectionRef =
       type: "physics-coupling";
     }
   | {
+      currentTransportId?: string;
+      currentTransportIndex?: number;
+      kind: "physics.current-transports" | "physics.current-transport";
+      nodeId: string;
+      type: "current-transport";
+    }
+  | {
+      kind: "physics.spin-transports" | "physics.spin-transport";
+      nodeId: string;
+      spinTransportId?: string;
+      spinTransportIndex?: number;
+      type: "spin-transport";
+    }
+  | {
+      kind: "physics.spin-interfaces" | "physics.spin-interface";
+      nodeId: string;
+      spinInterfaceId?: string;
+      spinInterfaceIndex?: number;
+      spinInterfaceOwnerId?: string;
+      type: "spin-interface";
+    }
+  | {
+      kind: "physics.spin-torques" | "physics.spin-torque";
+      nodeId: string;
+      spinTorqueId?: string;
+      spinTorqueIndex?: number;
+      type: "spin-torque";
+    }
+  | {
+      kind: "physics.oersted-fields" | "physics.oersted-field";
+      nodeId: string;
+      oerstedFieldId?: string;
+      oerstedFieldIndex?: number;
+      type: "oersted-field";
+    }
+  | {
       fieldDriveId: string;
-      kind: "physics.field-drive";
+      kind: "physics.field-drives" | "physics.field-drive";
       nodeId: string;
       type: "physics-field-drive";
     }
@@ -499,6 +535,47 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.couplingId === right.couplingId
+      );
+    case "spin-transport":
+      return (
+        right.type === "spin-transport" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.spinTransportId === right.spinTransportId &&
+        left.spinTransportIndex === right.spinTransportIndex
+      );
+    case "current-transport":
+      return (
+        right.type === "current-transport" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.currentTransportId === right.currentTransportId &&
+        left.currentTransportIndex === right.currentTransportIndex
+      );
+    case "spin-interface":
+      return (
+        right.type === "spin-interface" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.spinInterfaceId === right.spinInterfaceId &&
+        left.spinInterfaceIndex === right.spinInterfaceIndex &&
+        left.spinInterfaceOwnerId === right.spinInterfaceOwnerId
+      );
+    case "spin-torque":
+      return (
+        right.type === "spin-torque" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.spinTorqueId === right.spinTorqueId &&
+        left.spinTorqueIndex === right.spinTorqueIndex
+      );
+    case "oersted-field":
+      return (
+        right.type === "oersted-field" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.oerstedFieldId === right.oerstedFieldId &&
+        left.oerstedFieldIndex === right.oerstedFieldIndex
       );
     case "physics-field-drive":
       return (

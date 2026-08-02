@@ -102,6 +102,7 @@ impl LocalLiveWorkspaceState {
 
         CurrentLiveSnapshotPayload {
             fem_mesh,
+            coupled_checkpoint: live_state.coupled_checkpoint.clone(),
             session: Some(self.session.clone()),
             session_status: Some(self.session.status.clone()),
             metadata,
@@ -3614,6 +3615,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             preview_field: None,
             finished: false,
         },
+        coupled_checkpoint: None,
     }
 }
 

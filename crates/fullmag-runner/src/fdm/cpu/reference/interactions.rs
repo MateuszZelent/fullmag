@@ -2,8 +2,8 @@
 
 use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
-    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiSttConfig, SotConfig,
-    ZhangLiSttConfig,
+    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiFormula,
+    SlonczewskiSttConfig, SotConfig, SotFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::FdmPlanIR;
 
@@ -28,11 +28,17 @@ pub(super) fn build_sot(plan: &FdmPlanIR) -> Option<SotConfig> {
         return None;
     }
     Some(SotConfig {
+        formula: match plan.sot_formula_version.as_deref() {
+            Some("prescribed_sot.fullmag.v1") => SotFormula::FullmagV1,
+            _ => SotFormula::LegacyFullmagV0,
+        },
         current_density: je,
         xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
         xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
         sigma,
         thickness,
+        active_mask: plan.sot_active_mask.clone(),
+        envelope: plan.sot_envelope.clone(),
     })
 }
 
@@ -81,18 +87,48 @@ pub(super) fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<Slonczews
         return None;
     }
     let thickness = plan.stt_thickness.unwrap_or(cell_dz);
-    let current_sign = match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
-        "bottom" => -1.0,
-        _ => 1.0,
+    let (current_density_magnitude, current_sign, active_mask) = match plan
+        .slonczewski_formula_version
+        .as_deref()
+        .unwrap_or("slonczewski.legacy_fullmag.v0")
+    {
+        "slonczewski.fullmag.v2" => {
+            let n = plan.slonczewski_stack_normal?;
+            let active_mask = plan.slonczewski_active_mask.clone()?;
+            let n_norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let signed_normal_current = (j[0] * n[0] + j[1] * n[1] + j[2] * n[2]) / n_norm;
+            if !signed_normal_current.is_finite() || signed_normal_current == 0.0 {
+                return None;
+            }
+            (
+                signed_normal_current.abs(),
+                signed_normal_current.signum(),
+                Some(active_mask),
+            )
+        }
+        "slonczewski.legacy_fullmag.v0" => (
+            j_mag,
+            match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
+                "bottom" => -1.0,
+                _ => 1.0,
+            },
+            None,
+        ),
+        _ => return None,
     };
     Some(SlonczewskiSttConfig {
-        current_density_magnitude: j_mag,
+        formula: match plan.slonczewski_formula_version.as_deref() {
+            Some("slonczewski.fullmag.v2") => SlonczewskiFormula::FullmagV2,
+            _ => SlonczewskiFormula::LegacyFullmagV0,
+        },
+        current_density_magnitude,
         spin_polarization_axis: p_axis,
         lambda: lam,
         epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
         degree: plan.stt_degree.unwrap_or(1.0),
         thickness,
         current_sign,
+        active_mask,
     })
 }
 

@@ -131,6 +131,10 @@ else()
 endif()
 add_test(NAME fdm_llg_time_policy_contract COMMAND fdm_llg_time_policy_contract)
 
+add_executable(prescribed_sot_contract tests/prescribed_sot_contract.cpp)
+target_include_directories(prescribed_sot_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fdm_prescribed_sot_contract COMMAND prescribed_sot_contract)
+
 if(FULLMAG_ENABLE_CUDA)
     add_executable(smoke_context tests/smoke_context.cpp)
     target_link_libraries(smoke_context PRIVATE fullmag_fdm)
@@ -143,6 +147,16 @@ if(FULLMAG_ENABLE_CUDA)
     add_executable(heun_fp64_parity tests/heun_fp64_parity.cu)
     target_link_libraries(heun_fp64_parity PRIVATE fullmag_fdm)
     add_test(NAME fdm_heun_fp64_parity COMMAND heun_fp64_parity)
+
+    add_executable(prescribed_sot_cuda_runtime tests/prescribed_sot_cuda_runtime.cu)
+    target_include_directories(prescribed_sot_cuda_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(prescribed_sot_cuda_runtime PRIVATE fullmag_fdm)
+    add_test(NAME fdm_prescribed_sot_cuda_runtime COMMAND prescribed_sot_cuda_runtime)
+
+    add_executable(oersted_cuda_runtime tests/oersted_cuda_runtime.cu)
+    target_include_directories(oersted_cuda_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(oersted_cuda_runtime PRIVATE fullmag_fdm)
+    add_test(NAME fdm_oersted_cuda_runtime COMMAND oersted_cuda_runtime)
 
     add_executable(tier_a_compare tests/tier_a_compare.cu)
     target_link_libraries(tier_a_compare PRIVATE fullmag_fdm)

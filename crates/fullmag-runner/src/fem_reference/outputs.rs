@@ -80,7 +80,12 @@ pub(super) fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: select_field_values(observables, &name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(select_field_values(observables, &name)?),
             })?;
         }
         advance_due_schedules(field_schedules, state.time_seconds);
@@ -179,7 +184,12 @@ pub(super) fn record_final_outputs(
             step,
             time: state.time_seconds,
             solver_dt,
-            values: select_field_values(&observables, &name)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_field_values(&observables, &name)?),
         })?;
     }
 

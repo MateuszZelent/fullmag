@@ -261,7 +261,7 @@ pub(super) fn load_resolved_fdm_membership(
     }
     let (descriptor, artifact_dir) = load_descriptor(snapshot)?;
     if descriptor.schema_version != "fdm_region_membership.v2" {
-        return Err(ApiError::unprocessable_entity(
+        return Err(ApiError::unprocessable(
             "planar_scope_unsupported: FDM membership artifact does not publish active-cell support",
         ));
     }
@@ -291,7 +291,7 @@ fn resolved_membership_from_execution_plan(
         .as_ref()
         .and_then(|metadata| metadata.get("execution_plan"))
         .ok_or_else(|| {
-            ApiError::unprocessable_entity(
+            ApiError::unprocessable(
                 "planar_scope_unsupported: no realized FDM membership is published",
             )
         })?;
@@ -302,12 +302,12 @@ fn resolved_membership_from_execution_plan(
             ))
         })?;
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
-        return Err(ApiError::unprocessable_entity(
+        return Err(ApiError::unprocessable(
             "planar_scope_unsupported: active execution plan is not single-grid FDM",
         ));
     };
     let certificate = fdm.grid_certificate.ok_or_else(|| {
-        ApiError::unprocessable_entity("planar_scope_unsupported: FDM plan has no grid certificate")
+        ApiError::unprocessable("planar_scope_unsupported: FDM plan has no grid certificate")
     })?;
     certificate.validate().map_err(|error| {
         ApiError::internal(format!(

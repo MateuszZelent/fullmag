@@ -46,11 +46,7 @@ impl ApiError {
         }
     }
 
-    pub fn conflict_code(code: &str, message: impl Into<String>) -> Self {
-        Self::conflict(format!("{code}: {}", message.into()))
-    }
-
-    pub fn unprocessable_entity(message: impl Into<String>) -> Self {
+    pub fn unprocessable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             message: message.into(),

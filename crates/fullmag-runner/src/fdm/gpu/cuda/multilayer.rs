@@ -666,6 +666,7 @@ fn execute_cuda_assisted_multilayer_double(
 
         if let Some((grid, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh_generation_id: None,
@@ -747,7 +748,12 @@ fn execute_cuda_assisted_multilayer_double(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (final_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(values),
         })?;
     }
 
@@ -915,6 +921,7 @@ fn execute_cuda_assisted_multilayer_single(
 
         if let Some((grid, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh_generation_id: None,
@@ -996,7 +1003,12 @@ fn execute_cuda_assisted_multilayer_single(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (final_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(values),
         })?;
     }
 
@@ -1247,6 +1259,7 @@ fn build_native_stacked_cuda_plan(
             grid_certificate: None,
             region_mask,
             active_mask: Some(active_mask),
+            spin_transport_plans: Vec::new(),
             initial_magnetization,
             material: reference_material.clone(),
             enable_exchange: plan.enable_exchange,
@@ -1279,11 +1292,20 @@ fn build_native_stacked_cuda_plan(
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            slonczewski_formula_version: None,
+            slonczewski_stack_normal: None,
+            slonczewski_target: None,
+            slonczewski_active_mask: None,
             sot_current_density: None,
             sot_xi_dl: None,
             sot_xi_fl: None,
             sot_sigma: None,
             sot_thickness: None,
+            sot_formula_version: None,
+            sot_target: None,
+            sot_active_mask: None,
+            sot_envelope: None,
+            sot_drive: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -1437,6 +1459,7 @@ fn execute_native_stacked_cuda_multilayer(
             )?;
             if let Some((_, on_step)) = live.as_mut() {
                 let action = on_step(StepUpdate {
+                    coupled_checkpoint: None,
                     stats: stats.clone(),
                     grid: native.global_grid,
                     fem_mesh_generation_id: None,
@@ -1463,6 +1486,7 @@ fn execute_native_stacked_cuda_multilayer(
             }
         } else if let Some((_, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: stats.clone(),
                 grid: native.global_grid,
                 fem_mesh_generation_id: None,
@@ -1533,7 +1557,16 @@ fn execute_native_stacked_cuda_multilayer(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values: select_state_observable_field(&final_observables, &schedule.name, false)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (final_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                &final_observables,
+                &schedule.name,
+                false,
+            )?),
         })?;
     }
 
@@ -1598,6 +1631,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         grid_certificate: None,
         region_mask: vec![0; layer.initial_magnetization.len()],
         active_mask: layer.native_active_mask.clone(),
+        spin_transport_plans: Vec::new(),
         initial_magnetization: layer.initial_magnetization.clone(),
         material: FdmMaterialIR {
             name: layer.material.name.clone(),
@@ -1644,11 +1678,20 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         stt_epsilon_prime: None,
         stt_thickness: None,
         stt_fixed_layer_position: None,
+        slonczewski_formula_version: None,
+        slonczewski_stack_normal: None,
+        slonczewski_target: None,
+        slonczewski_active_mask: None,
         sot_current_density: None,
         sot_xi_dl: None,
         sot_xi_fl: None,
         sot_sigma: None,
         sot_thickness: None,
+        sot_formula_version: None,
+        sot_target: None,
+        sot_active_mask: None,
+        sot_envelope: None,
+        sot_drive: None,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

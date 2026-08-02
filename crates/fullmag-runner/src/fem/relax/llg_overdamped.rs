@@ -331,6 +331,7 @@ pub(crate) fn execute_llg_overdamped(
                     live_stats.preview_callback_thread_cpu_started_ns =
                         preview_callback_cpu_started;
                     let action = (live.on_step)(StepUpdate {
+                        coupled_checkpoint: None,
                         stats: live_stats,
                         grid: live.grid,
                         fem_mesh_generation_id: fem_mesh_generation_id.clone(),
@@ -521,6 +522,7 @@ pub(crate) fn execute_llg_overdamped(
                 elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
             live_stats.preview_callback_thread_cpu_started_ns = preview_callback_cpu_started;
             let action = (live.on_step)(StepUpdate {
+                coupled_checkpoint: None,
                 stats: live_stats,
                 grid: live.grid,
                 fem_mesh_generation_id: fem_mesh_generation_id.clone(),

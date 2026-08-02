@@ -170,6 +170,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -284,6 +285,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -461,6 +463,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),
@@ -562,6 +565,11 @@ impl CpuInteractiveFemPreviewRuntime {
                             step: local_stats.step,
                             time: local_stats.time,
                             solver_dt: report.dt_used,
+                           component_count: 3,
+                           component_order: "xyz".into(),
+                           location: "sample".into(),
+                           scope: "full".into(),
+                           revision: (local_stats.step as u64).saturating_add(1),
                             values: select_output_field_values_from_observables(
                                 &observables,
                                 name,
@@ -593,6 +601,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: self.mesh.generation_id.clone(),

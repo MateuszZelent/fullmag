@@ -6,7 +6,15 @@ from dataclasses import dataclass, field
 from fullmag._validation import require_non_negative, require_positive
 
 DEFAULT_GAMMA = 2.211e5
-SUPPORTED_INTEGRATORS = {"heun", "rk4", "rk23", "rk45", "abm3", "auto"}
+SUPPORTED_INTEGRATORS = {
+    "heun",
+    "rk4",
+    "rk23",
+    "rk45",
+    "abm3",
+    "coupled_imex_ark2",
+    "auto",
+}
 
 # Canonical aliases: user-facing name → algorithm family.
 # rk45 = Dormand-Prince 5(4), rk23 = Bogacki-Shampine 3(2).
@@ -16,7 +24,7 @@ INTEGRATOR_ALIASES: dict[str, str] = {
 }
 
 # Integrators that support embedded error estimation (adaptive step).
-ADAPTIVE_INTEGRATORS = {"rk23", "rk45"}
+ADAPTIVE_INTEGRATORS = {"rk23", "rk45", "coupled_imex_ark2"}
 
 
 class _AdaptiveTimestepType(type):
@@ -33,8 +41,14 @@ class _AdaptiveTimestepType(type):
 
 
 @dataclass(frozen=True, slots=True)
-class AdaptiveTimestep(metaclass=_AdaptiveTimestepType):
-    """Controls for embedded-error adaptive time stepping (RK23, RK45)."""
+class AdaptiveTimestep:
+    """Controls for RK23/RK45 embedded error or coupled ARS step doubling.
+
+    ``coupled_imex_ark2`` compares one full coupled step with two half steps,
+    scales their complete physical-state difference by ``1 / 3``, and accepts
+    the more accurate two-half-step candidate when the normalized error is at
+    most one.
+    """
 
     atol: float = 1e-6
     rtol: float = 1e-3

@@ -36,7 +36,7 @@ pub(super) fn sample(
             (*reduction).into(),
             *empty_policy == EmptyPolicyIR::IncludeAirAsZero,
         ),
-        PlanarOperatorIR::SurfaceProjection { .. } => Err(ApiError::unprocessable_entity(
+        PlanarOperatorIR::SurfaceProjection { .. } => Err(ApiError::unprocessable(
             "unsupported_planar_operator: FDM boundary surface topology is not published",
         )),
     }

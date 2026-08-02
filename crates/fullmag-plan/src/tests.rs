@@ -5744,36 +5744,58 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
     let cases = vec![
         (
             fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+                schema_version: None,
+                id: None,
+                target: None,
+                formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+                operator_version: None,
                 current_density: Some([1e10, 0.0, 0.0]),
                 current_source: None,
                 degree: 0.5,
                 beta: 0.1,
+                lande_g: None,
             },
             "zhang_li",
         ),
         (
             fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+                schema_version: None,
+                id: None,
+                target: None,
+                formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
                 current_density: Some([0.0, 0.0, 1e10]),
                 current_source: None,
                 degree: 0.5,
                 spin_polarization: [0.0, 0.0, 1.0],
+                stack_normal: None,
                 lambda_asymmetry: 1.0,
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: Some(1e-9),
                 fixed_layer_position: Some("top".to_string()),
+                realization: None,
             },
             "slonczewski",
         ),
         (
-            fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque {
-                charge_current_density_a_per_m2: Some(1e10),
-                current_source: None,
-                damping_like_efficiency: 0.1,
-                field_like_efficiency: 0.0,
-                spin_polarization: [0.0, 1.0, 0.0],
-                ferromagnet_thickness_m: 1e-9,
+            fullmag_ir::SpinTorqueModuleIR::PrescribedSot {
+                schema_version: "prescribed_sot.v1".to_string(),
+                id: "sot".to_string(),
+                target: Some(fullmag_ir::RegionRefIR {
+                    object_id: "strip".to_string(),
+                    region_id: None,
+                }),
+                formula: fullmag_ir::PrescribedSotFormulaIR::FullmagV1 {
+                    drive: fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+                        current_density_apm2: 1e10,
+                        sigma_hat: [0.0, 1.0, 0.0],
+                        envelope: None,
+                    },
+                    xi_dl: 0.1,
+                    xi_fl: 0.0,
+                    free_layer_thickness_m: 1e-9,
+                },
             },
-            "spin_orbit_torque",
+            "prescribed_sot",
         ),
     ];
     for (module, expected) in cases {
@@ -5798,6 +5820,57 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("thermal noise") && reason.contains("conservative equilibrium")
     }));
+}
+
+#[test]
+fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some("cip".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.fullmag.v1".to_string(),
+        operator_version: Some("zl_central_reference_v1".to_string()),
+        current_density: Some([-1e11, 0.0, 0.0]),
+        current_source: None,
+        degree: 0.4,
+        beta: 0.02,
+        lande_g: Some(1.9),
+    }];
+
+    let planned = plan(&ir).expect("canonical FEM Zhang-Li should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let contract = fem
+        .spin_torque_contract
+        .expect("versioned FEM STT contract");
+    assert_eq!(contract.formula_version, "zhang_li.fullmag.v1");
+    assert_eq!(
+        contract.operator_version.as_deref(),
+        Some("zl_central_reference_v1")
+    );
+    assert_eq!(contract.lande_g, Some(1.9));
+    assert_eq!(
+        contract
+            .target
+            .as_ref()
+            .map(|target| target.object_id.as_str()),
+        Some("strip")
+    );
+    assert!(contract
+        .active_node_mask
+        .as_ref()
+        .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
+    assert!(contract
+        .active_element_mask
+        .as_ref()
+        .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
 }
 
 #[test]
@@ -10755,6 +10828,8 @@ fn fdm_cuda_general_oersted_field_plans() {
         current_density: Some([1.0e10, 0.0, 0.0]),
         solve_region: Some("strip".to_string()),
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        definition: None,
     });
     ir.energy_terms.push(EnergyTermIR::OerstedField {
         model: OerstedFieldModelIR::FromCurrentSolution,

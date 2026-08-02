@@ -313,6 +313,80 @@ fn thermal_execution_provenance(
     }))
 }
 
+fn fem_spin_torque_provenance(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution: &crate::types::ExecutionProvenance,
+) -> Option<serde_json::Value> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return None;
+    };
+    let contract = fem.spin_torque_contract.as_ref()?;
+    let (authored_class, authored_id) = problem
+        .spin_torque_modules
+        .iter()
+        .find_map(|module| match module {
+            fullmag_ir::SpinTorqueModuleIR::Slonczewski { id, .. }
+                if contract.formula_version.starts_with("slonczewski.") =>
+            {
+                Some(("SlonczewskiSTT", id.as_deref()))
+            }
+            fullmag_ir::SpinTorqueModuleIR::ZhangLi { id, .. }
+                if contract.formula_version.starts_with("zhang_li.") =>
+            {
+                Some(("ZhangLiSTT", id.as_deref()))
+            }
+            _ => None,
+        })
+        .unwrap_or(("legacy_flat_stt", None));
+    let canonical_class = if contract.formula_version.starts_with("slonczewski.") {
+        "SlonczewskiSTT"
+    } else if contract.formula_version.starts_with("zhang_li.") {
+        "ZhangLiSTT"
+    } else {
+        "unknown"
+    };
+    let active_node_count = contract.active_node_mask.as_ref()
+        .map(|mask| mask.iter().filter(|active| **active).count());
+    let active_element_count = contract.active_element_mask.as_ref()
+        .map(|mask| mask.iter().filter(|active| **active).count());
+
+    Some(serde_json::json!({
+        "schema_version": "spin_torque_provenance.v1",
+        "artifact_path": "physics/spin_torque_provenance.v1.json",
+        "authored_class": authored_class,
+        "authored_id": authored_id,
+        "canonical_class": canonical_class,
+        "formula_version": contract.formula_version,
+        "operator_version": contract.operator_version,
+        "realization_version": contract.realization_version,
+        "target": contract.target,
+        "current_convention": "conventional_charge_current",
+        "current_density_unit": "A/m^2",
+        "current_density": fem.current_density,
+        "degree": fem.stt_degree,
+        "beta": fem.stt_beta,
+        "spin_polarization": fem.stt_spin_polarization,
+        "lambda_asymmetry": fem.stt_lambda,
+        "epsilon_prime": fem.stt_epsilon_prime,
+        "free_layer_thickness_m": fem.stt_thickness,
+        "free_layer_thickness_unit": "m",
+        "stack_normal": contract.stack_normal,
+        "lande_g": contract.lande_g,
+        "active_node_count": active_node_count,
+        "total_node_count": fem.mesh.nodes.len(),
+        "active_element_count": active_element_count,
+        "total_element_count": fem.mesh.cell_count(),
+        "material": {
+            "saturation_magnetisation_A_per_m": fem.material.saturation_magnetisation,
+            "gilbert_damping": fem.material.damping,
+        },
+        "resolved_execution_engine": execution.execution_engine,
+        "resolved_precision": execution.precision,
+        "resolved_fallback": execution.resolved_fallback,
+    }))
+}
+
 fn demag_amg_profile_metadata(
     preconditioner: &str,
     stats: Option<&StepStats>,
@@ -1106,6 +1180,13 @@ pub(crate) fn write_artifacts(
             .expect("ExecutionProvenance must serialize to an object")
             .insert("thermal".to_string(), thermal);
     }
+    let spin_torque_provenance = fem_spin_torque_provenance(problem, plan, &execution_provenance);
+    if let Some(spin_torque) = spin_torque_provenance.as_ref() {
+        execution_provenance_json
+            .as_object_mut()
+            .expect("ExecutionProvenance must serialize to an object")
+            .insert("spin_torque".to_string(), spin_torque.clone());
+    }
 
     let mut metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -1148,6 +1229,12 @@ pub(crate) fn write_artifacts(
     let metadata_path = output_dir.join("metadata.json");
     let mut metadata_file = fs::File::create(&metadata_path)?;
     metadata_file.write_all(serde_json::to_string_pretty(&metadata).unwrap().as_bytes())?;
+
+    if let Some(spin_torque) = spin_torque_provenance {
+        let path = output_dir.join("physics/spin_torque_provenance.v1.json");
+        fs::create_dir_all(path.parent().expect("spin-torque artifact has parent"))?;
+        fs::write(path, serde_json::to_vec_pretty(&spin_torque).unwrap())?;
+    }
 
     if streamed.is_none_or(|summary| summary.scalar_rows_written == 0) {
         write_scalars_csv(&output_dir.join("scalars.csv"), &executed.result.steps)?;
@@ -1886,8 +1973,20 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
     let mut issues = Vec::<String>::new();
     let h_demag_snapshot = field_snapshot_at_step(executed, "H_demag", final_stats.step);
     let demag_phi_snapshot = field_snapshot_at_step(executed, "demag_phi", final_stats.step);
-    let h_demag = h_demag_snapshot.map(|snapshot| snapshot.values.as_slice());
-    let demag_phi = demag_phi_snapshot.map(|snapshot| snapshot.values.as_slice());
+    let h_demag = h_demag_snapshot.and_then(|snapshot| match snapshot.vec3_values() {
+        Ok(values) => Some(values),
+        Err(error) => {
+            issues.push(error);
+            None
+        }
+    });
+    let demag_phi = demag_phi_snapshot.and_then(|snapshot| match snapshot.vec3_values() {
+        Ok(values) => Some(values),
+        Err(error) => {
+            issues.push(error);
+            None
+        }
+    });
     if h_demag.is_none() {
         issues.push(format!(
             "missing H_demag field snapshot at final step {}",
@@ -1900,7 +1999,7 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
             final_stats.step
         ));
     }
-    if let Some(values) = h_demag {
+    if let Some(values) = &h_demag {
         if values.len() != fem.mesh.nodes.len() {
             issues.push(format!(
                 "H_demag field snapshot length {} does not match FEM mesh node count {}",
@@ -1909,7 +2008,7 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
             ));
         }
     }
-    if let Some(values) = demag_phi {
+    if let Some(values) = &demag_phi {
         if values.len() != fem.mesh.nodes.len() {
             issues.push(format!(
                 "demag_phi field snapshot length {} does not match FEM mesh node count {}",
@@ -1941,8 +2040,8 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
                     boundary_pair,
                     node_pairs,
                     &executed.result.final_magnetization,
-                    h_demag,
-                    demag_phi,
+                    &h_demag,
+                    &demag_phi,
                 );
                 issues.extend(pair_issues);
                 pair_diagnostics.push(diagnostics);
@@ -2952,30 +3051,28 @@ pub(crate) fn write_field_snapshot_artifact(
 
     let Some(layers) = multilayer_field_layers(&context.layout)? else {
         let snapshot_path = observable_dir.join(format!("step_{:06}.json", snapshot.step));
-        return write_field_file(
-            &snapshot_path,
-            context,
-            provenance,
-            &snapshot.name,
-            snapshot.step,
-            snapshot.time,
-            snapshot.solver_dt,
-            &snapshot.values,
-        );
+        return write_canonical_field_snapshot_file(&snapshot_path, context, provenance, snapshot);
     };
+
+    if snapshot.component_count != 3 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "multilayer field snapshots require three components",
+        ));
+    }
 
     let expected_len = layers
         .iter()
         .map(|layer| layer.value_offset.saturating_add(layer.value_count))
         .max()
         .unwrap_or(0);
-    if expected_len != snapshot.values.len() {
+    if expected_len != snapshot.sample_count() {
         return Err(Error::new(
             ErrorKind::InvalidData,
             format!(
                 "multilayer field snapshot '{}' has {} values, expected {} from artifact layout",
                 snapshot.name,
-                snapshot.values.len(),
+                snapshot.sample_count(),
                 expected_len
             ),
         ));
@@ -2986,8 +3083,8 @@ pub(crate) fn write_field_snapshot_artifact(
     for layer in &layers {
         let layer_dir = observable_dir.join(&layer.directory);
         fs::create_dir_all(&layer_dir)?;
-        let start = layer.value_offset;
-        let end = start + layer.value_count;
+        let start = layer.value_offset * usize::from(snapshot.component_count);
+        let end = start + layer.value_count * usize::from(snapshot.component_count);
         let snapshot_path = layer_dir.join(format!("step_{:06}.json", snapshot.step));
         write_layer_field_file(
             &snapshot_path,
@@ -2997,12 +3094,67 @@ pub(crate) fn write_field_snapshot_artifact(
             snapshot.step,
             snapshot.time,
             snapshot.solver_dt,
+            snapshot.revision,
             layer,
             &snapshot.values[start..end],
         )?;
     }
 
     Ok(())
+}
+
+fn write_canonical_field_snapshot_file(
+    path: &Path,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+    snapshot: &crate::types::FieldSnapshot,
+) -> std::io::Result<()> {
+    if snapshot.component_count == 0
+        || snapshot.values.len() % usize::from(snapshot.component_count) != 0
+        || snapshot.revision == 0
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid canonical field snapshot '{}' shape or revision", snapshot.name),
+        ));
+    }
+    let values = if snapshot.component_count == 3 && snapshot.location == "sample" {
+        serde_json::json!(snapshot
+            .values
+            .chunks_exact(3)
+            .map(|value| [value[0], value[1], value[2]])
+            .collect::<Vec<_>>())
+    } else {
+        serde_json::json!(snapshot.values)
+    };
+    let mut field_provenance = serde_json::json!({
+        "problem_name": context.problem_name,
+        "ir_version": context.ir_version,
+        "source_hash": context.source_hash,
+        "execution_mode": context.execution_mode,
+        "execution_engine": provenance.execution_engine,
+        "precision": provenance.precision,
+    });
+    if !provenance.transport_modules.is_empty() {
+        field_provenance["transport_modules"] =
+            serde_json::json!(provenance.transport_modules);
+    }
+    let field_json = serde_json::json!({
+        "observable": snapshot.name,
+        "unit": field_unit(&snapshot.name),
+        "step": snapshot.step,
+        "time": snapshot.time,
+        "solver_dt": snapshot.solver_dt,
+        "component_count": snapshot.component_count,
+        "component_order": snapshot.component_order,
+        "location": snapshot.location,
+        "scope": snapshot.scope,
+        "revision": snapshot.revision,
+        "layout": context.layout,
+        "provenance": field_provenance,
+        "values": values,
+    });
+    fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
 
 fn multilayer_field_layers(
@@ -3101,19 +3253,47 @@ fn write_layer_field_file(
     step: u64,
     time: f64,
     solver_dt: f64,
+    revision: u64,
     layer: &MultilayerFieldLayer,
-    values: &[[f64; 3]],
+    values: &[f64],
 ) -> std::io::Result<()> {
+    if values.len() % 3 != 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "multilayer field snapshot values are not divisible by three",
+        ));
+    }
+    let nested_values = values
+        .chunks_exact(3)
+        .map(|value| [value[0], value[1], value[2]])
+        .collect::<Vec<_>>();
+    let mut field_provenance = serde_json::json!({
+        "problem_name": context.problem_name,
+        "ir_version": context.ir_version,
+        "source_hash": context.source_hash,
+        "execution_mode": context.execution_mode,
+        "execution_engine": provenance.execution_engine,
+        "precision": provenance.precision,
+    });
+    if !provenance.transport_modules.is_empty() {
+        field_provenance["transport_modules"] =
+            serde_json::json!(provenance.transport_modules);
+    }
     let field_json = serde_json::json!({
         "observable": observable,
         "unit": field_unit(observable),
         "step": step,
         "time": time,
         "solver_dt": solver_dt,
+        "component_count": 3,
+        "component_order": "xyz",
+        "location": "cell",
+        "scope": "layer",
+        "revision": revision,
         "layer": layer.manifest_entry.clone(),
         "layout": context.layout.clone(),
-        "provenance": artifact_provenance_json(context, provenance),
-        "values": values,
+        "provenance": field_provenance,
+        "values": nested_values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
@@ -3256,9 +3436,13 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
     let base_observable = observable
         .split_once('.')
         .map_or(observable, |(base, _)| base);
-    fullmag_quantities::quantity_spec(base_observable)
-        .map(|spec| spec.unit)
-        .unwrap_or_else(|| panic!("unsupported observable '{}'", base_observable))
+    if let Some(spec) = fullmag_quantities::quantity_spec(base_observable) {
+        return spec.unit;
+    }
+    match base_observable {
+        "H_OE" => "A/m",
+        other => panic!("unsupported observable '{}'", other),
+    }
 }
 
 #[cfg(test)]
@@ -3445,9 +3629,58 @@ mod tests {
     }
 
     #[test]
-    fn regional_drive_field_artifact_uses_magnetic_field_units() {
-        assert_eq!(field_unit("H_drive"), "A/m");
-        assert_eq!(field_unit("H_drive.y"), "A/m");
+    fn steady_transport_field_artifact_units_come_from_quantity_catalog() {
+        assert_eq!(field_unit("V_electric"), "V");
+        assert_eq!(field_unit("J_charge"), "A/m^2");
+        assert_eq!(field_unit("spin_potential"), "V");
+        assert_eq!(field_unit("spin_current_tensor"), "A/m^2");
+        assert_eq!(field_unit("torque_stt"), "1/s");
+    }
+
+    #[test]
+    fn legacy_sample_vector_artifact_keeps_nested_xyz_values() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-legacy-vector-artifact-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "legacy-fdm".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: ExecutionMode::Strict,
+            layout: serde_json::json!({"backend": "fdm", "grid_cells": [2, 1, 1]}),
+        };
+        let snapshot = FieldSnapshot::new(
+            "m",
+            0,
+            0.0,
+            0.0,
+            3,
+            "xyz",
+            "sample",
+            "full",
+            1,
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        )
+        .expect("valid vector snapshot");
+
+        write_field_snapshot_artifact(&root, &context, &ExecutionProvenance::default(), &snapshot)
+            .expect("write vector artifact");
+        let payload: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("m/step_000000.json")).expect("read vector artifact"),
+        )
+        .expect("parse vector artifact");
+        assert_eq!(
+            payload["values"],
+            serde_json::json!([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        );
+        assert!(payload["provenance"].get("transport_modules").is_none());
+
+        fs::remove_dir_all(root).expect("remove vector artifact fixture");
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
@@ -4039,6 +4272,7 @@ mod tests {
                 field_drive_geometry_masks: Vec::new(),
                 time_stage: Default::default(),
                 current_modules: Vec::new(),
+                spin_transport_plans: Vec::new(),
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -4063,6 +4297,7 @@ mod tests {
                 stt_epsilon_prime: None,
                 stt_thickness: None,
                 stt_fixed_layer_position: None,
+                spin_torque_contract: None,
                 has_oersted_cylinder: false,
                 oersted_current: None,
                 oersted_radius: None,
@@ -4401,6 +4636,104 @@ mod tests {
         );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fem_canonical_stt_persists_complete_provenance_and_manifest() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp".to_string()),
+            target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            current_density: Some([0.0, 0.0, -2.0e11]),
+            current_source: None,
+            degree: 0.55,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry: 1.4,
+            epsilon_prime: 0.03,
+            free_layer_thickness_m: Some(1.5e-9),
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+            }),
+        }];
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else { panic!("FEM fixture") };
+        fem.current_density = Some([0.0, 0.0, -2.0e11]);
+        fem.stt_degree = Some(0.55);
+        fem.stt_spin_polarization = Some([0.0, 1.0, 0.0]);
+        fem.stt_lambda = Some(1.4);
+        fem.stt_epsilon_prime = Some(0.03);
+        fem.stt_thickness = Some(1.5e-9);
+        fem.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            operator_version: None,
+            realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lande_g: None,
+            active_node_mask: Some(vec![true, true, false, false]),
+            active_element_mask: Some(vec![true]),
+        });
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fem-stt-provenance-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("clock drift").as_nanos()
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "fem_native_gpu".to_string(),
+                    fallback_engine: "fem_cpu_native".to_string(),
+                    reason: "fem_gpu_rk_plan_ineligible".to_string(),
+                    message: "canonical FEM STT is CPU-only".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        };
+        write_artifacts(&output_dir, &problem, &plan, &executed, None).expect("write artifacts");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata"),
+        ).expect("metadata JSON");
+        let provenance = &metadata["execution_provenance"]["spin_torque"];
+        assert_eq!(provenance["schema_version"], "spin_torque_provenance.v1");
+        assert_eq!(provenance["authored_class"], "SlonczewskiSTT");
+        assert_eq!(provenance["canonical_class"], "SlonczewskiSTT");
+        assert_eq!(provenance["formula_version"], "slonczewski.fullmag.v2");
+        assert_eq!(provenance["realization_version"], "slonczewski_thin_layer_homogenized.v1");
+        assert_eq!(provenance["current_convention"], "conventional_charge_current");
+        assert_eq!(provenance["current_density_unit"], "A/m^2");
+        assert_eq!(provenance["current_density"], serde_json::json!([0.0, 0.0, -2.0e11]));
+        assert_eq!(provenance["target"]["object_id"], "free");
+        assert_eq!(provenance["stack_normal"], serde_json::json!([0.0, 0.0, 1.0]));
+        assert_eq!(provenance["active_node_count"], 2);
+        assert_eq!(provenance["active_element_count"], 1);
+        assert_eq!(provenance["resolved_execution_engine"], "fem_cpu_native");
+        assert_eq!(provenance["resolved_precision"], "double");
+        assert_eq!(provenance["resolved_fallback"]["reason"], "fem_gpu_rk_plan_ineligible");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("physics/spin_torque_provenance.v1.json"))
+                .expect("spin-torque manifest"),
+        ).expect("manifest JSON");
+        assert_eq!(manifest, *provenance);
+        fs::remove_dir_all(output_dir).expect("remove fixture");
     }
 
     #[test]
@@ -5597,6 +5930,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: Some("pillar_region".to_string()),
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
         problem.regions = vec![fullmag_ir::RegionIR {
             name: "pillar_region".to_string(),
@@ -5605,6 +5940,7 @@ mod tests {
         let plan = test_fem_execution_plan();
         let context = build_field_context(&problem, &plan);
         let provenance = crate::types::ExecutionProvenance {
+            transport_modules: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: None,
@@ -5714,6 +6050,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: Some("pillar_region".to_string()),
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
         problem.regions = vec![fullmag_ir::RegionIR {
             name: "pillar_region".to_string(),
@@ -6480,6 +6818,7 @@ mod tests {
             true, true, false, false, true, false, true, false,
         ]));
         let provenance = ExecutionProvenance {
+            transport_modules: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: None,
@@ -6573,7 +6912,12 @@ mod tests {
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
-                values: vec![
+               component_count: 3,
+               component_order: "xyz".into(),
+               location: "sample".into(),
+               scope: "full".into(),
+               revision: (1 as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(vec![
                     [0.0, 0.0, 1.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0],
@@ -6582,7 +6926,7 @@ mod tests {
                     [0.0, 0.0, 0.0],
                     [-1.0, 0.0, 0.0],
                     [0.0, 0.0, 0.0],
-                ],
+                ]),
             }],
             field_snapshot_count: 1,
             auxiliary_artifacts: Vec::new(),
@@ -6866,21 +7210,36 @@ mod tests {
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                    values: vec![[1.0, 0.0, 0.0]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (1 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[1.0, 0.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
                     name: "H_eff.z".to_string(),
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                    values: vec![[5.0, 0.0, 0.0]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (1 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[5.0, 0.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
                     name: "torque".to_string(),
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                    values: vec![[0.0, 0.0, 2.0e-3]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (1 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[0.0, 0.0, 2.0e-3]; 8]),
                 },
             ],
             field_snapshot_count: 3,
@@ -6961,12 +7320,17 @@ mod tests {
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
-                values: vec![
+               component_count: 3,
+               component_order: "xyz".into(),
+               location: "sample".into(),
+               scope: "full".into(),
+               revision: (1 as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(vec![
                     [1.0, 0.0, 0.0],
                     [0.9, 0.1, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.9, 0.1],
-                ],
+                ]),
             }],
             field_snapshot_count: 1,
             auxiliary_artifacts: Vec::new(),
@@ -7172,14 +7536,24 @@ mod tests {
                     step: 4,
                     time: 2.0e-12,
                     solver_dt: 5.0e-13,
-                    values: vec![[10.0, 2.0, 0.0]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (4 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[10.0, 2.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
                     name: "demag_phi".to_string(),
                     step: 4,
                     time: 2.0e-12,
                     solver_dt: 5.0e-13,
-                    values: vec![
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (4 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![
                         [1.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],
@@ -7188,7 +7562,7 @@ mod tests {
                         [3.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],
                         [1.0e-6, 0.0, 0.0],
-                    ],
+                    ]),
                 },
             ],
             field_snapshot_count: 2,

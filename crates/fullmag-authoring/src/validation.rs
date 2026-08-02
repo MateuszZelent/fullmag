@@ -1,4 +1,12 @@
-use crate::{SceneDocument, StudyPipelineDocument, StudyPipelineNode};
+use crate::{
+    CurrentTransportModel, KnownSceneCurrentTransport, KnownSceneOerstedField,
+    KnownSceneSpinTorque, PrescribedSotFormulaVersion, SceneChargeBoundary,
+    SceneChargePotentialGauge, SceneDocument, SceneOerstedField, SceneOerstedTimeDependence,
+    ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef, SceneSpinBoundary,
+    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSpinTransportMode,
+    SceneSurfaceRef, SceneTimeEnvelope, SlonczewskiFormulaVersion, StudyPipelineDocument,
+    StudyPipelineNode,
+};
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
     ExchangeCouplingModeIR, FieldSpatialProfileIR, FieldTargetIR, MaterialParameterAssignmentIR,
@@ -148,13 +156,7 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
         }
     }
     validate_region_owned_scene_payloads(scene, &object_ids)?;
-    for interface in &scene.study.mesh_interfaces {
-        validate_requested_layered_mesh(
-            &format!("mesh interface '{}'.config", interface.interface_id),
-            &interface.config,
-            scene.study.requested_mode != "extended",
-        )?;
-    }
+    validate_spin_authoring(scene, &object_ids)?;
 
     if let Some(document) = &scene.study.study_pipeline {
         validate_study_pipeline_document(document)?;
@@ -630,6 +632,7 @@ fn collect_stage_ids(nodes: &[StudyPipelineNode], ids: &mut BTreeSet<String>) {
     }
 }
 
+
 fn validate_scene_field_drives(
     scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
@@ -715,6 +718,1167 @@ fn validate_scene_field_drives(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+
+fn validate_spin_authoring(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let mut transport_ids = BTreeSet::new();
+    for (index, transport) in scene.current_transports.iter().enumerate() {
+        let transport = transport.known().ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "current_transports[{index}] uses an unsupported read-only variant"
+            ))
+        })?;
+        validate_current_transport(index, transport, object_ids)?;
+        if !transport_ids.insert(transport.name.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "duplicate current transport id '{}'",
+                transport.name
+            )));
+        }
+    }
+
+    let mut spin_transport_ids = BTreeSet::new();
+    for (index, module) in scene.spin_transports.iter().enumerate() {
+        let module = match module {
+            SceneSpinTransport::Known(module) => module,
+            SceneSpinTransport::Unsupported(_) => {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}] uses an unsupported read-only variant"
+                )))
+            }
+        };
+        if module.id.trim().is_empty() || !spin_transport_ids.insert(module.id.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_transports[{index}] id must be non-empty and unique"
+            )));
+        }
+        require_reference(
+            &module.current_source_id,
+            &transport_ids,
+            &format!("spin_transports[{index}].current_source_id"),
+        )?;
+        if module.domain.is_empty() || module.materials.len() != module.domain.len() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_transports[{index}] requires exactly one material assignment per domain region"
+            )));
+        }
+        let mut domain = BTreeSet::new();
+        for (region_index, region) in module.domain.iter().enumerate() {
+            validate_spin_region_ref(
+                region,
+                object_ids,
+                &format!("spin_transports[{index}].domain[{region_index}]"),
+            )?;
+            if !domain.insert((region.object_id.clone(), region.region_id.clone())) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}] contains a duplicate domain region"
+                )));
+            }
+        }
+        let mut assigned = BTreeSet::new();
+        for (material_index, assignment) in module.materials.iter().enumerate() {
+            validate_spin_region_ref(
+                &assignment.region,
+                object_ids,
+                &format!("spin_transports[{index}].materials[{material_index}].region"),
+            )?;
+            let key = (
+                assignment.region.object_id.clone(),
+                assignment.region.region_id.clone(),
+            );
+            if !domain.contains(&key) || !assigned.insert(key) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}].materials must map each domain region exactly once"
+                )));
+            }
+            let material = &assignment.material;
+            positive(
+                material.sigma_s_spm,
+                &format!("spin_transports[{index}].materials[{material_index}].sigma_s_Spm"),
+            )?;
+            if !material.polarization_p.is_finite()
+                || !(-1.0..=1.0).contains(&material.polarization_p)
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}].materials[{material_index}].polarization_p must be in [-1,1]"
+                )));
+            }
+            finite(
+                material.theta_sh,
+                &format!("spin_transports[{index}].materials[{material_index}].theta_sh"),
+            )?;
+            positive(
+                material.lambda_sf_m,
+                &format!("spin_transports[{index}].materials[{material_index}].lambda_sf_m"),
+            )?;
+            validate_scene_reaction_length(
+                &material.lambda_j_m,
+                &format!("spin_transports[{index}].materials[{material_index}].lambda_j_m"),
+            )?;
+            validate_scene_reaction_length(
+                &material.lambda_phi_m,
+                &format!("spin_transports[{index}].materials[{material_index}].lambda_phi_m"),
+            )?;
+            let density_of_states = material.density_of_states_per_spin_j_inv_m3;
+            let has_physical_capacitance_source =
+                material.spin_capacitance_as_per_v_m3.is_some() || density_of_states.is_some();
+            match (
+                has_physical_capacitance_source,
+                material.capacitance_formula_version.as_deref(),
+            ) {
+                (true, Some(version)) => {
+                    if let Some(capacitance) = material.spin_capacitance_as_per_v_m3 {
+                        positive(
+                            capacitance,
+                            &format!(
+                                "spin_transports[{index}].materials[{material_index}].spin_capacitance_As_per_V_m3"
+                            ),
+                        )?;
+                    }
+                    if let Some(density) = density_of_states {
+                        positive(
+                            density,
+                            &format!(
+                                "spin_transports[{index}].materials[{material_index}].density_of_states_per_spin_Jinv_m3"
+                            ),
+                        )?;
+                        if let Some(capacitance) = material.spin_capacitance_as_per_v_m3 {
+                            let expected =
+                                fullmag_ir::spin_capacitance_from_density_of_states(density);
+                            let tolerance =
+                                1.0e-12 * capacitance.abs().max(expected.abs()).max(1.0e-300);
+                            if (capacitance - expected).abs() > tolerance {
+                                return Err(SceneDocumentValidationError::new(format!(
+                                    "spin_transports[{index}].materials[{material_index}] spin capacitance must equal e^2 times density_of_states_per_spin_Jinv_m3"
+                                )));
+                            }
+                        }
+                    }
+                    if version.trim().is_empty() {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_transports[{index}].materials[{material_index}].capacitance_formula_version must be non-empty"
+                        )));
+                    }
+                    if version != fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_transports[{index}].materials[{material_index}] unsupported capacitance_formula_version '{}' (expected '{}')",
+                            version,
+                            fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+                        )));
+                    }
+                }
+                (false, None) if module.mode == SceneSpinTransportMode::Steady => {}
+                (false, None) => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_transports[{index}].materials[{material_index}] transient mode requires physical spin capacitance and formula version"
+                    )));
+                }
+                (false, Some(_)) => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_transports[{index}].materials[{material_index}] capacitance_formula_version requires spin capacitance or density of states"
+                    )));
+                }
+                (true, None) => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_transports[{index}].materials[{material_index}] spin capacitance or density of states requires capacitance_formula_version"
+                    )));
+                }
+            }
+        }
+        for (interface_index, interface) in module.interfaces.iter().enumerate() {
+            validate_scene_spin_interface(
+                interface,
+                object_ids,
+                &format!("spin_transports[{index}].interfaces[{interface_index}]"),
+            )?;
+        }
+        for (boundary_index, boundary) in module.boundaries.iter().enumerate() {
+            validate_scene_spin_boundary(
+                boundary,
+                object_ids,
+                &format!("spin_transports[{index}].boundaries[{boundary_index}]"),
+            )?;
+        }
+        positive(
+            module.solver.linear.relative_tolerance,
+            &format!("spin_transports[{index}].solver.linear.relative_tolerance"),
+        )?;
+        nonnegative(
+            module.solver.linear.absolute_tolerance,
+            &format!("spin_transports[{index}].solver.linear.absolute_tolerance"),
+        )?;
+        if module.solver.linear.max_iterations == 0
+            || module.schema_version.trim().is_empty()
+            || module.constitutive_version.trim().is_empty()
+            || module.solver.engine.trim().is_empty()
+            || module.solver.operator_version.trim().is_empty()
+            || module.solver.physical_residual_version.trim().is_empty()
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_transports[{index}] has an incomplete versioned solver contract"
+            )));
+        }
+    }
+
+    let mut torque_ids = BTreeSet::new();
+    for (index, torque) in scene.spin_torques.iter().enumerate() {
+        if torque.id().trim().is_empty() || !torque_ids.insert(torque.id().to_string()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_torques[{index}] id must be non-empty and unique"
+            )));
+        }
+        validate_spin_torque(index, torque, object_ids, &transport_ids)?;
+    }
+
+    let mut oersted_ids = BTreeSet::new();
+    for (index, field) in scene.oersted_fields.iter().enumerate() {
+        if field.id().trim().is_empty() || !oersted_ids.insert(field.id().to_string()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "oersted_fields[{index}] id must be non-empty and unique"
+            )));
+        }
+        let field = match field {
+            SceneOerstedField::Known(field) => field,
+            SceneOerstedField::Unsupported(_) => {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "oersted_fields[{index}] uses an unsupported read-only variant"
+                )))
+            }
+        };
+        match field {
+            KnownSceneOerstedField::OerstedCylinder {
+                current,
+                radius,
+                center,
+                axis,
+                time_dependence,
+                ..
+            } => {
+                finite(*current, &format!("oersted_fields[{index}].current"))?;
+                positive(*radius, &format!("oersted_fields[{index}].radius"))?;
+                finite_vec3(*center, &format!("oersted_fields[{index}].center"), false)?;
+                finite_vec3(*axis, &format!("oersted_fields[{index}].axis"), true)?;
+                if let Some(envelope) = time_dependence {
+                    validate_oersted_envelope(index, envelope)?;
+                }
+            }
+            KnownSceneOerstedField::OerstedField { source, .. } => {
+                require_reference(
+                    source,
+                    &transport_ids,
+                    &format!("oersted_fields[{index}].source"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_spin_region_ref(
+    region: &SceneRegionRef,
+    object_ids: &BTreeSet<String>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    require_reference(&region.object_id, object_ids, &format!("{path}.object_id"))?;
+    if region
+        .region_id
+        .as_ref()
+        .is_some_and(|id| id.trim().is_empty())
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path}.region_id must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_scene_reaction_length(
+    length: &SceneReactionLength,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    if let SceneReactionLength::Enabled(value) = length {
+        positive(*value, path)?;
+    }
+    Ok(())
+}
+
+fn validate_scene_surface_ref(
+    surface: &SceneSurfaceRef,
+    object_ids: &BTreeSet<String>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    require_reference(&surface.object_id, object_ids, &format!("{path}.object_id"))?;
+    if surface.surface_id.trim().is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path}.surface_id must not be empty"
+        )));
+    }
+    finite_vec3(surface.orientation, &format!("{path}.orientation"), true)
+}
+
+fn validate_scene_spin_interface(
+    interface: &SceneSpinInterface,
+    object_ids: &BTreeSet<String>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    match interface {
+        SceneSpinInterface::Transparent {
+            id,
+            side_a,
+            side_b,
+            normal_a_to_b,
+        } => {
+            if id.trim().is_empty() || side_a == side_b {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path} requires a non-empty id and two distinct sides"
+                )));
+            }
+            validate_spin_region_ref(side_a, object_ids, &format!("{path}.side_a"))?;
+            validate_spin_region_ref(side_b, object_ids, &format!("{path}.side_b"))?;
+            finite_vec3(*normal_a_to_b, &format!("{path}.normal_a_to_b"), true)
+        }
+        SceneSpinInterface::MixingConductance {
+            id,
+            normal_to_ferromagnet,
+            normal_side,
+            ferromagnet_side,
+            g_up_spm2,
+            g_down_spm2,
+            g_r_spm2,
+            g_i_spm2,
+            g_sml_spm2,
+            spin_memory_loss,
+            absorption,
+            formula_version,
+        } => {
+            if id.trim().is_empty()
+                || absorption.trim().is_empty()
+                || formula_version.trim().is_empty()
+                || normal_side == ferromagnet_side
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path} has an incomplete oriented mixing contract"
+                )));
+            }
+            validate_spin_region_ref(normal_side, object_ids, &format!("{path}.normal_side"))?;
+            validate_spin_region_ref(
+                ferromagnet_side,
+                object_ids,
+                &format!("{path}.ferromagnet_side"),
+            )?;
+            finite_vec3(
+                *normal_to_ferromagnet,
+                &format!("{path}.normal_to_ferromagnet"),
+                true,
+            )?;
+            for (name, value) in [
+                ("g_up_Spm2", *g_up_spm2),
+                ("g_down_Spm2", *g_down_spm2),
+                ("g_r_Spm2", *g_r_spm2),
+                ("g_sml_Spm2", *g_sml_spm2),
+            ] {
+                nonnegative(value, &format!("{path}.{name}"))?;
+            }
+            finite(*g_i_spm2, &format!("{path}.g_i_Spm2"))?;
+            if formula_version != "magnetoelectronic.fullmag.v2" {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.formula_version must be magnetoelectronic.fullmag.v2; v1 is read-only"
+                )));
+            }
+            if *g_sml_spm2 > 0.0 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.g_sml_Spm2 uses rejected sml_surface_conductance.fullmag.v1; author spin_memory_loss with sml_reservoir.fullmag.v2"
+                )));
+            }
+            if let Some(reservoir) = spin_memory_loss {
+                if reservoir.formula_version != "sml_reservoir.fullmag.v2" {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{path}.spin_memory_loss.formula_version must be sml_reservoir.fullmag.v2"
+                    )));
+                }
+                nonnegative(
+                    reservoir.g_n_spm2,
+                    &format!("{path}.spin_memory_loss.g_n_Spm2"),
+                )?;
+                nonnegative(
+                    reservoir.g_f_spm2,
+                    &format!("{path}.spin_memory_loss.g_f_Spm2"),
+                )?;
+                positive(
+                    reservoir.g_lattice_spm2,
+                    &format!("{path}.spin_memory_loss.g_lattice_Spm2"),
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_scene_spin_boundary(
+    boundary: &SceneSpinBoundary,
+    object_ids: &BTreeSet<String>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    let (id, surfaces): (&str, Vec<&SceneSurfaceRef>) = match boundary {
+        SceneSpinBoundary::SpinInsulating { id, surfaces }
+        | SceneSpinBoundary::SpinSink { id, surfaces } => (id, surfaces.iter().collect()),
+        SceneSpinBoundary::SpecifiedSpinPotential {
+            id,
+            surfaces,
+            spin_potential_v,
+        } => {
+            finite_vec3(
+                *spin_potential_v,
+                &format!("{path}.spin_potential_V"),
+                false,
+            )?;
+            (id, surfaces.iter().collect())
+        }
+        SceneSpinBoundary::SpecifiedSpinFlux {
+            id,
+            surfaces,
+            normal_spin_flux_apm2,
+        } => {
+            finite_vec3(
+                *normal_spin_flux_apm2,
+                &format!("{path}.normal_spin_flux_Apm2"),
+                false,
+            )?;
+            (id, surfaces.iter().collect())
+        }
+        SceneSpinBoundary::PeriodicSpin {
+            id,
+            minus_surface,
+            plus_surface,
+            translation_m,
+        } => {
+            finite_vec3(*translation_m, &format!("{path}.translation_m"), true)?;
+            (id, vec![minus_surface, plus_surface])
+        }
+    };
+    if id.trim().is_empty() || surfaces.is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} requires a non-empty id and surface selection"
+        )));
+    }
+    for (index, surface) in surfaces.into_iter().enumerate() {
+        validate_scene_surface_ref(surface, object_ids, &format!("{path}.surfaces[{index}]"))?;
+    }
+    Ok(())
+}
+
+fn validate_current_transport(
+    index: usize,
+    transport: &KnownSceneCurrentTransport,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    if transport.name.trim().is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "current_transports[{index}].name must not be empty"
+        )));
+    }
+    if let Some(region) = &transport.solve_region {
+        require_reference(
+            region,
+            object_ids,
+            &format!("current_transports[{index}].solve_region"),
+        )?;
+    }
+    if let Some(conductivity) = transport.conductivity_s_per_m {
+        positive(
+            conductivity,
+            &format!("current_transports[{index}].conductivity_s_per_m"),
+        )?;
+    }
+    match transport.model {
+        CurrentTransportModel::PrescribedDensity => {
+            if !transport.domain.is_empty()
+                || !transport.materials.is_empty()
+                || !transport.boundaries.is_empty()
+                || transport.gauge.is_some()
+                || transport.solver.is_some()
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] prescribed_density must not define an ohmic charge solve"
+                )));
+            }
+            let density = transport.current_density.ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] prescribed_density requires current_density"
+                ))
+            })?;
+            finite_vec3(
+                density,
+                &format!("current_transports[{index}].current_density"),
+                false,
+            )?;
+        }
+        CurrentTransportModel::OhmicPoisson if transport.current_density.is_some() => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "current_transports[{index}] ohmic_poisson must not define current_density"
+            )));
+        }
+        CurrentTransportModel::OhmicPoisson => {
+            if transport.solve_region.is_some() || transport.conductivity_s_per_m.is_some() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] legacy ohmic_poisson solve_region/conductivity_s_per_m is ambiguous"
+                )));
+            }
+            validate_scene_charge_contract(index, transport, object_ids)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_scene_charge_contract(
+    index: usize,
+    transport: &KnownSceneCurrentTransport,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let prefix = format!("current_transports[{index}]");
+    if transport.domain.is_empty()
+        || transport.materials.is_empty()
+        || transport.boundaries.is_empty()
+        || transport.gauge.is_none()
+        || transport.solver.is_none()
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix} ohmic_poisson requires non-empty domain, materials, boundaries, gauge, and solver"
+        )));
+    }
+    let mut domain = BTreeSet::new();
+    for (region_index, region) in transport.domain.iter().enumerate() {
+        validate_spin_region_ref(
+            region,
+            object_ids,
+            &format!("{prefix}.domain[{region_index}]"),
+        )?;
+        if !domain.insert((region.object_id.clone(), region.region_id.clone())) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.domain contains duplicate regions"
+            )));
+        }
+    }
+    let mut assigned = BTreeSet::new();
+    for (material_index, assignment) in transport.materials.iter().enumerate() {
+        validate_spin_region_ref(
+            &assignment.region,
+            object_ids,
+            &format!("{prefix}.materials[{material_index}].region"),
+        )?;
+        let key = (
+            assignment.region.object_id.clone(),
+            assignment.region.region_id.clone(),
+        );
+        if !domain.contains(&key) || !assigned.insert(key) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.materials must map every domain region exactly once"
+            )));
+        }
+        positive(
+            assignment.material.sigma_spm,
+            &format!("{prefix}.materials[{material_index}].material.sigma_Spm"),
+        )?;
+    }
+    if assigned != domain {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.materials must map every domain region exactly once"
+        )));
+    }
+
+    let mut boundary_ids = BTreeSet::new();
+    let mut surfaces = BTreeSet::new();
+    let mut voltage_count = 0usize;
+    for (boundary_index, boundary) in transport.boundaries.iter().enumerate() {
+        let (id, selected_surfaces) = match boundary {
+            SceneChargeBoundary::VoltageElectrode {
+                id,
+                surfaces,
+                potential_v,
+            } => {
+                voltage_count += 1;
+                finite(
+                    *potential_v,
+                    &format!("{prefix}.boundaries[{boundary_index}].potential_V"),
+                )?;
+                (id, surfaces)
+            }
+            SceneChargeBoundary::NormalCurrentElectrode {
+                id,
+                surfaces,
+                outward_current_density_apm2,
+            } => {
+                finite(
+                    *outward_current_density_apm2,
+                    &format!("{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2"),
+                )?;
+                (id, surfaces)
+            }
+            SceneChargeBoundary::Insulating { id, surfaces } => (id, surfaces),
+        };
+        if id.trim().is_empty() || !boundary_ids.insert(id.as_str()) || selected_surfaces.is_empty()
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.boundaries[{boundary_index}] requires a unique non-empty id and surfaces"
+            )));
+        }
+        for (surface_index, surface) in selected_surfaces.iter().enumerate() {
+            validate_scene_surface_ref(
+                surface,
+                object_ids,
+                &format!("{prefix}.boundaries[{boundary_index}].surfaces[{surface_index}]"),
+            )?;
+            if !surfaces.insert((surface.object_id.as_str(), surface.surface_id.as_str())) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{prefix} has conflicting charge boundary assignments for '{}:{}'",
+                    surface.object_id, surface.surface_id
+                )));
+            }
+        }
+    }
+    match transport.gauge {
+        Some(SceneChargePotentialGauge::DirichletReference) if voltage_count == 0 => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.gauge=dirichlet_reference requires a voltage electrode"
+            )));
+        }
+        Some(SceneChargePotentialGauge::ZeroMean) if voltage_count != 0 => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.gauge=zero_mean conflicts with voltage electrodes"
+            )));
+        }
+        _ => {}
+    }
+    let solver = transport.solver.as_ref().expect("checked above");
+    if solver.engine != "cg"
+        || solver.operator_version != "fv_charge_harmonic_v1"
+        || solver.physical_residual_version != "charge_balance_integrated_l2.v1"
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.solver carries an unsupported charge engine/version"
+        )));
+    }
+    positive(
+        solver.linear.relative_tolerance,
+        &format!("{prefix}.solver.linear.relative_tolerance"),
+    )?;
+    nonnegative(
+        solver.linear.absolute_tolerance,
+        &format!("{prefix}.solver.linear.absolute_tolerance"),
+    )?;
+    if solver.linear.max_iterations == 0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.solver.linear.max_iterations must be positive"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_spin_torque(
+    index: usize,
+    torque: &SceneSpinTorque,
+    object_ids: &BTreeSet<String>,
+    transport_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let torque = match torque {
+        SceneSpinTorque::Known(torque) => torque,
+        SceneSpinTorque::Unsupported(_) => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_torques[{index}] uses an unsupported read-only variant"
+            )))
+        }
+    };
+    match torque {
+        KnownSceneSpinTorque::ZhangLi {
+            current_density,
+            current_source,
+            degree,
+            beta,
+            ..
+        } => {
+            validate_current_binding(
+                index,
+                *current_density,
+                current_source.as_deref(),
+                transport_ids,
+            )?;
+            unit_interval_open(*degree, &format!("spin_torques[{index}].degree"))?;
+            nonnegative(*beta, &format!("spin_torques[{index}].beta"))?;
+        }
+        KnownSceneSpinTorque::Slonczewski {
+            formula_version,
+            schema_version,
+            current_density,
+            current_source,
+            spin_polarization,
+            degree,
+            lambda_asymmetry,
+            epsilon_prime,
+            free_layer_thickness_m,
+            fixed_layer_position,
+            target,
+            stack_normal,
+            realization,
+            ..
+        } => {
+            validate_current_binding(
+                index,
+                *current_density,
+                current_source.as_deref(),
+                transport_ids,
+            )?;
+            finite_vec3(
+                *spin_polarization,
+                &format!("spin_torques[{index}].spin_polarization"),
+                matches!(
+                    formula_version,
+                    SlonczewskiFormulaVersion::FullmagV2 | SlonczewskiFormulaVersion::FullmagV1
+                ),
+            )?;
+            unit_interval_open(*degree, &format!("spin_torques[{index}].degree"))?;
+            if !lambda_asymmetry.is_finite() || *lambda_asymmetry < 1.0 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_torques[{index}].lambda_asymmetry must be finite and >= 1"
+                )));
+            }
+            finite(
+                *epsilon_prime,
+                &format!("spin_torques[{index}].epsilon_prime"),
+            )?;
+            if let Some(thickness) = free_layer_thickness_m {
+                positive(
+                    *thickness,
+                    &format!("spin_torques[{index}].free_layer_thickness_m"),
+                )?;
+            }
+            match formula_version {
+                SlonczewskiFormulaVersion::FullmagV2 => {
+                    if schema_version.as_deref() != Some("slonczewski_torque.v1")
+                        || free_layer_thickness_m.is_none()
+                        || fixed_layer_position.is_some()
+                        || realization.is_none()
+                    {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] canonical Slonczewski contract is incomplete"
+                        )));
+                    }
+                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    finite_vec3(
+                        stack_normal.ok_or_else(|| {
+                            SceneDocumentValidationError::new(format!(
+                                "spin_torques[{index}].stack_normal is required"
+                            ))
+                        })?,
+                        &format!("spin_torques[{index}].stack_normal"),
+                        true,
+                    )?;
+                }
+                SlonczewskiFormulaVersion::FullmagV1 => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_torques[{index}] slonczewski.fullmag.v1 is read-only provenance; use slonczewski.fullmag.v2"
+                    )));
+                }
+                SlonczewskiFormulaVersion::LegacyFullmagV0 => {
+                    if target.is_some() || stack_normal.is_some() || realization.is_some() {
+                        return Err(SceneDocumentValidationError::new(format!("spin_torques[{index}] legacy Slonczewski must not define canonical geometry")));
+                    }
+                    if !matches!(fixed_layer_position.as_deref(), Some("top" | "bottom")) {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}].fixed_layer_position must be top or bottom"
+                        )));
+                    }
+                }
+            }
+        }
+        KnownSceneSpinTorque::PrescribedSot {
+            formula_version,
+            target,
+            drive,
+            raw_spin_polarization,
+            xi_dl,
+            xi_fl,
+            free_layer_thickness_m,
+            compatibility_origin,
+            ..
+        } => {
+            finite(*xi_dl, &format!("spin_torques[{index}].xi_dl"))?;
+            finite(*xi_fl, &format!("spin_torques[{index}].xi_fl"))?;
+            positive(
+                *free_layer_thickness_m,
+                &format!("spin_torques[{index}].free_layer_thickness_m"),
+            )?;
+            match formula_version {
+                PrescribedSotFormulaVersion::FullmagV1 => {
+                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    if raw_spin_polarization.is_some() || compatibility_origin.is_some() {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] canonical prescribed SOT contains legacy fields"
+                        )));
+                    }
+                    validate_prescribed_drive(index, drive, transport_ids, false)?;
+                }
+                PrescribedSotFormulaVersion::LegacyFullmagV0 => {
+                    if target.is_some() || raw_spin_polarization.is_none() {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] legacy prescribed SOT contract is incomplete"
+                        )));
+                    }
+                    finite_vec3(
+                        raw_spin_polarization.unwrap(),
+                        &format!("spin_torques[{index}].raw_spin_polarization"),
+                        false,
+                    )?;
+                    let origin = compatibility_origin.as_ref().ok_or_else(|| {
+                        SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}].compatibility_origin is required"
+                        ))
+                    })?;
+                    if origin.source_ir_version != "0.2.0"
+                        || origin.authored_kind != "spin_orbit_torque"
+                        || !origin.additional.is_empty()
+                    {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}].compatibility_origin is unsupported"
+                        )));
+                    }
+                    validate_prescribed_drive(index, drive, transport_ids, true)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_current_binding(
+    index: usize,
+    density: Option<[f64; 3]>,
+    source: Option<&str>,
+    transports: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    if density.is_some() == source.is_some() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "spin_torques[{index}] requires exactly one current binding"
+        )));
+    }
+    if let Some(value) = density {
+        finite_vec3(
+            value,
+            &format!("spin_torques[{index}].current_density"),
+            false,
+        )?;
+    }
+    if let Some(value) = source {
+        require_reference(
+            value,
+            transports,
+            &format!("spin_torques[{index}].current_source"),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_region_ref(
+    index: usize,
+    target: Option<&crate::SceneRegionRef>,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let target = target.ok_or_else(|| {
+        SceneDocumentValidationError::new(format!("spin_torques[{index}].target is required"))
+    })?;
+    require_reference(
+        &target.object_id,
+        object_ids,
+        &format!("spin_torques[{index}].target.object_id"),
+    )
+}
+
+fn validate_prescribed_drive(
+    index: usize,
+    drive: &ScenePrescribedSotDrive,
+    transports: &BTreeSet<String>,
+    legacy: bool,
+) -> Result<(), SceneDocumentValidationError> {
+    match (legacy, drive) {
+        (
+            false,
+            ScenePrescribedSotDrive::SignedScalar {
+                current_density_apm2,
+                sigma_hat,
+                envelope,
+            },
+        ) => {
+            finite(
+                *current_density_apm2,
+                &format!("spin_torques[{index}].drive.current_density_Apm2"),
+            )?;
+            finite_vec3(
+                *sigma_hat,
+                &format!("spin_torques[{index}].drive.sigma_hat"),
+                true,
+            )?;
+            if let Some(value) = envelope {
+                validate_time_envelope(index, value)?;
+            }
+        }
+        (
+            false,
+            ScenePrescribedSotDrive::VectorCurrentSource {
+                current_source_id,
+                drive_direction,
+                interface_normal,
+            },
+        ) => {
+            require_reference(
+                current_source_id,
+                transports,
+                &format!("spin_torques[{index}].drive.current_source_id"),
+            )?;
+            finite_vec3(
+                *drive_direction,
+                &format!("spin_torques[{index}].drive.drive_direction"),
+                true,
+            )?;
+            finite_vec3(
+                *interface_normal,
+                &format!("spin_torques[{index}].drive.interface_normal"),
+                true,
+            )?;
+            let cross = [
+                interface_normal[1] * drive_direction[2] - interface_normal[2] * drive_direction[1],
+                interface_normal[2] * drive_direction[0] - interface_normal[0] * drive_direction[2],
+                interface_normal[0] * drive_direction[1] - interface_normal[1] * drive_direction[0],
+            ];
+            finite_vec3(cross, &format!("spin_torques[{index}].drive.axes"), true)?;
+        }
+        (
+            true,
+            ScenePrescribedSotDrive::LegacyScalarMagnitude {
+                raw_charge_current_density_apm2,
+            },
+        ) => finite(
+            *raw_charge_current_density_apm2,
+            &format!("spin_torques[{index}].drive.raw_charge_current_density_Apm2"),
+        )?,
+        (true, ScenePrescribedSotDrive::LegacyCurrentSourceNorm { current_source_id }) => {
+            require_reference(
+                current_source_id,
+                transports,
+                &format!("spin_torques[{index}].drive.current_source_id"),
+            )?
+        }
+        _ => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_torques[{index}].drive is incompatible with formula_version"
+            )))
+        }
+    }
+    Ok(())
+}
+
+fn validate_time_envelope(
+    index: usize,
+    envelope: &SceneTimeEnvelope,
+) -> Result<(), SceneDocumentValidationError> {
+    let path = format!("spin_torques[{index}].drive.envelope");
+    match envelope {
+        SceneTimeEnvelope::Constant { value } => finite(*value, &format!("{path}.value"))?,
+        SceneTimeEnvelope::Sinusoidal {
+            amplitude,
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            finite(*amplitude, &format!("{path}.amplitude"))?;
+            nonnegative(*frequency_hz, &format!("{path}.frequency_hz"))?;
+            finite(*phase_rad, &format!("{path}.phase_rad"))?;
+            finite(*offset, &format!("{path}.offset"))?;
+        }
+        SceneTimeEnvelope::Pulse {
+            amplitude,
+            t_on_s,
+            t_off_s,
+        } => {
+            finite(*amplitude, &format!("{path}.amplitude"))?;
+            finite(*t_on_s, &format!("{path}.t_on_s"))?;
+            finite(*t_off_s, &format!("{path}.t_off_s"))?;
+            if t_off_s <= t_on_s {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.t_off_s must be greater than t_on_s"
+                )));
+            }
+        }
+        SceneTimeEnvelope::PiecewiseLinear { points } => {
+            let mut previous = None;
+            for (point_index, point) in points.iter().enumerate() {
+                finite(
+                    point.time_s,
+                    &format!("{path}.points[{point_index}].time_s"),
+                )?;
+                finite(point.value, &format!("{path}.points[{point_index}].value"))?;
+                if previous.is_some_and(|value| point.time_s <= value) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{path}.points times must be strictly increasing"
+                    )));
+                }
+                previous = Some(point.time_s);
+            }
+        }
+        SceneTimeEnvelope::Sinc {
+            amplitude,
+            center_s,
+            bandwidth_hz,
+            offset,
+        } => {
+            finite(*amplitude, &format!("{path}.amplitude"))?;
+            finite(*center_s, &format!("{path}.center_s"))?;
+            positive(*bandwidth_hz, &format!("{path}.bandwidth_hz"))?;
+            finite(*offset, &format!("{path}.offset"))?;
+        }
+        SceneTimeEnvelope::Tabulated {
+            artifact_ref,
+            bandwidth_hz,
+            ..
+        } => {
+            if artifact_ref.trim().is_empty() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.artifact_ref must not be empty"
+                )));
+            }
+            if let Some(value) = bandwidth_hz {
+                positive(*value, &format!("{path}.bandwidth_hz"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_oersted_envelope(
+    index: usize,
+    envelope: &SceneOerstedTimeDependence,
+) -> Result<(), SceneDocumentValidationError> {
+    let path = format!("oersted_fields[{index}].time_dependence");
+    match envelope {
+        SceneOerstedTimeDependence::Constant => {}
+        SceneOerstedTimeDependence::Sinusoidal {
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            positive(*frequency_hz, &format!("{path}.frequency_hz"))?;
+            finite(*phase_rad, &format!("{path}.phase_rad"))?;
+            finite(*offset, &format!("{path}.offset"))?;
+        }
+        SceneOerstedTimeDependence::Pulse { t_on, t_off } => {
+            finite(*t_on, &format!("{path}.t_on"))?;
+            finite(*t_off, &format!("{path}.t_off"))?;
+            if t_off <= t_on {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.t_off must be greater than t_on"
+                )));
+            }
+        }
+        SceneOerstedTimeDependence::PiecewiseLinear { points } => {
+            if points.len() < 2 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.points requires at least two values"
+                )));
+            }
+            let mut previous = None;
+            for point in points {
+                finite(point[0], &format!("{path}.points.time"))?;
+                finite(point[1], &format!("{path}.points.value"))?;
+                if previous.is_some_and(|value| point[0] <= value) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{path}.points times must be strictly increasing"
+                    )));
+                }
+                previous = Some(point[0]);
+            }
+        }
+        SceneOerstedTimeDependence::SincPulse {
+            cutoff_hz,
+            t0,
+            amplitude,
+        } => {
+            positive(*cutoff_hz, &format!("{path}.cutoff_hz"))?;
+            finite(*t0, &format!("{path}.t0"))?;
+            finite(*amplitude, &format!("{path}.amplitude"))?;
+        }
+    }
+    Ok(())
+}
+
+fn require_reference(
+    value: &str,
+    available: &BTreeSet<String>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    if value.trim().is_empty() || !available.contains(value) {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} references missing id '{value}'"
+        )));
+    }
+    Ok(())
+}
+fn finite(value: f64, path: &str) -> Result<(), SceneDocumentValidationError> {
+    if !value.is_finite() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be finite"
+        )));
+    }
+    Ok(())
+}
+fn positive(value: f64, path: &str) -> Result<(), SceneDocumentValidationError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be finite and > 0"
+        )));
+    }
+    Ok(())
+}
+fn nonnegative(value: f64, path: &str) -> Result<(), SceneDocumentValidationError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be finite and >= 0"
+        )));
+    }
+    Ok(())
+}
+fn unit_interval_open(value: f64, path: &str) -> Result<(), SceneDocumentValidationError> {
+    if !value.is_finite() || value <= 0.0 || value > 1.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be in (0, 1]"
+        )));
+    }
+    Ok(())
+}
+fn finite_vec3(
+    value: [f64; 3],
+    path: &str,
+    nonzero: bool,
+) -> Result<(), SceneDocumentValidationError> {
+    if value.iter().any(|component| !component.is_finite()) {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must contain finite components"
+        )));
+    }
+    if nonzero
+        && value
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+            .sqrt()
+            <= 1e-12
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be nonzero"
+        )));
     }
     Ok(())
 }
@@ -1370,6 +2534,217 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_complete_spin_authoring_graph() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "transport",
+            "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0],
+            "solve_region": "body"
+        }]))
+        .unwrap();
+        scene.spin_torques = serde_json::from_value(serde_json::json!([{
+            "id": "zl",
+            "kind": "zhang_li",
+            "current_source": "transport",
+            "degree": 0.4,
+            "beta": 0.02
+        }]))
+        .unwrap();
+        scene.oersted_fields = serde_json::from_value(serde_json::json!([{
+            "id": "oe",
+            "kind": "oersted_field",
+            "source": "transport",
+            "model": "from_current_solution"
+        }]))
+        .unwrap();
+
+        validate_scene_document(&scene).expect("complete graph must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_requires_physical_capacitance_for_transient_spin() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "transport",
+            "model": "prescribed_density",
+            "coupling": "one_way",
+            "current_density": [1.0e11, 0.0, 0.0]
+        }]))
+        .unwrap();
+        let transient = serde_json::json!({
+            "schema_version": "spin_transport.v1",
+            "id": "spin",
+            "current_source_id": "transport",
+            "mode": "transient",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {
+                    "sigma_s_Spm": 5.0e6,
+                    "polarization_p": 0.4,
+                    "theta_sh": 0.1,
+                    "lambda_sf_m": 5.0e-9,
+                    "lambda_j_m": "disabled",
+                    "lambda_phi_m": "disabled",
+                    "spin_capacitance_As_per_V_m3": 2.0,
+                    "capacitance_formula_version": "dos_isotropic_nonmagnetic.fullmag.v1"
+                }
+            }],
+            "solver": {
+                "engine": "gmres",
+                "linear": {"relative_tolerance": 1.0e-8, "absolute_tolerance": 0.0, "max_iterations": 500},
+                "physical_residual_version": "transport_balance_integrated_l2.v1",
+                "operator_version": "fv_spin_upwind_v1",
+                "default_external_boundary": "spin_insulating"
+            },
+            "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+            "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+        });
+        scene.spin_transports =
+            serde_json::from_value(serde_json::json!([transient.clone()])).unwrap();
+        validate_scene_document(&scene).expect("physical transient contract must validate");
+
+        let mut dos_only = transient.clone();
+        dos_only["materials"][0]["material"]
+            .as_object_mut()
+            .unwrap()
+            .remove("spin_capacitance_As_per_V_m3");
+        dos_only["materials"][0]["material"]["density_of_states_per_spin_Jinv_m3"] =
+            serde_json::json!(2.0);
+        scene.spin_transports = serde_json::from_value(serde_json::json!([dos_only])).unwrap();
+        validate_scene_document(&scene).expect("DOS adapter must qualify transient material");
+
+        let mut inconsistent = transient.clone();
+        inconsistent["materials"][0]["material"]["density_of_states_per_spin_Jinv_m3"] =
+            serde_json::json!(2.0);
+        scene.spin_transports = serde_json::from_value(serde_json::json!([inconsistent])).unwrap();
+        let error = validate_scene_document(&scene)
+            .expect_err("inconsistent explicit capacitance and DOS must fail");
+        assert!(error.message.contains("must equal e^2 times density_of_states"), "{error}");
+
+        let mut unsupported = transient.clone();
+        unsupported["materials"][0]["material"]["capacitance_formula_version"] =
+            serde_json::json!("dos_constant.fullmag.v1");
+        scene.spin_transports = serde_json::from_value(serde_json::json!([unsupported])).unwrap();
+        let error = validate_scene_document(&scene)
+            .expect_err("unversioned DOS convention must fail closed");
+        assert!(
+            error
+                .message
+                .contains("unsupported capacitance_formula_version"),
+            "{error}"
+        );
+
+        let mut missing = transient;
+        missing["materials"][0]["material"]
+            .as_object_mut()
+            .unwrap()
+            .remove("spin_capacitance_As_per_V_m3");
+        missing["materials"][0]["material"]["capacitance_formula_version"] =
+            serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
+        scene.spin_transports = serde_json::from_value(serde_json::json!([missing])).unwrap();
+        let error = validate_scene_document(&scene).expect_err("partial capacitance must fail");
+        assert!(
+            error
+                .message
+                .contains("requires spin capacitance or density of states"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_complete_ohmic_charge_contract() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "dirichlet_reference",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .unwrap();
+
+        validate_scene_document(&scene).expect("complete ohmic charge contract must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_rejects_conflicting_charge_gauge() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .unwrap();
+
+        let error = validate_scene_document(&scene).expect_err("gauge conflict must fail");
+        assert!(error.message.contains("zero_mean conflicts"), "{error}");
+    }
+
+    #[test]
+    fn scene_document_validation_rejects_spin_authoring_without_partial_commit() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "transport",
+            "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0],
+            "solve_region": "body"
+        }]))
+        .unwrap();
+        scene.oersted_fields = serde_json::from_value(serde_json::json!([{
+            "id": "oe",
+            "kind": "oersted_cylinder",
+            "current": 0.001,
+            "radius": 1.0e-8,
+            "center": [0.0, 0.0, 0.0],
+            "axis": [0.0, 0.0, 0.0]
+        }]))
+        .unwrap();
+
+        let error = validate_scene_document(&scene).expect_err("zero axis must be rejected");
+        assert!(error.message.contains("axis") && error.message.contains("nonzero"));
     }
 }
 

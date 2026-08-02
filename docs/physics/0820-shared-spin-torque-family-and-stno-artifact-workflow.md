@@ -6,6 +6,15 @@
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
+> **Normative reconciliation (2026-07-15).** This document preserves the
+> implemented STNO/legacy bridge history. Equations, signs, SI units,
+> orientation, formula versions, and Gilbert conversion are governed by
+> `0960-spin-torque-sign-units-and-prescribed-sot.md`; solved SHE and
+> drift-diffusion by `0970-spin-hall-drift-diffusion-transport.md`; current and
+> Oersted coupling by `0980-dynamic-current-and-oersted-coupling.md`.
+> `SpinOrbitTorque` is the deprecated authoring alias of
+> `PrescribedSpinOrbitTorque`; it is never evidence for a SHE solver.
+
 ## 1. Problem statement
 
 Fullmag needs one physics-first contract for spin-transfer and spin-orbit drive terms that:
@@ -32,41 +41,48 @@ The driven micromagnetic dynamics use the LLG equation with explicit torque-fami
 
 $$
 \frac{\partial \mathbf{m}}{\partial t}
-= -\gamma \mu_0 \mathbf{m} \times \mathbf{H}_\mathrm{eff}
+= -\gamma_0 \mathbf{m} \times \mathbf{H}_\mathrm{eff}
 + \alpha \mathbf{m} \times \frac{\partial \mathbf{m}}{\partial t}
 + \sum_k \boldsymbol{\tau}^{(k)}_\mathrm{spin}
 + \boldsymbol{\eta}_\mathrm{th}.
 $$
 
-For the currently executable public slice:
+The formulas below are the **normative M0 target**, not a claim that every
+currently executable legacy slice already implements the correction. M0 must
+lower each module to the Gilbert-source contract in 0960 and preserve signed
+conventional current before those lanes can claim formula-v1 conformance. In
+particular, no adapter may use `abs(J)` or infer current sign from
+`fixed_layer_position`.
 
-- Slonczewski CPP torque
+Canonical target formulas:
+
+- Slonczewski CPP Gilbert-source torque
 
 $$
-\boldsymbol{\tau}_\mathrm{Slonc}
-= \frac{\sigma(J, P, \Lambda)}{1+\alpha^2}
-\left[
-(1+\alpha\varepsilon')\mathbf{m} \times (\mathbf{m} \times \hat{\mathbf{p}})
-+(\varepsilon'-\alpha)\mathbf{m} \times \hat{\mathbf{p}}
+\mathbf T_{\mathrm{Slonc},G}
+= \Omega_J\left[
+\epsilon(\mathbf m\cdot\hat{\mathbf p})\,\mathbf m\times(\mathbf m\times\hat{\mathbf p})
++\epsilon'\,\mathbf m\times\hat{\mathbf p}
 \right],
 $$
 
-where $\sigma(J,P,\Lambda,\mathbf{m}\cdot\hat{\mathbf{p}})$ is a direct-RHS
-coefficient in `1/s`. It includes the reduced gyromagnetic factor
-`gamma_mu0`; this is the explicit Gilbert-equivalent form of adding the same
-Slonczewski contribution through `H_eff`.
+where $\Omega_J=\gamma_e\hbar J_n/(2eM_s t_F)$, with signed
+$J_n=\mathbf J_c\cdot\hat n_\mathrm{stack}$. The angular efficiency
+$\epsilon$ and field-like coefficient $\epsilon'$ follow formula version
+0960; this source is converted to explicit RHS exactly once.
 
-- Zhang-Li CIP torque
+- Zhang-Li CIP Gilbert-source torque
 
 $$
-\boldsymbol{\tau}_\mathrm{ZL}
-= \frac{(1+\alpha\beta)\mathbf{v}_\perp
--(\beta-\alpha)\mathbf{m}\times\mathbf{v}}{1+\alpha^2},
-\quad
-\mathbf{v}=(\mathbf{u}\cdot\nabla)\mathbf{m},
-\quad
-\mathbf{v}_\perp=-\mathbf{m}\times(\mathbf{m}\times\mathbf{v}).
+\mathbf T_{\mathrm{ZL},G}
+= -(\mathbf u\cdot\nabla)\mathbf m
++\beta\,\mathbf m\times[(\mathbf u\cdot\nabla)\mathbf m],
+\qquad
+\mathbf u=\frac{g\mu_B P}{2eM_s}\mathbf J_c.
 $$
+
+For either source, explicit integration uses
+$[\mathbf T_G+\alpha\mathbf m\times\mathbf T_G]/(1+\alpha^2)$.
 
 - Oersted field from a cylindrical conductor
 
@@ -83,7 +99,7 @@ $$
 | Symbol | Meaning | SI unit |
 |---|---|---|
 | $\mathbf{m}$ | reduced magnetization | dimensionless |
-| $\gamma$ | gyromagnetic ratio | m/(A s) |
+| $\gamma_e$ | positive angular gyromagnetic factor | s^-1 T^-1 |
 | $\mu_0$ | vacuum permeability | N/A^2 |
 | $\mathbf{H}_\mathrm{eff}$ | effective field | A/m |
 | $J$ | current density | A/m^2 |
@@ -93,17 +109,17 @@ $$
 | $\varepsilon'$ | field-like CPP coefficient | dimensionless |
 | $\beta$ | Zhang-Li non-adiabaticity | dimensionless |
 | $\hat{\mathbf{p}}$ | fixed spin-polarization direction | dimensionless |
-| $\gamma_{\mu0}$ | reduced gyromagnetic ratio used by LLG | m/(A s) |
+| $\gamma_0=\mu_0\gamma_e$ | gyromagnetic factor for `H` in A/m | m/(A s) |
 | $R$ | conductor radius | m |
 | $T$ | temperature | K |
 
 ### 2.3 Assumptions and approximations
 
-1. Public executable FDM and native FEM assume one executable torque module at a time.
+1. The historical public executable bridge assumes one torque module at a time; canonical M0+ semantics use an ordered list and sum independent active torque modules.
 2. The public Slonczewski model is a bulk / uniform CPP drive over the solved magnetic body.
 3. `InterfaceCppSTT` is reserved for interface-local multilayer torque semantics and is not executable yet.
 4. `DriftDiffusionSpinTorque` is reserved for self-consistent spin accumulation and diffusion and is not executable yet.
-5. `SpinOrbitTorque` is executable for damping-like / field-like prescribed-current SOT on the FDM path.
+5. `SpinOrbitTorque` is the legacy name for damping-like / field-like prescribed SOT on the FDM path; it does not solve charge or spin transport.
 6. The current Oersted model assumes an analytically prescribed cylindrical conductor, not a self-consistent transport solve.
 7. The current STNO artifact workflow assumes that averaged magnetization scalars and optional `m` snapshots are sufficient to measure frequency, linewidth, orbit radius, and a steady-state score.
 
@@ -227,7 +243,7 @@ Current truthful status:
 
 ### 5.1 Runtime / session impact
 
-- the already executable FDM slice uses the same corrected STT contract as native FEM,
+- existing FDM and native FEM slices remain executable legacy realizations, but neither may claim the corrected formula-v1 contract until the M0 code changes and vector oracles land,
 - unsupported or semantic-only modules fail in planning instead of leaking to the runner,
 - supported single-module Slonczewski/Zhang-Li requests may execute on native FEM CPU/GPU,
 - requested intent and resolved executable lane remain distinct.

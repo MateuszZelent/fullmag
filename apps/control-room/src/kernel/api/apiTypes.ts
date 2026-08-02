@@ -517,6 +517,29 @@ export interface ObjectMetricsResource {
   time_seconds: number;
 }
 export type SceneResource = components["schemas"]["SceneResource"];
+export type SceneCurrentTransport = components["schemas"]["SceneCurrentTransport"];
+export type SceneSpinTransport = components["schemas"]["SceneSpinTransport"];
+export type KnownSceneCurrentTransport = components["schemas"]["KnownSceneCurrentTransport"];
+export type KnownSceneSpinTransport = components["schemas"]["KnownSceneSpinTransport"];
+export type SceneSpinTorque = components["schemas"]["SceneSpinTorque"];
+export type SceneOerstedField = components["schemas"]["SceneOerstedField"];
+export type CurrentTransportListResource = components["schemas"]["CurrentTransportListResource"];
+export type CurrentTransportMutationRequest = components["schemas"]["CurrentTransportMutationRequest"];
+export type CurrentTransportCommitResource = components["schemas"]["CurrentTransportCommitResource"];
+export type SpinTransportListResource = components["schemas"]["SpinTransportListResource"];
+export type SpinTransportMutationRequest = components["schemas"]["SpinTransportMutationRequest"];
+export type SpinTransportCommitResource = components["schemas"]["SpinTransportCommitResource"];
+export type SpinInterfaceListResource = components["schemas"]["SpinInterfaceListResource"];
+export type TransportValidationRequest = components["schemas"]["TransportValidationRequest"];
+export type TransportValidationResponse = components["schemas"]["TransportValidationResponse"];
+export type TransportAuthoringCapabilityMap = components["schemas"]["TransportAuthoringCapabilityMap"];
+export type SpinTorqueListResource = components["schemas"]["SpinTorqueListResource"];
+export type SpinTorqueMutationRequest = components["schemas"]["SpinTorqueMutationRequest"];
+export type SpinTorqueCommitResource = components["schemas"]["SpinTorqueCommitResource"];
+export type OerstedFieldListResource = components["schemas"]["OerstedFieldListResource"];
+export type OerstedFieldMutationRequest = components["schemas"]["OerstedFieldMutationRequest"];
+export type OerstedFieldCommitResource = components["schemas"]["OerstedFieldCommitResource"];
+export type SpinAuthoringDeleteRequest = components["schemas"]["SpinAuthoringDeleteRequest"];
 export type RuntimeCommandPrecondition =
   components["schemas"]["RuntimeCommandPrecondition"];
 export type RuntimeCommandTarget =

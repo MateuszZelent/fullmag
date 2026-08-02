@@ -71,6 +71,7 @@ fn make_test_plan() -> FemPlanIR {
         enable_demag: false,
         external_field: Some([1.0, 2.0, 3.0]),
         current_modules: vec![],
+        spin_transport_plans: vec![],
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -190,6 +191,7 @@ fn make_exchange_only_plan() -> FemPlanIR {
         enable_demag: false,
         external_field: Some([1.5e3, -2.0e3, 7.5e2]),
         current_modules: vec![],
+        spin_transport_plans: vec![],
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -451,6 +453,7 @@ fn cpu_reference_single_step(
             },
             slonczewski_stt: if has_slonczewski_stt(plan) {
                 Some(fullmag_engine::SlonczewskiSttConfig {
+                    formula: fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
                     current_density_magnitude: {
                         let j = plan.current_density.expect("current density");
                         (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt()

@@ -15,6 +15,10 @@ mod frequency_domain;
 mod plan;
 #[cfg(feature = "fem-gpu")]
 mod runtime_info;
+#[cfg(feature = "fem-gpu")]
+mod steady_transport;
+#[cfg(all(test, feature = "fem-gpu"))]
+pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
 pub(crate) use availability::{
     is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
@@ -54,6 +58,14 @@ pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
     strict_gpu_runtime_build_info,
     DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+};
+#[allow(unused_imports)]
+#[cfg(feature = "fem-gpu")]
+pub(crate) use steady_transport::{
+    execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
+    NativeFemSteadyTransportBundle, NativeFemSteadyTransportExecution,
+    NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
+    NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -1808,6 +1820,36 @@ impl NativeFemBackend {
                 ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE
             }
         };
+        let stt_contract = plan.spin_torque_contract.as_ref();
+        let stt_active_node_mask = stt_contract
+            .and_then(|contract| contract.active_node_mask.as_ref())
+            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let stt_active_element_mask = stt_contract
+            .and_then(|contract| contract.active_element_mask.as_ref())
+            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let stt_formula_version = match stt_contract.map(|contract| contract.formula_version.as_str()) {
+            None | Some("slonczewski.legacy_fullmag.v0") | Some("zhang_li.legacy_fullmag.v0") => 0,
+            Some("slonczewski.fullmag.v2") => 3,
+            Some("zhang_li.fullmag.v1") => 2,
+            Some(_) => u32::MAX,
+        };
+        let stt_realization_version = match stt_contract
+            .and_then(|contract| contract.realization_version.as_deref())
+        {
+            None => 0,
+            Some("slonczewski_thin_layer_homogenized.v1") => 1,
+            Some("slonczewski_interface_flux.v1") => 2,
+            Some(_) => u32::MAX,
+        };
+        let stt_operator_version = match stt_contract
+            .and_then(|contract| contract.operator_version.as_deref())
+        {
+            None => 0,
+            Some("zl_central_reference_v1") => 1,
+            Some(_) => u32::MAX,
+        };
 
         let mut plan_desc = ffi::fullmag_fem_plan_desc {
             mesh,
@@ -2161,6 +2203,17 @@ impl NativeFemBackend {
                 Some("bottom") if has_slonczewski_stt(plan) => -1.0,
                 _ => 1.0,
             },
+            stt_formula_version,
+            stt_realization_version,
+            stt_operator_version,
+            stt_stack_normal: stt_contract
+                .and_then(|contract| contract.stack_normal)
+                .unwrap_or([0.0, 0.0, 1.0]),
+            stt_lande_g: stt_contract.and_then(|contract| contract.lande_g).unwrap_or(0.0),
+            stt_active_node_mask: optional_slice_ptr(&stt_active_node_mask),
+            stt_active_node_mask_len: stt_active_node_mask.len() as u64,
+            stt_active_element_mask: optional_slice_ptr(&stt_active_element_mask),
+            stt_active_element_mask_len: stt_active_element_mask.len() as u64,
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -3136,6 +3189,7 @@ impl NativeFemBackend {
         Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
     }
 
+    #[allow(dead_code)]
     pub fn copy_scalar_field(
         &self,
         observable: ffi::fullmag_fem_observable,
@@ -3163,6 +3217,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_demag_phi(&self, node_count: usize) -> Result<Vec<f64>, RunError> {
         self.copy_scalar_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI,
@@ -4868,6 +4923,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -4892,6 +4948,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -6246,6 +6303,7 @@ mod tests {
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -6270,6 +6328,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -6612,6 +6671,8 @@ mod tests {
                 },
                 slonczewski_stt: if has_slonczewski_stt(plan) {
                     Some(fullmag_engine::SlonczewskiSttConfig {
+                        active_mask: None,
+                        formula: fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
                         current_density_magnitude: {
                             let j = plan.current_density.expect("current density");
                             (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt()

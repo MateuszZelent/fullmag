@@ -214,6 +214,12 @@ Reguły dla tego drzewa:
   materiałów, field buffers, własność stanu i natywne kontrakty backend-neutral,
   żyją w `backends/fem/core` albo `backends/fem/include`.
 - Realizacja FEM CPU MFEM żyje pod `backends/fem/cpu/mfem`.
+- Workflow steady charge/spin transportu FEM CPU należy do
+  `backends/fem/cpu/mfem/transport`. Runner może walidować deskryptor,
+  wywołać wersjonowane ABI oraz opublikować quantity/provenance, ale nie może
+  scalać dwóch polityk solvera w ukrytą trzecią. ABI v1 z jedną polityką
+  liniową wymaga dokładnie zgodnych polityk charge/spin i zachowuje osobne
+  resolved engine IDs `cg` oraz `gmres`.
 - Realizacja FEM GPU CUDA/libCEED/hypre-device żyje pod
   `backends/fem/gpu/cuda`.
 - Testy natywne żyją przy kompilowanym backendzie, który chronią.
