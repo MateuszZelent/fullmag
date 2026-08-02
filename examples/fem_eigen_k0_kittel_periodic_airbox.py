@@ -116,12 +116,9 @@ study.stages.add_eigenmodes(
     equilibrium_source="relax",
     normalization="unit_l2",
     damping_policy="ignore",
-    k_sampling=fm.KPath(
-        points=[
-            fm.KPoint("Hnear0", (0.0, 0.0, 0.0)),
-            fm.KPoint("H100mT", (0.0, 0.0, 0.0)),
-        ],
-        samples_per_segment=[len(BIAS_FIELDS_A_PER_M) - 1],
-    ),
+    # The production K0 shared-domain lane is one exact Gamma sample.  The
+    # independent K0-3 field sweep above remains a post-solve validation
+    # oracle; it is not encoded as a fake k-path.
+    k_sampling=fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
     bc=fm.PeriodicBC(["x_faces"]),
 )

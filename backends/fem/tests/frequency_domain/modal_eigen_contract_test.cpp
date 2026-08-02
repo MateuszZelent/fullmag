@@ -185,6 +185,23 @@ void modal_invalid_abi_returns_validation_error()
     fullmag_fem_frequency_domain_result_destroy(&invalid_result);
 }
 
+void modal_v13_extension_rejects_unknown_enum_and_releases_zero_result()
+{
+    FullmagFemModalEigenRequest invalid = base_request();
+    invalid.execution_target = static_cast<fullmag_fem_modal_execution_target>(99);
+    FullmagFemFrequencyDomainResult invalid_result =
+        fullmag_fem_modal_eigen_solve(&invalid);
+    check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal v13 rejects an unknown execution target");
+    check(contains(invalid_result.diagnostics_json, "unknown_execution_target"),
+          "modal v13 reports the unknown execution target reason");
+    fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+
+    FullmagFemFrequencyDomainResult zeroed{};
+    fullmag_fem_frequency_domain_result_destroy(&zeroed);
+    fullmag_fem_frequency_domain_result_destroy(&zeroed);
+}
+
 void modal_shift_invert_finds_macrospin_mode()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
@@ -1350,6 +1367,18 @@ void modal_poisson_airbox_tail_payload_reaches_full_coupled_solver()
           "modal Poisson-airbox tail result reports magnetic pair count");
     check(contains(result.result_json, "\"airbox_pair_count\":1"),
           "modal Poisson-airbox tail result reports airbox pair count");
+    check(result.mode_count == 1, "modal Poisson-airbox ABI exposes one accepted mode");
+    check(result.mode_lambda_count == result.mode_count,
+          "modal Poisson-airbox ABI exposes one lambda per mode");
+    check(result.mode_q_complex_count == result.mode_count * result.q_dof_count,
+          "modal Poisson-airbox ABI exposes mode-major q vectors");
+    check(result.mode_phi_complex_count == result.mode_count * result.phi_dof_count,
+          "modal Poisson-airbox ABI exposes mode-major phi vectors");
+    check(result.mode_residual_count == result.mode_count,
+          "modal Poisson-airbox ABI exposes one residual per mode");
+    check(result.mode_lambda != nullptr && result.mode_q_complex != nullptr &&
+              result.mode_phi_complex != nullptr && result.mode_residuals != nullptr,
+          "modal Poisson-airbox ABI owns all accepted-mode buffers");
 #else
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "modal Poisson-airbox tail payload must require SLEPc when unavailable");
@@ -1553,6 +1582,7 @@ int main()
 
     modal_dependency_info_is_reported();
     modal_invalid_abi_returns_validation_error();
+    modal_v13_extension_rejects_unknown_enum_and_releases_zero_result();
     modal_shift_invert_finds_macrospin_mode();
     modal_shift_invert_residual_below_tolerance();
     modal_shift_invert_validation_reports_slepc_adapter_configuration();

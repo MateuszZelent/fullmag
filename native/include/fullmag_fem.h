@@ -740,6 +740,23 @@ typedef enum {
 } fullmag_fem_frequency_domain_phase_convention;
 
 typedef enum {
+    FULLMAG_FEM_MODAL_EXECUTION_AUTO = 0,
+    FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU = 1,
+    FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU = 2,
+} fullmag_fem_modal_execution_target;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_SCALAR_REAL_SPLIT = 0,
+    FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE = 1,
+} fullmag_fem_modal_scalar_representation;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_RESULT_TANGENT_Q = 0,
+    FULLMAG_FEM_MODAL_RESULT_CARTESIAN_DELTA_M = 1,
+    FULLMAG_FEM_MODAL_RESULT_TANGENT_Q_AND_CARTESIAN_DELTA_M = 2,
+} fullmag_fem_modal_result_field_representation;
+
+typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS = 2,
@@ -965,7 +982,9 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 12u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION 12u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION 13u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 14u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -1004,6 +1023,37 @@ typedef struct {
     const double *values;
     uint64_t values_len;
 } FullmagFemCsrMatrixView;
+
+/*
+ * Versioned native modal payload for the physical shared-domain Poisson
+ * airbox lane.  The payload is append-only and is referenced by the modal
+ * request; all pointed-to storage remains owned by the caller for the
+ * duration of fullmag_fem_modal_eigen_solve().
+ */
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const fullmag_fem_mesh_desc *mesh;
+    const double *equilibrium_m0_xyz;
+    uint64_t equilibrium_m0_xyz_count;
+    const double *saturation_magnetisation_a_per_m;
+    uint64_t saturation_magnetisation_count;
+    double uniform_saturation_magnetisation_a_per_m;
+    double gamma0_m_per_a_s;
+    FullmagFemCsrMatrixView magnetic_a_qq_csr;
+    const uint32_t *scalar_reduced_node;
+    uint64_t scalar_reduced_node_count;
+    const uint32_t *magnetic_reduced_node;
+    uint64_t magnetic_reduced_node_count;
+    uint64_t magnetic_pair_count;
+    uint64_t airbox_pair_count;
+    const char *boundary_kind;
+    double robin_beta;
+    uint32_t boundary_marker;
+    const char *equilibrium_digest;
+    const char *mesh_certificate_digest;
+    const char *mesh_certificate_schema;
+} FullmagFemModalSharedDomainPayload;
 
 typedef struct {
     uint32_t abi_version;
@@ -1076,6 +1126,12 @@ typedef struct {
     const char *poisson_airbox_assembly_kind;
     const double *dynamic_demag_k_tangent_matrix_row_major;
     uint64_t dynamic_demag_k_tangent_matrix_value_count;
+    uint64_t struct_size;
+    fullmag_fem_modal_execution_target execution_target;
+    fullmag_fem_modal_scalar_representation scalar_representation;
+    fullmag_fem_modal_result_field_representation result_field_representation;
+    uint32_t reserved_modal_contract_flags;
+    const FullmagFemModalSharedDomainPayload *shared_domain_payload;
 } FullmagFemModalEigenRequest;
 
 typedef struct {
@@ -1097,12 +1153,37 @@ typedef struct {
 } FullmagFemDrivenResponseRequest;
 
 typedef struct {
+    double real;
+    double imag;
+} FullmagFemComplex64;
+
+typedef struct {
     uint32_t abi_version;
     FullmagFemFrequencyDomainStatus status;
     char *error_message;
     char *diagnostics_json;
     char *result_json;
     char *artifact_manifest_path;
+    uint64_t mode_count;
+    uint64_t q_dof_count;
+    uint64_t phi_dof_count;
+    uint64_t mode_lambda_count;
+    uint64_t mode_q_complex_count;
+    uint64_t mode_phi_complex_count;
+    uint64_t mode_delta_m_xyz_complex_count;
+    uint64_t mode_residual_count;
+    uint64_t mode_cluster_id_count;
+    FullmagFemComplex64 *mode_lambda;
+    FullmagFemComplex64 *mode_q_complex;
+    FullmagFemComplex64 *mode_phi_complex;
+    FullmagFemComplex64 *mode_delta_m_xyz_complex;
+    double *mode_residuals;
+    uint64_t *mode_cluster_ids;
+    fullmag_fem_modal_execution_target resolved_execution_target;
+    fullmag_fem_modal_scalar_representation resolved_scalar_representation;
+    uint32_t resolved_spectral_transform_kind;
+    uint32_t result_flags;
+    uint64_t struct_size;
 } FullmagFemFrequencyDomainResult;
 
 typedef struct {

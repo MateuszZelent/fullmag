@@ -29,6 +29,14 @@ pub(crate) enum NativeFrequencyDomainExecutionLane {
     ProductionGpu,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum NativeModalExecutionTarget {
+    Auto,
+    ProductionCpu,
+    ProductionGpu,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 pub(crate) struct NativeFrequencyDomainProgress {
@@ -256,12 +264,90 @@ pub(crate) struct NativeModalEigenRequest<'a> {
     pub completeness_policy: i32,
     pub eigensolver_family: i32,
     pub spectral_transform_kind: i32,
+    pub execution_target: NativeModalExecutionTarget,
     pub cancel_requested: Option<&'a NativeFrequencyDomainCancelCallback<'a>>,
     pub progress_callback: Option<&'a NativeModalEigenProgressCallback<'a>>,
     pub tiny_validation_problem: Option<NativeModalEigenTinyValidationProblem<'a>>,
     pub mfem_operator_problem: Option<NativeModalEigenMfemOperatorProblem<'a>>,
     pub mfem_sparse_operator_problem: Option<NativeModalEigenSparseOperatorProblem<'a>>,
     pub poisson_airbox_block_problem: Option<NativeModalEigenPoissonAirboxBlockProblem<'a>>,
+    pub shared_domain_problem: Option<NativeModalEigenSharedDomainProblem<'a>>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenSharedDomainProblem<'a> {
+    pub mesh: &'a fullmag_ir::MeshIR,
+    pub equilibrium_m0_xyz: Vec<f64>,
+    pub saturation_magnetisation_a_per_m: Vec<f64>,
+    pub uniform_saturation_magnetisation_a_per_m: f64,
+    pub gamma0_m_per_a_s: f64,
+    pub full_a_qq_row_offsets: Vec<u32>,
+    pub full_a_qq_column_indices: Vec<u32>,
+    pub full_a_qq_values: Vec<f64>,
+    pub scalar_reduced_node: Vec<u32>,
+    pub scalar_reduced_node_count: u64,
+    pub magnetic_reduced_node: Vec<u32>,
+    pub magnetic_reduced_node_count: u64,
+    pub magnetic_pair_count: u64,
+    pub airbox_pair_count: u64,
+    pub boundary_kind: String,
+    pub robin_beta: f64,
+    pub boundary_marker: u32,
+    pub equilibrium_digest: String,
+    pub mesh_certificate_digest: String,
+    pub mesh_certificate_schema: String,
+    pub(crate) _marker: std::marker::PhantomData<&'a fullmag_ir::MeshIR>,
+}
+
+impl<'a> NativeModalEigenSharedDomainProblem<'a> {
+    #[cfg(feature = "fem-gpu")]
+    fn ffi_payload<'b>(
+        &'b self,
+        mesh_descriptor: &'b ffi::fullmag_fem_mesh_desc,
+        boundary_kind: &'b CString,
+        equilibrium_digest: &'b CString,
+        mesh_certificate_digest: &'b CString,
+        mesh_certificate_schema: &'b CString,
+    ) -> ffi::FullmagFemModalSharedDomainPayload {
+        ffi::FullmagFemModalSharedDomainPayload {
+            abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::FullmagFemModalSharedDomainPayload>() as u32,
+            mesh: mesh_descriptor,
+            equilibrium_m0_xyz: self.equilibrium_m0_xyz.as_ptr(),
+            equilibrium_m0_xyz_count: self.equilibrium_m0_xyz.len() as u64,
+            saturation_magnetisation_a_per_m: if self.saturation_magnetisation_a_per_m.is_empty() {
+                std::ptr::null()
+            } else {
+                self.saturation_magnetisation_a_per_m.as_ptr()
+            },
+            saturation_magnetisation_count: self.saturation_magnetisation_a_per_m.len() as u64,
+            uniform_saturation_magnetisation_a_per_m: self.uniform_saturation_magnetisation_a_per_m,
+            gamma0_m_per_a_s: self.gamma0_m_per_a_s,
+            magnetic_a_qq_csr: ffi::FullmagFemCsrMatrixView {
+                row_count: self.mesh.nodes.len() as u64 * 2,
+                column_count: self.mesh.nodes.len() as u64 * 2,
+                row_offsets: self.full_a_qq_row_offsets.as_ptr(),
+                row_offsets_len: self.full_a_qq_row_offsets.len() as u64,
+                column_indices: self.full_a_qq_column_indices.as_ptr(),
+                column_indices_len: self.full_a_qq_column_indices.len() as u64,
+                values: self.full_a_qq_values.as_ptr(),
+                values_len: self.full_a_qq_values.len() as u64,
+            },
+            scalar_reduced_node: self.scalar_reduced_node.as_ptr(),
+            scalar_reduced_node_count: self.scalar_reduced_node_count,
+            magnetic_reduced_node: self.magnetic_reduced_node.as_ptr(),
+            magnetic_reduced_node_count: self.magnetic_reduced_node_count,
+            magnetic_pair_count: self.magnetic_pair_count,
+            airbox_pair_count: self.airbox_pair_count,
+            boundary_kind: boundary_kind.as_ptr(),
+            robin_beta: self.robin_beta,
+            boundary_marker: self.boundary_marker,
+            equilibrium_digest: equilibrium_digest.as_ptr(),
+            mesh_certificate_digest: mesh_certificate_digest.as_ptr(),
+            mesh_certificate_schema: mesh_certificate_schema.as_ptr(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -365,12 +451,36 @@ pub(crate) struct NativeDrivenResponseContractRequest<'a> {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
+pub(crate) struct NativeModalComplex64 {
+    pub real: f64,
+    pub imag: f64,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenTypedResult {
+    pub q_dof_count: u64,
+    pub phi_dof_count: u64,
+    pub mode_lambda: Vec<NativeModalComplex64>,
+    pub mode_q_complex: Vec<NativeModalComplex64>,
+    pub mode_phi_complex: Vec<NativeModalComplex64>,
+    pub mode_delta_m_xyz_complex: Vec<NativeModalComplex64>,
+    pub mode_residuals: Vec<f64>,
+    pub mode_cluster_ids: Vec<u64>,
+    pub resolved_execution_target: u32,
+    pub resolved_scalar_representation: u32,
+    pub resolved_spectral_transform_kind: u32,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct NativeFrequencyDomainContractResult {
     pub status: NativeFrequencyDomainStatus,
     pub error_message: String,
     pub diagnostics_json: String,
     pub result_json: String,
     pub artifact_manifest_path: String,
+    pub modal_eigen: Option<NativeModalEigenTypedResult>,
 }
 
 #[allow(dead_code)]
@@ -1058,6 +1168,54 @@ fn solve_native_modal_eigen_impl(
         .map_err(|_| {
             "native FEM modal_eigen Poisson-airbox assembly kind contains NUL".to_string()
         })?;
+    let shared_domain = request.shared_domain_problem.as_ref();
+    let shared_packed_mesh =
+        shared_domain.map(|problem| super::PackedNativeMesh::new(problem.mesh));
+    let shared_mesh_descriptor = shared_domain
+        .zip(shared_packed_mesh.as_ref())
+        .map(|(problem, packed)| packed.descriptor(problem.mesh));
+    let shared_boundary_kind = shared_domain
+        .map(|problem| CString::new(problem.boundary_kind.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen shared-domain boundary kind contains NUL".to_string()
+        })?;
+    let shared_equilibrium_digest = shared_domain
+        .map(|problem| CString::new(problem.equilibrium_digest.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen equilibrium digest contains NUL".to_string())?;
+    let shared_mesh_certificate_digest = shared_domain
+        .map(|problem| CString::new(problem.mesh_certificate_digest.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen mesh certificate digest contains NUL".to_string())?;
+    let shared_mesh_certificate_schema = shared_domain
+        .map(|problem| CString::new(problem.mesh_certificate_schema.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen mesh certificate schema contains NUL".to_string())?;
+    let shared_payload = match (
+        shared_domain,
+        shared_mesh_descriptor.as_ref(),
+        shared_boundary_kind.as_ref(),
+        shared_equilibrium_digest.as_ref(),
+        shared_mesh_certificate_digest.as_ref(),
+        shared_mesh_certificate_schema.as_ref(),
+    ) {
+        (
+            Some(problem),
+            Some(mesh_descriptor),
+            Some(boundary_kind),
+            Some(equilibrium_digest),
+            Some(mesh_certificate_digest),
+            Some(mesh_certificate_schema),
+        ) => Some(problem.ffi_payload(
+            mesh_descriptor,
+            boundary_kind,
+            equilibrium_digest,
+            mesh_certificate_digest,
+            mesh_certificate_schema,
+        )),
+        _ => None,
+    };
     let floquet_k_vector_rad_per_m = request.k_vector_rad_m.and_then(|values| {
         if values.len() == 3 {
             Some([values[0], values[1], values[2]])
@@ -1297,6 +1455,26 @@ fn solve_native_modal_eigen_impl(
             .unwrap_or(std::ptr::null()),
         dynamic_demag_k_tangent_matrix_row_major: std::ptr::null(),
         dynamic_demag_k_tangent_matrix_value_count: 0,
+        struct_size: std::mem::size_of::<ffi::FullmagFemModalEigenRequest>() as u64,
+        execution_target: match request.execution_target {
+            NativeModalExecutionTarget::Auto => {
+                ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_AUTO
+            }
+            NativeModalExecutionTarget::ProductionCpu => {
+                ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU
+            }
+            NativeModalExecutionTarget::ProductionGpu => {
+                ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU
+            }
+        },
+        scalar_representation:
+            ffi::fullmag_fem_modal_scalar_representation::FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE,
+        result_field_representation:
+            ffi::fullmag_fem_modal_result_field_representation::FULLMAG_FEM_MODAL_RESULT_TANGENT_Q,
+        reserved_modal_contract_flags: 0,
+        shared_domain_payload: shared_payload
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value as *const _),
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {
@@ -1600,6 +1778,28 @@ impl Default for NativeFrequencyDomainContractFfiResult {
                 diagnostics_json: std::ptr::null_mut(),
                 result_json: std::ptr::null_mut(),
                 artifact_manifest_path: std::ptr::null_mut(),
+                mode_count: 0,
+                q_dof_count: 0,
+                phi_dof_count: 0,
+                mode_lambda_count: 0,
+                mode_q_complex_count: 0,
+                mode_phi_complex_count: 0,
+                mode_delta_m_xyz_complex_count: 0,
+                mode_residual_count: 0,
+                mode_cluster_id_count: 0,
+                mode_lambda: std::ptr::null_mut(),
+                mode_q_complex: std::ptr::null_mut(),
+                mode_phi_complex: std::ptr::null_mut(),
+                mode_delta_m_xyz_complex: std::ptr::null_mut(),
+                mode_residuals: std::ptr::null_mut(),
+                mode_cluster_ids: std::ptr::null_mut(),
+                resolved_execution_target:
+                    ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_AUTO,
+                resolved_scalar_representation:
+                    ffi::fullmag_fem_modal_scalar_representation::FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE,
+                resolved_spectral_transform_kind: 0,
+                result_flags: 0,
+                struct_size: std::mem::size_of::<ffi::FullmagFemFrequencyDomainResult>() as u64,
             },
         }
     }
@@ -1608,14 +1808,74 @@ impl Default for NativeFrequencyDomainContractFfiResult {
 #[cfg(feature = "fem-gpu")]
 impl NativeFrequencyDomainContractFfiResult {
     fn to_owned_result(&self) -> NativeFrequencyDomainContractResult {
+        let modal_eigen = if self.inner.mode_count == 0 {
+            None
+        } else {
+            Some(NativeModalEigenTypedResult {
+                q_dof_count: self.inner.q_dof_count,
+                phi_dof_count: self.inner.phi_dof_count,
+                mode_lambda: copy_ffi_complex(self.inner.mode_lambda, self.inner.mode_lambda_count),
+                mode_q_complex: copy_ffi_complex(
+                    self.inner.mode_q_complex,
+                    self.inner.mode_q_complex_count,
+                ),
+                mode_phi_complex: copy_ffi_complex(
+                    self.inner.mode_phi_complex,
+                    self.inner.mode_phi_complex_count,
+                ),
+                mode_delta_m_xyz_complex: copy_ffi_complex(
+                    self.inner.mode_delta_m_xyz_complex,
+                    self.inner.mode_delta_m_xyz_complex_count,
+                ),
+                mode_residuals: copy_ffi_values(
+                    self.inner.mode_residuals,
+                    self.inner.mode_residual_count,
+                ),
+                mode_cluster_ids: copy_ffi_values(
+                    self.inner.mode_cluster_ids,
+                    self.inner.mode_cluster_id_count,
+                ),
+                resolved_execution_target: self.inner.resolved_execution_target as u32,
+                resolved_scalar_representation: self.inner.resolved_scalar_representation as u32,
+                resolved_spectral_transform_kind: self.inner.resolved_spectral_transform_kind,
+            })
+        };
         NativeFrequencyDomainContractResult {
             status: map_contract_status(self.inner.status),
             error_message: ffi_string(self.inner.error_message),
             diagnostics_json: ffi_string(self.inner.diagnostics_json),
             result_json: ffi_string(self.inner.result_json),
             artifact_manifest_path: ffi_string(self.inner.artifact_manifest_path),
+            modal_eigen,
         }
     }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn copy_ffi_complex(
+    pointer: *const ffi::FullmagFemComplex64,
+    count: u64,
+) -> Vec<NativeModalComplex64> {
+    if count == 0 || pointer.is_null() || count > usize::MAX as u64 {
+        return Vec::new();
+    }
+    unsafe {
+        std::slice::from_raw_parts(pointer, count as usize)
+            .iter()
+            .map(|value| NativeModalComplex64 {
+                real: value.real,
+                imag: value.imag,
+            })
+            .collect()
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn copy_ffi_values<T: Copy>(pointer: *const T, count: u64) -> Vec<T> {
+    if count == 0 || pointer.is_null() || count > usize::MAX as u64 {
+        return Vec::new();
+    }
+    unsafe { std::slice::from_raw_parts(pointer, count as usize).to_vec() }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1762,12 +2022,14 @@ mod tests {
                 completeness_policy: 0,
                 eigensolver_family: 0,
                 spectral_transform_kind: 0,
+                execution_target: NativeModalExecutionTarget::Auto,
                 cancel_requested: None,
                 progress_callback: None,
                 tiny_validation_problem: None,
                 mfem_operator_problem: None,
                 mfem_sparse_operator_problem: None,
                 poisson_airbox_block_problem: None,
+                shared_domain_problem: None,
             })
             .expect_err("native modal contract should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
@@ -1801,12 +2063,14 @@ mod tests {
                 completeness_policy: 0,
                 eigensolver_family: 0,
                 spectral_transform_kind: 0,
+                execution_target: NativeModalExecutionTarget::Auto,
                 cancel_requested: None,
                 progress_callback: None,
                 tiny_validation_problem: None,
                 mfem_operator_problem: None,
                 mfem_sparse_operator_problem: None,
                 poisson_airbox_block_problem: None,
+                shared_domain_problem: None,
             })
             .expect("native modal contract should return a structured unavailable result");
             assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
@@ -1870,12 +2134,14 @@ mod tests {
             completeness_policy: 0,
             eigensolver_family: 0,
             spectral_transform_kind: 0,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: None,
             progress_callback: None,
             tiny_validation_problem: None,
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
+        shared_domain_problem: None,
         })
         .expect("native modal contract should return a structured unavailable result");
 
@@ -1933,6 +2199,7 @@ mod tests {
             completeness_policy: 0,
             eigensolver_family: 0,
             spectral_transform_kind: 0,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: None,
             progress_callback: Some(&progress_callback),
             tiny_validation_problem: Some(NativeModalEigenTinyValidationProblem {
@@ -1945,6 +2212,7 @@ mod tests {
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
+            shared_domain_problem: None,
         })
         .expect("native modal validation solve should return a structured result");
 
@@ -1994,6 +2262,7 @@ mod tests {
             completeness_policy: 0,
             eigensolver_family: 0,
             spectral_transform_kind: 0,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: Some(&cancel_callback),
             progress_callback: None,
             tiny_validation_problem: Some(NativeModalEigenTinyValidationProblem {
@@ -2006,6 +2275,7 @@ mod tests {
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
+            shared_domain_problem: None,
         })
         .expect("native modal validation cancel should return a structured result");
 
@@ -2051,6 +2321,7 @@ mod tests {
             completeness_policy: 0,
             eigensolver_family: 0,
             spectral_transform_kind: 0,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: None,
             progress_callback: None,
             tiny_validation_problem: Some(NativeModalEigenTinyValidationProblem {
@@ -2063,6 +2334,7 @@ mod tests {
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
+            shared_domain_problem: None,
         })
         .expect("native modal frequency-window validation solve should return a result");
 
@@ -2168,6 +2440,7 @@ mod tests {
             completeness_policy: 1,
             eigensolver_family: 2,
             spectral_transform_kind: 0,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: None,
             progress_callback: Some(&progress_callback),
             tiny_validation_problem: None,
@@ -2183,6 +2456,7 @@ mod tests {
             }),
             mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
+        shared_domain_problem: None,
         })
         .expect("native modal production payload should return a structured result");
 
@@ -2301,6 +2575,7 @@ mod tests {
             completeness_policy: 1,
             eigensolver_family: 1,
             spectral_transform_kind: 1,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: None,
             progress_callback: None,
             tiny_validation_problem: None,
@@ -2316,6 +2591,7 @@ mod tests {
             }),
             mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
+        shared_domain_problem: None,
         })
         .expect("native modal shift-invert payload should return a structured result");
 
@@ -2381,6 +2657,7 @@ mod tests {
             completeness_policy: 1,
             eigensolver_family: 1,
             spectral_transform_kind: 1,
+            execution_target: NativeModalExecutionTarget::Auto,
             cancel_requested: None,
             progress_callback: None,
             tiny_validation_problem: None,
@@ -2396,6 +2673,7 @@ mod tests {
             }),
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
+            shared_domain_problem: None,
         })
         .expect("native modal Floquet payload should return a structured result");
 

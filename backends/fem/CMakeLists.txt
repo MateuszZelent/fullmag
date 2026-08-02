@@ -157,12 +157,14 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
     cpu/frequency_domain/dense_driven_response.cpp
     cpu/frequency_domain/modal_response.cpp
     cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.cpp
     cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.cpp
+    src/frequency_domain/real_frequency_rotated_pencil.cpp
     cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp
     cpu/frequency_domain/contour_interval_solver.cpp
     cpu/frequency_domain/contour_quadrature.cpp
@@ -227,6 +229,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/exchange/exchange_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/frequency_domain/driven_response_gpu.cu
+            gpu/cuda/frequency_domain/modal_krylov.cu
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu
@@ -527,6 +530,10 @@ add_fem_source_facade_contract(
     tests/frequency_domain/linearized_dynamic_pencil_test.cpp
 )
 add_fem_source_facade_contract(
+    fem_real_frequency_rotated_pencil_contract
+    tests/frequency_domain/real_frequency_rotated_pencil_test.cpp
+)
+add_fem_source_facade_contract(
     fem_operator_contract
     tests/frequency_domain/operator_contract_test.cpp
 )
@@ -543,6 +550,10 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
 )
 add_fem_source_facade_contract(
+    fem_poisson_airbox_real_split_cpu_contract
+    tests/frequency_domain/poisson_airbox_real_split_cpu_test.cpp
+)
+add_fem_source_facade_contract(
     fem_poisson_airbox_schur_matshell_contract
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
@@ -550,6 +561,17 @@ add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_poisson_airbox_shared_domain_contract
+    tests/frequency_domain/poisson_airbox_shared_domain_test.cpp
+)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE mfem)
+    endif()
+endif()
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)

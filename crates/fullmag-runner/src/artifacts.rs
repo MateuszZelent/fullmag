@@ -405,26 +405,23 @@ fn demag_runtime_metadata(
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
             let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
-            let (runtime_solver, runtime_preconditioner) = if provenance
-                .fem_demag_operator_mode
-                .as_deref()
-                == Some("device_hypre_poisson")
-            {
-                let solver = match linear_solver.as_str() {
-                    "CG" => Some("HyprePCG"),
-                    "GMRES" => Some("HypreGMRES"),
-                    _ => None,
+            let (runtime_solver, runtime_preconditioner) =
+                if provenance.fem_demag_operator_mode.as_deref() == Some("device_hypre_poisson") {
+                    let solver = match linear_solver.as_str() {
+                        "CG" => Some("HyprePCG"),
+                        "GMRES" => Some("HypreGMRES"),
+                        _ => None,
+                    };
+                    let preconditioner = match preconditioner.as_str() {
+                        "AMG" => Some("HypreBoomerAMG"),
+                        "JACOBI" => Some("HypreDiagScale"),
+                        "NONE" => Some("HypreIdentity"),
+                        _ => None,
+                    };
+                    (solver, preconditioner)
+                } else {
+                    (None, None)
                 };
-                let preconditioner = match preconditioner.as_str() {
-                    "AMG" => Some("HypreBoomerAMG"),
-                    "JACOBI" => Some("HypreDiagScale"),
-                    "NONE" => Some("HypreIdentity"),
-                    _ => None,
-                };
-                (solver, preconditioner)
-            } else {
-                (None, None)
-            };
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),

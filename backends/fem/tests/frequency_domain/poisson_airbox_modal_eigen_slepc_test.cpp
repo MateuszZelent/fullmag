@@ -5,6 +5,7 @@
 
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "frequency_domain/dense_poisson_airbox_eigen_oracle.hpp"
+#include "frequency_domain/modal_gpu_krylov.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 
 #include <cmath>
@@ -276,6 +277,17 @@ void SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle()
         fixture.sparse_result.reconstructed_full_descriptor_backward_error ==
             fixture.sparse_result.full_residual_reconstruction_relative_error,
         "PA-E2 legacy full residual must alias the reconstructed descriptor error");
+    check(fixture.sparse_result.accepted_modes.size() == 1,
+          "PA-E2 fixture must expose the accepted mode detail");
+    check(
+        fixture.sparse_result.accepted_modes.front().relative_residual ==
+            fixture.sparse_result.accepted_modes.front()
+                .full_residual_reconstruction_relative_error,
+        "PA-E2 per-mode public residual must be the certified full descriptor residual");
+    check(
+        fixture.sparse_result.accepted_modes.front().slepc_reported_backward_error ==
+            fixture.sparse_result.slepc_reported_backward_error,
+        "PA-E2 per-mode detail must preserve the independent SLEPc backward error");
     check(
         fixture.sparse_result.reconstructed_full_descriptor_backward_error ==
             std::max(
@@ -299,6 +311,16 @@ void SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle()
             fixture.sparse_result.diagnostics_json,
             "\"reconstruction_vs_slepc_ratio\""),
         "PA-E2 diagnostics must publish reconstruction-to-SLEPc disagreement");
+    check(
+        contains(
+            fixture.sparse_result.diagnostics_json,
+            "\"spectral_pencil_kind\":\"real_frequency_rotated\""),
+        "PA-E2 must solve through the managed real-frequency-rotated pencil");
+    check(
+        contains(
+            fixture.sparse_result.diagnostics_json,
+            "\"target_representation\":\"tau=omega_target\""),
+        "PA-E2 must publish the real tau target instead of an imaginary-axis target");
     check(
         fixture.sparse_result.gauge_mean_abs <= 1.0e-12,
         "PA-E2 eigenvector potential must satisfy the mean-zero gauge");
@@ -1133,6 +1155,25 @@ void EmitsSlepcAdapterDiagnostics()
         "PA-E2 diagnostics must carry airbox periodic pair count");
 }
 
+void AnalyticalReferenceDoesNotGateTheModalSolve()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.expected_reference_frequency_hz = 1.0;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        "PA-E2 analytical reference mismatch must remain a postsolve diagnostic, not a solve gate");
+    check(
+        !result.reference_frequency_certified,
+        "PA-E2 must preserve the failed analytical-reference comparison as postsolve metadata");
+    check(
+        result.full_residual_certified,
+        "PA-E2 analytical-reference mismatch must not weaken descriptor residual certification");
+}
+
 void RejectsSyntheticPaE1DemagKind()
 {
     TinySparseFixture fixture = make_tiny_full_coupled_fixture();
@@ -1237,11 +1278,17 @@ void RejectsNegativeMeanZeroGaugeWeights()
           "PA-E2 negative gauge-weight rejection must report positive normalized weights");
 }
 
-void RobinAndDirichletRequireNoGaugeWithoutPayload()
+void SolvesRobinAndDirichletWithoutGauge()
 {
     TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    const double coercive_a_phiphi_values[4] = {2.0, -1.0, -1.0, 2.0};
+    const CsrOwned coercive_a_phiphi = dense_to_csr(
+        2,
+        2,
+        coercive_a_phiphi_values);
     for (const char *outer_boundary_kind : {"poisson_robin", "poisson_dirichlet"}) {
         fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+        problem.A_phiphi = coercive_a_phiphi.view();
         problem.outer_boundary_kind = outer_boundary_kind;
         problem.robin_beta =
             std::strcmp(outer_boundary_kind, "poisson_robin") == 0 ? 1.0 : 0.0;
@@ -1254,8 +1301,8 @@ void RobinAndDirichletRequireNoGaugeWithoutPayload()
         fd::PoissonAirboxModalEigenResult result{};
         check(
             fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
-                fd::FrequencyDomainStatus::validation_error,
-            "PA-E2 no-gauge outer boundaries must not silently fall back to mean-zero augmentation");
+                fd::FrequencyDomainStatus::ok,
+            "PA-E2 no-gauge outer boundaries must solve without mean-zero augmentation");
         const std::string outer_boundary_provenance =
             "\"outer_boundary_kind\":\"" + std::string(outer_boundary_kind) + "\"";
         check(
@@ -1276,14 +1323,13 @@ void RobinAndDirichletRequireNoGaugeWithoutPayload()
         check(
             contains(
                 result.diagnostics_json,
-                "\"algebraic_form\":\"full_coupled_descriptor_no_gauge_unimplemented\""),
-            "PA-E2 no-gauge diagnostics must not claim an augmented-gauge descriptor");
+                "\"algebraic_form\":\"full_coupled_descriptor_no_gauge\""),
+            "PA-E2 no-gauge diagnostics must identify the non-augmented descriptor");
         check(
             contains(result.diagnostics_json, "\"augmented_dof_count\":4"),
-            "PA-E2 no-gauge diagnostics must not report a synthetic gauge DOF");
-        check(
-            contains(result.diagnostics_json, "poisson_airbox_eigen_gauge_policy_not_implemented"),
-            "PA-E2 no-gauge boundaries must fail explicitly before SLEPc setup");
+            "PA-E2 no-gauge diagnostics must report only q/phi degrees of freedom");
+        check(!result.gauge_augmented,
+              "PA-E2 no-gauge solve must not report a synthetic gauge degree of freedom");
     }
 }
 
@@ -1382,6 +1428,83 @@ void RejectsInconsistentProvenanceBeforeSlepcSetup()
         "PA-E2 assembly-kind rejection must preserve a pre-SLEPc reason");
 }
 
+void SolvesSharedDomainGpuDeviceResidentModalFixture()
+{
+    TinySparseFixture fixture{};
+    const double a_qq[4] = {0.5, -0.2, 0.2, 0.5};
+    const double a_qphi[4] = {1.0e-3, -1.0e-3, 0.0, 5.0e-4};
+    const double a_phiq[4] = {1.0e-3, 0.0, -1.0e-3, 5.0e-4};
+    const double a_phiphi[4] = {2.0, -0.5, -0.5, 2.0};
+    const double b_qq[4] = {1.0, 0.0, 0.0, 1.0};
+    std::memcpy(fixture.a_qq, a_qq, sizeof(a_qq));
+    std::memcpy(fixture.a_qphi, a_qphi, sizeof(a_qphi));
+    std::memcpy(fixture.a_phiq, a_phiq, sizeof(a_phiq));
+    std::memcpy(fixture.a_phiphi, a_phiphi, sizeof(a_phiphi));
+    std::memcpy(fixture.b_qq, b_qq, sizeof(b_qq));
+    fixture.A_qq = dense_to_csr(2, 2, fixture.a_qq);
+    fixture.A_qphi = dense_to_csr(2, 2, fixture.a_qphi);
+    fixture.A_phiq = dense_to_csr(2, 2, fixture.a_phiq);
+    fixture.A_phiphi = dense_to_csr(2, 2, fixture.a_phiphi);
+    fixture.B_qq = dense_to_csr(2, 2, fixture.b_qq);
+
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    problem.phi_mean_weights = nullptr;
+    problem.phi_mean_weights_count = 0;
+    problem.target_frequency_hz = 0.2 / kTwoPi;
+    problem.expected_reference_frequency_hz = 0.0;
+    problem.residual_tolerance = 1.0e-6;
+    problem.requested_mode_count = 1;
+    problem.max_outer_iterations = 64;
+    problem.max_linear_iterations = 512;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_gpu_device_krylov(problem, &result);
+    if (status == fd::FrequencyDomainStatus::unavailable &&
+        contains(result.error_message, "CUDA")) {
+        return;
+    }
+    check(status == fd::FrequencyDomainStatus::ok, result.error_message);
+    check(result.accepted_mode_count == 1u,
+          "GPU modal K0 fixture must return one accepted mode");
+    check(result.full_residual_certified,
+          "GPU modal K0 fixture must certify the full residual");
+    check(result.positive_frequency_branch_found && result.frequency_hz > 0.0,
+          "GPU modal K0 fixture must select a positive-frequency branch");
+    check(contains(result.diagnostics_json,
+                   "\"gpu_device_resident_modal_eigensolver\":true"),
+          "GPU modal K0 diagnostics must publish device residency");
+    check(contains(result.diagnostics_json,
+                   "\"persistent_solver_context\":true"),
+          "GPU modal K0 diagnostics must publish persistent context");
+    check(contains(result.diagnostics_json,
+                   "\"cpu_fallback\":\"disabled\""),
+          "GPU modal K0 diagnostics must reject CPU fallback");
+
+    problem.outer_boundary_kind = "pure_neumann";
+    problem.robin_beta = 0.0;
+    problem.gauge_policy = "mean_zero_augmented";
+    problem.gauge_reason = "pure_neumann_nullspace";
+    problem.phi_mean_weights = fixture.weights;
+    problem.phi_mean_weights_count = 2;
+    fd::PoissonAirboxModalEigenResult gauge_result{};
+    const fd::FrequencyDomainStatus gauge_status =
+        fd::solve_poisson_airbox_modal_eigen_gpu_device_krylov(problem, &gauge_result);
+    check(gauge_status == fd::FrequencyDomainStatus::ok, gauge_result.error_message);
+    check(gauge_result.gauge_augmented && gauge_result.accepted_mode_count == 1u,
+          "GPU modal K0 gauge fixture must return an augmented accepted mode");
+    check(gauge_result.full_residual_certified,
+          "GPU modal K0 gauge fixture must certify the full residual");
+    check(contains(gauge_result.diagnostics_json, "\"gauge_policy\":\"mean_zero_augmented\""),
+          "GPU modal K0 gauge diagnostics must publish the mean-zero policy");
+}
+
 } // namespace
 
 int main()
@@ -1398,14 +1521,16 @@ int main()
     AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference();
     ModalContractWritesShiftInvertActionArtifact();
     EmitsSlepcAdapterDiagnostics();
+    AnalyticalReferenceDoesNotGateTheModalSolve();
     RejectsSyntheticPaE1DemagKind();
     RejectsMissingPeriodicMeshCertificate();
     RejectsDecoupledDemagBlocks();
     RejectsZeroMeanZeroGaugeWeights();
     RejectsNegativeMeanZeroGaugeWeights();
-    RobinAndDirichletRequireNoGaugeWithoutPayload();
+    SolvesRobinAndDirichletWithoutGauge();
     PureNeumannRequiresMeanZeroGaugeWithWeights();
     RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup();
     RejectsInconsistentProvenanceBeforeSlepcSetup();
+    SolvesSharedDomainGpuDeviceResidentModalFixture();
     return 0;
 }

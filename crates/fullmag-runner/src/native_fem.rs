@@ -40,7 +40,8 @@ pub(crate) use frequency_domain::{
     NativeFrequencyDomainStatus, NativeModalEigenCsrMatrixView,
     NativeModalEigenFloquetPeriodicPair, NativeModalEigenMfemOperatorProblem,
     NativeModalEigenPoissonAirboxBlockProblem, NativeModalEigenRequest,
-    NativeModalEigenSparseOperatorProblem,
+    NativeModalEigenSharedDomainProblem, NativeModalEigenSparseOperatorProblem,
+    NativeModalExecutionTarget,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
@@ -52,8 +53,8 @@ pub(crate) use plan::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info,
-    DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    NativeFemGpuStateInfo,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -235,7 +236,7 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
 }
 
 #[cfg(feature = "fem-gpu")]
-struct PackedNativeMesh {
+pub(crate) struct PackedNativeMesh {
     nodes_xyz: Vec<f64>,
     cell_types: Vec<u32>,
     facet_types: Vec<u32>,
@@ -246,7 +247,7 @@ struct PackedNativeMesh {
 
 #[cfg(feature = "fem-gpu")]
 impl PackedNativeMesh {
-    fn new(mesh: &fullmag_ir::MeshIR) -> Self {
+    pub(crate) fn new(mesh: &fullmag_ir::MeshIR) -> Self {
         Self {
             nodes_xyz: mesh.nodes.iter().flatten().copied().collect(),
             cell_types: mesh
@@ -296,7 +297,7 @@ impl PackedNativeMesh {
         }
     }
 
-    fn descriptor(&self, mesh: &fullmag_ir::MeshIR) -> ffi::fullmag_fem_mesh_desc {
+    pub(crate) fn descriptor(&self, mesh: &fullmag_ir::MeshIR) -> ffi::fullmag_fem_mesh_desc {
         ffi::fullmag_fem_mesh_desc {
             abi_version: ffi::FULLMAG_FEM_MESH_DESC_ABI_VERSION,
             struct_size: std::mem::size_of::<ffi::fullmag_fem_mesh_desc>() as u32,

@@ -1985,7 +1985,9 @@ fn materialize_pipeline_eigenmodes(
         .map(|current| current.7.clone())
         .unwrap_or_default();
     let default_magnetostatic_bc = match &base_ir.study {
-        fullmag_ir::StudyIR::Eigenmodes { magnetostatic_bc, .. } => *magnetostatic_bc,
+        fullmag_ir::StudyIR::Eigenmodes {
+            magnetostatic_bc, ..
+        } => *magnetostatic_bc,
         _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
     };
     let count = payload_u32(payload, "eigen_count")?.unwrap_or(default_count);

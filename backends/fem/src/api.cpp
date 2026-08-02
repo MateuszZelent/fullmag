@@ -47,6 +47,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -904,6 +905,65 @@ char *duplicate_c_string(const char *value) noexcept
     return copy;
 }
 
+FullmagFemComplex64 *duplicate_complex_values(
+    const std::vector<std::complex<double>> &values) noexcept
+{
+    if (values.empty()) {
+        return nullptr;
+    }
+    auto *copy = new (std::nothrow) FullmagFemComplex64[values.size()];
+    if (copy == nullptr) {
+        return nullptr;
+    }
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        copy[index].real = values[index].real();
+        copy[index].imag = values[index].imag();
+    }
+    return copy;
+}
+
+double *duplicate_double_values(const std::vector<double> &values) noexcept
+{
+    if (values.empty()) {
+        return nullptr;
+    }
+    auto *copy = new (std::nothrow) double[values.size()];
+    if (copy == nullptr) {
+        return nullptr;
+    }
+    std::copy(values.begin(), values.end(), copy);
+    return copy;
+}
+
+std::uint64_t *duplicate_u64_values(const std::vector<std::uint64_t> &values) noexcept
+{
+    if (values.empty()) {
+        return nullptr;
+    }
+    auto *copy = new (std::nothrow) std::uint64_t[values.size()];
+    if (copy == nullptr) {
+        return nullptr;
+    }
+    std::copy(values.begin(), values.end(), copy);
+    return copy;
+}
+
+void release_modal_buffers(FullmagFemFrequencyDomainResult &result) noexcept
+{
+    delete[] result.mode_lambda;
+    delete[] result.mode_q_complex;
+    delete[] result.mode_phi_complex;
+    delete[] result.mode_delta_m_xyz_complex;
+    delete[] result.mode_residuals;
+    delete[] result.mode_cluster_ids;
+    result.mode_lambda = nullptr;
+    result.mode_q_complex = nullptr;
+    result.mode_phi_complex = nullptr;
+    result.mode_delta_m_xyz_complex = nullptr;
+    result.mode_residuals = nullptr;
+    result.mode_cluster_ids = nullptr;
+}
+
 bool fill_frequency_domain_validation_result(
     fullmag_fem_frequency_domain_solve_result *out_result,
     uint64_t total_frequency_count,
@@ -997,16 +1057,46 @@ FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
     result.result_json = duplicate_c_string(native_result.result_json.c_str());
     result.artifact_manifest_path =
         duplicate_c_string(native_result.artifact_manifest_path.c_str());
+    result.struct_size = sizeof(result);
+    result.q_dof_count = native_result.modal_eigen.q_dof_count;
+    result.phi_dof_count = native_result.modal_eigen.phi_dof_count;
+    result.mode_count = native_result.modal_eigen.mode_lambda.size();
+    result.mode_lambda_count = native_result.modal_eigen.mode_lambda.size();
+    result.mode_q_complex_count = native_result.modal_eigen.mode_q_complex.size();
+    result.mode_phi_complex_count = native_result.modal_eigen.mode_phi_complex.size();
+    result.mode_delta_m_xyz_complex_count =
+        native_result.modal_eigen.mode_delta_m_xyz_complex.size();
+    result.mode_residual_count = native_result.modal_eigen.mode_residuals.size();
+    result.mode_cluster_id_count = native_result.modal_eigen.mode_cluster_ids.size();
+    result.mode_lambda = duplicate_complex_values(native_result.modal_eigen.mode_lambda);
+    result.mode_q_complex = duplicate_complex_values(native_result.modal_eigen.mode_q_complex);
+    result.mode_phi_complex = duplicate_complex_values(native_result.modal_eigen.mode_phi_complex);
+    result.mode_delta_m_xyz_complex = duplicate_complex_values(
+        native_result.modal_eigen.mode_delta_m_xyz_complex);
+    result.mode_residuals = duplicate_double_values(native_result.modal_eigen.mode_residuals);
+    result.mode_cluster_ids = duplicate_u64_values(native_result.modal_eigen.mode_cluster_ids);
+    result.resolved_execution_target = FULLMAG_FEM_MODAL_EXECUTION_AUTO;
+    result.resolved_scalar_representation = FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE;
+    result.resolved_spectral_transform_kind = 0;
     if (result.error_message == nullptr ||
         result.diagnostics_json == nullptr ||
         result.result_json == nullptr ||
-        result.artifact_manifest_path == nullptr) {
+        result.artifact_manifest_path == nullptr ||
+        (result.mode_lambda_count != 0 && result.mode_lambda == nullptr) ||
+        (result.mode_q_complex_count != 0 && result.mode_q_complex == nullptr) ||
+        (result.mode_phi_complex_count != 0 && result.mode_phi_complex == nullptr) ||
+        (result.mode_delta_m_xyz_complex_count != 0 &&
+         result.mode_delta_m_xyz_complex == nullptr) ||
+        (result.mode_residual_count != 0 && result.mode_residuals == nullptr) ||
+        (result.mode_cluster_id_count != 0 && result.mode_cluster_ids == nullptr)) {
         delete[] result.error_message;
         delete[] result.diagnostics_json;
         delete[] result.result_json;
         delete[] result.artifact_manifest_path;
+        release_modal_buffers(result);
         result = {};
         result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+        result.struct_size = sizeof(result);
         result.status = FULLMAG_FEM_FD_ARTIFACT_ERROR;
         result.error_message =
             duplicate_c_string("failed to allocate native FEM frequency-domain result strings");
@@ -2551,9 +2641,109 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->dynamic_demag_k_tangent_matrix_row_major;
     native_request.dynamic_demag_k_tangent_matrix_value_count =
         request->dynamic_demag_k_tangent_matrix_value_count;
+    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION - 1u) {
+        native_request.struct_size = request->struct_size;
+        switch (request->execution_target) {
+        case FULLMAG_FEM_MODAL_EXECUTION_AUTO:
+            native_request.execution_target = fd::ModalExecutionTarget::auto_select;
+            break;
+        case FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU:
+            native_request.execution_target = fd::ModalExecutionTarget::production_cpu;
+            break;
+        case FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU:
+            native_request.execution_target = fd::ModalExecutionTarget::production_gpu;
+            break;
+        default: {
+            fd::FrequencyDomainContractResult invalid_target{};
+            invalid_target.status = fd::FrequencyDomainStatus::validation_error;
+            invalid_target.error_message =
+                "native FEM modal_eigen request uses an unknown execution target";
+            invalid_target.diagnostics_json =
+                "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"validation_error\","
+                "\"reason\":\"unknown_execution_target\"}";
+            invalid_target.result_json =
+                "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                "\"status\":\"validation_error\"}";
+            return copy_frequency_domain_contract_result(invalid_target);
+        }
+        }
+        switch (request->scalar_representation) {
+        case FULLMAG_FEM_MODAL_SCALAR_REAL_SPLIT:
+            native_request.scalar_representation =
+                fd::ModalScalarRepresentation::real_split;
+            break;
+        case FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE:
+            native_request.scalar_representation =
+                fd::ModalScalarRepresentation::complex_double;
+            break;
+        default: {
+            fd::FrequencyDomainContractResult invalid_scalar{};
+            invalid_scalar.status = fd::FrequencyDomainStatus::validation_error;
+            invalid_scalar.error_message =
+                "native FEM modal_eigen request uses an unknown scalar representation";
+            invalid_scalar.diagnostics_json =
+                "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"validation_error\","
+                "\"reason\":\"unknown_scalar_representation\"}";
+            invalid_scalar.result_json =
+                "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                "\"status\":\"validation_error\"}";
+            return copy_frequency_domain_contract_result(invalid_scalar);
+        }
+        }
+        switch (request->result_field_representation) {
+        case FULLMAG_FEM_MODAL_RESULT_TANGENT_Q:
+            native_request.result_field_representation =
+                fd::ModalResultFieldRepresentation::tangent_q;
+            break;
+        case FULLMAG_FEM_MODAL_RESULT_CARTESIAN_DELTA_M:
+            native_request.result_field_representation =
+                fd::ModalResultFieldRepresentation::cartesian_delta_m;
+            break;
+        case FULLMAG_FEM_MODAL_RESULT_TANGENT_Q_AND_CARTESIAN_DELTA_M:
+            native_request.result_field_representation =
+                fd::ModalResultFieldRepresentation::tangent_q_and_cartesian_delta_m;
+            break;
+        default: {
+            fd::FrequencyDomainContractResult invalid_fields{};
+            invalid_fields.status = fd::FrequencyDomainStatus::validation_error;
+            invalid_fields.error_message =
+                "native FEM modal_eigen request uses an unknown result field representation";
+            invalid_fields.diagnostics_json =
+                "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"validation_error\","
+                "\"reason\":\"unknown_result_field_representation\"}";
+            invalid_fields.result_json =
+                "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                "\"status\":\"validation_error\"}";
+            return copy_frequency_domain_contract_result(invalid_fields);
+        }
+        }
+    }
+    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+        request->shared_domain_payload != nullptr &&
+        (request->struct_size == 0u ||
+         request->struct_size >=
+             offsetof(FullmagFemModalEigenRequest, shared_domain_payload) +
+                 sizeof(request->shared_domain_payload))) {
+        native_request.poisson_airbox_shared_domain_enabled = 1;
+        native_request.poisson_airbox_shared_domain_payload =
+            request->shared_domain_payload;
+    }
 
-    return copy_frequency_domain_contract_result(
+    FullmagFemFrequencyDomainResult result = copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));
+    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION) {
+        result.resolved_execution_target = request->execution_target;
+        result.resolved_scalar_representation = request->scalar_representation;
+        result.resolved_spectral_transform_kind =
+            static_cast<std::uint32_t>(request->spectral_transform_kind);
+    }
+    return result;
 }
 
 FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
@@ -2624,6 +2814,7 @@ void fullmag_fem_frequency_domain_result_destroy(
     delete[] result->diagnostics_json;
     delete[] result->result_json;
     delete[] result->artifact_manifest_path;
+    release_modal_buffers(*result);
     *result = {};
 }
 

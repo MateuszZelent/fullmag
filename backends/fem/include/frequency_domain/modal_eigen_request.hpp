@@ -2,12 +2,32 @@
 
 #include "frequency_domain/frequency_domain_contract.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
+#include "fullmag_fem.h"
 
 #include <cstdint>
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 12;
+constexpr std::uint32_t kFrequencyDomainLegacyAbiVersion = 12;
+constexpr std::uint32_t kFrequencyDomainPreviousAbiVersion = 13;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 14;
+
+enum class ModalExecutionTarget : std::uint32_t {
+    auto_select = 0,
+    production_cpu = 1,
+    production_gpu = 2,
+};
+
+enum class ModalScalarRepresentation : std::uint32_t {
+    real_split = 0,
+    complex_double = 1,
+};
+
+enum class ModalResultFieldRepresentation : std::uint32_t {
+    tangent_q = 0,
+    cartesian_delta_m = 1,
+    tangent_q_and_cartesian_delta_m = 2,
+};
 
 struct LinearizedOperatorRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;
@@ -127,6 +147,14 @@ struct ModalEigenRequest {
     const char *poisson_airbox_assembly_kind = nullptr;
     const double *dynamic_demag_k_tangent_matrix_row_major = nullptr;
     std::uint64_t dynamic_demag_k_tangent_matrix_value_count = 0;
+    ModalExecutionTarget execution_target = ModalExecutionTarget::auto_select;
+    ModalScalarRepresentation scalar_representation = ModalScalarRepresentation::complex_double;
+    ModalResultFieldRepresentation result_field_representation =
+        ModalResultFieldRepresentation::tangent_q;
+    /* Physical shared-domain mesh/material/equilibrium payload.  This is
+       intentionally separate from the legacy synthetic CSR descriptor. */
+    int poisson_airbox_shared_domain_enabled = 0;
+    const FullmagFemModalSharedDomainPayload *poisson_airbox_shared_domain_payload = nullptr;
 };
 
 struct DrivenResponseContractRequest {

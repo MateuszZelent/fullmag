@@ -863,6 +863,29 @@ pub enum fullmag_fem_frequency_domain_phase_convention {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_execution_target {
+    FULLMAG_FEM_MODAL_EXECUTION_AUTO = 0,
+    FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU = 1,
+    FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_scalar_representation {
+    FULLMAG_FEM_MODAL_SCALAR_REAL_SPLIT = 0,
+    FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_result_field_representation {
+    FULLMAG_FEM_MODAL_RESULT_TANGENT_Q = 0,
+    FULLMAG_FEM_MODAL_RESULT_CARTESIAN_DELTA_M = 1,
+    FULLMAG_FEM_MODAL_RESULT_TANGENT_Q_AND_CARTESIAN_DELTA_M = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_frequency_domain_drive_kind {
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
@@ -1121,7 +1144,9 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 12;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION: u32 = 12;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION: u32 = 13;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 14;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1166,6 +1191,33 @@ pub struct FullmagFemCsrMatrixView {
     pub column_indices_len: u64,
     pub values: *const f64,
     pub values_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalSharedDomainPayload {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh: *const fullmag_fem_mesh_desc,
+    pub equilibrium_m0_xyz: *const f64,
+    pub equilibrium_m0_xyz_count: u64,
+    pub saturation_magnetisation_a_per_m: *const f64,
+    pub saturation_magnetisation_count: u64,
+    pub uniform_saturation_magnetisation_a_per_m: f64,
+    pub gamma0_m_per_a_s: f64,
+    pub magnetic_a_qq_csr: FullmagFemCsrMatrixView,
+    pub scalar_reduced_node: *const u32,
+    pub scalar_reduced_node_count: u64,
+    pub magnetic_reduced_node: *const u32,
+    pub magnetic_reduced_node_count: u64,
+    pub magnetic_pair_count: u64,
+    pub airbox_pair_count: u64,
+    pub boundary_kind: *const c_char,
+    pub robin_beta: f64,
+    pub boundary_marker: u32,
+    pub equilibrium_digest: *const c_char,
+    pub mesh_certificate_digest: *const c_char,
+    pub mesh_certificate_schema: *const c_char,
 }
 
 #[repr(C)]
@@ -1241,6 +1293,12 @@ pub struct FullmagFemModalEigenRequest {
     pub poisson_airbox_assembly_kind: *const c_char,
     pub dynamic_demag_k_tangent_matrix_row_major: *const f64,
     pub dynamic_demag_k_tangent_matrix_value_count: u64,
+    pub struct_size: u64,
+    pub execution_target: fullmag_fem_modal_execution_target,
+    pub scalar_representation: fullmag_fem_modal_scalar_representation,
+    pub result_field_representation: fullmag_fem_modal_result_field_representation,
+    pub reserved_modal_contract_flags: u32,
+    pub shared_domain_payload: *const FullmagFemModalSharedDomainPayload,
 }
 
 #[repr(C)]
@@ -1266,6 +1324,13 @@ pub struct FullmagFemDrivenResponseRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct FullmagFemComplex64 {
+    pub real: f64,
+    pub imag: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct FullmagFemFrequencyDomainResult {
     pub abi_version: u32,
     pub status: FullmagFemFrequencyDomainStatus,
@@ -1273,6 +1338,26 @@ pub struct FullmagFemFrequencyDomainResult {
     pub diagnostics_json: *mut c_char,
     pub result_json: *mut c_char,
     pub artifact_manifest_path: *mut c_char,
+    pub mode_count: u64,
+    pub q_dof_count: u64,
+    pub phi_dof_count: u64,
+    pub mode_lambda_count: u64,
+    pub mode_q_complex_count: u64,
+    pub mode_phi_complex_count: u64,
+    pub mode_delta_m_xyz_complex_count: u64,
+    pub mode_residual_count: u64,
+    pub mode_cluster_id_count: u64,
+    pub mode_lambda: *mut FullmagFemComplex64,
+    pub mode_q_complex: *mut FullmagFemComplex64,
+    pub mode_phi_complex: *mut FullmagFemComplex64,
+    pub mode_delta_m_xyz_complex: *mut FullmagFemComplex64,
+    pub mode_residuals: *mut f64,
+    pub mode_cluster_ids: *mut u64,
+    pub resolved_execution_target: fullmag_fem_modal_execution_target,
+    pub resolved_scalar_representation: fullmag_fem_modal_scalar_representation,
+    pub resolved_spectral_transform_kind: u32,
+    pub result_flags: u32,
+    pub struct_size: u64,
 }
 
 #[repr(C)]
@@ -2414,6 +2499,7 @@ mod tests {
         assert_eq!(request.mfem_sparse_stiffness_csr.values_len, 0);
         assert_eq!(request.mfem_sparse_gyrotropic_csr.row_count, 0);
         assert_eq!(request.mfem_sparse_mass_csr.row_count, 0);
+        assert!(request.shared_domain_payload.is_null());
     }
 
     #[test]
@@ -2531,6 +2617,63 @@ mod tests {
         assert!(poisson_gauge_reason < poisson_assembly_kind);
         assert!(poisson_assembly_kind < dynamic_demag_k_matrix);
         assert!(dynamic_demag_k_matrix < dynamic_demag_k_count);
+    }
+
+    #[test]
+    fn modal_v14_request_and_result_tails_are_append_only_and_zeroable() {
+        type Request = FullmagFemModalEigenRequest;
+        type Result = FullmagFemFrequencyDomainResult;
+        let request = unsafe { std::mem::MaybeUninit::<Request>::zeroed().assume_init() };
+        assert_eq!(request.struct_size, 0);
+        assert_eq!(request.execution_target as u32, 0);
+        assert_eq!(request.scalar_representation as u32, 0);
+        assert_eq!(request.result_field_representation as u32, 0);
+        let dynamic_count =
+            std::mem::offset_of!(Request, dynamic_demag_k_tangent_matrix_value_count);
+        let request_struct_size = std::mem::offset_of!(Request, struct_size);
+        assert!(dynamic_count < request_struct_size);
+        assert!(request_struct_size < std::mem::offset_of!(Request, execution_target));
+        assert!(
+            std::mem::offset_of!(Request, execution_target)
+                < std::mem::offset_of!(Request, scalar_representation)
+        );
+        assert!(
+            std::mem::offset_of!(Request, scalar_representation)
+                < std::mem::offset_of!(Request, result_field_representation)
+        );
+
+        let result = unsafe { std::mem::MaybeUninit::<Result>::zeroed().assume_init() };
+        assert_eq!(result.mode_count, 0);
+        assert!(result.mode_lambda.is_null());
+        assert!(result.mode_q_complex.is_null());
+        assert!(result.mode_phi_complex.is_null());
+        assert!(result.mode_delta_m_xyz_complex.is_null());
+        assert!(result.mode_residuals.is_null());
+        assert!(result.mode_cluster_ids.is_null());
+        assert!(
+            std::mem::offset_of!(Result, mode_count)
+                > std::mem::offset_of!(Result, artifact_manifest_path)
+        );
+        assert!(
+            std::mem::offset_of!(Result, mode_lambda)
+                < std::mem::offset_of!(Result, mode_q_complex)
+        );
+        assert!(
+            std::mem::offset_of!(Result, mode_cluster_ids)
+                < std::mem::offset_of!(Result, struct_size)
+        );
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION, 12);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION, 13);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION, 14);
+        assert!(
+            std::mem::offset_of!(Request, reserved_modal_contract_flags)
+                < std::mem::offset_of!(Request, shared_domain_payload)
+        );
+        assert!(
+            std::mem::offset_of!(Request, shared_domain_payload)
+                + std::mem::size_of::<*const FullmagFemModalSharedDomainPayload>()
+                <= std::mem::size_of::<Request>()
+        );
     }
 
     #[test]
@@ -2765,9 +2908,18 @@ mod tests {
         assert_eq!(info.struct_size, 0);
         assert_eq!(info.mfem_version, [0; 32]);
         assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info>(), 40);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, abi_version), 0);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, struct_size), 4);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, mfem_version), 8);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info, abi_version),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info, struct_size),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info, mfem_version),
+            8
+        );
     }
 
     #[test]
@@ -2780,10 +2932,22 @@ mod tests {
         assert_eq!(info.hypre_version, [0; 32]);
         assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info>(), 40);
         assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info_v2>(), 72);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, abi_version), 0);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, struct_size), 4);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, mfem_version), 8);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, hypre_version), 40);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, abi_version),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, struct_size),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, mfem_version),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, hypre_version),
+            40
+        );
     }
 
     /// Verify native FEM demag timing totals are ABI-visible.

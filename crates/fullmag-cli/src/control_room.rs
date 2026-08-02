@@ -247,8 +247,8 @@ mod control_room_guard_tests {
     use std::sync::{Arc, Mutex};
 
     use super::{
-        api_openapi_response_is_compatible, control_room_launch_signature, BootstrapProcessGuard,
-        packaged_install_root, ControlRoomGuard, GuardedProcess,
+        api_openapi_response_is_compatible, control_room_launch_signature, packaged_install_root,
+        BootstrapProcessGuard, ControlRoomGuard, GuardedProcess,
     };
 
     struct RecordingProcess {
@@ -388,7 +388,10 @@ mod control_room_guard_tests {
             packaged_install_root(&root.join("bin").join("fullmag")),
             Some(root.clone())
         );
-        assert_eq!(packaged_install_root(&root.join("target").join("fullmag")), None);
+        assert_eq!(
+            packaged_install_root(&root.join("target").join("fullmag")),
+            None
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1235,9 +1238,7 @@ pub(crate) fn spawn_fullmag_api(
     stream_logs_to_terminal: bool,
 ) -> Result<std::process::Child> {
     let packaged_root = packaged_install_root(self_exe);
-    let runtime_root = packaged_root
-        .clone()
-        .unwrap_or_else(|| root.to_path_buf());
+    let runtime_root = packaged_root.clone().unwrap_or_else(|| root.to_path_buf());
     let sibling_api = self_exe.with_file_name(format!("fullmag-api{EXE_SUFFIX}"));
     let web_static_dir = {
         let candidates = [

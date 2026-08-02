@@ -2,7 +2,9 @@
 
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <complex>
 #include <cstdint>
+#include <vector>
 
 namespace fullmag::fem::frequency_domain {
 
@@ -85,9 +87,30 @@ struct PoissonAirboxModalEigenResult {
     double relative_reference_frequency_error = 0.0;
 
     bool gauge_augmented = false;
+    bool q_layout_interleaved_node_component = false;
     bool positive_frequency_branch_found = false;
     bool full_residual_certified = false;
     bool reference_frequency_certified = false;
+
+    struct AcceptedMode {
+        std::uint32_t eigenpair_index = 0;
+        double eigenvalue_real = 0.0;
+        double eigenvalue_imag = 0.0;
+        double omega_rad_s = 0.0;
+        // The backend-reported SLEPc error is diagnostic only.  The public
+        // relative_residual below is always the reconstructed full descriptor
+        // residual certified against the original coupled blocks.
+        double slepc_reported_backward_error = 0.0;
+        double frequency_hz = 0.0;
+        double relative_residual = 0.0;
+        double full_residual_reconstruction_relative_error = 0.0;
+        double magnetic_block_backward_error = 0.0;
+        double poisson_block_backward_error = 0.0;
+        double gauge_constraint_backward_error = 0.0;
+        double gauge_mean_abs = 0.0;
+        std::vector<std::complex<double>> full_vector{};
+    };
+    std::vector<AcceptedMode> accepted_modes{};
 
     char diagnostics_json[8192]{};
 };

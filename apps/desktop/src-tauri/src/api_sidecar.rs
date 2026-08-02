@@ -205,7 +205,10 @@ mod tests {
             packaged_install_root(&root.join("bin").join("fullmag-ui")),
             Some(root.clone())
         );
-        assert_eq!(packaged_install_root(&root.join("target").join("fullmag-ui")), None);
+        assert_eq!(
+            packaged_install_root(&root.join("target").join("fullmag-ui")),
+            None
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

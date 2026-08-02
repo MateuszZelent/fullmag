@@ -4943,7 +4943,9 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax_in_mode(").count()
+        let route_count = source
+            .matches("fem::relax::execute_fem_relax_in_mode(")
+            .count()
             + source
                 .matches("fem::relax::execute_fem_relax_with_context_in_mode(")
                 .count();

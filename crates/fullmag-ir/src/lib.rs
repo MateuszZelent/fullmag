@@ -1020,27 +1020,56 @@ impl ProblemIR {
                         errors.push("eigenmodes.k0_periodic_airbox_requires_demag".to_string());
                     }
                     if spin_wave_bc.kind() != SpinWaveBoundaryKindIR::Periodic {
-                        errors.push("eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc".to_string());
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc"
+                                .to_string(),
+                        );
                     }
-                    if !matches!(k_sampling, Some(KSamplingIR::Single { k_vector: [0.0, 0.0, 0.0] })) {
-                        errors.push("eigenmodes.k0_periodic_airbox_requires_exact_zero_k".to_string());
+                    if !matches!(
+                        k_sampling,
+                        Some(KSamplingIR::Single {
+                            k_vector: [0.0, 0.0, 0.0]
+                        })
+                    ) {
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_exact_zero_k".to_string(),
+                        );
                     }
                     if *damping_policy != EigenDampingPolicyIR::Ignore {
-                        errors.push("eigenmodes.k0_periodic_airbox_requires_alpha_zero".to_string());
+                        errors
+                            .push("eigenmodes.k0_periodic_airbox_requires_alpha_zero".to_string());
                     }
                     if self.backend_policy.execution_precision != ExecutionPrecision::Double {
-                        errors.push("eigenmodes.k0_periodic_airbox_requires_double_precision".to_string());
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_double_precision".to_string(),
+                        );
                     }
-                    if !self.energy_terms.iter().any(|term| matches!(term, EnergyTermIR::Demag { .. })) {
-                        errors.push("eigenmodes.k0_periodic_airbox_requires_demag_energy".to_string());
+                    if !self
+                        .energy_terms
+                        .iter()
+                        .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+                    {
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_demag_energy".to_string(),
+                        );
                     }
                     match &self.pbc {
                         Some(periodicity)
-                            if periodicity.axes == [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open] => {}
+                            if periodicity.axes
+                                == [
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Open,
+                                ] => {}
                         Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
-                            errors.push("eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d".to_string());
+                            errors.push(
+                                "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d"
+                                    .to_string(),
+                            );
                         }
-                        _ => errors.push("eigenmodes.k0_periodic_airbox_requires_xy_periodic_open_z".to_string()),
+                        _ => errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_xy_periodic_open_z".to_string(),
+                        ),
                     }
                 }
                 let has_mode_output = self

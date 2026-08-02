@@ -705,18 +705,46 @@ fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
         "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "frequency_hz"}]}
     });
     let cases = [
-        ("backend_policy.execution_precision", serde_json::json!("single"), "eigenmodes.k0_periodic_airbox_requires_double_precision"),
-        ("operator.include_demag", serde_json::json!(false), "eigenmodes.k0_periodic_airbox_requires_demag"),
-        ("k_sampling.k_vector", serde_json::json!([1.0, 0.0, 0.0]), "eigenmodes.k0_periodic_airbox_requires_exact_zero_k"),
-        ("spin_wave_bc", serde_json::json!("free"), "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc"),
-        ("pbc.axes", serde_json::json!(["periodic", "periodic", "periodic"]), "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d"),
-        ("damping_policy", serde_json::json!("include"), "eigenmodes.k0_periodic_airbox_requires_alpha_zero"),
+        (
+            "backend_policy.execution_precision",
+            serde_json::json!("single"),
+            "eigenmodes.k0_periodic_airbox_requires_double_precision",
+        ),
+        (
+            "operator.include_demag",
+            serde_json::json!(false),
+            "eigenmodes.k0_periodic_airbox_requires_demag",
+        ),
+        (
+            "k_sampling.k_vector",
+            serde_json::json!([1.0, 0.0, 0.0]),
+            "eigenmodes.k0_periodic_airbox_requires_exact_zero_k",
+        ),
+        (
+            "spin_wave_bc",
+            serde_json::json!("free"),
+            "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc",
+        ),
+        (
+            "pbc.axes",
+            serde_json::json!(["periodic", "periodic", "periodic"]),
+            "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d",
+        ),
+        (
+            "damping_policy",
+            serde_json::json!("include"),
+            "eigenmodes.k0_periodic_airbox_requires_alpha_zero",
+        ),
     ];
     for (path, replacement, token) in cases {
         let mut candidate = value.clone();
         match path {
-            "backend_policy.execution_precision" => candidate["backend_policy"]["execution_precision"] = replacement,
-            "operator.include_demag" => candidate["study"]["operator"]["include_demag"] = replacement,
+            "backend_policy.execution_precision" => {
+                candidate["backend_policy"]["execution_precision"] = replacement
+            }
+            "operator.include_demag" => {
+                candidate["study"]["operator"]["include_demag"] = replacement
+            }
             "k_sampling.k_vector" => candidate["study"]["k_sampling"]["k_vector"] = replacement,
             "spin_wave_bc" => candidate["study"]["spin_wave_bc"] = replacement,
             "pbc.axes" => candidate["pbc"]["axes"] = replacement,
@@ -724,14 +752,22 @@ fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
             _ => unreachable!(),
         }
         let ir: ProblemIR = serde_json::from_value(candidate).unwrap();
-        assert!(ir.validate().unwrap_err().iter().any(|error| error == token), "missing {token}");
+        assert!(
+            ir.validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error == token),
+            "missing {token}"
+        );
     }
     let mut without_demag = value;
     without_demag["energy_terms"] = serde_json::json!([{"kind": "exchange"}]);
     let ir: ProblemIR = serde_json::from_value(without_demag).unwrap();
-    assert!(ir.validate().unwrap_err().iter().any(|error| {
-        error == "eigenmodes.k0_periodic_airbox_requires_demag_energy"
-    }));
+    assert!(ir
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| { error == "eigenmodes.k0_periodic_airbox_requires_demag_energy" }));
 }
 
 #[test]
