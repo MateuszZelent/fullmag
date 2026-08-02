@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md
 ---
 
 (public-docs-numerical-methods-relaxation-projected-gradient)=
