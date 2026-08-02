@@ -4325,3 +4325,75 @@ suita Python pozostaje otwarta do osobnych, kontraktowo uzasadnionych poprawek;
 nie zmieniam przez to oceny SHE/BORIS ani capability matrix. Otwarte pozostają
 również wszystkie bramy wymienione w sekcji 32.22: GPU/device proof, OE-F1/OE-F2,
 SML produkcyjne, browser round-trip, `SHE-BORIS-001`, SP5 i cross-backend parity.
+
+## 32.24. Audyt źródła BORIS i powtórzenie reciprocal smoke (2026-08-02)
+
+Wykonano ponowne, linia-po-linii porównanie dokumentacji Fullmag SHE z
+implementacją `external_solvers/BORIS/Boris`. Porównanie obejmuje kolejność
+rozwiązywania, warunki brzegowe, interfejsy N/F/T, zmienne `S`/`V_s`, tensor
+`Q_ia`, rozdzielenie `SHA`/`iSHA`, kryteria SOR oraz ścieżkę CUDA. Wynik jest
+zgodny z raportem
+`docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/BORIS_FULLMAG_SHE_COMPARISON.md`:
+BORIS jest wykonywalnym wzorcem zakresu, Fullmag M2 pozostaje docelowym
+kontraktem reciprocal, ale nie ma podstaw do twierdzenia o parity.
+
+### 32.24.1. Dowód wykonywalny
+
+Na tym samym lokalnym, spatchowanym buildzie BORIS wykonano
+`scripts/boris_reciprocal_she_smoke.py` w obrazie
+`nvidia/cuda:11.8.0-devel-ubuntu22.04` z apt-owym Pythonem 3.10 i bibliotekami
+runtime. Snapshot builda zachowuje wcześniejszy manifest źródeł, digest obrazu
+i hash binarium opisane w sekcji 32.20. Skrypt ustawia jawnie
+`SHA=iSHA=0.10`, `De=0.01`, `l_sf=5 nm`, `elC=5.8e7 S/m` i
+`J_c=(1e11,0,0) A/m^2`, a następnie zapisuje `V`, `S`, `J_c`, `J_sy` i
+`J_sz` jako OVF.
+
+Powtórzenie dla filmu `1 um x 0.4 um x 1 nm` (10 x 4 x 2 komórek) dało:
+
+```text
+RECIPROCAL_SHA 0.1
+bottom_S  [0.0, 0.0, 0.0]
+center_S  [0.0, 0.0, 0.0]
+top_S     [0.0, 0.0, 0.0]
+bottom_Jsy  [0.0, 0.0, 289419.0]
+center_Jsy  [0.0, 0.0, 578838.0]
+top_Jsy     [0.0, 0.0, 289419.0]
+bottom_Jsz  [0.0, -289419.0, 0.0]
+center_Jsz  [0.0, -289419.0, 0.0]
+top_Jsz     [0.0, -289419.0, 0.0]
+```
+
+Jest to dowód, że patched executable uruchamia kanały direct-SHE i przy
+`iSHA=SHA` materializuje również obserwable inverse-SHE, lecz w jednorodnym,
+stałoprądowym workloadzie akumulacja `S` jest zerowa. Nie jest to benchmark
+reciprocal ilościowy: nie ma niezerowego `S`, profilu `V_s`, interfejsu `Gi/Gmix`
+ani bilansu N/F/T. Kod procesu kończy się kodem 143, ponieważ BORIS zostawia
+listener skryptowy po ukończeniu skryptu; log zawiera `Finished Python script`
+i wszystkie wartości przed kontrolowanym timeoutem listenera.
+
+### 32.24.2. Ustalenia fizyczne i granica
+
+Audyt kodu potwierdza, że BORIS:
+
+- najpierw relaksuje `V`, potem `S` przez osobne SOR (`STransport_Spin.cpp`);
+- używa direct-SHE w niejednorodnym warunku Neumanna
+  `grad_n S = epsilon(E) SHA elC MUB_E / De`;
+- używa inverse-SHE w warunku `V` proporcjonalnym do
+  `iSHA De curl(S)/(MUB_E elC)`;
+- ma osobne warunki kontaktowe `Gi/Gmix` i osobny torque interfejsowy;
+- ma CUDA kernel dla inverse-SHE, ale sama obecność kernela nie jest dowodem
+  CPU↔CUDA parity.
+
+Nie należy mapować `S` bezpośrednio na Fullmag `mu_s`: wymagany jest adapter
+`V_s=(De/elC)(e/muB)S`, a następnie ustalenie, czy porównywane `mu_s` jest
+pełnym rozszczepieniem kanałów. Próba uzyskania niezerowego `S` przez prosty,
+ręcznie utworzony N/F stack nie została zaliczona: inicjalizacja materiału i
+ścieżka GPU nie dały stabilnego, skończonego pola, więc wynik odrzucono jako
+diagnostykę harnessu, nie jako wynik fizyczny.
+
+`SHE-BORIS-001` pozostaje otwarte. Nadal wymagane są: stabilny N/F/T workload z
+niezerowym `S`, `Gi/Gmix`, inverse-SHE, niezależny residual i bilanse, trzy
+siatki oraz sweep tolerancji, BORIS CPU↔CUDA, Fullmag FDM/FEM/GPU i artefakt
+provenance z adapterem jednostek. Capability matrix pozostaje bez zmian, a
+ocena celu nadal wynosi konserwatywnie **84% implementacji / 58% gotowości
+produkcyjnej**.
