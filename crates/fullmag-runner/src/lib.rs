@@ -4064,6 +4064,7 @@ mod tests {
             resolved_sample_period_s: Some(sample_period_s),
             every_steps: None,
             quantities: vec!["t".into(), "my".into()],
+            expressions: Vec::new(),
         });
         problem.study.sampling_mut().outputs = vec![OutputIR::FieldResolvedAuto {
             name: "m".into(),

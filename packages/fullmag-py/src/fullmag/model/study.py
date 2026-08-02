@@ -276,6 +276,7 @@ class TableAutosave:
     every_steps: int | None = None
     quantities: Sequence[str] | None = None
     extra_quantities: Sequence[str] = ()
+    expressions: Sequence[str] = ()
     table_id: str = "default"
 
     def __post_init__(self) -> None:
@@ -304,10 +305,14 @@ class TableAutosave:
         normalized_extra = tuple(
             _require_supported_table_quantity(quantity) for quantity in self.extra_quantities
         )
+        expressions = tuple(
+            _normalize_table_expression(expression) for expression in self.expressions
+        )
         normalized_quantities = tuple(dict.fromkeys((*base_quantities, *normalized_extra)))
         object.__setattr__(self, "table_id", table_id)
         object.__setattr__(self, "quantities", normalized_quantities)
         object.__setattr__(self, "extra_quantities", normalized_extra)
+        object.__setattr__(self, "expressions", expressions)
 
     def to_ir(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -315,6 +320,8 @@ class TableAutosave:
             "table_id": self.table_id,
             "quantities": list(self.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES),
         }
+        if self.expressions:
+            payload["expressions"] = list(self.expressions)
         if self.every_steps is not None:
             payload["every_steps"] = self.every_steps
         elif self.t_sampl == "auto":
@@ -322,6 +329,18 @@ class TableAutosave:
         else:
             payload["sample_period_s"] = self.t_sampl
         return payload
+
+    def add_expression(self, expression: object) -> "TableAutosave":
+        normalized = _normalize_table_expression(expression)
+        if normalized in self.expressions:
+            return self
+        return TableAutosave(
+            t_sampl=self.t_sampl,
+            every_steps=self.every_steps,
+            quantities=self.quantities,
+            expressions=(*self.expressions, normalized),
+            table_id=self.table_id,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,6 +476,24 @@ def _require_supported_table_quantity(quantity: str) -> str:
     normalized = TABLE_AUTOSAVE_QUANTITY_ALIASES.get(normalized, normalized)
     if normalized not in SUPPORTED_TABLE_AUTOSAVE_QUANTITIES:
         raise ValueError(f"unsupported table_autosave quantity '{normalized}'")
+    return normalized
+
+
+def _normalize_table_expression(expression: object) -> str:
+    if isinstance(expression, str):
+        normalized = expression.strip()
+    else:
+        normalized = getattr(expression, "table_expression", None)
+        if not isinstance(normalized, str):
+            raise TypeError(
+                "tableadd() expects a quantity string or a quantity handle with "
+                "a table_expression"
+            )
+        normalized = normalized.strip()
+    if not normalized:
+        raise ValueError("table expression must not be empty")
+    if any(character.isspace() for character in normalized):
+        raise ValueError("table expression must not contain whitespace")
     return normalized
 
 
@@ -623,6 +660,17 @@ class TimeEvolution:
                 table_id=table_id,
             ),
         )
+
+    def tableadd(self, expression: object) -> "TimeEvolution":
+        if self._table_autosave is None:
+            raise ValueError("tableadd() requires table_autosave() to be configured first")
+        return TimeEvolution(
+            dynamics=self.dynamics,
+            outputs=self.outputs,
+            table_autosave=self._table_autosave.add_expression(expression),
+        )
+
+    table_add = tableadd
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -850,6 +898,20 @@ class Relaxation:
                 table_id=table_id,
             ),
         )
+
+    def tableadd(self, expression: object) -> "Relaxation":
+        if self._table_autosave is None:
+            raise ValueError("tableadd() requires table_autosave() to be configured first")
+        return Relaxation(
+            algorithm=self.algorithm,
+            dynamics=self.dynamics,
+            outputs=self.outputs,
+            stop=self.stop,
+            torque_tolerance_unit=self.torque_tolerance_unit,
+            table_autosave=self._table_autosave.add_expression(expression),
+        )
+
+    table_add = tableadd
 
 
 def _resolve_relax_stop(

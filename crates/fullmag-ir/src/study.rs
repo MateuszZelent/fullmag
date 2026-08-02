@@ -718,6 +718,8 @@ pub struct TableAutosaveIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every_steps: Option<u64>,
     pub quantities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expressions: Vec<String>,
 }
 
 impl TableAutosaveIR {
@@ -899,6 +901,14 @@ fn validate_stage_table_autosave(
                 "sampling.stage_autosave.table contains duplicate quantity '{}'",
                 quantity
             ));
+        }
+    }
+    for expression in &table.expressions {
+        if expression.trim().is_empty() {
+            errors.push(
+                "sampling.stage_autosave.table.expressions must not contain empty expressions"
+                    .to_string(),
+            );
         }
     }
     if is_relaxation && table.accepted_step_cadence().is_none() {

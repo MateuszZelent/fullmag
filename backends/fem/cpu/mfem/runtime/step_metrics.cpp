@@ -75,9 +75,6 @@ std::array<double, 3> average_magnetization_components(const Context &ctx)
         const double mx = ctx.state.m_xyz[base + 0u];
         const double my = ctx.state.m_xyz[base + 1u];
         const double mz = ctx.state.m_xyz[base + 2u];
-        if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
-            continue;
-        }
         const double volume = node < lumped_volume.size() ? lumped_volume[node] : 0.0;
         const double ms = ctx.material_fields.Ms_field.empty()
             ? ctx.material_fields.material.saturation_magnetisation

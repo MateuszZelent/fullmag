@@ -705,6 +705,11 @@ class Ferromagnet:
             return self.region.name
         return self.name
 
+    @property
+    def m(self) -> object:
+        """Object-scoped magnetization quantity for ``study.tableadd``."""
+        return _TableQuantityReference(f"{self.name}.m")
+
     def to_ir(self) -> dict[str, object]:
         return {
             "name": self.name,
@@ -713,3 +718,13 @@ class Ferromagnet:
             "initial_magnetization": self.m0.to_ir() if self.m0 else None,
             "mesh_recipe": self.mesh.to_ir() if self.mesh else None,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _TableQuantityReference:
+    table_expression: str
+
+    def comp(self, component: str) -> "_TableQuantityReference":
+        if component not in {"x", "y", "z"}:
+            raise ValueError("magnetization component must be 'x', 'y', or 'z'")
+        return _TableQuantityReference(f"{self.table_expression}.{component}")

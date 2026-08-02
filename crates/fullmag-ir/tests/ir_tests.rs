@@ -470,6 +470,7 @@ fn sampling_policy_validation_accepts_unresolved_and_resolved_auto_intent() {
         resolved_sample_period_s: None,
         every_steps: None,
         quantities: vec!["t".into(), "mx".into()],
+        expressions: Vec::new(),
     };
     ir.study.sampling_mut().table_autosave = Some(table);
     ir.validate()
@@ -520,6 +521,7 @@ fn sampling_policy_validation_rejects_invalid_explicit_table_periods() {
             resolved_sample_period_s: None,
             every_steps: None,
             quantities: vec!["t".into()],
+            expressions: Vec::new(),
         });
         let errors = ir
             .validate()
@@ -596,6 +598,7 @@ fn sampling_policy_validation_rejects_missing_mode_and_noncanonical_values() {
         resolved_sample_period_s: None,
         every_steps: None,
         quantities: vec!["t".into()],
+        expressions: Vec::new(),
     });
     let errors = ir
         .validate()

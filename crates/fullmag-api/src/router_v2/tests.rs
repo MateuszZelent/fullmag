@@ -966,6 +966,8 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         max_h_demag: 10.0,
         max_torque_Apm: 2.0,
         max_torque_T: 0.002,
+        per_object_scalars: HashMap::new(),
+        table_expressions: Vec::new(),
     }
 }
 
@@ -1050,6 +1052,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
+                per_object_scalars: HashMap::new(),
+                table_expressions: Vec::new(),
                 wall_time_ns: 100,
                 grid: [4, 4, 1],
                 fem_mesh_generation_id: None,
@@ -1086,6 +1090,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
+                per_object_scalars: HashMap::new(),
+                table_expressions: Vec::new(),
             },
             ScalarRow {
                 step: 42,

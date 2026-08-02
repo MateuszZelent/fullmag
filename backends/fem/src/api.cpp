@@ -2944,9 +2944,18 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
     }
 
     double sum[3] = {0.0, 0.0, 0.0};
-    uint64_t accepted = 0;
+    double weight_sum = 0.0;
     const uint64_t available_nodes =
         static_cast<uint64_t>(handle->context.state.m_xyz.size() / 3u);
+    const auto &lumped_volume = !handle->context.integration_weights.mfem_lumped_mass.empty()
+        ? handle->context.integration_weights.mfem_lumped_mass
+        : handle->context.mesh.node_volumes;
+    if (lumped_volume.size() != available_nodes) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_average_m_for_nodes_f64 requires nodal integration weights");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     for (uint64_t i = 0; i < node_count; ++i) {
         const uint64_t node = static_cast<uint64_t>(node_indices[i]);
         if (node >= available_nodes) {
@@ -2959,21 +2968,26 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
         const double mx = handle->context.state.m_xyz[static_cast<size_t>(base + 0u)];
         const double my = handle->context.state.m_xyz[static_cast<size_t>(base + 1u)];
         const double mz = handle->context.state.m_xyz[static_cast<size_t>(base + 2u)];
-        if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
+        const double volume = lumped_volume[static_cast<size_t>(node)];
+        const double ms = handle->context.material_fields.Ms_field.empty()
+            ? handle->context.material_fields.material.saturation_magnetisation
+            : handle->context.material_fields.Ms_field[static_cast<size_t>(node)];
+        const double weight = ms * volume;
+        if (!std::isfinite(weight) || weight <= 0.0) {
             continue;
         }
-        sum[0] += mx;
-        sum[1] += my;
-        sum[2] += mz;
-        ++accepted;
+        sum[0] += weight * mx;
+        sum[1] += weight * my;
+        sum[2] += weight * mz;
+        weight_sum += weight;
     }
 
-    if (accepted == 0) {
+    if (!(weight_sum > 0.0) || !std::isfinite(weight_sum)) {
         out_xyz[0] = 0.0;
         out_xyz[1] = 0.0;
         out_xyz[2] = 0.0;
     } else {
-        const double inv = 1.0 / static_cast<double>(accepted);
+        const double inv = 1.0 / weight_sum;
         out_xyz[0] = sum[0] * inv;
         out_xyz[1] = sum[1] * inv;
         out_xyz[2] = sum[2] * inv;

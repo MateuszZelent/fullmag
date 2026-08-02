@@ -8315,11 +8315,15 @@ export interface components {
             column_id: string;
             component?: string | null;
             dimension: string;
+            expression_id?: string | null;
             label: string;
+            object_id?: string | null;
             quantity_id: string;
             reduction?: string | null;
+            scope: string;
             unit: string;
             value_type: string;
+            weighting?: string | null;
         };
         TableDecimationMeta: {
             endpoints_preserved: boolean;

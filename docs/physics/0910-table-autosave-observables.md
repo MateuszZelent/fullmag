@@ -33,7 +33,8 @@ observables produced by the active study at solver states:
 
 ```text
 m = M / M_s
-<m_i>(t_k) = volume_average(m_i(x, t_k))
+<m_i>(t_k) = (integral over Omega_F of M_s(x) m_i(x,t_k) dV)
+             / (integral over Omega_F of M_s(x) dV)
 E_total(t_k) = E_ex + E_demag + E_ext + E_ani + E_dmi + ...
 max_torque(t_k) = max_x |torque proxy(x, t_k)|
 ```
@@ -69,7 +70,7 @@ state already on cadence is not duplicated.
 | `t` | physical simulation time, only for time evolution | `s` |
 | `pseudo_time_s` | algorithmic relaxation clock, never physical time | `s` |
 | `dt` | solver timestep | `s` |
-| `mx`, `my`, `mz` | volume averaged normalized magnetization components | `1` |
+| `mx`, `my`, `mz` | global magnetic-moment averaged normalized magnetization components over all active ferromagnets; zero-valued active samples remain in the denominator | `1` |
 | `e_total` | total magnetic energy | `J` |
 | `e_ex`, `e_demag`, `e_ext`, `e_ani`, `e_dmi` | energy contributions | `J` |
 | `max_torque` | canonical max torque display alias | `A/m` |
@@ -83,6 +84,11 @@ Public authoring and UI labels use `t` and `dt`.
 ### 2.3 Assumptions and Approximations
 
 - Table autosave samples reduced observables at solver states only.
+- The global magnetization domain is the union of active ferromagnetic material;
+  airbox and inactive samples are excluded. The denominator is the magnetic
+  moment measure `M_s dV`, or the backend-equivalent lumped FEM measure.
+- An active sample with `m=(0,0,0)` is still part of the domain and contributes
+  its positive measure to the denominator. It is not treated as missing data.
 - It is disabled unless the user requests `table_autosave`.
 - A time-evolution cadence is in simulation seconds, not wall-clock seconds.
 - A relaxation `every_steps` cadence is dimensionless and counts accepted
@@ -126,14 +132,19 @@ energy and magnetization reductions. For every accepted state, including direct
 minimizer (`projected_gradient_bb` and `nonlinear_cg`) states, `mx/my/mz` are
 populated from the current magnetization before the row is stored; they must
 never be copied from an uninitialized step-stat snapshot.
+FDM uses the cell measure multiplied by `M_s`; the same reducer is used for
+the global step statistics and the table row.
 
 ### 3.2 FEM
 
 FEM backends expose the same public column identifiers. Backend-specific
 integration and weighting stay below the scalar observable boundary. The
 reduction is the magnetic-region volume/moment average (lumped FEM measure,
-including $M_s$ where it varies), not a node-count average. The table contract
-does not expose MFEM, hypre, libCEED, mesh-part, or device-residency details.
+including $M_s$ where it varies), not a node-count average. Object-scoped
+columns use the same formula restricted to the object's owned magnetic
+elements; object scope is never substituted for the global default. The table
+contract does not expose MFEM, hypre, libCEED, mesh-part, or device-residency
+details.
 
 ### 3.3 Hybrid
 
@@ -200,6 +211,8 @@ table policy, and zero or more field policies. The nested table policy keeps:
 - exactly one cadence: `sample_period_s` / `sample_period_policy` or
   `every_steps`
 - `quantities`
+- `expressions`: explicit object/quantity additions such as `disk.m`; a vector
+  expands to `disk.mx`, `disk.my`, and `disk.mz`
 - `table_id`
 
 The IR field uses SI-clean names and public quantity identifiers. UI-authored
@@ -266,6 +279,11 @@ little-endian flags word, revision/schema/cursor counters, row and column
 counts, then row-major `f64` values. Flags bit 0 carries `resync_required` so a
 binary-only chart consumer can discard stale cursor state without falling back
 to the JSON row payload.
+
+The default table columns and live telemetry use the global `mx`, `my`, and
+`mz` values. An added expression is explicit object scope and is labelled with
+its object id and `weighting=Ms_times_measure`; no UI fallback may replace a
+global sample with a selected-object sample.
 
 `GET /v2/sessions/current/data/scalars` stays a compatibility view over the
 default table. Status carries only `scalars_revision` and resource pointers.

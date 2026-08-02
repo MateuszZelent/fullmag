@@ -2826,6 +2826,8 @@ mod tests {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
+            per_object_scalars: HashMap::new(),
+            table_expressions: Vec::new(),
         }
     }
 
@@ -3662,6 +3664,8 @@ fn scalar_row_from_stats_with_active_runtime(
         max_h_demag: stats.max_h_demag,
         max_torque_Apm: stats.max_torque_Apm,
         max_torque_T: stats.max_torque_T,
+        per_object_scalars: stats.per_object_scalars.clone(),
+        table_expressions: Vec::new(),
     }
 }
 
@@ -3687,10 +3691,25 @@ pub(crate) fn set_latest_scalar_row_if_due(
         .and_then(|row| row.active_runtime_s)
         .unwrap_or(0.0);
     let active_runtime_s = previous_runtime_s + update.stats.wall_time_ns as f64 * 1.0e-9;
-    state.latest_scalar_row = Some(scalar_row_from_stats_with_active_runtime(
+    let mut row = scalar_row_from_stats_with_active_runtime(
         &update.stats,
         active_runtime_s,
-    ));
+    );
+    row.table_expressions = state
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("table_autosave"))
+        .and_then(|table| table.get("expressions"))
+        .and_then(serde_json::Value::as_array)
+        .map(|expressions| {
+            expressions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    state.latest_scalar_row = Some(row);
 }
 
 fn table_autosave_sample_due(

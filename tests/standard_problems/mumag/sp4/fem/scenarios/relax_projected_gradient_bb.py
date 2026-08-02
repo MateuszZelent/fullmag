@@ -70,7 +70,7 @@ study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
     max_steps=100_000,
-    tolT=0.5e-8,
+    tolT=5.8349e-9,
 ).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(

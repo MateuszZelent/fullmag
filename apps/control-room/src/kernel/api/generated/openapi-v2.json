@@ -20965,8 +20965,20 @@
           "dimension": {
             "type": "string"
           },
+          "expression_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "label": {
             "type": "string"
+          },
+          "object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "quantity_id": {
             "type": "string"
@@ -20977,11 +20989,20 @@
               "null"
             ]
           },
+          "scope": {
+            "type": "string"
+          },
           "unit": {
             "type": "string"
           },
           "value_type": {
             "type": "string"
+          },
+          "weighting": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20990,7 +21011,8 @@
           "label",
           "unit",
           "dimension",
-          "value_type"
+          "value_type",
+          "scope"
         ],
         "type": "object"
       },
