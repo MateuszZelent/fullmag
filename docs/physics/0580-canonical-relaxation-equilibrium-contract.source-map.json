@@ -14,13 +14,13 @@
     {
       "id": "adaptive-timestep-authoring",
       "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
-      "symbol": "AdaptiveTimestep",
+      "symbol": "class AdaptiveTimestep",
       "responsibility": "Preserve explicit dt_min authoring so advanced adaptive policies cannot be satisfied by an omitted sentinel."
     },
     {
       "id": "chunked-relax-authoring",
       "path": "packages/fullmag-py/src/fullmag/world.py",
-      "symbol": "run_while",
+      "symbol": "_relax_chunk_kwargs",
       "responsibility": "Forward only authored optional relaxation controls, including dt_min and dt_max, during chunked execution."
     },
     {

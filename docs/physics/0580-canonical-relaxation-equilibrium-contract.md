@@ -803,6 +803,8 @@ from the current runs.
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
+| `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | Preserves whether `dt_min` was explicitly authored. |
+| `packages/fullmag-py/src/fullmag/world.py` | `_relax_chunk_kwargs` | Forwards only authored optional relaxation controls during chunked execution. |
 | `scripts/validate_fem_relaxation_equilibrium_parity.py` | `compare_equilibrium_states` | Compares converged CPU/GPU states without requiring equal step counts. |
 | `scripts/analysis/fem_gpu_benchmark.py` | `equilibrium_parity_summary` | Produces the versioned parity summary from benchmark rows. |
 | `examples/bench_fem_gpu_long.py` | `solver_time_to_tolerance_evidence` | Computes native accepted-step time to the first torque-qualified state. |
