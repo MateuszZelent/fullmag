@@ -48,7 +48,7 @@ export interface DescriptorPreferences {
   /** Units display overrides: quantity ID → display unit symbol */
   displayUnits: Record<string, string>;
   /** Series IDs selected by the user */
-  selectedSeriesIds: string[];
+  selectedSeriesIds?: string[];
   liveMode: ChartLiveMode;
   range: ChartRangePreference;
   /** Server decimation target — one of the allowed bucket values */
@@ -157,11 +157,14 @@ export function validateDescriptorPreferences(
   const defaults = defaultDescriptorPreferences(descriptorId);
   if (!raw || typeof raw !== "object") return defaults;
   const v = raw as Record<string, unknown>;
+  const selection = Array.isArray(v["selectedSeriesIds"])
+    ? normalizeSelectedSeriesIds(v["selectedSeriesIds"])
+    : isLegacyFrequencyDefault(descriptorId ?? "", v)
+      ? undefined
+      : legacySelectedSeriesIds(v, descriptorId, defaults);
   return {
     displayUnits: validatedDisplayUnits(v["displayUnits"]),
-    selectedSeriesIds: Array.isArray(v["selectedSeriesIds"])
-      ? normalizeSelectedSeriesIds(v["selectedSeriesIds"])
-      : legacySelectedSeriesIds(v, descriptorId, defaults),
+    ...(selection === undefined ? {} : { selectedSeriesIds: selection }),
     liveMode:
       v["liveMode"] === "following" || v["liveMode"] === "paused"
         ? v["liveMode"]
@@ -186,7 +189,6 @@ export function validateAnalysisChartPreferences(
   if (rawDescriptors && typeof rawDescriptors === "object" && !Array.isArray(rawDescriptors)) {
     for (const [key, value] of Object.entries(rawDescriptors as Record<string, unknown>)) {
       if (key.length === 0 || key.length > MAX_DESCRIPTOR_ID_LENGTH) continue;
-      if (isLegacyFrequencyDefault(key, value)) continue;
       descriptorPreferences[key] = validateDescriptorPreferences(value, key);
       const access = (rawLru as Record<string, unknown>)?.[key];
       lruAccessAt[key] =
@@ -226,13 +228,13 @@ function legacySelectedSeriesIds(
   descriptorId: string | undefined,
   defaults: DescriptorPreferences,
 ): string[] {
-  if (!Array.isArray(raw["yAxisIds"])) return defaults.selectedSeriesIds;
+  if (!Array.isArray(raw["yAxisIds"])) return defaults.selectedSeriesIds ?? [];
   const legacy = normalizeSelectedSeriesIds(raw["yAxisIds"]);
   if (
     (descriptorId === "analysis:solver-energy-history" || descriptorId === "analysis:frequency-domain") &&
     legacy.length === 4 &&
     legacy.every((id, index) => id === ["mx", "my", "mz", "e_total"][index])
-  ) return defaults.selectedSeriesIds;
+  ) return defaults.selectedSeriesIds ?? [];
   const xAxisId = typeof raw["xAxisId"] === "string" ? raw["xAxisId"] : "step";
   return normalizeSelectedSeriesIds(legacy.flatMap((id) => {
     if (descriptorId === "analysis:solver-energy-history") {

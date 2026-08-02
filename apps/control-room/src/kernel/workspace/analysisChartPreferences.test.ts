@@ -105,7 +105,7 @@ describe("validateDescriptorPreferences", () => {
   it("limits selectedSeriesIds to 100 entries", () => {
     const many = Array.from({ length: 30 }, (_, i) => `col${i}`);
     const result = validateDescriptorPreferences({ selectedSeriesIds: many });
-    expect(result.selectedSeriesIds.length).toBe(30);
+    expect(result.selectedSeriesIds?.length).toBe(30);
   });
 
   it("migrates legacy V1 yAxisIds per descriptor and preserves explicit empty selections", () => {
@@ -118,12 +118,12 @@ describe("validateDescriptorPreferences", () => {
   it("replaces the historical shared table default for energy and frequency without weakening normalization", () => {
     const legacy = { yAxisIds: ["mx", "my", "mz", "e_total"] };
     expect(validateDescriptorPreferences(legacy, "analysis:solver-energy-history").selectedSeriesIds).toEqual(defaultDescriptorPreferences("analysis:solver-energy-history").selectedSeriesIds);
-    expect(validateDescriptorPreferences(legacy, "analysis:frequency-domain").selectedSeriesIds).toEqual([]);
+    expect(validateDescriptorPreferences(legacy, "analysis:frequency-domain").selectedSeriesIds).toBeUndefined();
     const corrupted = Array.from({ length: 130 }, (_, index) => index % 2 ? "x".repeat(200) : "total");
     const migrated = validateDescriptorPreferences({ yAxisIds: corrupted }, "analysis:solver-energy-history").selectedSeriesIds;
     expect(migrated).toHaveLength(2);
-    expect(new Set(migrated).size).toBe(migrated.length);
-    expect(migrated.every((id) => id.length <= 160)).toBe(true);
+    expect(new Set(migrated ?? []).size).toBe((migrated ?? []).length);
+    expect((migrated ?? []).every((id) => id.length <= 160)).toBe(true);
   });
 
   it("omits only the legacy frequency default so first-use initialization remains possible", () => {
@@ -132,7 +132,7 @@ describe("validateDescriptorPreferences", () => {
       descriptorPreferences: { "analysis:frequency-domain": { yAxisIds: ["mx", "my", "mz", "e_total"] } },
       _lruAccessAt: {},
     });
-    expect(legacy.descriptorPreferences["analysis:frequency-domain"]).toBeUndefined();
+    expect(legacy.descriptorPreferences["analysis:frequency-domain"]?.selectedSeriesIds).toBeUndefined();
     const explicitEmpty = validateAnalysisChartPreferences({
       schemaVersion: 1, activeSurface: "frequency",
       descriptorPreferences: { "analysis:frequency-domain": { selectedSeriesIds: [] } },

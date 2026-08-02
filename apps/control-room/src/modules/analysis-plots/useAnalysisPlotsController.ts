@@ -124,7 +124,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     const scope = chartSeriesSelectionScopeForDescriptorId(descriptorId);
     const mergedSelection = replaceSelectedSeriesIdsInScope(
       analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds,
-      descriptor.selectedSeriesIds,
+      descriptor.selectedSeriesIds ?? [],
       (seriesId) => chartSeriesIdBelongsToScope(scope, seriesId),
     );
     analysisPlotsWorkspaceStore.setLiveMode(descriptor.liveMode);
@@ -171,7 +171,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const frequencyData = useAnalysisFrequencyData(activeSurface);
 
   useEffect(() => {
-    if (!preferences.isHydrated || preferences.descriptor) return;
+    if (!preferences.isHydrated || preferences.descriptor?.selectedSeriesIds !== undefined) return;
     const scope = activeSurface === "energy"
       ? "energy"
       : activeSurface === "frequency"
