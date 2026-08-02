@@ -43,11 +43,11 @@ themselves establish CPU/GPU parity or a validated workload.
 (stt-problem-statement)=
 ## Physical problem
 
-Let $mathbf m=mathbf M/M_s$ be the reduced magnetization. A conventional charge
+Let $\mathbf m=\mathbf M/M_s$ be the reduced magnetization. A conventional charge
 current transfers angular momentum from a spin-polarised electron population to a
 ferromagnet. CPP torque uses a fixed-layer polarization and acts locally through
-the thickness model. CIP torque uses the current-driven derivative of $mathbf m$.
-Both are direct rates in $mathrm{s^{-1}}$ and are evaluated at the magnetization
+the thickness model. CIP torque uses the current-driven derivative of $\mathbf m$.
+Both are direct rates in $\mathrm{s^{-1}}$ and are evaluated at the magnetization
 state of the current LLG stage.
 
 STT is not the same as prescribed spin-orbit torque and neither is the same as a
@@ -80,7 +80,7 @@ Every Gilbert source is transformed exactly once:
 
 ### Zhang–Li, canonical `zhang_li.fullmag.v1`
 
-For signed conventional current density $mathbf J_c$,
+For signed conventional current density $\mathbf J_c$,
 
 ```{math}
 :label: eq-stt-zhang-li-canonical
@@ -111,7 +111,7 @@ as the canonical v1 formula.
 
 ### Slonczewski, canonical `slonczewski.fullmag.v2`
 
-For stack normal $mathbf n_{\mathrm{stack}}$ from fixed to free layer, use the
+For stack normal $\mathbf n_{\mathrm{stack}}$ from fixed to free layer, use the
 signed normal current $J_n=\mathbf J_c\cdot\mathbf n_{\mathrm{stack}}$ and
 $q=\mathbf m\cdot\hat{\mathbf p}$:
 
@@ -123,7 +123,7 @@ $q=\mathbf m\cdot\hat{\mathbf p}$:
  {\Lambda^2+1+(\Lambda^2-1)q}.
 ```
 
-With $mathbf D=\mathbf m\times(\mathbf m\times\hat{\mathbf p})$ and
+With $\mathbf D=\mathbf m\times(\mathbf m\times\hat{\mathbf p})$ and
 $\mathbf C=\mathbf m\times\hat{\mathbf p}$,
 
 ```{math}
@@ -134,7 +134,7 @@ $\mathbf C=\mathbf m\times\hat{\mathbf p}$,
  +(\varepsilon'-\alpha\varepsilon)\mathbf C\right].
 ```
 
-`epsilon_prime` is independent of $arepsilon(q)$; it must not be factored by
+`epsilon_prime` is independent of $\varepsilon(q)$; it must not be factored by
 the angular efficiency. The `slonczewski_thin_layer_homogenized.v1` realization
 uses $t_F$ volumetrically. The mutually exclusive
 `slonczewski_interface_flux.v1` realization uses an oriented absorbed-spin-flux
@@ -183,7 +183,7 @@ canonical API uses the oriented `stack_normal` and must not apply the sign twice
 - Canonical v1/v2 requires an explicit target and orientation; thin-layer and interface-flux
   realizations are mutually exclusive.
 - FDM Zhang–Li uses signed one-sided upwind differences for each nonzero component of
-  $mathbf u$ and honors the configured axis periodicity. Native FEM Zhang–Li uses P1
+  $\mathbf u$ and honors the configured axis periodicity. Native FEM Zhang–Li uses P1
   tetrahedral gradients and node-weight accumulation.
 - STT has no energy accumulator, no self-consistent spin accumulation, and no implicit
   interface transparency model in the legacy constructors.
