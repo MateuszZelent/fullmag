@@ -401,6 +401,7 @@ bool mfem_default_stream_wait_for_hypre_validation(
     }
     interop.event_wait_count += 1u;
     return true;
+}
 #endif
 
 } // namespace fullmag::fem
