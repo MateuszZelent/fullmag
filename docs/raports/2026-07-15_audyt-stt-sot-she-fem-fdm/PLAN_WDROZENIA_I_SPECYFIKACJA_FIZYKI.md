@@ -4256,3 +4256,35 @@ Ta brama nie zamyka `SHE-BORIS-001`, M2 nonlinear/interface product gate,
 FDM GPU device proof, FEM reciprocal assembly ani browserowego round-trip dla
 pełnego zestawu parametrów. Zbiorcza ocena pozostaje zatem konserwatywnie
 **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.22. Naprawa driftu testu adaptive FDM CUDA identity (2026-08-02)
+
+Pełny test biblioteki runnera ujawnił niespójność kontraktu, nie błąd solvera.
+Commit `1a2abaf5` dodał kwalifikacyjny wiersz
+`explicit_adaptive_fdm_cuda_double` do rejestru i odpowiadającą gałąź w
+`resolve_timestep_execution_identity`. Stary test nadal oczekiwał błędu
+„no executable LLG timestep capability row”, więc nie odpowiadał już aktualnej
+polityce jawnego, lecz niezakwalifikowanego lane'u.
+
+Test został zmieniony tak, aby sprawdzał właściwą granicę fail-closed:
+
+- identity ma `qualification_id=explicit_adaptive_fdm_cuda_double`;
+- `validation_state=unvalidated`;
+- brak `qualification_artifact_sha256`, `runtime_source_inputs_sha256`,
+  `validated_scope`, daty i schematu walidatora;
+- nie ma żadnej promocji do `production_executable` ani `validated`.
+
+Dowód:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/runner-adaptive-identity \\
+  cargo test -p fullmag-runner --lib
+test result: ok. 733 passed; 0 failed
+```
+
+Zmiana obejmuje tylko test w
+`crates/fullmag-runner/src/lib.rs`; nie zmienia rejestru ani wykonania CUDA.
+Weryfikacja zamyka drift test–registry, ale nie kwalifikuje adaptive CUDA:
+brakuje nadal czystego artefaktu trajectory/trace, device residency, FP64
+parity i niezależnej naukowej tolerancji. Ogólna ocena pozostaje **84%
+implementacji / 58% gotowości produkcyjnej**.
