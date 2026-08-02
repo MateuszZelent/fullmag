@@ -82,8 +82,8 @@
     }
   ],
   "schema": "fullmag.relaxation_torque_calibration_suite.v2",
-  "runtime_manifest_sha256": "5fd9b683f594f82b758b24f7673a388a2651412e91c1c263b1eb7675b3397186",
-  "source_snapshot_sha256": "150b0a28f49eb47383cf5c989d1f50754c4f39b6009c9129e75189e84f4b60f5",
+  "runtime_manifest_sha256": "2075e11a2a6d1a9c94c22904fa4dd394c9a74c9c194ac4c85810c36dd3417140",
+  "source_snapshot_sha256": "0d33977618faa0227991b3e1ec3684fc8e40cbd4096db18af02755dc7f08f599",
   "step_budgets": [
     128,
     256,
