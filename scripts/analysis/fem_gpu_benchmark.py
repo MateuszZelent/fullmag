@@ -7525,6 +7525,9 @@ def run_backend(
     env["FULLMAG_BENCH_STEPS"] = str(steps)
     env["FULLMAG_BENCH_DT"] = repr(dt)
     solver_mesh_path = env.get("FULLMAG_BENCH_DOMAIN_MESH")
+    solver_mesh_identity_path = (
+        Path(solver_mesh_path) if solver_mesh_path is not None else None
+    )
     if solver_mesh_path:
         try:
             row["solver_mesh_sha256"] = hashlib.sha256(
@@ -7596,9 +7599,7 @@ def run_backend(
                 execution_plan_mesh_stats(
                     load_run_metadata(execution_dir),
                     input_mesh_path=mesh_path,
-                    solver_mesh_path=Path(solver_mesh_path)
-                    if solver_mesh_path
-                    else None,
+                    solver_mesh_path=solver_mesh_identity_path,
                 )
             )
             row.update(
@@ -7628,6 +7629,10 @@ def run_backend(
                 json.dumps(canonical_mesh, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            solver_mesh_identity_path = canonical_mesh_output_path
+            row["solver_mesh_sha256"] = hashlib.sha256(
+                canonical_mesh_output_path.read_bytes()
+            ).hexdigest()
         final_scalar_row = load_final_scalar_row(execution_dir)
         artifact_payload = load_authoritative_benchmark_payload(execution_dir)
         energy_monotonicity_evidence = load_energy_monotonicity_evidence(execution_dir)
@@ -7705,7 +7710,7 @@ def run_backend(
         execution_plan_mesh_stats(
             metadata,
             input_mesh_path=mesh_path,
-            solver_mesh_path=Path(solver_mesh_path) if solver_mesh_path else None,
+            solver_mesh_path=solver_mesh_identity_path,
         )
     )
     row.update(energy_monotonicity_evidence)

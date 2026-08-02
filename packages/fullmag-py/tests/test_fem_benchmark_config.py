@@ -3281,6 +3281,108 @@ def test_run_backend_prefers_execution_plan_mesh_stats_from_metadata(monkeypatch
     assert row["solver_mesh_signature"]
 
 
+def test_run_backend_uses_canonical_solver_mesh_for_identity_check(monkeypatch, tmp_path):
+    bench = load_analysis_benchmark_module()
+    binary = tmp_path / "fullmag"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    domain_input = tmp_path / "domain-input.mesh.json"
+    domain_input.write_text(
+        json.dumps(
+            {
+                "mesh_name": "domain-input",
+                "nodes": [[0, 0, 0]],
+                "elements": [],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    typed_mesh = {
+        "mesh_name": "canonical-solver",
+        "nodes": [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        "cells": {
+            "types": ["tet4", "tet4"],
+            "offsets": [0, 4, 8],
+            "nodes": [0, 1, 2, 3, 0, 2, 1, 4],
+            "global_ordinals": [0, 1],
+        },
+        "facets": {
+            "types": ["tri3", "tri3"],
+            "offsets": [0, 3, 6],
+            "nodes": [0, 1, 3, 0, 2, 1],
+            "roles": ["exterior", "material_interface"],
+        },
+        "element_markers": [1, 1],
+        "boundary_markers": [1, 1],
+    }
+    canonical_output = tmp_path / "canonical-solver.mesh.json"
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        run_dir = Path(env["FULLMAG_RUN_DIR"])
+        (run_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "execution_plan": {
+                        "backend_plan": {
+                            "kind": "fem",
+                            "mesh_name": "canonical-solver",
+                            "mesh": typed_mesh,
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return bench.subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='BENCHMARK_RESULT={"executed_steps": 1}\n',
+            stderr="",
+        )
+
+    captured_paths = []
+    original_stats = bench.execution_plan_mesh_stats
+
+    def capture_stats(metadata, *, input_mesh_path=None, solver_mesh_path=None):
+        captured_paths.append(solver_mesh_path)
+        return original_stats(
+            metadata,
+            input_mesh_path=input_mesh_path,
+            solver_mesh_path=solver_mesh_path,
+        )
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(bench, "execution_plan_mesh_stats", capture_stats)
+
+    row = bench.run_backend(
+        backend_label="fem_cpu",
+        binary=binary,
+        mesh_path=domain_input,
+        scenario="exchange_demag",
+        integrator="heun",
+        steps=1,
+        dt=1e-13,
+        extra_env={
+            "FULLMAG_FEM_EXECUTION": "cpu",
+            "FULLMAG_BENCH_DOMAIN_MESH": str(domain_input),
+        },
+        canonical_mesh_output_path=canonical_output,
+    )
+
+    assert row["status"] == "ok"
+    assert captured_paths == [canonical_output]
+    assert json.loads(canonical_output.read_text(encoding="utf-8")) == typed_mesh
+    assert row["solver_mesh_sha256"] == hashlib.sha256(
+        canonical_output.read_bytes()
+    ).hexdigest()
+
+
 def test_input_mesh_summary_distinguishes_input_asset_from_solver_mesh():
     bench = load_analysis_benchmark_module()
 
