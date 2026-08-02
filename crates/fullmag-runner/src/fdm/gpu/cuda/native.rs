@@ -24,7 +24,7 @@ use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::{apply_average_m_to_step_stats, single_object_scalars};
+use crate::scalar_metrics::single_object_scalars;
 #[cfg(any(feature = "cuda", test))]
 use crate::types::RunError;
 #[cfg(feature = "cuda")]
@@ -233,6 +233,7 @@ fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunEr
 pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     cell_count: usize,
+    active_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
     precession_enabled: bool,
@@ -566,9 +567,29 @@ impl NativeFdmBackend {
             .iter()
             .map(|layer| layer.initial_magnetization.len())
             .sum();
+        let active_mask = if plan
+            .layers
+            .iter()
+            .any(|layer| layer.native_active_mask.is_some())
+        {
+            Some(
+                plan.layers
+                    .iter()
+                    .flat_map(|layer| {
+                        layer
+                            .native_active_mask
+                            .as_deref()
+                            .map_or_else(|| vec![true; layer.initial_magnetization.len()], ToOwned::to_owned)
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
         Ok(Self {
             handle,
             cell_count,
+            active_mask,
             precision: plan.precision,
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -1068,6 +1089,7 @@ impl NativeFdmBackend {
         Ok(Self {
             handle,
             cell_count: m_flat.len() / 3,
+            active_mask: plan.active_mask.clone(),
             precision: plan.precision,
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -1162,9 +1184,21 @@ impl NativeFdmBackend {
 
     pub fn apply_average_m_to_step_stats(&self, stats: &mut StepStats) -> Result<(), RunError> {
         let magnetization = self.copy_m(self.cell_count)?;
-        apply_average_m_to_step_stats(stats, &magnetization);
+        self.apply_average_m_to_step_stats_from_values(stats, &magnetization);
         stats.per_object_scalars = single_object_scalars("free", stats);
         Ok(())
+    }
+
+    pub(crate) fn apply_average_m_to_step_stats_from_values(
+        &self,
+        stats: &mut StepStats,
+        magnetization: &[[f64; 3]],
+    ) {
+        crate::scalar_metrics::apply_average_m_to_step_stats_with_active_mask(
+            stats,
+            &magnetization,
+            self.active_mask.as_deref(),
+        );
     }
 
     /// Execute one time step.
@@ -1804,7 +1838,11 @@ impl NativeFdmBackend {
             hot_loop_control_scalar_host_sync_count: stats.hot_loop_control_scalar_host_sync_count,
             ..StepStats::default()
         };
-        crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
+        crate::scalar_metrics::apply_average_m_to_step_stats_with_active_mask(
+            &mut step_stats,
+            &magnetization,
+            self.active_mask.as_deref(),
+        );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
     }

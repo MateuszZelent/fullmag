@@ -3,7 +3,9 @@ use fullmag_engine::{ExchangeLlgProblem, ExchangeLlgState, StepReport, Vector3};
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
-use crate::scalar_metrics::{apply_average_m_to_step_stats, single_object_scalars};
+use crate::scalar_metrics::{
+    apply_average_m_to_step_stats_with_active_mask, single_object_scalars,
+};
 use crate::schedules::{advance_due_schedules, is_due, same_time, OutputSchedule};
 use crate::types::{FieldSnapshot, RunError, StateObservables, StepStats};
 
@@ -41,8 +43,13 @@ pub(super) fn record_due_outputs(
         && (!scalar_due || step_report.is_some())
     {
         if let Some(report) = step_report.filter(|_| scalar_due) {
-            let stats =
-                make_step_stats_from_report(step, report, wall_time_ns, state.magnetization());
+            let stats = make_step_stats_from_report(
+                step,
+                report,
+                wall_time_ns,
+                state.magnetization(),
+                problem.active_mask.as_deref(),
+            );
             artifacts.record_scalar(&stats)?;
             steps.push(stats);
             advance_due_schedules(scalar_schedules, state.time_seconds);
@@ -73,6 +80,7 @@ pub(super) fn record_due_outputs(
             solver_dt,
             wall_time_ns,
             &observables,
+            problem.active_mask.as_deref(),
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -111,6 +119,7 @@ pub(super) fn record_scalar_snapshot(
         solver_dt,
         wall_time_ns,
         &observables,
+        problem.active_mask.as_deref(),
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -192,7 +201,13 @@ pub(super) fn record_final_outputs(
             .all(|name| direct_field_values_available(name))
     {
         let report = final_step_report.expect("checked final step report");
-        let stats = make_step_stats_from_report(step, report, 0, state.magnetization());
+        let stats = make_step_stats_from_report(
+            step,
+            report,
+            0,
+            state.magnetization(),
+            problem.active_mask.as_deref(),
+        );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
 
@@ -212,7 +227,14 @@ pub(super) fn record_final_outputs(
     let observables = observe_state(problem, state)?;
 
     if need_scalar {
-        let stats = make_step_stats(step, state.time_seconds, solver_dt, 0, &observables);
+        let stats = make_step_stats(
+            step,
+            state.time_seconds,
+            solver_dt,
+            0,
+            &observables,
+            problem.active_mask.as_deref(),
+        );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
     }
@@ -312,6 +334,7 @@ pub(super) fn make_step_stats_from_report(
     report: &StepReport,
     wall_time_ns: u64,
     magnetization: &[Vector3],
+    active_mask: Option<&[bool]>,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -331,7 +354,7 @@ pub(super) fn make_step_stats_from_report(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, magnetization);
+    apply_average_m_to_step_stats_with_active_mask(&mut stats, magnetization, active_mask);
     stats.per_object_scalars = single_object_scalars("free", &stats);
     stats
 }
@@ -342,6 +365,7 @@ pub(super) fn make_step_stats(
     solver_dt: f64,
     wall_time_ns: u64,
     observables: &StateObservables,
+    active_mask: Option<&[bool]>,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -359,7 +383,11 @@ pub(super) fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    apply_average_m_to_step_stats_with_active_mask(
+        &mut stats,
+        &observables.magnetization,
+        active_mask,
+    );
     stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
         single_object_scalars("free", &stats)
     } else {

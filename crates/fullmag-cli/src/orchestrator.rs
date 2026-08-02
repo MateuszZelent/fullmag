@@ -10456,6 +10456,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             max_h_demag: step.max_h_demag,
             max_torque_Apm: step.max_torque_Apm,
             max_torque_T: step.max_torque_T,
+            per_object_scalars: step.per_object_scalars.clone(),
+            table_expressions: Vec::new(),
         });
         set_live_state_status(&mut state.live_state, &summary.status, Some(true));
     });

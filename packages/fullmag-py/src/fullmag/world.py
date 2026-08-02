@@ -847,6 +847,11 @@ class MagnetizationHandle:
     def value(self) -> Any:
         return self._owner._m_value
 
+    @property
+    def table_expression(self) -> str:
+        """Stable object-scoped table expression used by ``study.tableadd``."""
+        return f"{self._owner._name}.m"
+
     def get(self) -> Any:
         return self._owner._m_value
 
@@ -3143,6 +3148,15 @@ class QuantityHandle(_ComparableQuantityMixin):
     def name(self) -> str:
         return self._name
 
+    @property
+    def table_expression(self) -> str:
+        expression = self._name
+        if self._region is not None:
+            expression = f"{expression}.region({self._region})"
+        if self._component is not None:
+            expression = f"{expression}.{self._component}"
+        return expression
+
     def get(self) -> object:
         if self._kind == "scalar":
             return _coerce_scalar_quantity_value(self._name, region=self._region)
@@ -5181,6 +5195,12 @@ class StudyBuilder:
     ) -> "StudyBuilder":
         tableautosave(every, quantities=quantities)
         return self
+
+    def tableadd(self, expression: object) -> "StudyBuilder":
+        tableadd(expression)
+        return self
+
+    table_add = tableadd
 
     def antenna_field_source(
         self,
@@ -7510,6 +7530,13 @@ def tableautosave(
         every_steps=every_steps,
         quantities=quantities,
     )
+
+
+def tableadd(expression: object) -> None:
+    """Append one explicit object or quantity expression to the table."""
+    if _state._table_autosave is None:
+        raise ValueError("tableadd() requires tableautosave() to be configured first")
+    _state._table_autosave = _state._table_autosave.add_expression(expression)
 
 
 def name(problem_name: str) -> None:

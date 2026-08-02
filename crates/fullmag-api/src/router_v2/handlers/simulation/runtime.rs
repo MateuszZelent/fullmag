@@ -2190,6 +2190,8 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             max_h_demag: live_state.latest_step.max_h_demag,
             max_torque_Apm: live_state.latest_step.max_torque_Apm,
             max_torque_T: live_state.latest_step.max_torque_T,
+            per_object_scalars: live_state.latest_step.per_object_scalars.clone(),
+            table_expressions: Vec::new(),
         })
     })
 }
@@ -2224,6 +2226,8 @@ fn latest_solver_sample(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             max_h_demag: live_state.latest_step.max_h_demag,
             max_torque_Apm: live_state.latest_step.max_torque_Apm,
             max_torque_T: live_state.latest_step.max_torque_T,
+            per_object_scalars: live_state.latest_step.per_object_scalars.clone(),
+            table_expressions: Vec::new(),
         })
     })
 }

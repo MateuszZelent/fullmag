@@ -793,6 +793,10 @@ pub(crate) struct CurrentLiveScalarRow {
     pub max_h_demag: f64,
     pub max_torque_Apm: f64,
     pub max_torque_T: f64,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_expressions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

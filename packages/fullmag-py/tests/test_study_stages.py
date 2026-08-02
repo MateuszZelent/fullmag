@@ -30,6 +30,20 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+    def test_tableadd_serializes_object_magnetization_expression(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.tableautosave(1e-12, quantities=["step", "mx", "my", "mz"])
+study.tableadd(body.m)
+"""
+        )
+
+        table = loaded.problem.to_ir(include_geometry_assets=False)["study"][
+            "sampling"
+        ]["table_autosave"]
+        self.assertEqual(table["expressions"], ["film.m"])
+
     def test_relax_and_run_stage_handles_own_autosave_without_leaking(self) -> None:
         loaded = _load(
             _PREAMBLE

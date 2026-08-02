@@ -79,7 +79,11 @@ impl NativeFdmBackend {
             wall_time_ns: stats.wall_time_ns,
             ..StepStats::default()
         };
-        crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
+        crate::scalar_metrics::apply_average_m_to_step_stats_with_active_mask(
+            &mut step_stats,
+            &magnetization,
+            self.active_mask.as_deref(),
+        );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
     }

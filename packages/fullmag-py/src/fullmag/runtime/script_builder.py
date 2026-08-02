@@ -3475,10 +3475,15 @@ def _render_table_autosave(
     quantities = tuple(table_autosave.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
     if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
         kwargs.append(f"quantities={_py_literal(list(quantities))}")
-    return [
+    lines = [
         "# Table autosave",
         f"{_surface_call(surface, 'tableautosave')}({', '.join(kwargs)})",
     ]
+    lines.extend(
+        f"{_surface_call(surface, 'tableadd')}({_py_repr(expression)})"
+        for expression in table_autosave.expressions
+    )
+    return lines
 
 
 def _table_autosave_from_override(value: object) -> TableAutosave | None:
@@ -3493,10 +3498,12 @@ def _table_autosave_from_override(value: object) -> TableAutosave | None:
     if sample_period is None and every_steps is None:
         return None
     quantities = value.get("quantities")
+    expressions = value.get("expressions")
     return TableAutosave(
         t_sampl=sample_period,
         every_steps=every_steps,
         quantities=quantities if isinstance(quantities, list) else None,
+        expressions=expressions if isinstance(expressions, list) else (),
         table_id=str(value.get("table_id") or "default"),
     )
 

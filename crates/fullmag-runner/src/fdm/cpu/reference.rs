@@ -31,8 +31,8 @@ use crate::relaxation::{
     CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
 };
 use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
-    single_object_scalars,
+    apply_average_m_to_step_stats_with_active_mask, scalar_outputs_request_average_m,
+    scalar_row_due, single_object_scalars,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -804,6 +804,7 @@ pub(crate) fn execute_reference_fdm(
             0.0,
             wall_elapsed,
             &observables,
+            problem.active_mask.as_deref(),
         );
         final_stats.pseudo_time_s = None;
         let direct_metrics = final_stats
@@ -855,7 +856,16 @@ pub(crate) fn execute_reference_fdm(
         let mut current_observables_stale = false;
         let mut current_stats = current_observables
             .as_ref()
-            .map(|observables| make_step_stats(step_count, state.time_seconds, 0.0, 0, observables))
+            .map(|observables| {
+                make_step_stats(
+                    step_count,
+                    state.time_seconds,
+                    0.0,
+                    0,
+                    observables,
+                    problem.active_mask.as_deref(),
+                )
+            })
             .unwrap_or_default();
         while state.time_seconds < stage_end_time_s {
             if step_count == 0
@@ -1088,7 +1098,11 @@ pub(crate) fn execute_reference_fdm(
                     &problem,
                 );
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
-                    apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
+                    apply_average_m_to_step_stats_with_active_mask(
+                        &mut update_stats,
+                        state.magnetization(),
+                        problem.active_mask.as_deref(),
+                    );
                 }
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
@@ -1334,6 +1348,7 @@ fn record_due_outputs(
             solver_dt,
             wall_time_ns,
             &observables,
+            problem.active_mask.as_deref(),
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1372,6 +1387,7 @@ fn record_scalar_snapshot(
         solver_dt,
         wall_time_ns,
         &observables,
+        problem.active_mask.as_deref(),
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -1474,7 +1490,14 @@ fn record_final_outputs(
     let observables = observe_state_with_antenna_field(problem, state, antenna_field)?;
 
     if need_scalar {
-        let stats = make_step_stats(step, state.time_seconds, solver_dt, 0, &observables);
+        let stats = make_step_stats(
+            step,
+            state.time_seconds,
+            solver_dt,
+            0,
+            &observables,
+            problem.active_mask.as_deref(),
+        );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
     }
@@ -1645,7 +1668,11 @@ fn make_step_stats_from_report(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, magnetization);
+    apply_average_m_to_step_stats_with_active_mask(
+        &mut stats,
+        magnetization,
+        problem.active_mask.as_deref(),
+    );
     stats.per_object_scalars = single_object_scalars("free", &stats);
     stats
 }
@@ -1656,6 +1683,7 @@ fn make_step_stats(
     solver_dt: f64,
     wall_time_ns: u64,
     observables: &StateObservables,
+    active_mask: Option<&[bool]>,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -1677,7 +1705,11 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    apply_average_m_to_step_stats_with_active_mask(
+        &mut stats,
+        &observables.magnetization,
+        active_mask,
+    );
     stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
         single_object_scalars("free", &stats)
     } else {

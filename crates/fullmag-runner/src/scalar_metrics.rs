@@ -6,11 +6,21 @@ use std::collections::HashMap;
 const ENERGY_KEYS: [&str; 6] = ["e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
 
 pub(crate) fn average_magnetization_components(values: &[[f64; 3]]) -> [f64; 3] {
+    average_magnetization_components_with_active_mask(values, None)
+}
+
+pub(crate) fn average_magnetization_components_with_active_mask(
+    values: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
+) -> [f64; 3] {
     let mut sum = [0.0; 3];
     let mut count = 0usize;
 
-    for value in values {
-        if value[0].abs() <= 1e-18 && value[1].abs() <= 1e-18 && value[2].abs() <= 1e-18 {
+    for (index, value) in values.iter().enumerate() {
+        if active_mask.is_some_and(|mask| mask.get(index) != Some(&true)) {
+            continue;
+        }
+        if value.iter().any(|component| !component.is_finite()) {
             continue;
         }
         sum[0] += value[0];
@@ -61,6 +71,17 @@ pub(crate) fn weighted_average_magnetization_components(
 
 pub(crate) fn apply_average_m_to_step_stats(stats: &mut StepStats, magnetization: &[[f64; 3]]) {
     let [mx, my, mz] = average_magnetization_components(magnetization);
+    stats.mx = mx;
+    stats.my = my;
+    stats.mz = mz;
+}
+
+pub(crate) fn apply_average_m_to_step_stats_with_active_mask(
+    stats: &mut StepStats,
+    magnetization: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
+) {
+    let [mx, my, mz] = average_magnetization_components_with_active_mask(magnetization, active_mask);
     stats.mx = mx;
     stats.my = my;
     stats.mz = mz;
@@ -161,6 +182,39 @@ pub(crate) fn weighted_object_scalars(
     out
 }
 
+pub(crate) fn weighted_average_m_from_object_scalars(
+    per_object: &HashMap<String, HashMap<String, f64>>,
+) -> Option<[f64; 3]> {
+    let mut sum = [0.0; 3];
+    let mut weight_sum = 0.0;
+    for values in per_object.values() {
+        let weight = *values.get("m_weight")?;
+        let mx = *values.get("mx")?;
+        let my = *values.get("my")?;
+        let mz = *values.get("mz")?;
+        if !weight.is_finite()
+            || weight <= 0.0
+            || !mx.is_finite()
+            || !my.is_finite()
+            || !mz.is_finite()
+        {
+            return None;
+        }
+        sum[0] += weight * mx;
+        sum[1] += weight * my;
+        sum[2] += weight * mz;
+        weight_sum += weight;
+    }
+    if weight_sum <= 0.0 {
+        return None;
+    }
+    Some([
+        sum[0] / weight_sum,
+        sum[1] / weight_sum,
+        sum[2] / weight_sum,
+    ])
+}
+
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn set_object_average_m(
     per_object: &mut HashMap<String, HashMap<String, f64>>,
@@ -253,6 +307,25 @@ mod tests {
         );
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn uniform_average_keeps_zero_active_samples_in_the_denominator() {
+        assert_eq!(
+            super::average_magnetization_components(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+            [0.5, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn active_mask_excludes_inactive_zero_samples_but_keeps_active_zero_samples() {
+        assert_eq!(
+            super::average_magnetization_components_with_active_mask(
+                &[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [9.0, 0.0, 0.0]],
+                Some(&[true, true, false]),
+            ),
+            [0.5, 0.0, 0.0]
+        );
     }
 
     #[test]

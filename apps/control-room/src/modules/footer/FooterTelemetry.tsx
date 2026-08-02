@@ -345,7 +345,10 @@ export function buildFooterTelemetryModel(
   const totalEnergy =
     scalarEnergy.total ?? objectMetrics?.energies.total ?? status?.energies?.total;
   const scalarMagnetization = scalarSampleMagnetization(liveRow);
-  const magnetization = scalarMagnetization ?? objectMetrics?.magnetization_average;
+  // The footer's magnetization is the same global table observable as Analysis.
+  // A selected object's metric is intentionally not a fallback: object scope
+  // must never silently replace the global ferromagnetic average.
+  const magnetization = scalarMagnetization;
   const magnetizationMagnitude = magnetization
     ? Math.hypot(magnetization.mx, magnetization.my, magnetization.mz)
     : null;
@@ -353,8 +356,7 @@ export function buildFooterTelemetryModel(
   const active = isRuntimeStateActive(runtimeState);
   const waitingForCompute = isRuntimeStateWaitingForCompute(runtimeState);
   const liveSampleSource = liveRow ? "Live scalar sample" : null;
-  const magnetizationSource =
-    liveSampleSource ?? objectMetrics?.source ?? "No object sample";
+  const magnetizationSource = liveSampleSource ?? "No global sample";
   const energySource = liveSampleSource
     ? liveSampleSource
     : objectMetrics

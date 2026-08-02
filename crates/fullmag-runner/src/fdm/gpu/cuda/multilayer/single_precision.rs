@@ -96,8 +96,16 @@ pub(super) fn observe_multilayer_cuda_single(
             context.problem.dynamics.precession_enabled,
         ));
 
-        let [mx, my, mz] =
-            crate::scalar_metrics::average_magnetization_components(&local_magnetization);
+        let active_mask = context.problem.active_mask.as_deref();
+        let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components_with_active_mask(
+            &local_magnetization,
+            active_mask,
+        );
+        let m_weight = active_mask
+            .map(|mask| mask.iter().filter(|active| **active).count())
+            .unwrap_or_else(|| local_magnetization.len()) as f64
+            * context.problem.cell_size.volume()
+            * context.problem.material.saturation_magnetisation;
         per_object_scalars.insert(
             context.magnet_name.clone(),
             std::collections::HashMap::from([
@@ -117,6 +125,7 @@ pub(super) fn observe_multilayer_cuda_single(
                 ("mx".to_string(), mx),
                 ("my".to_string(), my),
                 ("mz".to_string(), mz),
+                ("m_weight".to_string(), m_weight),
             ]),
         );
 

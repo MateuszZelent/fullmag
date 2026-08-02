@@ -11,6 +11,10 @@ pub struct TableColumnMeta {
     pub component: Option<String>,
     pub reduction: Option<String>,
     pub value_type: String,
+    pub scope: String,
+    pub object_id: Option<String>,
+    pub expression_id: Option<String>,
+    pub weighting: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

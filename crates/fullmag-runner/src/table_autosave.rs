@@ -20,6 +20,10 @@ pub struct TableColumnMeta {
     pub component: Option<String>,
     pub reduction: Option<String>,
     pub value_type: String,
+    pub scope: String,
+    pub object_id: Option<String>,
+    pub expression_id: Option<String>,
+    pub weighting: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,13 +91,16 @@ impl TableAutosaveConfig {
         } else {
             ir.quantities.iter().map(String::as_str).collect()
         };
-        let mut columns = Vec::with_capacity(quantity_ids.len());
+        let mut columns = Vec::with_capacity(quantity_ids.len() + ir.expressions.len() * 3);
         for quantity_id in quantity_ids {
             columns.push(
                 table_column_meta(quantity_id).ok_or_else(|| {
                     format!("unsupported table_autosave quantity '{quantity_id}'")
                 })?,
             );
+        }
+        for expression in &ir.expressions {
+            columns.extend(table_expression_columns(expression)?);
         }
         Ok(Self {
             table_id: ir.table_id.clone(),
@@ -148,6 +155,14 @@ impl TableStore {
         &self.config.cadence
     }
 
+    pub fn column_ids(&self) -> Vec<String> {
+        self.config
+            .columns
+            .iter()
+            .map(|column| column.column_id.clone())
+            .collect()
+    }
+
     pub fn append_if_due(&mut self, stats: &StepStats) -> Result<bool, String> {
         let sample_policy = match &self.config.cadence {
             TableAutosaveCadence::SimulationTime { sample_period_s } => {
@@ -196,7 +211,7 @@ impl TableStore {
             .config
             .columns
             .iter()
-            .map(|column| table_column_value(stats, &column.column_id))
+            .map(|column| table_column_value_for_meta(stats, column))
             .collect::<Result<Vec<_>, _>>()?;
         let cursor = self.rows.len() as u64 + 1;
         self.rows.push(TableRow {
@@ -378,7 +393,46 @@ pub fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
         component: component.map(str::to_string),
         reduction: reduction.map(str::to_string),
         value_type: value_type.to_string(),
+        scope: "global".to_string(),
+        object_id: None,
+        expression_id: None,
+        weighting: None,
     })
+}
+
+fn table_expression_columns(expression: &str) -> Result<Vec<TableColumnMeta>, String> {
+    let parts = expression.split('.').collect::<Vec<_>>();
+    if parts.len() < 2 || parts.len() > 3 || parts[0].is_empty() || parts[1] != "m" {
+        return Err(format!(
+            "unsupported table expression '{expression}'; expected object.m or object.m.x/y/z"
+        ));
+    }
+    let components = match parts.get(2).copied() {
+        None => vec!["x", "y", "z"],
+        Some(component @ ("x" | "y" | "z")) => vec![component],
+        Some(_) => {
+            return Err(format!(
+                "unsupported table expression '{expression}'; magnetization component must be x, y, or z"
+            ));
+        }
+    };
+    Ok(components
+        .into_iter()
+        .map(|component| TableColumnMeta {
+            column_id: format!("{}.m{}", parts[0], component),
+            quantity_id: "m".to_string(),
+            label: format!("{} m{}", parts[0], component),
+            unit: "1".to_string(),
+            dimension: "normalized_magnetization".to_string(),
+            component: Some(component.to_string()),
+            reduction: Some("average".to_string()),
+            value_type: "float".to_string(),
+            scope: "object".to_string(),
+            object_id: Some(parts[0].to_string()),
+            expression_id: Some(expression.to_string()),
+            weighting: Some("Ms_times_measure".to_string()),
+        })
+        .collect())
 }
 
 pub fn table_column_value(stats: &StepStats, column: &str) -> Result<f64, String> {
@@ -403,6 +457,31 @@ pub fn table_column_value(stats: &StepStats, column: &str) -> Result<f64, String
         "max_torque_T" => stats.max_torque_T,
         _ => return Err(format!("unsupported table column '{column}'")),
     })
+}
+
+fn table_column_value_for_meta(stats: &StepStats, column: &TableColumnMeta) -> Result<f64, String> {
+    if let (Some(object_id), Some(component)) = (&column.object_id, &column.component) {
+        let key = format!("m{component}");
+        let values = stats
+            .per_object_scalars
+            .get(object_id)
+            .or_else(|| {
+                (stats.per_object_scalars.len() == 1)
+                    .then(|| stats.per_object_scalars.get("free"))
+                    .flatten()
+            });
+        return values
+            .and_then(|values| values.get(&key))
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "table expression '{}' has no scoped sample for object '{}'",
+                    column.expression_id.as_deref().unwrap_or(&column.column_id),
+                    object_id
+                )
+            });
+    }
+    table_column_value(stats, &column.column_id)
 }
 
 fn write_table_csv(path: &Path, columns: &[TableColumnMeta], rows: &[TableRow]) -> io::Result<()> {
@@ -457,6 +536,10 @@ fn write_schema_json(path: &Path, config: &TableAutosaveConfig) -> io::Result<()
                 "component": column.component,
                 "reduction": column.reduction,
                 "value_type": column.value_type,
+                "scope": column.scope,
+                "object_id": column.object_id,
+                "expression_id": column.expression_id,
+                "weighting": column.weighting,
             })
         })
         .collect::<Vec<_>>();
@@ -532,6 +615,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_string())
                 .collect(),
+            expressions: Vec::new(),
         })
         .expect("default table config should resolve")
     }
@@ -584,6 +668,7 @@ mod tests {
             resolved_sample_period_s: None,
             every_steps: Some(10),
             quantities: vec!["step".to_string(), "mx".to_string()],
+            expressions: Vec::new(),
         })
         .expect("accepted-step table config should resolve");
         let mut store = TableStore::new(config);
@@ -616,12 +701,51 @@ mod tests {
             resolved_sample_period_s: None,
             every_steps: None,
             quantities: vec!["e_drive".to_string()],
+            expressions: Vec::new(),
         })
         .expect("regional drive energy should be accepted");
         assert_eq!(config.columns[0].quantity_id, "e_drive");
         let mut step = stats(1, 1e-12);
         step.e_drive = -7.5e-20;
         assert_eq!(table_column_value(&step, "e_drive").unwrap(), -7.5e-20);
+    }
+
+    #[test]
+    fn object_m_expression_expands_and_uses_the_scoped_moment_average() {
+        let config = TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".to_string(),
+            table_id: DEFAULT_TABLE_ID.to_string(),
+            sample_period_s: Some(1e-12),
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
+            every_steps: None,
+            quantities: vec!["step".to_string()],
+            expressions: vec!["disk.m".to_string()],
+        })
+        .expect("object magnetization expression should resolve");
+        assert_eq!(
+            config
+                .columns
+                .iter()
+                .map(|column| column.column_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["step", "disk.mx", "disk.my", "disk.mz"]
+        );
+        let mut step = stats(2, 2e-12);
+        step.per_object_scalars.insert(
+            "disk".to_string(),
+            std::collections::HashMap::from([
+                ("mx".to_string(), 0.25),
+                ("my".to_string(), 0.5),
+                ("mz".to_string(), 0.75),
+            ]),
+        );
+        let mut store = TableStore::new(config);
+        assert!(store.append_if_due(&step).unwrap());
+        assert_eq!(
+            &store.last_row().expect("table row").values,
+            &[2.0, 0.25, 0.5, 0.75]
+        );
     }
 
     #[test]
@@ -636,6 +760,7 @@ mod tests {
             resolved_sample_period_s: None,
             every_steps: None,
             quantities: vec!["t".to_string(), "my".to_string()],
+            expressions: Vec::new(),
         })
         .expect_err("unresolved automatic table cadence must fail closed");
 

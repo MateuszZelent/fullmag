@@ -493,6 +493,10 @@ impl StageAutosaveRuntime {
             .map(TableAutosaveConfig::from_ir)
             .transpose()?
             .map(TableStore::new);
+        let table_quantities = table
+            .as_ref()
+            .map(TableStore::column_ids)
+            .unwrap_or_default();
         let relaxation_clock = policy
             .fields
             .iter()
@@ -529,11 +533,7 @@ impl StageAutosaveRuntime {
             config.stage_id,
             policy.layout,
             policy.format,
-            policy
-                .table
-                .as_ref()
-                .map(|table| table.quantities.clone())
-                .unwrap_or_default(),
+            table_quantities,
             policy
                 .fields
                 .iter()

@@ -31,7 +31,9 @@ use crate::relaxation_direct_minimizer::{
 #[cfg(feature = "cuda")]
 use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::{apply_average_m_to_step_stats, scalar_row_due, single_object_scalars};
+use crate::scalar_metrics::{
+    apply_average_m_to_step_stats_with_active_mask, scalar_row_due, single_object_scalars,
+};
 #[cfg(feature = "cuda")]
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
@@ -350,11 +352,12 @@ pub(crate) fn execute_cuda_fdm(
                 if magnetization_cache.is_none() {
                     magnetization_cache = Some(backend.copy_m(cell_count)?);
                 }
-                apply_average_m_to_step_stats(
+                apply_average_m_to_step_stats_with_active_mask(
                     &mut sampled_stats,
                     magnetization_cache
                         .as_deref()
                         .expect("magnetization cache initialized"),
+                    plan.active_mask.as_deref(),
                 );
             }
             if let Some(live) = live.as_mut() {
@@ -364,11 +367,12 @@ pub(crate) fn execute_cuda_fdm(
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
                     }
-                    apply_average_m_to_step_stats(
+                    apply_average_m_to_step_stats_with_active_mask(
                         &mut sampled_stats,
                         magnetization_cache
                             .as_deref()
                             .expect("magnetization cache initialized"),
+                        plan.active_mask.as_deref(),
                     );
                 }
                 let display_selection = live.display_selection.map(|get| get());

@@ -2025,6 +2025,8 @@ mod tests {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
+            per_object_scalars: HashMap::new(),
+            table_expressions: Vec::new(),
         }
     }
 

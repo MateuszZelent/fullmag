@@ -145,9 +145,26 @@ fn write_header(file: &mut File, quantities: &[String]) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     for quantity in quantities {
-        write!(file, "\t{quantity}").map_err(|error| error.to_string())?;
+        write!(file, "\t{}", txt_quantity_header(quantity))
+            .map_err(|error| error.to_string())?;
     }
     writeln!(file).map_err(|error| error.to_string())
+}
+
+fn txt_quantity_header(quantity: &str) -> String {
+    let unit = match quantity {
+        "mx" | "my" | "mz" => "1",
+        "t" | "dt" | "time" | "solver_dt" => "s",
+        "e_ex" | "e_demag" | "e_ext" | "e_drive" | "e_ani" | "e_dmi" | "e_total" => "J",
+        "max_dm_dt" => "1/s",
+        "max_h_eff" | "max_h_demag" | "max_torque" | "max_torque_Apm" => "A/m",
+        "max_torque_T" => "T",
+        _ if quantity.ends_with(".mx")
+            || quantity.ends_with(".my")
+            || quantity.ends_with(".mz") => "1",
+        _ => return quantity.to_string(),
+    };
+    format!("{quantity}[{unit}]")
 }
 
 #[cfg(test)]
@@ -229,5 +246,12 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("scalar tables only"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn default_magnetization_headers_declare_dimensionless_units() {
+        assert_eq!(txt_quantity_header("mx"), "mx[1]");
+        assert_eq!(txt_quantity_header("disk.my"), "disk.my[1]");
+        assert_eq!(txt_quantity_header("e_total"), "e_total[J]");
     }
 }

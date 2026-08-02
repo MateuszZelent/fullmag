@@ -235,8 +235,23 @@ fn table_columns(snapshot: Option<&crate::types::SessionStateResponse>) -> Vec<S
         })
         .filter(|columns| !columns.is_empty());
 
-    configured
-        .unwrap_or_else(|| resolve_table_columns(None, &[]).expect("legacy defaults are valid"))
+    let mut columns = configured
+        .unwrap_or_else(|| resolve_table_columns(None, &[]).expect("legacy defaults are valid"));
+    if let Some(expressions) = snapshot
+        .and_then(|state| state.metadata.as_ref())
+        .and_then(|metadata| metadata.get("table_autosave"))
+        .and_then(|autosave| autosave.get("expressions"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for expression in expressions.iter().filter_map(serde_json::Value::as_str) {
+            for column in table_expression_column_ids(expression) {
+                if !columns.iter().any(|existing| existing == &column) {
+                    columns.push(column);
+                }
+            }
+        }
+    }
+    columns
 }
 
 fn build_table_rows_resource(
@@ -530,6 +545,22 @@ fn resolve_table_columns(
 }
 
 fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
+    if let Some((object_id, component, expression_id)) = parse_table_expression_column(column) {
+        return Some(TableColumnMeta {
+            column_id: column.to_string(),
+            quantity_id: "m".to_string(),
+            label: format!("{object_id} m{component}"),
+            unit: "1".to_string(),
+            dimension: "normalized_magnetization".to_string(),
+            component: Some(component.to_string()),
+            reduction: Some("average".to_string()),
+            value_type: "float".to_string(),
+            scope: "object".to_string(),
+            object_id: Some(object_id.to_string()),
+            expression_id: Some(expression_id),
+            weighting: Some("Ms_times_measure".to_string()),
+        });
+    }
     let (quantity_id, label, unit, dimension, component, reduction, value_type) = match column {
         "step" => ("step", "step", "1", "count", None, None, "integer"),
         "t" | "time" => ("t", "t", "s", "time", None, None, "float"),
@@ -666,10 +697,26 @@ fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
         component: component.map(str::to_string),
         reduction: reduction.map(str::to_string),
         value_type: value_type.to_string(),
+        scope: "global".to_string(),
+        object_id: None,
+        expression_id: None,
+        weighting: None,
     })
 }
 
 fn table_column_value(row: &ScalarRow, column: &str) -> Option<f64> {
+    if let Some((object_id, component, _)) = parse_table_expression_column(column) {
+        return row
+            .per_object_scalars
+            .get(object_id)
+            .or_else(|| {
+                (row.per_object_scalars.len() == 1)
+                    .then(|| row.per_object_scalars.get("free"))
+                    .flatten()
+            })
+            .and_then(|values| values.get(&format!("m{component}")))
+            .copied();
+    }
     Some(match column {
         "step" => row.step as f64,
         "t" | "time" => row.time,
@@ -692,4 +739,27 @@ fn table_column_value(row: &ScalarRow, column: &str) -> Option<f64> {
         "max_torque_T" => row.max_torque_T,
         _ => return None,
     })
+}
+
+fn table_expression_column_ids(expression: &str) -> Vec<String> {
+    let parts = expression.split('.').collect::<Vec<_>>();
+    if parts.len() < 2 || parts.len() > 3 || parts[0].is_empty() || parts[1] != "m" {
+        return Vec::new();
+    }
+    match parts.get(2).copied() {
+        None => ["x", "y", "z"]
+            .into_iter()
+            .map(|component| format!("{}.m{}", parts[0], component))
+            .collect(),
+        Some(component @ ("x" | "y" | "z")) => vec![format!("{}.m{component}", parts[0])],
+        Some(_) => Vec::new(),
+    }
+}
+
+fn parse_table_expression_column(column: &str) -> Option<(&str, &str, String)> {
+    let (object_id, component) = column.rsplit_once(".m")?;
+    if object_id.is_empty() || !matches!(component, "x" | "y" | "z") {
+        return None;
+    }
+    Some((object_id, component, format!("{object_id}.m")))
 }
