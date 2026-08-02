@@ -1,6 +1,6 @@
 //! FDM multilayer time-domain workflow helpers.
 
-use crate::scalar_metrics::apply_average_m_to_step_stats;
+use crate::scalar_metrics::weighted_average_m_from_object_scalars;
 use crate::types::{StateObservables, StepStats};
 
 pub(crate) fn make_multilayer_step_stats(
@@ -29,7 +29,13 @@ pub(crate) fn make_multilayer_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = observables.per_object_scalars.clone();
+    let averaged = weighted_average_m_from_object_scalars(&stats.per_object_scalars)
+        .unwrap_or_else(|| {
+            crate::scalar_metrics::average_magnetization_components(&observables.magnetization)
+        });
+    stats.mx = averaged[0];
+    stats.my = averaged[1];
+    stats.mz = averaged[2];
     stats
 }

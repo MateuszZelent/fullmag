@@ -256,10 +256,11 @@ def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
     path: Path,
 ) -> None:
     payload = _export_run_config(path)
-    assert [stage["entrypoint_kind"] for stage in payload["stages"]] == [
-        "flat_relax"
-    ]
-    [stage] = payload["stages"]
+    expected_stage_kinds = ["flat_relax"]
+    if scenario == "relax_projected_gradient_bb":
+        expected_stage_kinds.append("flat_save_state")
+    assert [stage["entrypoint_kind"] for stage in payload["stages"]] == expected_stage_kinds
+    stage = payload["stages"][0]
     assert _active_stage_id(stage) == "relax"
     ir = stage["ir"]
     relaxation = ir["study"]
@@ -287,20 +288,40 @@ def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
         assert adaptive["dt_max"] == pytest.approx(1e-14)
 
     expected_tolerance_apm = (
-        0.7957747154594767
+        0.004643265887234501
         if scenario == "relax_projected_gradient_bb"
         else 7.957747154594767
     )
     assert relaxation["stop"]["torque_tolerance_apm"] == pytest.approx(
         expected_tolerance_apm
     )
-    assert relaxation["stop"]["max_steps"] == 50_000
+    expected_max_steps = 100_000 if scenario == "relax_projected_gradient_bb" else 50_000
+    assert relaxation["stop"]["max_steps"] == expected_max_steps
+
+
+def test_projected_gradient_bb_requests_only_final_m_state_save() -> None:
+    scenario_path = RELAXATION_SCENARIOS["relax_projected_gradient_bb"]
+    payload = _export_run_config(scenario_path)
+
+    assert [stage["entrypoint_kind"] for stage in payload["stages"]] == [
+        "flat_relax",
+        "flat_save_state",
+    ]
+    relax_stage, save_state_stage = payload["stages"]
+    relax_autosave = relax_stage["ir"]["study"]["sampling"]["stage_autosave"]
+    assert relax_autosave["fields"] == []
+    assert save_state_stage["action"] == {
+        "kind": "save_state",
+        "artifact_name": "relaxed_m.zarr",
+        "format": "zarr",
+        "dataset": "m",
+    }
 
 
 def test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer() -> None:
     scenario_path = RELAXATION_SCENARIOS["relax_projected_gradient_bb"]
     payload = _export_run_config(scenario_path)
-    [stage] = payload["stages"]
+    stage, save_state_stage = payload["stages"]
     [mesh] = stage["ir"]["problem_meta"]["runtime_metadata"]["mesh_workflow"][
         "per_geometry"
     ]
@@ -321,7 +342,7 @@ def test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer() ->
     assert "corner_transition_distance" not in mesh
 
     loaded = load_problem_from_script(scenario_path, lightweight_assets=True)
-    [loaded_stage] = loaded.stages
+    loaded_stage, loaded_save_state = loaded.stages
     assert loaded_stage.autosave is not None
     assert loaded_stage.autosave.table is not None
     assert loaded_stage.autosave.table.to_ir() == {
@@ -338,4 +359,12 @@ def test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer() ->
             "e_total",
             "max_torque_T",
         ],
+    }
+    assert loaded_stage.autosave.fields == ()
+    assert loaded_save_state.entrypoint_kind == "flat_save_state"
+    assert loaded_save_state.action == {
+        "kind": "save_state",
+        "artifact_name": "relaxed_m.zarr",
+        "format": "zarr",
+        "dataset": "m",
     }

@@ -12,6 +12,22 @@ from fullmag.analysis.fitting import (
     fit_lorentzian_linewidth,
     linewidth_halfmax,
 )
+from fullmag.analysis.fem_cartesian_restriction import (
+    CartesianRestriction,
+    build_prism6_cartesian_restriction,
+    restrict_fem_magnetization,
+)
+from fullmag.analysis.magnetization_comparison import (
+    CartesianGrid,
+    FEMMagnetizationState,
+    MagnetizationComparison,
+    MagnetizationComparisonError,
+    StructuredMagnetization,
+    compare_magnetization_textures,
+    compare_relaxed_states,
+    load_fullmag_fem_magnetization,
+    load_mumax_magnetization,
+)
 from fullmag.analysis.spectrum import (
     fft_from_trace,
     linewidth_lorentzian,
@@ -40,9 +56,18 @@ from fullmag.analysis.vortex_fit import (
 )
 
 __all__ = [
+    "CartesianGrid",
+    "CartesianRestriction",
     "CoreTrackResult",
+    "FEMMagnetizationState",
     "LinewidthFitResult",
+    "MagnetizationComparison",
+    "MagnetizationComparisonError",
     "OrbitMetrics",
+    "StructuredMagnetization",
+    "build_prism6_cartesian_restriction",
+    "compare_magnetization_textures",
+    "compare_relaxed_states",
     "compute_orbit_metrics",
     "core_orbit_radius",
     "core_phase",
@@ -58,6 +83,9 @@ __all__ = [
     "StnoSteadyStateMetrics",
     "analyze_stno_artifacts",
     "load_scalar_artifacts",
+    "load_fullmag_fem_magnetization",
+    "load_mumax_magnetization",
+    "restrict_fem_magnetization",
     "track_vortex_core",
     "track_vortex_core_subpixel",
     "write_stno_report",

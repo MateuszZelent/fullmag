@@ -3755,7 +3755,7 @@ mod exact_metric_contract_tests {
             .and_then(|source| source.split("    /// Execute one time step.").next())
             .expect("native average-m helper");
         assert!(
-            average_stats.contains("apply_average_m_to_step_stats(stats, &magnetization)"),
+            average_stats.contains("apply_average_m_to_step_stats_with_active_mask"),
             "native average-m helper must publish averaged magnetization components"
         );
     }

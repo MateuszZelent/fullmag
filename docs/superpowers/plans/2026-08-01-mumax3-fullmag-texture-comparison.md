@@ -2,6 +2,30 @@
 
 > Zakres tego planu obejmuje wyłącznie końcowy, zeropolowy stan równowagowy po `minimize()` w MuMax3 i po `relax` w Fullmagu. Dynamika, trajektorie czasowe i pierwsze przejście przez `<mx>=0` są poza zakresem.
 
+## Status realizacji — 2026-08-02
+
+Zrealizowany został offline'owy rdzeń porównania oraz kontrakt zapisu końcowego
+stanu:
+
+- MuMax3: `minimize(); save(m); tablesave()` w
+  `external_solvers/3/test/standardproblem4.mx3`;
+- Fullmag: etap `add_save_state(... dataset="m")` po relaxacji i `fields=[]`
+  w scenariuszu PG-BB;
+- Python: loader MuMax3 `(t,z,y,x,component)`, loader Fullmag `(node,3)`,
+  dokładna restrykcja jednowarstwowego `prism6` oraz metryki komponentowe i
+  wektorowe w `fullmag.analysis`;
+- CLI: `scripts/compare_relaxed_magnetization.py`;
+- testy: moduł porównania `6 passed`, testy scenariusza i collect-results
+  `65 passed`, walidator noty naukowej PASS.
+
+Nie wykonano jeszcze świeżej pary produkcyjnych przebiegów MuMax3/Fullmag.
+Istniejący `standardproblem4.zarr` ma 11 klatek i jest odrzucany jako stary
+artefakt. Próba `just fem-managed-headless` została zatrzymana przez istniejący
+dirty native-runtime w głównym worktree (eksport wymagałby jawnego
+`FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1`); nie nadpisano tego runtime ani procesu
+GPU użytkownika. Po uzyskaniu świeżych artefaktów należy uruchomić CLI z trzema
+ścieżkami `--mumax`, `--fullmag-state`, `--fullmag-mesh` i zachować JSON report.
+
 ## Cel
 
 Zbudować powtarzalny przepływ w Pythonie, który dla µMAG Standard Problem 4:
@@ -100,12 +124,8 @@ Nowe moduły i testy:
 
 - `packages/fullmag-py/src/fullmag/analysis/magnetization_comparison.py`
 - `packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py`
-- `packages/fullmag-py/tests/test_magnetization_comparison_io.py`
-- `packages/fullmag-py/tests/test_fem_magnetization_series.py`
-- `packages/fullmag-py/tests/test_fem_cartesian_restriction.py`
-- `packages/fullmag-py/tests/test_magnetization_texture_metrics.py`
-- `scripts/compare_mumax_fullmag_sp4_textures.py`
-- `scripts/test_compare_mumax_fullmag_sp4_textures.py`
+- `packages/fullmag-py/tests/test_magnetization_comparison.py`
+- `scripts/compare_relaxed_magnetization.py`
 
 Modyfikowane kontrakty i scenariusze:
 
@@ -142,7 +162,8 @@ Modyfikowane kontrakty i scenariusze:
 
    - `load_mumax_magnetization`;
    - `load_fullmag_fem_magnetization`;
-   - `restrict_prism6_to_cartesian`;
+   - `build_prism6_cartesian_restriction`;
+   - `restrict_fem_magnetization`;
    - `compare_magnetization_textures`.
 
 3. Najpierw uruchomić walidator i odnotować oczekiwany RED dla brakujących symboli, następnie po implementacji uzyskać PASS:
@@ -171,7 +192,7 @@ class CartesianGrid:
 
 @dataclass(frozen=True, slots=True)
 class StructuredMagnetization:
-    values_tzyxc: np.ndarray
+    values: np.ma.MaskedArray
     times_s: np.ndarray
     grid: CartesianGrid
     source: str
@@ -189,13 +210,13 @@ def load_mumax_magnetization(path: str | Path) -> StructuredMagnetization:
     """Load and validate one final relaxed MuMax3 magnetization snapshot."""
 
 
-def from_mmpp_magnetization(
-    dataset: object,
+def load_mumax_magnetization(
+    path: str | Path,
     *,
-    root_attrs: Mapping[str, object],
-    source: str,
+    dataset: str = "m",
+    require_single_frame: bool = False,
 ) -> StructuredMagnetization:
-    """Consume job[0].m by duck typing without importing MMpp in Fullmag."""
+    """Load the MMpp/MuMax Zarr contract without importing MMpp."""
 ```
 
 3. Zachować `t` jako wymiar formatu, ale w tym workflow wymagać dokładnie jednej zaakceptowanej klatki końcowej. Nie wybierać automatycznie „ostatniej” z wieloklatkowego store.
@@ -218,7 +239,7 @@ Testy:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest -q \
-  packages/fullmag-py/tests/test_magnetization_comparison_io.py
+  packages/fullmag-py/tests/test_magnetization_comparison.py
 ```
 
 Kryterium: loader przyjmuje świeży jednoklatkowy fixture, wykrywa zamianę `x/y`, flip osi, złą jednostkę, niespójny czas i stary artefakt.
@@ -335,7 +356,7 @@ Testy:
 PYTHONPATH=packages/fullmag-py/src:. pytest -q \
   tests/standard_problems/mumag/sp4/fem/test_scenarios.py \
   tests/standard_problems/mumag/sp4/fem/test_collect_results.py \
-  packages/fullmag-py/tests/test_fem_magnetization_series.py
+  packages/fullmag-py/tests/test_magnetization_comparison.py
 ```
 
 Kryterium: istnieje dokładnie jeden Zarr final-state zawierający wyłącznie `m(node,component)`, związany z końcowym accepted step, właściwym meshem i natywną średnią runtime.
@@ -390,7 +411,7 @@ Testy:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest -q \
-  packages/fullmag-py/tests/test_fem_cartesian_restriction.py
+  packages/fullmag-py/tests/test_magnetization_comparison.py
 ```
 
 Kryterium: operator zachowuje całkę dla pól stałych/liniowych i nie dotyka elementów airboxa.
@@ -438,7 +459,7 @@ Testy:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest -q \
-  packages/fullmag-py/tests/test_magnetization_texture_metrics.py
+  packages/fullmag-py/tests/test_magnetization_comparison.py
 ```
 
 Kryterium: identyczne pola dają zera, a syntetyczny bias, obrót, maska i błąd brzegowy dają analitycznie oczekiwane wyniki.
@@ -449,7 +470,8 @@ Kryterium: identyczne pola dają zera, a syntetyczny bias, obrót, maska i błą
 
 2. Refaktoryzować wyłącznie ścieżkę końcowego stanu relaksacji tak, aby:
 
-   - używała `restrict_prism6_to_cartesian`;
+   - używa `build_prism6_cartesian_restriction` oraz
+     `restrict_fem_magnetization`;
    - pobierała `mean_m` z ostatniego wiersza `scalars.csv`;
    - nigdy nie używała `project_midplane` ani `np.mean(values, axis=0)` do wyniku naukowego;
    - odrzucała raport, gdy bramka zachowania średniej nie przechodzi.
@@ -522,44 +544,21 @@ plots/angle_deg.png
 5. README ma zawierać wykonywalny przykład MMpp z rzeczywistymi ścieżkami projektu:
 
 ```python
-import mmpp
 from fullmag.analysis import (
-    compare_magnetization_textures,
-    from_mmpp_magnetization,
-    load_fullmag_fem_magnetization,
-    restrict_prism6_to_cartesian,
+    compare_relaxed_states,
 )
 
-jobs = mmpp.open(
+report = compare_relaxed_states(
     ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-    "relaxed-s-state/mumax/standardproblem4.zarr"
-)
-mumax = from_mmpp_magnetization(
-    jobs[0].m,
-    root_attrs=jobs[0].attributes,
-    source=(
+    "relaxed-s-state/mumax/standardproblem4.zarr",
+    fullmag_state_path=(
         ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-        "relaxed-s-state/mumax/standardproblem4.zarr"
+        "relaxed-s-state/fullmag/artifacts/states/relaxed_m.zarr.zip"
     ),
-)
-fem = load_fullmag_fem_magnetization(
-    ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-    "relaxed-s-state/fullmag/relax_projected_gradient_bb.zarr/"
-    "artifacts/states/relaxed_m.zarr.zip",
-    mesh_path=(
+    fullmag_mesh_path=(
         ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
         "relaxed-s-state/fullmag/relax_projected_gradient_bb.fullmag-mesh"
     ),
-    run_bundle=(
-        ".fullmag/reports/standard-problems/mumag/sp4/texture-comparison/"
-        "relaxed-s-state/fullmag/relax_projected_gradient_bb.zarr"
-    ),
-    magnetic_markers=(1,),
-)
-restricted = restrict_prism6_to_cartesian(fem, mumax.grid)
-comparison = compare_magnetization_textures(
-    restricted.values_tzyxc[0],
-    mumax.values_tzyxc[0],
 )
 ```
 
@@ -569,7 +568,7 @@ Testy:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src:. pytest -q \
-  scripts/test_compare_mumax_fullmag_sp4_textures.py
+  packages/fullmag-py/tests/test_magnetization_comparison.py
 ```
 
 Kryterium: identyczny fixture daje raport z zerowym RMSE; stary Zarr, błędna oś, niepełne coverage i niespójny final step są odrzucane.
@@ -644,11 +643,7 @@ Testy postprocessingu i kontraktów:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src:. pytest -q \
-  packages/fullmag-py/tests/test_magnetization_comparison_io.py \
-  packages/fullmag-py/tests/test_fem_magnetization_series.py \
-  packages/fullmag-py/tests/test_fem_cartesian_restriction.py \
-  packages/fullmag-py/tests/test_magnetization_texture_metrics.py \
-  scripts/test_compare_mumax_fullmag_sp4_textures.py \
+  packages/fullmag-py/tests/test_magnetization_comparison.py \
   tests/standard_problems/mumag/sp4/fem/test_scenarios.py \
   tests/standard_problems/mumag/sp4/fem/test_collect_results.py \
   tests/standard_problems/mumag/sp4/fem/test_contract.py \
