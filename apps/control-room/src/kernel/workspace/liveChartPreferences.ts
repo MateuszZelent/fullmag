@@ -25,11 +25,14 @@ export interface LiveChartPreferencesV1 {
 
 export const LIVE_CHART_PREFERENCES_STORAGE_KEY = "fm:live-chart-preferences:v1";
 export const MAX_LIVE_CHART_DESCRIPTORS = 50;
+export const MAX_LIVE_CHART_STORAGE_CHARS = 64 * 1024;
 
 const MAX_DESCRIPTOR_ID_LENGTH = 160;
 const MAX_SELECTED_SERIES_IDS = 100;
 const MAX_DISPLAY_UNITS = 40;
 const MAX_DISPLAY_UNIT_LENGTH = 24;
+const MAX_RAW_SELECTED_SERIES_IDS = 256;
+const MAX_DESCRIPTOR_FIELDS = 128;
 const TARGET_POINTS: readonly LiveChartTargetPoints[] = [160, 400, 800, 1600, 3200, 5000];
 
 function defaultDescriptorPreferences(): LiveChartDescriptorPreferences {
@@ -59,8 +62,18 @@ function containsForbiddenPayload(value: unknown, seen = new Set<unknown>()): bo
   if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return true;
   if (seen.has(value)) return false;
   seen.add(value);
-  if (Array.isArray(value)) return value.some((entry) => containsForbiddenPayload(entry, seen));
-  for (const [key, entry] of Object.entries(value)) {
+  if (Array.isArray(value)) {
+    if (value.length > MAX_RAW_SELECTED_SERIES_IDS) return true;
+    for (let index = 0; index < value.length; index += 1) {
+      if (containsForbiddenPayload(value[index], seen)) return true;
+    }
+    return false;
+  }
+  let fieldCount = 0;
+  for (const key in value) {
+    fieldCount += 1;
+    if (fieldCount > MAX_DESCRIPTOR_FIELDS) return true;
+    const entry = (value as Record<string, unknown>)[key];
     if (key === "samples" || key === "series" || key === "option") return true;
     if (containsForbiddenPayload(entry, seen)) return true;
   }
@@ -97,23 +110,32 @@ function parseTargetPoints(value: unknown): LiveChartTargetPoints {
 
 function parseSelectedSeriesIds(value: unknown): string[] {
   if (!Array.isArray(value)) return defaultDescriptorPreferences().selectedSeriesIds;
-  return value
-    .filter((seriesId): seriesId is string => typeof seriesId === "string")
-    .filter((seriesId) => seriesId.length > 0 && seriesId.length <= MAX_DESCRIPTOR_ID_LENGTH)
-    .filter((seriesId, index, ids) => ids.indexOf(seriesId) === index)
-    .slice(0, MAX_SELECTED_SERIES_IDS);
+  if (value.length > MAX_RAW_SELECTED_SERIES_IDS) return defaultDescriptorPreferences().selectedSeriesIds;
+  const selected: string[] = [];
+  for (let index = 0; index < value.length && selected.length < MAX_SELECTED_SERIES_IDS; index += 1) {
+    const seriesId = value[index];
+    if (
+      typeof seriesId === "string" && seriesId.length > 0 &&
+      seriesId.length <= MAX_DESCRIPTOR_ID_LENGTH && !selected.includes(seriesId)
+    ) selected.push(seriesId);
+  }
+  return selected;
 }
 
 function parseDisplayUnits(value: unknown): Record<string, string> {
   if (!isRecord(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key, unit]) =>
-        key.length > 0 && key.length <= MAX_DESCRIPTOR_ID_LENGTH &&
-        typeof unit === "string" && unit.length <= MAX_DISPLAY_UNIT_LENGTH,
-      )
-      .slice(0, MAX_DISPLAY_UNITS),
-  ) as Record<string, string>;
+  const displayUnits: Record<string, string> = {};
+  let count = 0;
+  for (const key in value) {
+    count += 1;
+    if (count > MAX_DISPLAY_UNITS) return {};
+    const unit = value[key];
+    if (
+      key.length > 0 && key.length <= MAX_DESCRIPTOR_ID_LENGTH &&
+      typeof unit === "string" && unit.length <= MAX_DISPLAY_UNIT_LENGTH
+    ) displayUnits[key] = unit;
+  }
+  return displayUnits;
 }
 
 function parseDescriptor(value: unknown): LiveChartDescriptorPreferences {
@@ -132,17 +154,32 @@ function parseDescriptor(value: unknown): LiveChartDescriptorPreferences {
 }
 
 export function parseLiveChartPreferences(value: unknown): LiveChartPreferencesV1 {
-  if (!isRecord(value) || value.schemaVersion !== 1 || containsForbiddenPayload(value)) {
+  if (!isRecord(value) || value.schemaVersion !== 1) {
     return createDefaultLiveChartPreferences();
   }
   if (!isRecord(value.descriptors)) return createDefaultLiveChartPreferences();
   const descriptors: Record<string, LiveChartDescriptorPreferences> = {};
-  for (const [descriptorId, descriptor] of Object.entries(value.descriptors)) {
-    if (Object.keys(descriptors).length >= MAX_LIVE_CHART_DESCRIPTORS) break;
+  let descriptorCount = 0;
+  for (const descriptorId in value.descriptors) {
+    descriptorCount += 1;
+    if (descriptorCount > MAX_LIVE_CHART_DESCRIPTORS) break;
     if (descriptorId.length === 0 || descriptorId.length > MAX_DESCRIPTOR_ID_LENGTH) continue;
+    const descriptor = value.descriptors[descriptorId];
+    if (containsForbiddenPayload(descriptor)) return createDefaultLiveChartPreferences();
     descriptors[descriptorId] = parseDescriptor(descriptor);
   }
   return { descriptors, schemaVersion: 1 };
+}
+
+export function parseStoredLiveChartPreferences(serialized: string | null): LiveChartPreferencesV1 {
+  if (!serialized || serialized.length > MAX_LIVE_CHART_STORAGE_CHARS) {
+    return createDefaultLiveChartPreferences();
+  }
+  try {
+    return parseLiveChartPreferences(JSON.parse(serialized));
+  } catch {
+    return createDefaultLiveChartPreferences();
+  }
 }
 
 export function serializeLiveChartPreferences(value: unknown): string {
@@ -150,9 +187,42 @@ export function serializeLiveChartPreferences(value: unknown): string {
 }
 
 function storageFromBrowser(): Storage | null {
-  if (typeof window !== "undefined" && window.localStorage) return window.localStorage;
-  if (typeof localStorage !== "undefined") return localStorage;
-  return null;
+  if (typeof window !== "undefined") {
+    try {
+      return window.localStorage ?? null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStorage(storage: Storage, key: string): { available: boolean; value: string | null } {
+  try {
+    return { available: true, value: storage.getItem(key) };
+  } catch {
+    return { available: false, value: null };
+  }
+}
+
+function writeStorage(storage: Storage | null, key: string, value: string): void {
+  try {
+    storage?.setItem(key, value);
+  } catch {
+    // Persistence is best-effort; in-memory preferences remain authoritative.
+  }
+}
+
+function removeStorage(storage: Storage | null, key: string): void {
+  try {
+    storage?.removeItem(key);
+  } catch {
+    // Persistence is best-effort; reset still updates the in-memory view.
+  }
 }
 
 function legacyDescriptor(raw: unknown): Record<string, unknown> | null {
@@ -185,6 +255,7 @@ function legacyMagnetizationSelection(descriptor: Record<string, unknown>): stri
 
 export function migrateLegacyLiveChartPreferences(serialized: string | null): LiveChartPreferencesV1 {
   try {
+    if (!serialized || serialized.length > MAX_LIVE_CHART_STORAGE_CHARS) return createDefaultLiveChartPreferences();
     const descriptor = legacyDescriptor(serialized ? JSON.parse(serialized) : null);
     if (!descriptor || containsForbiddenPayload(descriptor)) return createDefaultLiveChartPreferences();
     const defaults = defaultDescriptorPreferences();
@@ -211,16 +282,21 @@ export function migrateLegacyLiveChartPreferences(serialized: string | null): Li
 
 type PreferenceListener = () => void;
 
+export interface LiveChartPreferencesHydrationSnapshot {
+  preferences: LiveChartPreferencesV1;
+  isHydrated: boolean;
+}
+
 class LiveChartPreferencesStore {
-  private snapshot = SERVER_SNAPSHOT;
-  private initialized = false;
+  private hydrationSnapshot = SERVER_HYDRATION_SNAPSHOT;
   private readonly listeners = new Set<PreferenceListener>();
   private storageOverride: Storage | null | undefined;
 
-  getSnapshot = (): LiveChartPreferencesV1 => this.snapshot;
+  getSnapshot = (): LiveChartPreferencesV1 => this.hydrationSnapshot.preferences;
   getServerSnapshot = (): LiveChartPreferencesV1 => SERVER_SNAPSHOT;
-  isHydrated = (): boolean => this.initialized;
-  getServerHydrationSnapshot = (): boolean => false;
+  getHydrationSnapshot = (): LiveChartPreferencesHydrationSnapshot => this.hydrationSnapshot;
+  getServerHydrationSnapshot = (): LiveChartPreferencesHydrationSnapshot => SERVER_HYDRATION_SNAPSHOT;
+  isHydrated = (): boolean => this.hydrationSnapshot.isHydrated;
 
   subscribe = (listener: PreferenceListener): (() => void) => {
     this.listeners.add(listener);
@@ -229,25 +305,21 @@ class LiveChartPreferencesStore {
   };
 
   hydrate(): void {
-    if (this.initialized) return;
+    if (this.hydrationSnapshot.isHydrated) return;
     const storage = this.storageOverride === undefined ? storageFromBrowser() : this.storageOverride;
-    this.initialized = true;
-    if (!storage) {
-      this.snapshot = createDefaultLiveChartPreferences();
-      this.notify();
-      return;
+    let preferences = createDefaultLiveChartPreferences();
+    if (storage) {
+      const stored = readStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY);
+      if (stored.available && stored.value === null) {
+        const legacy = readStorage(storage, ANALYSIS_CHART_PREFERENCES_STORAGE_KEY);
+        preferences = migrateLegacyLiveChartPreferences(legacy.available ? legacy.value : null);
+        writeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY, serializeLiveChartPreferences(preferences));
+      } else if (stored.available) {
+        preferences = parseStoredLiveChartPreferences(stored.value);
+      }
     }
-    try {
-      const stored = storage.getItem(LIVE_CHART_PREFERENCES_STORAGE_KEY);
-      this.snapshot = stored === null
-        ? migrateLegacyLiveChartPreferences(storage.getItem(ANALYSIS_CHART_PREFERENCES_STORAGE_KEY))
-        : parseLiveChartPreferences(JSON.parse(stored));
-      if (stored === null) storage.setItem(LIVE_CHART_PREFERENCES_STORAGE_KEY, serializeLiveChartPreferences(this.snapshot));
-      this.notify();
-    } catch {
-      this.snapshot = createDefaultLiveChartPreferences();
-      this.notify();
-    }
+    this.hydrationSnapshot = { isHydrated: true, preferences };
+    this.notify();
   }
 
   updateDescriptor(
@@ -255,41 +327,35 @@ class LiveChartPreferencesStore {
     patch: (current: LiveChartDescriptorPreferences) => Partial<LiveChartDescriptorPreferences>,
   ): void {
     if (descriptorId.length === 0 || descriptorId.length > MAX_DESCRIPTOR_ID_LENGTH) return;
-    const current = this.snapshot.descriptors[descriptorId] ?? defaultDescriptorPreferences();
+    const current = this.hydrationSnapshot.preferences.descriptors[descriptorId] ?? defaultDescriptorPreferences();
     const next = parseDescriptor({ ...current, ...patch(current) });
     this.setSnapshot({
-      descriptors: { ...this.snapshot.descriptors, [descriptorId]: next },
+      descriptors: { ...this.hydrationSnapshot.preferences.descriptors, [descriptorId]: next },
       schemaVersion: 1,
     });
   }
 
   reset(): void {
     const storage = this.storageOverride === undefined ? storageFromBrowser() : this.storageOverride;
-    try {
-      storage?.removeItem(LIVE_CHART_PREFERENCES_STORAGE_KEY);
-    } catch {
-      // Storage is optional and must not affect local view reset.
-    }
-    this.initialized = true;
-    this.snapshot = SERVER_SNAPSHOT;
+    removeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY);
+    this.hydrationSnapshot = { isHydrated: true, preferences: SERVER_SNAPSHOT };
     this.notify();
   }
 
-  resetForTests(storage: Storage | null = null): void {
+  resetForTests(storage?: Storage | null): void {
     this.storageOverride = storage;
-    this.snapshot = SERVER_SNAPSHOT;
-    this.initialized = false;
+    this.hydrationSnapshot = SERVER_HYDRATION_SNAPSHOT;
     this.listeners.clear();
   }
 
   private setSnapshot(snapshot: LiveChartPreferencesV1): void {
-    this.snapshot = parseLiveChartPreferences(snapshot);
+    const preferences = parseLiveChartPreferences(snapshot);
+    this.hydrationSnapshot = {
+      isHydrated: this.hydrationSnapshot.isHydrated,
+      preferences,
+    };
     const storage = this.storageOverride === undefined ? storageFromBrowser() : this.storageOverride;
-    try {
-      storage?.setItem(LIVE_CHART_PREFERENCES_STORAGE_KEY, serializeLiveChartPreferences(this.snapshot));
-    } catch {
-      // Persistence failures leave the in-memory user preference intact.
-    }
+    writeStorage(storage, LIVE_CHART_PREFERENCES_STORAGE_KEY, serializeLiveChartPreferences(preferences));
     this.notify();
   }
 
@@ -299,9 +365,13 @@ class LiveChartPreferencesStore {
 }
 
 const SERVER_SNAPSHOT = createDefaultLiveChartPreferences();
+const SERVER_HYDRATION_SNAPSHOT: LiveChartPreferencesHydrationSnapshot = {
+  isHydrated: false,
+  preferences: SERVER_SNAPSHOT,
+};
 
 export const liveChartPreferencesStore = new LiveChartPreferencesStore();
 
-export function resetLiveChartPreferencesStoreForTests(storage: Storage | null = null): void {
+export function resetLiveChartPreferencesStoreForTests(storage?: Storage | null): void {
   liveChartPreferencesStore.resetForTests(storage);
 }

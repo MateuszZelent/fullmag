@@ -5,6 +5,7 @@ import {
   LIVE_CHART_PREFERENCES_STORAGE_KEY,
   MAX_LIVE_CHART_DESCRIPTORS,
   parseLiveChartPreferences,
+  parseStoredLiveChartPreferences,
   serializeLiveChartPreferences,
 } from "./liveChartPreferences";
 
@@ -86,5 +87,44 @@ describe("Live Chart preferences", () => {
 
     expect(LIVE_CHART_PREFERENCES_STORAGE_KEY).toBe("fm:live-chart-preferences:v1");
     expect(JSON.parse(serialized)).toEqual(parseLiveChartPreferences(validPreferences));
+  });
+
+  it("rejects an oversized raw storage value before JSON parsing", () => {
+    expect(parseStoredLiveChartPreferences(" ".repeat(65 * 1024))).toEqual(
+      createDefaultLiveChartPreferences(),
+    );
+  });
+
+  it("rejects oversized selected-id arrays before visiting their items", () => {
+    let indexedReads = 0;
+    const selectedSeriesIds = new Proxy(Array.from({ length: 10_000 }, () => "mx"), {
+      get(target, property, receiver) {
+        if (/^\d+$/.test(String(property))) indexedReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(parseLiveChartPreferences({
+      ...validPreferences,
+      descriptors: { magnetization: { ...descriptor, selectedSeriesIds } },
+    })).toEqual(createDefaultLiveChartPreferences());
+    expect(indexedReads).toBe(0);
+  });
+
+  it("stops descriptor validation at the configured budget", () => {
+    let descriptorReads = 0;
+    const descriptors = new Proxy({}, {
+      getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true }),
+      get: () => {
+        descriptorReads += 1;
+        return descriptor;
+      },
+      ownKeys: () => Array.from({ length: 10_000 }, (_, index) => `descriptor-${index}`),
+    });
+
+    expect(Object.keys(parseLiveChartPreferences({ schemaVersion: 1, descriptors }).descriptors)).toHaveLength(
+      MAX_LIVE_CHART_DESCRIPTORS,
+    );
+    expect(descriptorReads).toBeLessThanOrEqual(MAX_LIVE_CHART_DESCRIPTORS + 1);
   });
 });

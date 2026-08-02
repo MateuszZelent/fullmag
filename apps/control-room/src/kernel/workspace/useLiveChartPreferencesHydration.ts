@@ -21,16 +21,12 @@ export function useLiveChartPreferencesHydration(descriptorId?: string): {
   setDescriptorXAxisId: (id: string, xAxisId: string) => void;
   reset: () => void;
 } {
-  const prefs = useSyncExternalStore(
+  const hydration = useSyncExternalStore(
     liveChartPreferencesStore.subscribe,
-    liveChartPreferencesStore.getSnapshot,
-    liveChartPreferencesStore.getServerSnapshot,
-  );
-  const isHydrated = useSyncExternalStore(
-    liveChartPreferencesStore.subscribe,
-    liveChartPreferencesStore.isHydrated,
+    liveChartPreferencesStore.getHydrationSnapshot,
     liveChartPreferencesStore.getServerHydrationSnapshot,
   );
+  const prefs = hydration.preferences;
 
   const updateDescriptor = useCallback(
     (id: string, patch: (current: LiveChartDescriptorPreferences) => Partial<LiveChartDescriptorPreferences>) =>
@@ -41,7 +37,7 @@ export function useLiveChartPreferencesHydration(descriptorId?: string): {
   return {
     prefs,
     descriptor: descriptorId ? prefs.descriptors[descriptorId] ?? null : null,
-    isHydrated,
+    isHydrated: hydration.isHydrated,
     setDescriptorLiveMode: (id, liveMode) => updateDescriptor(id, () => ({ liveMode })),
     setDescriptorRange: (id, range) => updateDescriptor(id, () => ({ range })),
     setDescriptorTargetPoints: (id, targetPoints) => updateDescriptor(id, () => ({ targetPoints })),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LIVE_CHART_PREFERENCES_STORAGE_KEY,
@@ -6,6 +6,11 @@ import {
   resetLiveChartPreferencesStoreForTests,
   liveChartPreferencesStore,
 } from "./liveChartPreferences";
+
+afterEach(() => {
+  vi.doUnmock("react");
+  vi.resetModules();
+});
 
 describe("useLiveChartPreferencesHydration", () => {
   it("keeps the server and first client snapshots identical", () => {
@@ -67,6 +72,74 @@ describe("useLiveChartPreferencesHydration", () => {
     });
     expect(writes).toEqual([LIVE_CHART_PREFERENCES_STORAGE_KEY]);
     expect(values.get("fm:analysis-chart-preferences:v1")).toBeDefined();
+  });
+
+  it("keeps migrated preferences in memory when persistence throws", () => {
+    const legacy = JSON.stringify({
+      schemaVersion: 1,
+      descriptorPreferences: {
+        "analysis:data-table:default": {
+          selectedSeriesIds: ["data.table:default:step:mz"],
+          xAxisId: "time",
+        },
+      },
+    });
+    const storage = {
+      getItem: (key: string) => key === "fm:analysis-chart-preferences:v1" ? legacy : null,
+      removeItem: () => undefined,
+      setItem: () => { throw new Error("SecurityError"); },
+    } as unknown as Storage;
+    let notifications = 0;
+
+    resetLiveChartPreferencesStoreForTests(storage);
+    const unsubscribe = liveChartPreferencesStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    expect(liveChartPreferencesStore.getSnapshot().descriptors.magnetization).toMatchObject({
+      selectedSeriesIds: ["mz"],
+      xAxisId: "time",
+    });
+    expect(notifications).toBe(1);
+    unsubscribe();
+  });
+
+  it("treats a throwing localStorage getter as unavailable for hydrate, writes, and reset", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+    let getterCalls = 0;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        get localStorage() {
+          getterCalls += 1;
+          throw new Error("SecurityError");
+        },
+      },
+    });
+    try {
+      resetLiveChartPreferencesStoreForTests(undefined);
+
+      expect(() => liveChartPreferencesStore.subscribe(() => undefined)).not.toThrow();
+      expect(() => liveChartPreferencesStore.updateDescriptor("magnetization", () => ({ liveMode: "paused" }))).not.toThrow();
+      expect(() => liveChartPreferencesStore.reset()).not.toThrow();
+      expect(getterCalls).toBeGreaterThan(0);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, "window", previous);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  });
+
+  it("uses one external-store subscription for preferences and hydration", async () => {
+    const useSyncExternalStore = vi.fn((_: unknown, getSnapshot: () => unknown) => getSnapshot());
+    vi.doMock("react", () => ({
+      useCallback: <T,>(callback: T) => callback,
+      useSyncExternalStore,
+    }));
+    const { useLiveChartPreferencesHydration } = await import("./useLiveChartPreferencesHydration");
+
+    useLiveChartPreferencesHydration("magnetization");
+
+    expect(useSyncExternalStore).toHaveBeenCalledTimes(1);
   });
 
   it("resets only the new preference key", () => {
