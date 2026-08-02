@@ -143,6 +143,13 @@ export interface KernelEventMap {
     tableId: string;
     xAxisId: string;
   };
+  "live-charts:selection-requested": {
+    descriptorId: string;
+    pointIndex?: number;
+    revision?: string | number;
+    seriesId?: string;
+    source: "live-charts";
+  };
   "viewport:mesh-size-bin-hovered": {
     highlight: MeshSizeHistogramHighlight | null;
     source: ModuleId;

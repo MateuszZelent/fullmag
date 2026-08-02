@@ -216,6 +216,11 @@ export const homeTab: RibbonTabContent = {
                   label: "Analysis",
                   value: "analysis",
                 },
+                {
+                  commandId: "live-charts.open",
+                  label: "Live Charts",
+                  value: "live-charts",
+                },
               ],
             },
           ],
@@ -247,6 +252,7 @@ export const homeTab: RibbonTabContent = {
           ],
         },
         { id: "ws-2d",      icon: icon(Columns2),  label: "2D",      shortcut: "2", commandId: "field-map.open", iconColor: C.sky },
+        { id: "ws-live-charts", icon: icon(Activity), label: "Live Charts", commandId: "live-charts.open", iconColor: C.blue },
         { id: "ws-analyze", icon: icon(BarChart3), label: "Analyze",               commandId: "analysis-plots.open",       iconColor: C.green },
         {
           id: "ws-panel",

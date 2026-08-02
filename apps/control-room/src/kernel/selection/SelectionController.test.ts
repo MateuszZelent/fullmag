@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import {
+  parseLiveChartSelectionIdentity,
+  serializeLiveChartSelectionIdentity,
+} from "./selectionTypes";
 
 import { SelectionController } from "./SelectionController";
 
@@ -77,6 +81,50 @@ describe("SelectionController", () => {
     controller.set(pointSelection, "analysis-plots");
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("treats a Live Chart point revision as part of selection identity", () => {
+    const { bus, controller } = setup();
+    const listener = vi.fn();
+    const livePoint = {
+      kind: "live.chart-point",
+      label: "mx 0.2",
+      nodeId: "live:chart:magnetization:point:mx:1:7",
+      objectId: null,
+      ref: {
+        descriptorId: "magnetization",
+        kind: "live.chart-point",
+        nodeId: "live:chart:magnetization:point:mx:1:7",
+        pointIndex: 1,
+        revision: 7,
+        seriesId: "mx",
+        type: "live-chart-point",
+      },
+    };
+
+    controller.set(livePoint, "live-charts");
+    bus.on("workspace:selection-changed", listener);
+    controller.set(livePoint, "live-charts");
+    controller.set(
+      {
+        ...livePoint,
+        ref: { ...livePoint.ref, revision: 8 },
+      },
+      "live-charts",
+    );
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the old live chart identity but writes only the live namespace", () => {
+    const parsed = parseLiveChartSelectionIdentity(
+      "analysis:charts:default",
+    );
+
+    expect(parsed).toEqual({ descriptorId: "default", kind: "live.chart" });
+    expect(serializeLiveChartSelectionIdentity(parsed!)).toBe(
+      "live:chart:default",
+    );
   });
 
   it("clear() resets to null", () => {

@@ -127,6 +127,13 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves Live Chart and Live Chart point selections to their own Inspector", () => {
+    expect(resolveInspectorPanel({ kind: "live.chart" })?.id).toBe("live-chart");
+    expect(resolveInspectorPanel({ kind: "live.chart-point" })?.id).toBe(
+      "live-chart",
+    );
+  });
+
   it("resolves geometry object selections to their correct panels", () => {
     expect(resolveInspectorPanel({ kind: "object.root" })?.id).toBe(
       "object-general",

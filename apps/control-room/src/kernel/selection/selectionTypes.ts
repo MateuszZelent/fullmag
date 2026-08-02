@@ -37,6 +37,55 @@ type ObjectSelectionKind =
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 export type RegionVisualizationTargetId = `region:${string}:${string}`;
+
+export type LiveChartSelection = {
+  kind: "live.chart";
+  descriptorId: string;
+};
+
+export type LiveChartPointSelection = {
+  kind: "live.chart-point";
+  descriptorId: string;
+  seriesId: string;
+  pointIndex: number;
+  revision: string | number;
+};
+
+export type LiveChartSelectionRef = LiveChartSelection & {
+  nodeId: string;
+  type: "live-chart";
+};
+
+export type LiveChartPointSelectionRef = LiveChartPointSelection & {
+  nodeId: string;
+  type: "live-chart-point";
+};
+
+/**
+ * Read the legacy live-chart selection only during the preference v1 migration.
+ * Remove after one released schema version has written `fm:live-chart-preferences:v1`
+ * and browser migration tests prove no old live identity remains.
+ */
+export function parseLiveChartSelectionIdentity(
+  identity: string,
+): LiveChartSelection | null {
+  const legacyPrefix = "analysis:charts:";
+  const currentPrefix = "live:chart:";
+  const descriptorId = identity.startsWith(legacyPrefix)
+    ? identity.slice(legacyPrefix.length)
+    : identity.startsWith(currentPrefix)
+      ? identity.slice(currentPrefix.length)
+      : "";
+  return descriptorId.length > 0
+    ? { descriptorId, kind: "live.chart" }
+    : null;
+}
+
+export function serializeLiveChartSelectionIdentity(
+  selection: LiveChartSelection,
+): string {
+  return `live:chart:${selection.descriptorId}`;
+}
 export interface VisualizationMeshPartLike {
   geometry_id?: string | null;
   id: string;
@@ -111,6 +160,8 @@ export function visualizationObjectIdForMeshPartLike(part: {
 export type MeshElementFamily = "hex8" | "prism6" | "pyramid5" | "tet4";
 
 export type SelectionRef =
+  | LiveChartSelectionRef
+  | LiveChartPointSelectionRef
   | {
       kind: "model.planar.monitor";
       monitorId: string;
@@ -436,6 +487,23 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "live-chart":
+      return (
+        right.type === "live-chart" &&
+        left.kind === right.kind &&
+        left.descriptorId === right.descriptorId &&
+        left.nodeId === right.nodeId
+      );
+    case "live-chart-point":
+      return (
+        right.type === "live-chart-point" &&
+        left.kind === right.kind &&
+        left.descriptorId === right.descriptorId &&
+        left.seriesId === right.seriesId &&
+        left.pointIndex === right.pointIndex &&
+        left.revision === right.revision &&
+        left.nodeId === right.nodeId
+      );
     case "planar-monitor":
       return (
         right.type === "planar-monitor" &&
