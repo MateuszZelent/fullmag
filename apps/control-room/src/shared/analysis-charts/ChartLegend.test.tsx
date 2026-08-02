@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ChartLegend, chartColorNameForIndex, type ChartLegendItem } from "./ChartLegend";
-import { toggleSelectedSeriesId } from "./chartSeriesSelection";
 
 describe("ChartLegend", () => {
   const dummyItems: ChartLegendItem[] = [
@@ -34,7 +34,7 @@ describe("ChartLegend", () => {
     const html = renderToStaticMarkup(
       <ChartLegend
         items={dummyItems}
-        onSelectedSeriesIdsChange={vi.fn()}
+        onSelectedSeriesIdsChange={() => undefined}
         selectedSeriesIds={["s1", "s2"]}
       />,
     );
@@ -52,24 +52,26 @@ describe("ChartLegend", () => {
 
   it("returns null when items array is empty", () => {
     const html = renderToStaticMarkup(
-      <ChartLegend items={[]} onSelectedSeriesIdsChange={vi.fn()} selectedSeriesIds={[]} />,
+      <ChartLegend items={[]} onSelectedSeriesIdsChange={() => undefined} selectedSeriesIds={[]} />,
     );
     expect(html).toBe("");
   });
 
-  it("renders the exact selected-series state after a legend toggle without an API call", () => {
-    const rowsBinary = vi.fn();
-    const selectedAfterToggle = toggleSelectedSeriesId(["s1"], "s1", false);
-    const callsBeforeToggle = rowsBinary.mock.calls.length;
-    const html = renderToStaticMarkup(
-      <ChartLegend
-        items={dummyItems}
-        onSelectedSeriesIdsChange={() => undefined}
-        selectedSeriesIds={selectedAfterToggle}
-      />,
-    );
+  it("updates the authoritative selection through the legend click handler", () => {
+    let received: string[] | null = null;
+    const legend = ChartLegend({
+      items: dummyItems,
+      onSelectedSeriesIdsChange: (next) => {
+        received = next;
+      },
+      selectedSeriesIds: ["s1"],
+    }) as ReactElement<{
+      children: ReactElement<{ onClick: (event: { shiftKey: boolean }) => void }>[];
+    }>;
+    const firstButton = legend.props.children[0]!;
 
-    expect(html).toContain('aria-pressed="false"');
-    expect(rowsBinary).toHaveBeenCalledTimes(callsBeforeToggle);
+    firstButton.props.onClick({ shiftKey: false });
+
+    expect(received).toEqual([]);
   });
 });

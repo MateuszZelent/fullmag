@@ -27,11 +27,28 @@ describe("AnalysisEnergySurface", () => {
       <AnalysisEnergySurface
         kernel={{} as KernelApi}
         onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedSeriesIds={["e_total"]}
         series={series}
         status="ready"
       />,
     );
 
     expect(html).toContain('aria-label="E total, unit pJ, latest 2.0000e-6');
+  });
+
+  it("renders an explicit empty selection instead of restoring all energy series", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisEnergySurface
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedSeriesIds={[]}
+        series={series}
+        status="ready"
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
   });
 });

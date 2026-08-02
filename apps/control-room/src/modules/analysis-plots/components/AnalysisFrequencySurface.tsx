@@ -35,8 +35,8 @@ export function AnalysisFrequencySurface({
 }: {
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
-  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
-  selectedSeriesIds?: readonly string[];
+  onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
+  selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   series: readonly ChartSeries[];
   status: string;
@@ -67,8 +67,7 @@ export function AnalysisFrequencySurface({
   }
 
   const allIds = series.map((s) => s.id);
-  const effectiveSelectedSeriesIds = selectedSeriesIds ?? allIds;
-  const selected = new Set(sanitizeSelectedSeriesIds(effectiveSelectedSeriesIds, allIds));
+  const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
   const yTransforms = createChartYAxisDisplayTransforms(
@@ -101,7 +100,7 @@ export function AnalysisFrequencySurface({
       ariaLabel="Frequency-domain series"
       items={legendItems}
       onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
-      selectedSeriesIds={effectiveSelectedSeriesIds}
+      selectedSeriesIds={selectedSeriesIds}
     />
   );
 

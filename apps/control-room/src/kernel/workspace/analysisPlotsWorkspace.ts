@@ -108,6 +108,17 @@ class AnalysisPlotsWorkspaceStore {
     this.setState({ ...this.state, selectedSeriesIds: next });
   }
 
+  setTableSelection(xAxisId: string, selectedSeriesIds: readonly string[]): void {
+    const next = [...new Set(selectedSeriesIds)];
+    if (
+      this.state.xAxisId === xAxisId &&
+      stringArraysEqual(this.state.selectedSeriesIds, next)
+    ) {
+      return;
+    }
+    this.setState({ ...this.state, selectedSeriesIds: next, xAxisId });
+  }
+
   setRange(range: AnalysisChartRange): void {
     if (
       this.state.range?.fromValue === range.fromValue &&

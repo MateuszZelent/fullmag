@@ -193,6 +193,22 @@ describe("writeAnalysisChartPreferencesToStorage / readAnalysisChartPreferencesF
 });
 
 describe("getOrCreateDescriptorPreferences", () => {
+  it("uses energy defaults for a new energy descriptor instead of table IDs", () => {
+    const { descriptor } = getOrCreateDescriptorPreferences(
+      defaultAnalysisChartPreferences(),
+      "analysis:solver-energy-history",
+    );
+
+    expect(descriptor.selectedSeriesIds).toEqual([
+      "simulation.solver.energies:exchange",
+      "simulation.solver.energies:demag",
+      "simulation.solver.energies:zeeman",
+      "simulation.solver.energies:anisotropy",
+      "simulation.solver.energies:dmi",
+      "simulation.solver.energies:total",
+    ]);
+  });
+
   it("creates new descriptor with defaults when not present", () => {
     const prefs = defaultAnalysisChartPreferences();
     const { descriptor } = getOrCreateDescriptorPreferences(prefs, "new-key");

@@ -3,6 +3,7 @@ import type { AnalysisChartRangeMode, AnalysisWorkbenchSurface, ChartLiveMode } 
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import type { AxisColumnDescriptor } from "@/shared/domain/analysis/TableColumnList";
+import type { ChartSeriesSelectionScope } from "@/shared/analysis-charts/chartSeriesSelection";
 
 import type { ChartSeries, ChartValueRange } from "./chartTableModel";
 
@@ -13,7 +14,7 @@ export interface AnalysisPlotsViewProps {
   frequencyDomainStatus?: string;
   frequencyDomainTitle?: string;
   frequencyDomainUnavailableReason?: string | null;
-  selectedSeriesIds?: readonly string[];
+  selectedSeriesIds: readonly string[];
   kernel: KernelApi;
   liveMode?: ChartLiveMode;
   onClearRange: () => void;
@@ -25,7 +26,10 @@ export interface AnalysisPlotsViewProps {
   onTargetPointsChange?: (targetPoints: 160 | 400 | 800 | 1600 | 3200 | 5000) => void;
   onSeriesSelect: (series: ChartSeries) => void;
   onSurfaceChange?: (surface: AnalysisWorkbenchSurface) => void;
-  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
+  onSelectedSeriesIdsChange?: (
+    scope: ChartSeriesSelectionScope,
+    selectedSeriesIds: string[],
+  ) => void;
   range: ChartValueRange | null;
   rangeMode?: AnalysisChartRangeMode;
   selectedPoint: AnalysisChartCursorPoint | null;

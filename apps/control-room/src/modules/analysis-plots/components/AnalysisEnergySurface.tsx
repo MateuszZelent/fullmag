@@ -24,8 +24,8 @@ export function AnalysisEnergySurface({
 }: {
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
-  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
-  selectedSeriesIds?: readonly string[];
+  onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
+  selectedSeriesIds: readonly string[];
   series: readonly ChartSeries[];
   showLegend?: boolean;
   status: string;
@@ -35,8 +35,7 @@ export function AnalysisEnergySurface({
   }
 
   const allIds = series.map((s) => s.id);
-  const effectiveSelectedSeriesIds = selectedSeriesIds ?? allIds;
-  const selected = new Set(sanitizeSelectedSeriesIds(effectiveSelectedSeriesIds, allIds));
+  const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
   const yTransforms = createChartYAxisDisplayTransforms(
@@ -69,7 +68,7 @@ export function AnalysisEnergySurface({
       ariaLabel="Energy series"
       items={legendItems}
       onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
-      selectedSeriesIds={effectiveSelectedSeriesIds}
+      selectedSeriesIds={selectedSeriesIds}
     />
   ) : null;
 

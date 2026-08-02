@@ -39,7 +39,7 @@ export function AnalysisPlotsView({
   tableRowsStatus,
   visibleTable,
   xAxisId,
-  selectedSeriesIds = [],
+  selectedSeriesIds,
 }: AnalysisPlotsViewProps) {
   const tableSurfaceActive =
     activeSurface === "overview" ||
@@ -62,7 +62,7 @@ export function AnalysisPlotsView({
             activeSurface,
           )
         : [],
-    [activeSurface, selectedSeriesIds, table, tableRowsStatus, tableSurfaceActive, visibleTable, xAxisId],
+    [activeSurface, table, tableRowsStatus, tableSurfaceActive, visibleTable, xAxisId],
   );
   const showFrequency =
     activeSurface === "frequency" ||
@@ -86,7 +86,8 @@ export function AnalysisPlotsView({
             liveMode={liveMode}
             onPointSelect={onPointSelect}
             onRangeChange={onRangeChange}
-            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+            onSelectedSeriesIdsChange={(nextSelectedSeriesIds) =>
+              onSelectedSeriesIdsChange("table", nextSelectedSeriesIds)}
             range={range}
             selectedSeriesIds={selectedSeriesIds}
             selectedPoint={selectedPoint}
@@ -100,7 +101,8 @@ export function AnalysisPlotsView({
           <AnalysisEnergySurface
             kernel={kernel}
             onPointSelect={onPointSelect}
-            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+            onSelectedSeriesIdsChange={(nextSelectedSeriesIds) =>
+              onSelectedSeriesIdsChange("energy", nextSelectedSeriesIds)}
             selectedSeriesIds={selectedSeriesIds}
             series={solverEnergySeries}
             status={solverEnergyStatus}
@@ -110,7 +112,8 @@ export function AnalysisPlotsView({
           <AnalysisFrequencySurface
             kernel={kernel}
             onPointSelect={onPointSelect}
-            onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+            onSelectedSeriesIdsChange={(nextSelectedSeriesIds) =>
+              onSelectedSeriesIdsChange("frequency", nextSelectedSeriesIds)}
             selectedSeriesIds={selectedSeriesIds}
             selectedPoint={selectedPoint}
             series={frequencyDomainSeries}

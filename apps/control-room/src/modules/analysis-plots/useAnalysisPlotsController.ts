@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import {
@@ -36,6 +36,12 @@ import {
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import {
+  chartSeriesIdBelongsToScope,
+  initializeSelectedSeriesIdsForUnconfiguredScope,
+  replaceSelectedSeriesIdsInScope,
+  type ChartSeriesSelectionScope,
+} from "@/shared/analysis-charts/chartSeriesSelection";
 
 import {
   tableRowsStatusForDisplay,
@@ -58,6 +64,54 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const appliedActiveSurfaceRef = useRef(false);
   const appliedDescriptorRef = useRef<unknown>(null);
 
+  const commitScopedSelection = useCallback(
+    (
+      scope: ChartSeriesSelectionScope,
+      nextSelectedSeriesIds: readonly string[],
+    ) => {
+      const ownsSeriesId = (seriesId: string) =>
+        chartSeriesIdBelongsToScope(scope, seriesId);
+      const scopedSelection = nextSelectedSeriesIds.filter(ownsSeriesId);
+      const mergedSelection = replaceSelectedSeriesIdsInScope(
+        analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds,
+        scopedSelection,
+        ownsSeriesId,
+      );
+      analysisPlotsWorkspaceStore.setSelectedSeriesIds(mergedSelection);
+      preferences.setDescriptorSelectedSeriesIds(
+        analysisChartDescriptorIdForScope(scope),
+        scopedSelection,
+      );
+    },
+    [preferences],
+  );
+
+  const commitTableSelection = useCallback(
+    (nextSelectedSeriesIds: readonly string[]) =>
+      commitScopedSelection("table", nextSelectedSeriesIds),
+    [commitScopedSelection],
+  );
+
+  const commitTableXAxis = useCallback(
+    (nextXAxisId: string, nextSelectedSeriesIds: readonly string[]) => {
+      const scopedSelection = nextSelectedSeriesIds.filter((seriesId) =>
+        chartSeriesIdBelongsToScope("table", seriesId),
+      );
+      const mergedSelection = replaceSelectedSeriesIdsInScope(
+        analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds,
+        scopedSelection,
+        (seriesId) => chartSeriesIdBelongsToScope("table", seriesId),
+      );
+      analysisPlotsWorkspaceStore.setTableSelection(nextXAxisId, mergedSelection);
+      preferences.setDescriptorXAxisId("analysis:data-table:default", nextXAxisId);
+      preferences.setDescriptorSelectedSeriesIds(
+        "analysis:data-table:default",
+        scopedSelection,
+      );
+    },
+    [preferences],
+  );
+
   useEffect(() => {
     if (!preferences.isHydrated) return;
     if (!appliedActiveSurfaceRef.current) {
@@ -67,9 +121,18 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     const descriptor = preferences.descriptor;
     if (!descriptor || appliedDescriptorRef.current === descriptor) return;
     appliedDescriptorRef.current = descriptor;
+    const scope = chartSeriesSelectionScopeForDescriptorId(descriptorId);
+    const mergedSelection = replaceSelectedSeriesIdsInScope(
+      analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds,
+      descriptor.selectedSeriesIds,
+      (seriesId) => chartSeriesIdBelongsToScope(scope, seriesId),
+    );
     analysisPlotsWorkspaceStore.setLiveMode(descriptor.liveMode);
-    analysisPlotsWorkspaceStore.setSelectedSeriesIds(descriptor.selectedSeriesIds);
-    analysisPlotsWorkspaceStore.setXAxisId(descriptor.xAxisId);
+    if (scope === "table") {
+      analysisPlotsWorkspaceStore.setTableSelection(descriptor.xAxisId, mergedSelection);
+    } else {
+      analysisPlotsWorkspaceStore.setSelectedSeriesIds(mergedSelection);
+    }
     analysisPlotsWorkspaceStore.setTargetPoints(descriptor.targetPoints);
     if (descriptor.range.mode === "fixed") {
       analysisPlotsWorkspaceStore.setRange({
@@ -79,7 +142,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     } else {
       analysisPlotsWorkspaceStore.setRangeMode(descriptor.range);
     }
-  }, [preferences.descriptor, preferences.isHydrated, preferences.prefs.activeSurface]);
+  }, [descriptorId, preferences.descriptor, preferences.isHydrated, preferences.prefs.activeSurface]);
 
   // Delegate data family loading to dedicated resource hooks (Etap 10)
   const tableData = useAnalysisTableData(kernel, {
@@ -88,6 +151,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     range,
     rangeMode,
     targetPoints,
+    onTableSelectionChange: commitTableSelection,
+    onTableXAxisChange: commitTableXAxis,
   });
   const setDescriptorRange = preferences.setDescriptorRange;
 
@@ -104,6 +169,35 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const energyData = useAnalysisEnergyData(activeSurface);
 
   const frequencyData = useAnalysisFrequencyData(activeSurface);
+
+  useEffect(() => {
+    if (!preferences.isHydrated || preferences.descriptor) return;
+    const scope = activeSurface === "energy"
+      ? "energy"
+      : activeSurface === "frequency"
+        ? "frequency"
+        : null;
+    const availableSeriesIds = scope === "energy"
+      ? energyData.solverEnergySeries.map((series) => series.id)
+      : scope === "frequency"
+        ? frequencyData.frequencyDomainSeries.map((series) => series.id)
+        : [];
+    if (!scope || availableSeriesIds.length === 0) return;
+    const initialized = initializeSelectedSeriesIdsForUnconfiguredScope(
+      analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds,
+      availableSeriesIds,
+      false,
+      (seriesId) => chartSeriesIdBelongsToScope(scope, seriesId),
+    );
+    commitScopedSelection(scope, initialized);
+  }, [
+    activeSurface,
+    commitScopedSelection,
+    energyData.solverEnergySeries,
+    frequencyData.frequencyDomainSeries,
+    preferences.descriptor,
+    preferences.isHydrated,
+  ]);
 
   const selectedStageId = useSelectionSelector(
     selectedHysteresisStageIdFromSelection,
@@ -229,19 +323,14 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       preferences.setDescriptorTargetPoints(descriptorId, points);
       analysisPlotsWorkspaceStore.setTargetPoints(points);
     },
-    setSelectedSeriesIds: (nextSelectedSeriesIds: readonly string[]) => {
-      analysisPlotsWorkspaceStore.setSelectedSeriesIds(nextSelectedSeriesIds);
-      preferences.setDescriptorSelectedSeriesIds(
-        descriptorId,
-        [...analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds],
-      );
-    },
+    setSelectedSeriesIds: (
+      scope: ChartSeriesSelectionScope,
+      nextSelectedSeriesIds: readonly string[],
+    ) => commitScopedSelection(scope, nextSelectedSeriesIds),
     solverEnergySeries: energyData.solverEnergySeries,
     solverEnergyStatus: energyData.solverEnergyStatus,
     setXAxisId: (columnId: string) => {
       tableData.setXAxisId(columnId);
-      const next = analysisPlotsWorkspaceStore.getSnapshot();
-      preferences.setDescriptorXAxisId(descriptorId, next.xAxisId);
     },
     availableColumns: tableData.availableColumns,
     tableRowsStatus: tableRowsStatusForDisplay(
@@ -329,6 +418,27 @@ function analysisChartDescriptorId(surface: AnalysisWorkbenchSurface): string {
   if (surface === "energy") return "analysis:solver-energy-history";
   if (surface === "frequency") return "analysis:frequency-domain";
   return "analysis:data-table:default";
+}
+
+function analysisChartDescriptorIdForScope(
+  scope: ChartSeriesSelectionScope,
+): string {
+  switch (scope) {
+    case "energy":
+      return "analysis:solver-energy-history";
+    case "frequency":
+      return "analysis:frequency-domain";
+    case "table":
+      return "analysis:data-table:default";
+  }
+}
+
+function chartSeriesSelectionScopeForDescriptorId(
+  descriptorId: string,
+): ChartSeriesSelectionScope {
+  if (descriptorId === "analysis:solver-energy-history") return "energy";
+  if (descriptorId === "analysis:frequency-domain") return "frequency";
+  return "table";
 }
 
 function emitRangeSelected(

@@ -38,6 +38,8 @@ describe("AnalysisFrequencySurface", () => {
       <AnalysisFrequencySurface
         kernel={{} as KernelApi}
         onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedSeriesIds={["response"]}
         selectedPoint={selectedPoint}
         series={series}
         status="ready"
@@ -48,5 +50,23 @@ describe("AnalysisFrequencySurface", () => {
 
     expect(html).toContain("9.5 THz");
     expect(html).toContain('aria-label="Response, unit dimensionless, latest 0.5');
+  });
+
+  it("renders an explicit empty selection instead of restoring all frequency series", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedSeriesIds={[]}
+        selectedPoint={null}
+        series={series}
+        status="ready"
+        title="FMR response sweep"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
   });
 });

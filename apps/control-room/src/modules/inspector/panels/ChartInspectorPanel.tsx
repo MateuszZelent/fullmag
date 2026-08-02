@@ -8,7 +8,11 @@ import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysi
 import { sanitizeYAxisIdsForUnitLimit, TableColumnList } from "@/shared/domain/analysis/TableColumnList";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
 import { ChartControlBar } from "@/shared/analysis-charts/ChartControlBar";
-import { tableChartSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
+import {
+  isTableChartSeriesId,
+  replaceSelectedSeriesIdsInScope,
+  tableChartSeriesId,
+} from "@/shared/analysis-charts/chartSeriesSelection";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -58,7 +62,12 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
       const sanitized = sanitizedColumns.map((columnId) =>
         tableChartSeriesId(tableId, current.xAxisId, columnId),
       );
-      analysisPlotsWorkspaceStore.setSelectedSeriesIds(sanitized);
+      const merged = replaceSelectedSeriesIdsInScope(
+        current.selectedSeriesIds,
+        sanitized,
+        isTableChartSeriesId,
+      );
+      analysisPlotsWorkspaceStore.setSelectedSeriesIds(merged);
       preferences.setDescriptorSelectedSeriesIds(descriptorId, sanitized);
     },
     [descriptorId, preferences, tableId],
@@ -81,8 +90,12 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
     const nextSelectedSeriesIds = nextSelectedColumnIds.map((selectedColumnId) =>
       tableChartSeriesId(tableId, columnId, selectedColumnId),
     );
-    analysisPlotsWorkspaceStore.setXAxisId(columnId);
-    analysisPlotsWorkspaceStore.setSelectedSeriesIds(nextSelectedSeriesIds);
+    const merged = replaceSelectedSeriesIdsInScope(
+      current.selectedSeriesIds,
+      nextSelectedSeriesIds,
+      isTableChartSeriesId,
+    );
+    analysisPlotsWorkspaceStore.setTableSelection(columnId, merged);
     preferences.setDescriptorXAxisId(descriptorId, columnId);
     preferences.setDescriptorSelectedSeriesIds(descriptorId, nextSelectedSeriesIds);
   }, [descriptorId, preferences, tableId]);

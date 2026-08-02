@@ -30,6 +30,8 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
 import {
+  isTableChartSeriesId,
+  replaceSelectedSeriesIdsInScope,
   sanitizeSelectedSeriesIds,
   tableChartSeriesId,
 } from "@/shared/analysis-charts/chartSeriesSelection";
@@ -128,12 +130,19 @@ export function useAnalysisTableData(
     range,
     rangeMode,
     targetPoints,
+    onTableSelectionChange,
+    onTableXAxisChange,
   }: {
     activeSurface: string;
     liveMode: string;
     range: ChartValueRange | null;
     rangeMode: AnalysisChartRangeMode;
     targetPoints: number;
+    onTableSelectionChange: (selectedSeriesIds: readonly string[]) => void;
+    onTableXAxisChange: (
+      xAxisId: string,
+      selectedSeriesIds: readonly string[],
+    ) => void;
   },
 ): AnalysisTableDataResult {
   const { bus } = kernel;
@@ -226,11 +235,11 @@ export function useAnalysisTableData(
     );
   }, [tableColumns.data]);
 
-  // Side-effect: remove unavailable series IDs without restoring defaults.
+  // Side-effect: remove unavailable table IDs without touching other surfaces.
   useEffect(() => {
     const columns = tableColumns.data;
     if (!columns) return;
-    const sanitized = tableSeriesIdsForColumnIds(
+    const sanitizedTableIds = tableSeriesIdsForColumnIds(
       resolveAnalysisPlotsYAxisIds(
         selectedColumnIds(selectedSeriesIds, columns, xAxisId),
         columns,
@@ -238,9 +247,14 @@ export function useAnalysisTableData(
       ),
       xAxisId,
     );
+    const sanitized = replaceSelectedSeriesIdsInScope(
+      selectedSeriesIds,
+      sanitizedTableIds,
+      isTableChartSeriesId,
+    );
     if (stringArraysEqual(sanitized, selectedSeriesIds)) return;
-    analysisPlotsWorkspaceStore.setSelectedSeriesIds(sanitized);
-  }, [selectedSeriesIds, tableColumns.data, xAxisId]);
+    onTableSelectionChange(sanitized);
+  }, [onTableSelectionChange, selectedSeriesIds, tableColumns.data, xAxisId]);
 
   // Side-effect: append decoded binary rows into visibleTable
   useEffect(() => {
@@ -287,15 +301,19 @@ export function useAnalysisTableData(
         xAxisId: current.xAxisId,
         yAxisIds: selectedColumnIds(current.selectedSeriesIds, columns, current.xAxisId),
       });
-      const nextSelectedSeriesIds = tableSeriesIdsForColumnIds(nextColumnIds, current.xAxisId);
+      const nextSelectedSeriesIds = replaceSelectedSeriesIdsInScope(
+        current.selectedSeriesIds,
+        tableSeriesIdsForColumnIds(nextColumnIds, current.xAxisId),
+        isTableChartSeriesId,
+      );
       if (stringArraysEqual(nextSelectedSeriesIds, current.selectedSeriesIds)) return;
-      analysisPlotsWorkspaceStore.setSelectedSeriesIds(nextSelectedSeriesIds);
+      onTableSelectionChange(nextSelectedSeriesIds);
     });
-  }, [bus, tableColumns.data]);
+  }, [bus, onTableSelectionChange, tableColumns.data]);
 
   const setXAxisId = (columnId: string) => {
-    analysisPlotsWorkspaceStore.setXAxisId(columnId);
-    analysisPlotsWorkspaceStore.setSelectedSeriesIds(
+    const nextSelectedSeriesIds = replaceSelectedSeriesIdsInScope(
+      analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds,
       tableSeriesIdsForColumnIds(resolveAnalysisPlotsYAxisIds(
         yAxisIdsAfterXAxisSelection(
           selectedColumnIds(selectedSeriesIds, tableColumns.data ?? [], xAxisId),
@@ -304,19 +322,24 @@ export function useAnalysisTableData(
         tableColumns.data,
         columnId,
       ), columnId),
+      isTableChartSeriesId,
     );
+    onTableXAxisChange(columnId, nextSelectedSeriesIds);
   };
 
   const setSelectedSeriesIds = (nextSelectedSeriesIds: readonly string[]) => {
     const columns = tableColumns.data;
-    analysisPlotsWorkspaceStore.setSelectedSeriesIds(
+    const current = analysisPlotsWorkspaceStore.getSnapshot();
+    onTableSelectionChange(replaceSelectedSeriesIdsInScope(
+      current.selectedSeriesIds,
       columns
         ? sanitizeSelectedSeriesIds(
             nextSelectedSeriesIds,
             tableSeriesIdsForColumns(columns, xAxisId),
           )
-        : nextSelectedSeriesIds,
-    );
+        : nextSelectedSeriesIds.filter(isTableChartSeriesId),
+      isTableChartSeriesId,
+    ));
   };
 
   return {

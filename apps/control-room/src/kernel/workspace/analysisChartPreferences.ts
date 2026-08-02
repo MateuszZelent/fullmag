@@ -85,15 +85,10 @@ export function chartRangePreferenceFromWorkspace(
 
 // ===== Defaults =====
 
-export function defaultDescriptorPreferences(): DescriptorPreferences {
+export function defaultDescriptorPreferences(descriptorId?: string): DescriptorPreferences {
   return {
     displayUnits: {},
-    selectedSeriesIds: [
-      "data.table:default:step:mx",
-      "data.table:default:step:my",
-      "data.table:default:step:mz",
-      "data.table:default:step:e_total",
-    ],
+    selectedSeriesIds: defaultSelectedSeriesIds(descriptorId),
     liveMode: "following",
     range: { mode: "follow" },
     targetPoints: DEFAULT_TARGET_POINTS,
@@ -314,7 +309,7 @@ export function getOrCreateDescriptorPreferences(
   descriptor: DescriptorPreferences;
 } {
   const existing = prefs.descriptorPreferences[descriptorId];
-  const descriptor = existing ?? defaultDescriptorPreferences();
+  const descriptor = existing ?? defaultDescriptorPreferences(descriptorId);
   const keys = [...Object.keys(prefs.descriptorPreferences), descriptorId];
   const lruAccessAt = { ...prefs._lruAccessAt, [descriptorId]: Date.now() };
   const trimmedKeys = lruEvict(keys, lruAccessAt, MAX_DESCRIPTORS);
@@ -323,7 +318,7 @@ export function getOrCreateDescriptorPreferences(
       k,
       k === descriptorId
         ? descriptor
-        : (prefs.descriptorPreferences[k] ?? defaultDescriptorPreferences()),
+        : (prefs.descriptorPreferences[k] ?? defaultDescriptorPreferences(k)),
     ]),
   );
   return {
@@ -334,6 +329,26 @@ export function getOrCreateDescriptorPreferences(
     },
     descriptor,
   };
+}
+
+function defaultSelectedSeriesIds(descriptorId?: string): string[] {
+  if (descriptorId === "analysis:solver-energy-history") {
+    return [
+      "simulation.solver.energies:exchange",
+      "simulation.solver.energies:demag",
+      "simulation.solver.energies:zeeman",
+      "simulation.solver.energies:anisotropy",
+      "simulation.solver.energies:dmi",
+      "simulation.solver.energies:total",
+    ];
+  }
+  if (descriptorId === "analysis:frequency-domain") return [];
+  return [
+    "data.table:default:step:mx",
+    "data.table:default:step:my",
+    "data.table:default:step:mz",
+    "data.table:default:step:e_total",
+  ];
 }
 
 function validatedDisplayUnits(value: unknown): Record<string, string> {

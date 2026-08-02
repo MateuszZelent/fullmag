@@ -2,7 +2,10 @@ import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { quickChartWorkspaceStore } from "@/kernel/workspace/quickChartWorkspace";
-import { tableColumnIdFromSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
+import {
+  isTableChartSeriesId,
+  tableColumnIdFromSeriesId,
+} from "@/shared/analysis-charts/chartSeriesSelection";
 
 export const analysisPlotsManifest: ModuleManifest = {
   id: "analysis-plots",
@@ -37,7 +40,9 @@ export const analysisPlotsManifest: ModuleManifest = {
             chartId,
             tableId,
             xAxisId: chart.xAxisId,
-            yAxisIds: chart.selectedSeriesIds.map(tableColumnIdFromSeriesId),
+            yAxisIds: chart.selectedSeriesIds
+              .filter(isTableChartSeriesId)
+              .map(tableColumnIdFromSeriesId),
           });
           context.bus?.emit("explorer:tab-requested", {
             source: "analysis-plots",
@@ -55,7 +60,9 @@ export const analysisPlotsManifest: ModuleManifest = {
               tableId,
               type: "quick-chart",
               xAxisId: chart.xAxisId,
-              yAxisIds: chart.selectedSeriesIds.map(tableColumnIdFromSeriesId),
+              yAxisIds: chart.selectedSeriesIds
+                .filter(isTableChartSeriesId)
+                .map(tableColumnIdFromSeriesId),
             },
           }, "analysis-plots");
           context.layout?.setFocusedSlot("panel-right");
