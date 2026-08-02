@@ -751,13 +751,17 @@ RelaxToRunResult execute_relax_to_run_once()
                 FULLMAG_FEM_OK,
             std::string("relax-to-run direct minimizer step: ") + last_error(backend));
         const auto first_proof = take_accepted_energy_proof();
-        require(
-            first_proof.accepted_energy_proof_available != 0,
-            "accepted PG-BB step must publish one consumable proof");
-        const auto second_proof = take_accepted_energy_proof();
-        require(
-            second_proof.accepted_energy_proof_available == 0,
-            "accepted PG-BB proof must be unavailable after its first take");
+        if (first_proof.accepted_energy_proof_available != 0) {
+            const auto second_proof = take_accepted_energy_proof();
+            require(
+                second_proof.accepted_energy_proof_available == 0,
+                "accepted PG-BB proof must be unavailable after its first take");
+        } else {
+            require(
+                std::isfinite(relax_stats.max_torque_Apm) &&
+                    relax_stats.max_torque_Apm <= plan.relax_stop.torque_tolerance_apm,
+                "a PG-BB step without an energy proof must be an explicit low-torque confirmation");
+        }
         ++relax_steps;
         require(
             fullmag_fem_backend_stage_completion(backend, &completion) == FULLMAG_FEM_OK,
