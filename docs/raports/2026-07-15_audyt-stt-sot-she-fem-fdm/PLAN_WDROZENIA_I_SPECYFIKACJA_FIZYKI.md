@@ -3711,11 +3711,11 @@ telemetryka zamyka defekt artefaktu, lecz nie zwiększa kwalifikacji fizycznej.
 ## 32.13. Zredukowana brama BORIS–Fullmag dla direct SHE (2026-08-02)
 
 Źródłowy audyt BORIS wykazał, że `external_solvers/BORIS` jest lokalnym
-snapshotem kodu (w `makefile` występuje `BVERSION := 380`), ale checkout nie
-zawiera zbudowanego `BorisLin`. Próba wykonania pełnego porównania binarnego
-nie może więc być przedstawiona jako dowód; środowisko nie ma również `nvcc`,
-którego wymaga linuxowy makefile BORIS. Nie zmieniono capability na podstawie
-samej obecności kodu CUDA.
+snapshotem kodu (w `makefile` występuje `BVERSION := 380`). W chwili zamykania
+tego historycznego reduced gate checkout nie zawierał zbudowanego `BorisLin`,
+więc wynik nie mógł być przedstawiony jako porównanie binarne; późniejszy
+patched-build smoke jest zapisany osobno w sekcji 32.20. Nie zmieniono
+capability na podstawie samej obecności kodu CUDA.
 
 ### 32.13.1. Oracle źródłowy
 
@@ -3746,8 +3746,9 @@ znormalizowany flux co BORIS.
 | SHA-256 źródeł BORIS | **zapisane w wyniku skryptu** | identyfikuje lokalny snapshot, nie release zewnętrzny |
 
 Brama zamknięta przez ten slice to wyłącznie
-`SHE-BORIS-REDUCED-1D-DIRECT`. Brama `SHE-BORIS-001` pozostaje otwarta: trzeba
-zbudować lub dostarczyć reprodukowalny executable BORIS, wykonać CPU/CUDA,
+`SHE-BORIS-REDUCED-1D-DIRECT`. Sekcja 32.20 dodaje ograniczony smoke
+wykonywalnego `BorisLin` z patched build copy, ale nie zastępuje reprodukowalnego
+wydania. Brama `SHE-BORIS-001` pozostaje otwarta: trzeba wykonać CPU/CUDA,
 ustawić osobno `iSHA=SHA`, porównać inverse SHE, profile materiałowe,
 interfejsy N/F/T oraz Fullmag FDM/FEM.
 
@@ -4090,3 +4091,65 @@ puste, a status nie promuje się do produkcji z powodu dirty provenance,
 SHE, interfejsów N/F/T mixing/SML, wspólnego continuum FDM↔FEM i browserowego
 end-to-end dla wszystkich parametrów. Ocena pozostaje konserwatywnie
 **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.20. Wykonawcza brama BORIS — build i reduced direct-SHE smoke (2026-08-02)
+
+W ramach `SHE-BORIS-001` wykonano pierwszy krok runtime, którego wcześniej
+brakowało: lokalny snapshot `external_solvers/BORIS` został zbudowany w
+zarządzanym obrazie CUDA, uruchomiono `BorisLin` przez NetSocks i odczytano
+obserwable transportu. Ciężki build pozostał na szybkim dysku
+`/zfn2/mateuszz/git/fullmag/boris-build`; nie zanieczyszczono checkoutu ani nie
+zmieniono ignorowanego snapshotu BORIS.
+
+### 32.20.1. Tożsamość i korekta buildowa
+
+```text
+source_manifest_sha256=8daa0a9b2ef414b95090f838ab72414fb6808909ea9bde50c4aabd2a11a717a2
+image=nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f
+configure=make configure arch=89 sprec=0 python=3.10 cuda=11.8
+compile=make compile -j8 && make install
+binary_sha256=5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997
+device=NVIDIA GeForce RTX 4080 SUPER, compute capability 8.9
+```
+
+CUDA 12.4 i CUDA 11.8 ujawniły ten sam brak overloadu
+`atomicAdd(size_t*, size_t)`. W kopii buildowej zastosowano wyłącznie
+kompatybilnościowy cast do 64-bitowego `unsigned long long` oraz rozszerzono
+istniejący adapter `unsigned long` do `sm_89`; źródło w
+`external_solvers/BORIS` pozostało bez zmian. Z tego powodu binarium jest
+artefaktem **patched build copy**, a nie kwalifikowanym binarium wydania BORIS.
+
+### 32.20.2. Wynik uruchomienia
+
+W jednorodnym przewodniku `10 x 2 x 2` dla `J_c=(10^{11},0,0) A/m^2`,
+`elC=5.8e7 S/m`, `De=0.01`, `lambda_sf=5 nm`, `SHA=0.10` wykonano tryb
+direct-only (`iSHA=0`):
+
+```text
+DIRECT_Jc  = [100000000000.0, 0.0, 0.0]
+DIRECT_S   = [0.0, 0.0, 0.0]
+DIRECT_Jsy = [0.0, 0.0, 289419.0]
+DIRECT_Jsz = [0.0, -289419.0, 0.0]
+```
+
+Kontrolny przebieg z `SHA=0` i `iSHA=0` zwrócił dokładnie zerowe `Jsy` i
+`Jsz`. Oba skrypty zakończyły kod użytkownika przed kontrolowanym timeoutem
+serwera (`Finished Python script`; kod procesu 143 pochodzi od zabicia
+pozostającego listenera). Smoke dowodzi wykonywalnej zależności direct-SHE od
+`SHA`, lecz nie dowodzi zgodności z Fullmag ani poprawnej skali quantity bez
+adaptera `S -> V_s -> mu_s`.
+
+### 32.20.3. Ujawniona pułapka API i granica bramy
+
+`Gi` i `Gmix` w BORIS są parametrami `DBL2`; ustawienie skalarnego `0.0`
+prowadzi w tej wersji do pustej listy komponentów i segfaultu w
+`MeshParamsBase::set_meshparam_value`. Poprawny zapis to `[0.0, 0.0]`. Jest to
+ustalenie interoperacyjności harnessu, nie poprawka równań Fullmag.
+
+`SHE-BORIS-001` pozostaje otwarte. Do zamknięcia pozostają: niepatchowane
+binarium albo wersjonowany release BORIS, reciprocal `iSHA=SHA` z niezerową
+akumulacją, inverse SHE, CPU↔CUDA parity, trzy siatki i sweep tolerancji,
+heterogeniczne N/F/T z `Gi/Gmix`, oraz ilościowe `V`/`S -> V_s`/`mu_s`/`Q_ia`
+z bilansami i residualami po stronie FDM/FEM. Capability matrix i
+`validated_workloads` nie zostały zmienione. Ocena celu pozostaje
+konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**.

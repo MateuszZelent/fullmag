@@ -4,7 +4,8 @@
 - Zakres: `docs/physics/0970-spin-hall-drift-diffusion-transport.md`,
   `docs/specs/spin-transport-runtime-contract-v1.md`, capability matrix oraz
   lokalny snapshot `external_solvers/BORIS/Boris`
-- Status: porównanie źródłowe; **brak twierdzenia o parity ilościowej**
+- Status: porównanie źródłowe + ograniczony executable smoke; **brak twierdzenia
+  o parity ilościowej**
 - Tożsamość BORIS: katalog jest lokalnym, ignorowanym snapshotem w checkoutcie
   Fullmag; nie ma osobnego commita BORIS, dlatego wynik nie jest reprodukowalną
   kwalifikacją konkretnego wydania zewnętrznego programu.
@@ -205,8 +206,10 @@ interfejsowy i inverse SHE.
 
 ## 7. Stan implementacji i blokady
 
-- BORIS: **source-visible implementation reference**, bez uruchomionego
-  `BorisLin`, twierdzenia o wersji release ani o kwalifikacji w tym checkoutcie.
+- BORIS: **source-visible implementation reference** plus ograniczony
+  executable direct-SHE smoke z patched build copy; nadal bez uruchomionego
+  binarium wydania BORIS, twierdzenia o wersji release ani kwalifikacji w tym
+  checkoutcie.
 - Fullmag M1 FEM CPU: **wąski reference executable** dla conforming H1/P1,
   transparent interface; signed analytic SHE jest zielony dla tego slice,
   natomiast cross-backend convergence i executable BORIS parity są nadal
@@ -223,9 +226,9 @@ awansu capability.
 
 ## 7.1. Wykonany zredukowany gate 1D (2026-08-02)
 
-Ponieważ snapshot nie zawiera binarium `BorisLin`, a lokalne środowisko nie ma
-`nvcc`, wykonano jawnie oznaczony **source-derived reduced oracle**, a nie
-parity executable. Implementacja znajduje się w
+Przed późniejszym buildem runtime snapshot nie zawierał binarium `BorisLin`,
+dlatego wykonano jawnie oznaczony **source-derived reduced oracle**, niezależny
+od executable smoke. Implementacja znajduje się w
 `scripts/verify_boris_fullmag_she_1d.py`; testy w
 `scripts/test_verify_boris_fullmag_she_1d.py`.
 
@@ -346,6 +349,76 @@ To usuwa rozbieżność między plannerem/runtime (który już emitował
 `reference_executable` dla ograniczonego FEM descriptoru) a publiczną macierzą.
 Nie zmienia wyniku porównania z BORIS: pełne executable parity nadal wymaga
 zamrożonego binarium BORIS, CPU/CUDA, `iSHA=SHA`, inverse SHE i interfejsów.
+
+## 7.4. Wykonany smoke executable BORIS direct-SHE (2026-08-02)
+
+Po audycie źródłowym zbudowano lokalny `BorisLin` ze snapshotu
+`external_solvers/BORIS`. Jest to dowód uruchomienia zewnętrznego kodu, ale nie
+reprodukowalny binarny release BORIS: snapshot nie ma commita, a kompilacja
+wymagała dwóch neutralnych adapterów zgodności CUDA w **kopii buildowej** poza
+checkoutem Fullmag:
+
+- `BorisCUDALib/Reduction.cuh`: jawny cast 64-bitowego `size_t` do
+  `unsigned long long` dla jedynego dostępnego overloadu `atomicAdd`;
+- `BorisCUDALib/atomics.cuh`: istniejący adapter `unsigned long` aktywowany do
+  `__CUDA_ARCH__ <= 900`, aby objąć Ada `sm_89`.
+
+Oryginalny snapshot pozostał niezmieniony. Tożsamość źródeł i artefaktu:
+
+```text
+source_manifest_sha256=8daa0a9b2ef414b95090f838ab72414fb6808909ea9bde50c4aabd2a11a717a2
+build_root=/zfn2/mateuszz/git/fullmag/boris-build/source
+image=nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f
+configure=make configure arch=89 sprec=0 python=3.10 cuda=11.8
+compile=make compile -j8 && make install
+binary_sha256=5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997
+device=NVIDIA GeForce RTX 4080 SUPER, compute capability 8.9
+```
+
+Pierwsza próba na CUDA 12.4 i powtórzona próba na CUDA 11.8 zatrzymały się na
+tym samym błędzie kompilacji `atomicAdd(size_t*, size_t)`; po adapterze build i
+link zakończyły się powodzeniem. `./BorisLin -version` i `./BorisLin -help`
+zwróciły kod 0, a runtime przyjął skrypt `-s` z `-g -1`.
+
+W ograniczonym jednorodnym przewodniku (`10 x 2 x 2` komórek,
+`J_c=(10^{11},0,0) A/m^2`, `elC=5.8e7 S/m`, `De=0.01`,
+`lambda_sf=5 nm`, `SHA=0.10`) wykonano dwa skrypty NetSocks. Dla
+`iSHA=0` (direct-only) BORIS zakończył skrypt i zwrócił:
+
+```text
+DIRECT_Jc  = [100000000000.0, 0.0, 0.0]
+DIRECT_S   = [0.0, 0.0, 0.0]
+DIRECT_Jsy = [0.0, 0.0, 289419.0]
+DIRECT_Jsz = [0.0, -289419.0, 0.0]
+```
+
+Przy `SHA=0` i `iSHA=0` te same obserwable spin-current były dokładnie zerowe:
+
+```text
+SHA0_Jsy = [0.0, 0.0, 0.0]
+SHA0_Jsz = [0.0, 0.0, 0.0]
+```
+
+Jest to minimalny dowód, że w zbudowanym BORIS parametr `SHA` zmienia
+wykonywalny kanał direct-SHE; nie jest to jeszcze porównanie profilu z
+Fullmag. `S`, `Jsy` i `Jsz` pozostawiono w natywnej konwencji quantity BORIS —
+nie przypisano im jednostek Fullmag bez adaptera `S -> V_s -> mu_s`.
+Skrypt `SHA=0.10, iSHA=0.10` zapisał dodatkowo `she_smoke_S.ovf` i
+`she_smoke_Jsy.ovf`, ale ustawienie obu współczynników nie jest testem
+Onsagera.
+
+Podczas smoke'u wykryto również pułapkę API BORIS: `Gi` i `Gmix` są
+parametrami `DBL2`, więc poprawne wyzerowanie wymaga `[0.0, 0.0]`; skalar
+`0.0` prowadzi w tej wersji do pustej listy komponentów w
+`MeshParamsBase::set_meshparam_value` i segfaultu. Nie jest to poprawka Fullmag
+ani dowód błędu równań SHE.
+
+`SHE-BORIS-001` pozostaje **otwarte**. Brakuje nadal: oryginalnego, niepatchowanego
+binarium albo opublikowanego wydania BORIS; testu reciprocal `iSHA=SHA` z
+niezerowym `S`; niezależnego inverse-SHE; BORIS CPU kontra CUDA; trzech
+rozdzielczości i sweepu tolerancji; heterogenicznego N/F/T z `Gi/Gmix`; oraz
+ilościowego porównania `V`, `S -> V_s`, `mu_s`, `Q_ia`, fluxów i bilansów z
+FDM/FEM. Capability Fullmag i `validated_workloads` pozostają bez zmian.
 
 ## 8. Źródła i mapowanie symboli
 
