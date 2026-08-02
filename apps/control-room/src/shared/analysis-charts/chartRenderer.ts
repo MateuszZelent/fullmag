@@ -1,14 +1,16 @@
 import type { EChartsOption } from "echarts";
 
 import {
-  axisScaleFromExtrema,
-  detectAxisScale,
-  formatAxisNameWithScale,
-  formatScaledTooltipValue,
+  parseLabelAndUnit,
   sanitizeLabelText,
   scaledAxisLabelFormatter,
   type AxisScale,
 } from "./scientificChartFormatting";
+import {
+  chartAxisName,
+  createChartDisplayTransform,
+  type ChartDisplayTransform,
+} from "./chartScalePolicy";
 import {
   DEFAULT_CHART_TOKENS,
   type FullmagChartTokens,
@@ -145,11 +147,17 @@ export function createChartRendererOwner(
 
 // ===== Scale computation =====
 
-function computeXScale(model: ChartRenderModel): AxisScale {
-  return detectAxisScale(iterateXValues(model.series));
+function computeXScale(model: ChartRenderModel): ChartDisplayTransform {
+  return createChartDisplayTransform(
+    model.xAxis.unit,
+    extremaFromValues(iterateXValues(model.series)),
+  );
 }
 
-function computeYScales(model: ChartRenderModel): AxisScale[] {
+function computeYScales(
+  model: ChartRenderModel,
+  axes: readonly { label: string; unit: string }[],
+): ChartDisplayTransform[] {
   const extrema = Array.from({ length: chartYAxisCount(model.series) }, () => ({
     absMax: 0,
     absMin: Number.POSITIVE_INFINITY,
@@ -166,9 +174,39 @@ function computeYScales(model: ChartRenderModel): AxisScale[] {
       axis.hasFiniteNonZeroValue = true;
     }
   }
-  return extrema.map((axis) =>
-    axisScaleFromExtrema(axis.absMin, axis.absMax, axis.hasFiniteNonZeroValue),
+  return extrema.map((axis, index) =>
+    createChartDisplayTransform(
+      axes[index]?.unit ?? "",
+      axis.hasFiniteNonZeroValue ? [axis.absMin, axis.absMax] : null,
+    ),
   );
+}
+
+function extremaFromValues(
+  values: Iterable<number>,
+): readonly [number, number] | null {
+  let absMax = 0;
+  let absMin = Number.POSITIVE_INFINITY;
+  for (const value of values) {
+    if (!Number.isFinite(value) || value === 0) continue;
+    const magnitude = Math.abs(value);
+    absMax = Math.max(absMax, magnitude);
+    absMin = Math.min(absMin, magnitude);
+  }
+  return Number.isFinite(absMin) ? [absMin, absMax] : null;
+}
+
+function axisScale(transform: ChartDisplayTransform): AxisScale {
+  return { factor: transform.factor, prefix: "" };
+}
+
+function seriesDisplayName(
+  series: ChartRenderSeries,
+  transforms: readonly ChartDisplayTransform[],
+): string {
+  const transform =
+    transforms[series.yAxis] ?? createChartDisplayTransform(series.unit, null);
+  return sanitizeLabelText(chartAxisName(series.label, transform));
 }
 
 function chartYAxisCount(series: readonly ChartRenderSeries[]): number {
@@ -208,7 +246,10 @@ export function chartRenderModelToEChartsOption(
 
   // Auto-scale axes
   const xScale = computeXScale(model);
-  const yScales = computeYScales(model);
+  const yScales = computeYScales(model, yAxes);
+  const seriesNames = new Map(
+    model.series.map((series) => [seriesDisplayName(series, yScales), series]),
+  );
 
   const textMuted = resolvedTokens.textMuted;
   const textPrimary = resolvedTokens.textPrimary;
@@ -253,11 +294,7 @@ export function chartRenderModelToEChartsOption(
         scale: false,
       },
       lineStyle: { width: 1.5 },
-      name: sanitizeLabelText(
-        series.unit
-          ? `${series.label} [${series.unit}]`
-          : series.label,
-      ),
+      name: seriesDisplayName(series, yScales),
       progressive: 0,
       showSymbol: series.kind === "scatter",
       symbol: series.kind === "scatter" ? "circle" : "none",
@@ -276,7 +313,7 @@ export function chartRenderModelToEChartsOption(
         const first = params[0] as { axisValue?: unknown; data?: unknown[] };
         const rawXVal = typeof first.axisValue === "number" ? first.axisValue : null;
         const xVal = rawXVal !== null
-          ? formatScaledTooltipValue(rawXVal, model.xAxis.unit, xScale)
+          ? xScale.formatValue(rawXVal)
           : sanitizeLabelText(String(first.axisValue ?? ""));
         const lines: string[] = [
           `${sanitizeLabelText(model.xAxis.label || "x")}: ${xVal}`,
@@ -286,12 +323,11 @@ export function chartRenderModelToEChartsOption(
           value?: unknown[];
         }>) {
           const rawYVal = Array.isArray(p.value) && typeof p.value[1] === "number" ? p.value[1] : null;
-          const seriesMatch = model.series.find((s) => sanitizeLabelText(s.unit ? `${s.label} [${s.unit}]` : s.label) === p.seriesName);
+          const seriesMatch = seriesNames.get(p.seriesName ?? "");
           const axisIndex = seriesMatch?.yAxis ?? 0;
-          const yScale = yScales[axisIndex] ?? { factor: 1, prefix: "" };
-          const yUnit = seriesMatch?.unit ?? "";
+          const yScale = yScales[axisIndex] ?? createChartDisplayTransform("", null);
           const yVal = rawYVal !== null
-            ? formatScaledTooltipValue(rawYVal, yUnit, yScale)
+            ? yScale.formatValue(rawYVal)
             : Array.isArray(p.value)
             ? String(p.value[1] ?? "—")
             : "—";
@@ -318,7 +354,7 @@ export function chartRenderModelToEChartsOption(
         color: textMuted,
         fontFamily,
         fontSize: 10,
-        formatter: scaledAxisLabelFormatter(xScale, 4),
+        formatter: scaledAxisLabelFormatter(axisScale(xScale), 4),
         hideOverlap: true,
         margin: 8,
       },
@@ -327,7 +363,10 @@ export function chartRenderModelToEChartsOption(
         show: true,
       },
       axisTick: { show: false },
-      name: formatAxisNameWithScale(model.xAxis.label, model.xAxis.unit, xScale),
+      name: chartAxisName(
+        parseLabelAndUnit(model.xAxis.label, model.xAxis.unit).baseLabel,
+        xScale,
+      ),
       nameGap: 26,
       nameLocation: "middle",
       nameTextStyle: {
@@ -342,18 +381,18 @@ export function chartRenderModelToEChartsOption(
 
     // ── Y Axes — auto-scaled per axis ────────────────────────────────────────
     yAxis: yAxes.slice(0, yAxisCount).map((axis, index) => {
-      const yScale = yScales[index] ?? { factor: 1, prefix: "" };
+      const yScale = yScales[index] ?? createChartDisplayTransform(axis.unit, null);
       return {
         axisLabel: {
           color: textMuted,
           fontFamily,
           fontSize: 10,
-          formatter: scaledAxisLabelFormatter(yScale, 4),
+          formatter: scaledAxisLabelFormatter(axisScale(yScale), 4),
           margin: 4,
         },
         axisLine: { show: false },
         axisTick: { show: false },
-        name: formatAxisNameWithScale(axis.label, axis.unit, yScale),
+        name: chartAxisName(parseLabelAndUnit(axis.label, axis.unit).baseLabel, yScale),
         nameGap: 8,
         nameLocation: "end",
         nameTextStyle: {

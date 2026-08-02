@@ -199,14 +199,7 @@ export function formatScaledTooltipValue(
   unit: string,
   scale: AxisScale,
 ): string {
-  if (!Number.isFinite(value)) return "—";
-  const scaled = value / scale.factor;
-  const formatted =
-    Math.abs(scaled) >= 1e4 || (scaled !== 0 && Math.abs(scaled) < 1e-3)
-      ? scaled.toExponential(4)
-      : String(Number(scaled.toPrecision(5)));
-  const fullUnit = scale.prefix + sanitizeLabelText(unit);
-  return fullUnit ? `${formatted} ${fullUnit}` : formatted;
+  return formatTooltipValue(value / scale.factor, `${scale.prefix}${unit}`);
 }
 
 /**

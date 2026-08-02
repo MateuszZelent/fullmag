@@ -100,6 +100,34 @@ describe("ChartDescriptor", () => {
     );
   });
 
+  it("does not place normalized m and physical M on one axis", () => {
+    const value = descriptor();
+    value.axes[1] = {
+      ...value.axes[1],
+      canonicalUnit: "1",
+      dimension: "dimensionless",
+      displayUnit: "1",
+    };
+    value.series = [
+      {
+        axisId: value.axes[1].id,
+        canonicalUnit: "1",
+        id: "my",
+        label: "my",
+        quantity: "my",
+      },
+      {
+        axisId: value.axes[1].id,
+        canonicalUnit: "A/m",
+        id: "M_y",
+        label: "M_y",
+        quantity: "M_y",
+      },
+    ];
+
+    expect(() => assertChartDescriptor(value)).toThrow("series[1].canonicalUnit");
+  });
+
   it("requires revisioned source identity and unique axes", () => {
     const missingRevision = descriptor();
     missingRevision.source.resourceRevision = Number.NaN;
