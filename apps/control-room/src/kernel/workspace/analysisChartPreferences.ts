@@ -283,6 +283,14 @@ function isValidSurface(value: unknown): value is AnalysisWorkbenchSurface {
 
 export const ANALYSIS_CHART_PREFERENCES_STORAGE_KEY = "fm:analysis-chart-preferences:v1";
 
+export function parseStoredAnalysisChartPreferences(serialized: string | null): AnalysisChartPreferencesV1 {
+  try {
+    return serialized ? validateAnalysisChartPreferences(JSON.parse(serialized)) : defaultAnalysisChartPreferences();
+  } catch {
+    return defaultAnalysisChartPreferences();
+  }
+}
+
 /**
  * Safely parse preferences from localStorage.
  * Returns defaults on parse/validation failure.
@@ -299,8 +307,7 @@ export function readAnalysisChartPreferencesFromStorage(): AnalysisChartPreferen
     const storage = getStorage();
     if (!storage) return defaultAnalysisChartPreferences();
     const raw = storage.getItem(ANALYSIS_CHART_PREFERENCES_STORAGE_KEY);
-    if (!raw) return defaultAnalysisChartPreferences();
-    return validateAnalysisChartPreferences(JSON.parse(raw));
+    return parseStoredAnalysisChartPreferences(raw);
   } catch {
     return defaultAnalysisChartPreferences();
   }

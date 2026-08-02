@@ -10,6 +10,7 @@ import {
   getOrCreateDescriptorPreferences,
   MAX_DESCRIPTORS,
   readAnalysisChartPreferencesFromStorage,
+  parseStoredAnalysisChartPreferences,
   validateAnalysisChartPreferences,
   validateDescriptorPreferences,
   writeAnalysisChartPreferencesToStorage,
@@ -191,6 +192,21 @@ describe("readAnalysisChartPreferencesFromStorage", () => {
     // localStorage is not available in node test env, reads safely
     const result = readAnalysisChartPreferencesFromStorage();
     expect(result.schemaVersion).toBe(1);
+  });
+});
+
+describe("parseStoredAnalysisChartPreferences", () => {
+  it("keeps an explicit empty descriptor selection when decoding legacy storage", () => {
+    const parsed = parseStoredAnalysisChartPreferences(JSON.stringify({
+      schemaVersion: 1,
+      activeSurface: "overview",
+      descriptorPreferences: {
+        "analysis:data-table:default": { selectedSeriesIds: [] },
+      },
+      _lruAccessAt: {},
+    }));
+
+    expect(parsed.descriptorPreferences["analysis:data-table:default"]?.selectedSeriesIds).toEqual([]);
   });
 });
 
