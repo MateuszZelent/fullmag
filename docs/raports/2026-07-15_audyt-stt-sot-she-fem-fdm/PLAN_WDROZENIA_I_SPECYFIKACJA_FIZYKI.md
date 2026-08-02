@@ -2947,6 +2947,7 @@ semantycznego.
 | worktree | `/home/kkingstoun/git/fullmag/fullmag/.worktrees/spin-transport-final` |
 | branch | `codex/spin-transport-final` |
 | HEAD przed bieżącym slice'em v2 | `918db0209056fb036d73381c67977434907a334a` |
+| v2 slice commit | `bb0031df5ca05766b379e27f569f8945f515674c` |
 | aktualny `master` | `f57c34d1ce9cbcf50f651bdc7a28f4e43bba716d` |
 | rozjazd | `116` commitów tylko na gałęzi, `567` tylko na `master` |
 | integracja | nie wykonana; wymagany nowy worktree od aktualnego `master` i replay konfliktów semantycznych |
