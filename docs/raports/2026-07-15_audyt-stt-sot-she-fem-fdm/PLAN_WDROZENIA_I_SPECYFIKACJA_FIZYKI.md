@@ -3270,3 +3270,75 @@ Pozostają co najmniej następujące niezależne bramy:
    przestrzennym `C_s`/DOS i dowodem termodynamicznym;
 6. zbudować aktualny launcher porównawczy i zamknąć raport z external solvers
    bez mieszania starych artefaktów z dowodem bieżącego `master`.
+
+## 32. Addendum — odtworzenie MuMax3 Standard Problem 5 (2026-08-02)
+
+Na podstawie `external_solvers/3/test/standardproblem5.mx3` dodano zwykły
+stage-first workflow FDM:
+
+- `examples/mumax_standard_problem_5_fdm.py` — literalne `32 x 32 x 4`,
+  `100 x 100 x 10 nm`, `Ms=800 kA/m`, `Aex=13 pJ/m`, vortex `(1,1)`,
+  Zhang–Li `J=(1e12,0,0) A/m²`, `degree=1`, `beta=xi=0.05`, `run=1 ns`;
+- `packages/fullmag-py/tests/test_standard_problem_5_fdm.py` — focused
+  source-to-IR test, **1 passed**;
+- `docs/physics/0990-mumax-standard-problem-5-fdm-validation.md` wraz z
+  source map — kompletna definicja fizyki, jednostek, mappingu API/IR,
+  ograniczeń backendów i bram kwalifikacji;
+- `docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/SP5_FULLMAG_MUMAX_COMPARISON.md`
+  — raport z reprodukcji i wykonanych artefaktów.
+
+### 32.1. Korekta geometrii
+
+Źródłowe `setcellsize(...,10e-9/4)` oznacza całkowitą grubość `10 nm`.
+Wariant `40 nm` byłby błędną interpretacją i został wykluczony testem. Fullmag
+loweruje `cell=(3.125,3.125,2.5) nm` oraz `universe.size=(100,100,10) nm`.
+
+### 32.2. Wyniki runtime
+
+| Gate | Wynik | Granica |
+|---|---|---|
+| FDM Python/IR | **PASS** | kontrakt authoringu; nie jest to dowód trajektorii |
+| FDM CUDA adaptive RK45 | **REJECTED CORRECTLY** | brak executable timestep capability identity; brak CPU fallbacku |
+| FDM CUDA fixed Heun, `dt=1e-13 s`, relax `1e-4 T` | wykonany, `not_evaluated` | `m_final` mean `(-0.23433556,-0.09937264,0.02290284)`; max błąd `4.84e-3` |
+| FDM CUDA fixed Heun, `dt=1e-14 s`, relax `1e-4 T` | wykonany, `not_evaluated` | `m_final` mean `(-0.23433558,-0.09937265,0.02290284)`; max błąd `4.84e-3` |
+| FDM CUDA fixed Heun, `dt=1e-14 s`, relax `1e-6 T` | wykonany, `not_evaluated` | `m_final` mean `(-0.23433558,-0.09937255,0.02290284)`; max błąd `4.84e-3` |
+
+Referencja z pliku MuMax3 to
+`(-0.23479773,-0.09453578,0.02296375)` z tolerancją `1e-4` na komponent.
+Wszystkie trzy ukończone przebiegi diagnostyczne przekraczają tę tolerancję, głównie w
+`m_y`; nie są kwalifikacją. `qualification.json` ma `status=not_evaluated`.
+
+Bez `tableautosave` bieżący scalar publisher zapisuje w `scalars.csv`
+`mx=my=mz=0`, mimo że `m_final.json` zawiera 4096 niezerowych wektorów. Do
+porównania użyto zatem jawnie średniej z `m_final.json`; ten defekt artefaktu
+pozostaje osobną bramą i nie może być maskowany zerowym wynikiem.
+
+### 32.3. Wpływ na procent realizacji
+
+Odtworzenie SP5 zwiększa pokrycie aplikacyjnego workloadu i daje konkretny
+source-to-IR oraz executed-device diagnostic, ale nie zamyka żadnej z
+niezależnych bram produkcyjnych. Ocena celu pozostaje **82% implementacji /
+58% gotowości produkcyjnej**. Do zamknięcia pozostają: CPU adaptive RK45 z
+kwalifikowaną relaksacją, naprawa scalar publication, rozdzielenie błędu stanu
+od konwencji Zhang–Li/demag, device-resident GPU adaptive parity, pełna suita
+Python, cross-backend FEM/FDM oraz końcowy browser/provenance gate.
+
+### 32.4. Zidentyfikowana różnica dyskretyzacji Zhang–Li
+
+Porównanie kodu źródłowego wykazało rozdzielną, konkretną różnicę numeryczną:
+
+- MuMax3 `external_solvers/3/cuda/zhangli2.cu` liczy centralną różnicę
+  `deltax=(m[i+1]-m[i-1])` i skaluje ją przez `1/(2*cell_size)`; ten sam kernel
+  ma prefaktor `MUB/(2*QE*GAMMA0)` i zwraca torque w teslach;
+- Fullmag `crates/fullmag-engine/src/fdm/cpu/fields.rs` w legacy evaluatorze
+  wybiera sąsiada upwind na podstawie znaku `J` i liczy `(m_i-m_{i-1})/dx`
+  (analogicznie dla pozostałych osi), a wynik dodaje bezpośrednio do RHS w
+  `1/s`.
+
+Mapowanie parametrów (`J`, `Pol`, `xi`) jest zatem poprawne semantycznie, ale
+obecny operator przestrzenny nie jest MuMax3-compatible. Plateau błędu
+`4.84e-3` przy `dt=1e-13` i `1e-14 s` jest dowodem otwartej bramki operatora,
+nie dowodem błędnego znaku ani prefaktora. Wymagany następny krok to osobna,
+wersjonowana realizacja centralnego operatora zgodna z MuMax3 oraz oracle
+jednego kroku; nie wolno zmieniać globalnie legacy v0 bez migracji testów i
+provenance.
