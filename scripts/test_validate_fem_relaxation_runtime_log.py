@@ -6666,7 +6666,9 @@ def test_direct_minimizer_equilibrium_parity_gate_fails_closed() -> None:
         for failure in summary["failures"]
     )
 
-    args = benchmark.parse_args(["--require-equilibrium-parity"])
+    args = benchmark.parse_args(
+        ["--require-equilibrium-parity", "--capture-final-magnetization"]
+    )
     assert args.require_equilibrium_parity is True
 
 

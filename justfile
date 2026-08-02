@@ -2520,6 +2520,59 @@ verify-fem-relaxation-consistency-semantics:
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; python3 scripts/verify_fem_relaxation_consistency_semantics.py'
 
+# Same-tolerance direct-minimizer qualification.  The source semantics and
+# synthetic contract run before the managed gate; missing immutable v2 mesh
+# assets or an unavailable managed runtime fail closed rather than producing a
+# coverage-only claim.
+verify-fem-relaxation-equilibrium-parity:
+    PYTHONDONTWRITEBYTECODE=1 python3 scripts/verify_fem_relaxation_equilibrium_parity_semantics.py
+    TMPDIR=/tmp/fullmag-fem-t4-test-tmp PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q scripts/test_validate_fem_relaxation_equilibrium_parity.py --capture=sys
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports/fem-relaxation-equilibrium-parity
+    scope="${FULLMAG_EQUILIBRIUM_SCOPE:-coarse,medium,fine}"; \
+      repeat="${FULLMAG_EQUILIBRIUM_REPEAT:-5}"; \
+      timeout="${FULLMAG_EQUILIBRIUM_CASE_TIMEOUT_S:-3600}"; \
+      case "$scope" in coarse|coarse,medium,fine) ;; *) echo "FULLMAG_EQUILIBRIUM_SCOPE must be coarse or coarse,medium,fine" >&2; exit 2 ;; esac; \
+      case "$repeat" in ''|*[!0-9]*) echo "FULLMAG_EQUILIBRIUM_REPEAT must be a positive integer" >&2; exit 2 ;; esac; \
+      test "$repeat" -ge 1; \
+      docker compose --profile fem-gpu run --rm \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        -e FULLMAG_PYTHON=/usr/bin/python3 \
+        -e FULLMAG_GMSH_THREADS=1 \
+        fem-gpu bash -lc 'cd /workspace && \
+          python3 scripts/analysis/fem_gpu_benchmark.py \
+            --equilibrium-suite examples/assets/fem_performance/equilibrium_qualification_suite_v1.json \
+            --meshes '"$scope"' \
+            --scenarios exchange_only,exchange_demag \
+            --relax-algorithms projected_gradient_bb,nonlinear_cg \
+            --backends cpu,gpu \
+            --demag-solver CG \
+            --demag-preconditioner AMG \
+            --demag-rtol 1e-12 \
+            --demag-amg-relax-types 6 \
+            --demag-amg-coarsenings 8 \
+            --demag-amg-interpolations 6 \
+            --demag-amg-aggressive-coarsenings 1 \
+            --relax-torque-tolerance-apm 8000 \
+            --steps 50000 \
+            --repeat '"$repeat"' \
+            --case-timeout-s '"$timeout"' \
+            --gpu-warmup \
+            --capture-final-magnetization \
+            --require-stable-solver-mesh \
+            --require-equilibrium-parity \
+            --equilibrium-parity-output .fullmag/reports/fem-relaxation-equilibrium-parity/summary.json \
+            --output .fullmag/reports/fem-relaxation-equilibrium-parity/rows.csv \
+            --cpu-gpu-summary-output .fullmag/reports/fem-relaxation-equilibrium-parity/benchmark-summary.json \
+            --quiet-json-summary'; \
+      python3 scripts/validate_fem_relaxation_equilibrium_parity.py \
+        .fullmag/reports/fem-relaxation-equilibrium-parity/rows.csv \
+        --output .fullmag/reports/fem-relaxation-equilibrium-parity/summary-revalidated.json \
+        --require-equilibrium-parity \
+        --equilibrium-suite examples/assets/fem_performance/equilibrium_qualification_suite_v1.json \
+        --scope "$scope" \
+        --expected-repeat-count "$repeat"
+
 capture-fem-task8-qualification-identity:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/task8-qualification

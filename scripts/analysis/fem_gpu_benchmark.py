@@ -325,6 +325,10 @@ NATIVE_FEM_LIBRARY_NAMES = (
 )
 PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v2"
 PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v2"
+EQUILIBRIUM_PARITY_SCHEMA = "fullmag.fem.relaxation_equilibrium_parity.v1"
+EQUILIBRIUM_QUALIFICATION_SUITE_SCHEMA = (
+    "fullmag.fem.relaxation_equilibrium_qualification_suite.v1"
+)
 LEGACY_PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
 LEGACY_PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
 TASK11_QUALIFICATION_IDENTITY_SCHEMA = (
@@ -2993,6 +2997,58 @@ def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
     return resolved
 
 
+def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
+    """Validate the immutable same-tolerance CPU/GPU qualification contract."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or payload.get("schema") != EQUILIBRIUM_QUALIFICATION_SUITE_SCHEMA:
+        raise ValueError("unsupported FEM equilibrium qualification suite schema")
+    if payload.get("immutable") is not True:
+        raise ValueError("FEM equilibrium qualification suite must be immutable")
+    if payload.get("initial_state") != "same_unit_x_plus_y_normalized_v1":
+        raise ValueError("FEM equilibrium qualification initial state differs from v1")
+    if payload.get("max_steps") != 50_000 or payload.get("torque_tolerance_apm") != 8000.0:
+        raise ValueError("FEM equilibrium qualification stop contract differs from v1")
+    expected_demag_policy = {
+        "solver": "CG",
+        "preconditioner": "AMG",
+        "rtol": 1e-12,
+        "amg_relax_type": 6,
+        "amg_coarsening": 8,
+        "amg_interpolation": 6,
+        "amg_aggressive_coarsening": 1,
+    }
+    if payload.get("demag_policy") != expected_demag_policy:
+        raise ValueError("FEM equilibrium qualification demag policy differs from v1")
+    algorithms = payload.get("algorithms")
+    scenarios = payload.get("scenarios")
+    if algorithms != ["projected_gradient_bb", "nonlinear_cg"]:
+        raise ValueError("FEM equilibrium qualification algorithms differ from v1")
+    if scenarios != ["exchange_only", "exchange_demag"]:
+        raise ValueError("FEM equilibrium qualification scenarios differ from v1")
+    fixtures = payload.get("fixtures")
+    if not isinstance(fixtures, list) or [item.get("resolution") for item in fixtures] != ["coarse", "medium", "fine"]:
+        raise ValueError("FEM equilibrium qualification fixtures must be coarse, medium, fine")
+    resolved: dict[str, dict[str, object]] = {}
+    for fixture in fixtures:
+        if not isinstance(fixture, Mapping):
+            raise ValueError("FEM equilibrium qualification fixture must be an object")
+        resolution = str(fixture.get("resolution") or "")
+        signature = fixture.get("solver_mesh_signature")
+        if not resolution or not isinstance(signature, str) or len(signature) != 64:
+            raise ValueError("FEM equilibrium qualification fixture identity is invalid")
+        mesh_path = (path.parent / str(fixture.get("solver_mesh_path") or "")).resolve()
+        if not mesh_path.is_file():
+            raise ValueError(f"FEM equilibrium qualification mesh is missing: {mesh_path}")
+        resolved[resolution] = {**fixture, "solver_mesh_path": mesh_path}
+    return {
+        "path": path.resolve(),
+        "algorithms": tuple(algorithms),
+        "scenarios": tuple(scenarios),
+        "fixtures": resolved,
+    }
+
+
 def print_amg_qualification_fixture_suite(path: Path) -> None:
     for fixture in load_amg_qualification_fixture_suite(path):
         print(
@@ -4571,6 +4627,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--equilibrium-parity-output",
+        type=Path,
+        default=None,
+        help="Optional fullmag.fem.relaxation_equilibrium_parity.v1 JSON output",
+    )
+    parser.add_argument(
+        "--equilibrium-suite",
+        type=Path,
+        default=None,
+        help="Immutable same-tolerance CPU/GPU equilibrium suite",
+    )
+    parser.add_argument(
         "--task11-relaxation-preconditioner-cpu-gpu-parity-sweep",
         action="store_true",
         help=(
@@ -4849,7 +4917,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional persistent cache directory for generated shared-domain meshes used by --reuse-generated-domain-mesh",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.require_equilibrium_parity and not args.capture_final_magnetization:
+        parser.error(
+            "--require-equilibrium-parity requires --capture-final-magnetization"
+        )
+    return args
 
 
 def resolve_relax_torque_tolerance_apm(args: argparse.Namespace) -> float | None:
@@ -6539,6 +6612,7 @@ def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
     if values is None:
         return {}
     return {
+        "final_magnetization_present": True,
         "final_magnetization_observable": "m",
         "final_magnetization_unit": "1",
         "final_magnetization_step": step,
@@ -6555,6 +6629,67 @@ def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
             separators=(",", ":"),
         ),
     }
+
+
+def _load_equilibrium_parity_module():
+    """Load the stdlib-only equilibrium verifier without making scripts a package."""
+
+    module_name = "fullmag_fem_relaxation_equilibrium_parity"
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    verifier_path = REPO_ROOT / "scripts" / "validate_fem_relaxation_equilibrium_parity.py"
+    spec = importlib.util.spec_from_file_location(module_name, verifier_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load equilibrium parity verifier: {verifier_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def compare_equilibrium_states(
+    cpu: Mapping[str, object],
+    gpu: Mapping[str, object],
+    thresholds: object | None = None,
+) -> object:
+    """Compare final CPU/GPU states through the canonical Task 4 verifier."""
+
+    return _load_equilibrium_parity_module().compare_equilibrium_states(
+        cpu, gpu, thresholds
+    )
+
+
+def equilibrium_parity_summary(
+    results: Sequence[Mapping[str, object]],
+    *,
+    require_parity: bool = False,
+    output_path: str | Path | None = None,
+    expected_resolutions: Sequence[str] | None = None,
+    expected_scenarios: Sequence[str] | None = None,
+    expected_algorithms: Sequence[str] | None = None,
+    expected_repeat_count: int | None = None,
+    expected_fixture_signatures: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Build the versioned same-tolerance summary from benchmark rows."""
+
+    summary = _load_equilibrium_parity_module().validate_rows(
+        results,
+        require_parity=require_parity,
+        expected_resolutions=expected_resolutions,
+        expected_scenarios=expected_scenarios,
+        expected_algorithms=expected_algorithms,
+        expected_repeat_count=expected_repeat_count,
+        expected_fixture_signatures=expected_fixture_signatures,
+    )
+    if output_path is not None:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return summary
 
 
 def task11_cumulative_relaxation_evidence(
@@ -7484,6 +7619,8 @@ def run_backend(
             if capture_final_magnetization
             else {}
         )
+        if capture_final_magnetization:
+            row["final_magnetization_present"] = bool(final_magnetization_evidence)
         if completed.returncode == 0 and executed_problem_ir_identity_path is not None:
             try:
                 row["executed_problem_ir_sha256"] = (
@@ -7636,6 +7773,12 @@ def run_backend(
                     final_scalar_row.get("E_dmi"),
                 ),
                 "stop_reason": qualification.get("stop_reason"),
+                "resolved_torque_tolerance_apm": first_present(
+                    qualification.get("stop_threshold")
+                    if qualification.get("stop_metric_kind") == "max_torque_apm"
+                    else None,
+                    payload.get("resolved_torque_tolerance_apm"),
+                ),
                 "final_torque_apm": first_present(
                     qualification.get("final_torque_apm"),
                     payload.get("max_torque_Apm"),
@@ -7648,6 +7791,24 @@ def run_backend(
                 ),
                 "norm_defect": qualification.get("norm_defect"),
                 "converged": qualification.get("converged"),
+                "time_to_tolerance_seconds": first_present(
+                    payload.get("time_to_tolerance_seconds"),
+                    payload.get("time_to_tolerance_s"),
+                    qualification.get("time_to_tolerance_seconds"),
+                ),
+                "time_to_tolerance_source": first_present(
+                    payload.get("time_to_tolerance_source"),
+                    qualification.get("time_to_tolerance_source"),
+                ),
+                "accepted_steps_to_tolerance": first_present(
+                    payload.get("accepted_steps_to_tolerance"),
+                    qualification.get("accepted_steps_to_tolerance"),
+                ),
+                "demag_solve_count_total": first_present(
+                    payload.get("demag_solve_count_total"),
+                    payload.get("cumulative_demag_solves"),
+                    payload.get("demag_solves"),
+                ),
                 "step_wall_time_ms": ns_to_ms(payload.get("wall_time_ns")),
                 "exchange_wall_time_ms": ns_to_ms(payload.get("exchange_wall_time_ns")),
                 "demag_wall_time_ms": ns_to_ms(payload.get("demag_wall_time_ns")),
@@ -11239,6 +11400,18 @@ def main() -> None:
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
+    equilibrium_suite: dict[str, object] | None = None
+    if args.equilibrium_suite is not None:
+        try:
+            equilibrium_suite = load_equilibrium_qualification_suite(
+                args.equilibrium_suite
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"invalid FEM equilibrium qualification suite: {exc}") from exc
+    if args.require_equilibrium_parity and equilibrium_suite is None:
+        raise SystemExit(
+            "--require-equilibrium-parity needs --equilibrium-suite"
+        )
     scenarios = resolve_scenarios(args.scenarios)
     integrators = resolve_integrators(args.integrators or ",".join(DEFAULT_INTEGRATORS))
     relaxation_algorithms = resolve_relaxation_algorithms(args.relax_algorithms)
@@ -11249,6 +11422,18 @@ def main() -> None:
     )
     timestep_policies = resolve_timestep_policies(args.timestep_policies)
     backends = resolve_backends(args.backends)
+    equilibrium_fixture_by_input_mesh: dict[Path, Mapping[str, object]] = {}
+    if equilibrium_suite is not None:
+        fixtures = equilibrium_suite["fixtures"]
+        assert isinstance(fixtures, Mapping)
+        for mesh_path in meshes:
+            resolution = qualification_mesh_size(mesh_path)
+            fixture_identity = fixtures.get(resolution) if resolution is not None else None
+            if not isinstance(fixture_identity, Mapping):
+                raise SystemExit(
+                    "--equilibrium-suite requires coarse, medium, and fine mesh presets"
+                )
+            equilibrium_fixture_by_input_mesh[mesh_path.resolve()] = fixture_identity
     if relaxation_preconditioner_strategies != ["none"] and (
         relaxation_algorithms != ["nonlinear_cg"] or backends != ["fem_gpu"]
     ):
@@ -11496,6 +11681,15 @@ def main() -> None:
                             runtime_fixture_mesh_path(fixture)
                         )
                     }
+                equilibrium_warmup_fixture = equilibrium_fixture_by_input_mesh.get(
+                    warmup_mesh.resolve()
+                )
+                if equilibrium_warmup_fixture is not None:
+                    warmup_domain_mesh_env = {
+                        "FULLMAG_BENCH_DOMAIN_MESH": str(
+                            equilibrium_warmup_fixture["solver_mesh_path"]
+                        )
+                    }
                 print(
                     f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} thread_count={warmup_thread_spec.label}:{warmup_thread_spec.env_value} demag_policy={warmup_solver}/{warmup_preconditioner} demag_rtol={warmup_rtol!r} demag_amg_profile={warmup_amg_profile}",
                     flush=True,
@@ -11569,6 +11763,15 @@ def main() -> None:
                                 domain_mesh_env = {
                                     "FULLMAG_BENCH_DOMAIN_MESH": str(
                                         runtime_fixture_mesh_path(fixture)
+                                    )
+                                }
+                            equilibrium_fixture = equilibrium_fixture_by_input_mesh.get(
+                                mesh_path.resolve()
+                            )
+                            if equilibrium_fixture is not None:
+                                domain_mesh_env = {
+                                    "FULLMAG_BENCH_DOMAIN_MESH": str(
+                                        equilibrium_fixture["solver_mesh_path"]
                                     )
                                 }
                             demag_policy_pairs = demag_policy_pairs_for_scenario(
@@ -11797,6 +12000,33 @@ def main() -> None:
                                                     results.append(row)
 
     write_csv(results, args.output)
+    equilibrium_summary: dict[str, object] | None = None
+    if equilibrium_suite is not None or args.require_equilibrium_parity:
+        if equilibrium_suite is None:
+            raise SystemExit(
+                "--require-equilibrium-parity needs --equilibrium-suite"
+            )
+        fixtures = equilibrium_suite["fixtures"]
+        assert isinstance(fixtures, Mapping)
+        expected_signatures = {
+            str(resolution): str(fixture["solver_mesh_signature"])
+            for resolution, fixture in fixtures.items()
+            if isinstance(fixture, Mapping)
+        }
+        equilibrium_summary = equilibrium_parity_summary(
+            results,
+            require_parity=args.require_equilibrium_parity,
+            output_path=args.equilibrium_parity_output,
+            expected_resolutions=tuple(str(mesh_size) for mesh_size in fixtures),
+            expected_scenarios=tuple(
+                str(value) for value in equilibrium_suite["scenarios"]
+            ),
+            expected_algorithms=tuple(
+                str(value) for value in equilibrium_suite["algorithms"]
+            ),
+            expected_repeat_count=repeat_count,
+            expected_fixture_signatures=expected_signatures,
+        )
     demag_residual_threshold = args.demag_convergence_residual
     best_policy_rows: list[dict[str, object]] = []
     if args.emit_best_demag_policy or args.require_best_demag_policy:
@@ -11819,13 +12049,20 @@ def main() -> None:
             torque_atol_apm=args.cpu_gpu_torque_atol_apm,
             torque_atol_t=args.cpu_gpu_torque_atol_t,
             max_step_delta=args.cpu_gpu_max_step_delta,
-            require_equilibrium_parity=args.require_equilibrium_parity,
+            require_equilibrium_parity=(
+                args.require_equilibrium_parity and equilibrium_summary is None
+            ),
         )
         cpu_gpu_summary_for_report["performance_distributions"] = (
             performance_distribution_summary(results)
         )
         if best_policy_rows:
             cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
+        if equilibrium_summary is not None:
+            cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
+            cpu_gpu_summary_for_report["equilibrium_parity_status"] = equilibrium_summary.get(
+                "equilibrium_parity_status", "not_requested"
+            )
         summary_path = Path(args.cpu_gpu_summary_output)
         summary_path.write_text(
             json.dumps(cpu_gpu_summary_for_report, indent=2, sort_keys=True) + "\n",
@@ -11833,6 +12070,14 @@ def main() -> None:
         )
     gate_failures: list[str] = []
     gate_exit_code = 0
+    if equilibrium_summary is not None and args.require_equilibrium_parity:
+        equilibrium_failures = [
+            str(failure)
+            for failure in equilibrium_summary.get("failures", [])
+        ]
+        if equilibrium_failures:
+            gate_failures.extend(equilibrium_failures)
+            gate_exit_code = gate_exit_code or 20
     if args.task8_qualification_identity is not None:
         task8_gate = task8_qualification_gate(
             results,
@@ -11944,7 +12189,14 @@ def main() -> None:
                 torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                 torque_atol_t=args.cpu_gpu_torque_atol_t,
                 max_step_delta=args.cpu_gpu_max_step_delta,
-                require_equilibrium_parity=args.require_equilibrium_parity,
+                require_equilibrium_parity=(
+                    args.require_equilibrium_parity and equilibrium_summary is None
+                ),
+            )
+        if equilibrium_summary is not None:
+            cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
+            cpu_gpu_summary_for_report["equilibrium_parity_status"] = equilibrium_summary.get(
+                "equilibrium_parity_status", "not_requested"
             )
         if not args.quiet_json_summary:
             print(
@@ -12008,7 +12260,9 @@ def main() -> None:
                 torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                 torque_atol_t=args.cpu_gpu_torque_atol_t,
                 max_step_delta=args.cpu_gpu_max_step_delta,
-                require_equilibrium_parity=args.require_equilibrium_parity,
+                require_equilibrium_parity=(
+                    args.require_equilibrium_parity and equilibrium_summary is None
+                ),
             )
         failures = gpu_demag_total_speedup_failures(
             cpu_gpu_summary_for_report,
@@ -12084,12 +12338,19 @@ def main() -> None:
                     torque_atol_apm=args.cpu_gpu_torque_atol_apm,
                     torque_atol_t=args.cpu_gpu_torque_atol_t,
                     max_step_delta=args.cpu_gpu_max_step_delta,
-                    require_equilibrium_parity=args.require_equilibrium_parity,
+                    require_equilibrium_parity=(
+                        args.require_equilibrium_parity and equilibrium_summary is None
+                    ),
                 )
             else:
                 cpu_gpu_summary_for_report = cpu_gpu_not_requested_summary(results)
         if best_policy_rows:
             cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
+        if equilibrium_summary is not None:
+            cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
+            cpu_gpu_summary_for_report["equilibrium_parity_status"] = equilibrium_summary.get(
+                "equilibrium_parity_status", "not_requested"
+            )
         report_text = render_cpu_gpu_benchmark_report(
             cpu_gpu_summary_for_report,
             pass_fail_summary,
