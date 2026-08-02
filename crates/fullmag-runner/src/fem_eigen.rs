@@ -206,6 +206,51 @@ struct NativeModalMagneticPencilPayload {
     gamma0_m_per_a_s: f64,
 }
 
+#[derive(Debug, Clone)]
+struct SharedDomainLinearizationState {
+    equilibrium_artifact: serde_json::Value,
+    linearization_state: serde_json::Value,
+    equilibrium_m0: Vec<Vector3>,
+    h_eff0: Vec<Vector3>,
+    h_demag0: Vec<Vector3>,
+    phi0: Vec<f64>,
+    equilibrium_id: String,
+    mesh_snapshot_id: String,
+    material_snapshot_id: String,
+    physics_snapshot_id: String,
+    boundary_snapshot_id: String,
+    producer_run_id: String,
+    equilibrium_content_sha256: String,
+    demag_model: String,
+    m0_norm_tolerance: f64,
+    equilibrium_torque_relative_tolerance: f64,
+    equilibrium_artifact_digest: String,
+    linearization_state_digest: String,
+    periodic_mesh_certificate_digest: String,
+}
+
+#[derive(Debug, Clone)]
+struct LoadedEquilibriumArtifactV6 {
+    value: serde_json::Value,
+    m0: Vec<Vector3>,
+    h_eff0: Vec<Vector3>,
+    h_demag0: Vec<Vector3>,
+    phi0: Vec<f64>,
+    equilibrium_id: String,
+    producer_run_id: String,
+    content_sha256: String,
+    mesh_signature: String,
+    material_signature: String,
+    physics_signature: String,
+    boundary_signature: String,
+    static_demag_signature: String,
+    demag_model: String,
+    m0_norm_tolerance: f64,
+    equilibrium_torque_relative_tolerance: f64,
+    phi0_requirement: String,
+    periodic_mesh_certificate: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TangentLeakageSummary {
     mean_abs: f64,
@@ -415,7 +460,7 @@ fn execute_native_gpu_k0_kittel_modal(
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
     let initial_magnetization = plan.equilibrium_magnetization.clone();
-    let (problem, equilibrium, relaxation_steps, observables) =
+    let (problem, equilibrium, relaxation_steps, observables, _source_artifact) =
         materialize_equilibrium(plan, &initial_magnetization)?;
     let reduction = build_reduction_map(
         &problem.topology,
@@ -508,6 +553,7 @@ fn execute_native_gpu_k0_kittel_modal(
         node_mass_weights_from_tangent_mass(&mass, active_nodes).as_deref(),
         solver_diagnostics,
         relaxation_steps,
+        None,
     )?;
 
     let stats = StepStats {
@@ -1299,11 +1345,472 @@ fn shared_domain_content_digest<T: serde::Serialize>(
     Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
 }
 
+fn max_vector_field_difference(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .zip(right)
+            .map(|(left, right)| {
+                (0..3)
+                    .map(|axis| (left[axis] - right[axis]).abs())
+                    .fold(0.0, f64::max)
+            })
+            .fold(0.0, f64::max),
+    )
+}
+
+fn max_scalar_field_difference(left: &[f64], right: &[f64]) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .zip(right)
+            .map(|(left, right)| (left - right).abs())
+            .fold(0.0, f64::max),
+    )
+}
+
+fn build_shared_domain_linearization_state(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    problem: &FemLlgProblem,
+    source_artifact: Option<&LoadedEquilibriumArtifactV6>,
+    equilibrium: &[Vector3],
+    observables: &EffectiveFieldObservables,
+) -> Result<SharedDomainLinearizationState, RunError> {
+    validate_shared_domain_modal_scope(plan, topology, equilibrium, observables)?;
+    let phi0 = problem
+        .demag_potential_from_vectors(equilibrium)
+        .map_err(|error| RunError {
+            message: format!(
+                "shared-domain modal equilibrium potential materialization failed: {error}"
+            ),
+        })?;
+    if phi0.len() != topology.n_nodes || phi0.iter().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: format!(
+                "shared-domain modal equilibrium potential is incomplete or non-finite (expected {} values, got {})",
+                topology.n_nodes,
+                phi0.len()
+            ),
+        });
+    }
+
+    let mesh_signature = plan.mesh.topology_fingerprint_v6();
+    let material_signature = shared_domain_content_digest("material_signature", &plan.material)?;
+    let physics_signature = shared_domain_content_digest(
+        "physics_signature",
+        &serde_json::json!({
+            "enable_exchange": plan.enable_exchange,
+            "enable_demag": plan.enable_demag,
+            "external_field_a_per_m": plan.external_field,
+            "gyromagnetic_ratio": plan.gyromagnetic_ratio,
+            "damping": plan.material.damping,
+            "operator": plan.operator,
+            "demag_realization": resolved_demag_realization(plan)
+                .map(|value| value.provenance_name()),
+        }),
+    )?;
+    let boundary_signature = shared_domain_content_digest(
+        "boundary_signature",
+        &serde_json::json!({
+            "spin_wave_bc": plan.spin_wave_bc,
+            "air_box_config": plan.air_box_config,
+            "periodic_node_pairs": plan.mesh.periodic_node_pairs,
+            "periodic_boundary_pairs": plan.mesh.periodic_boundary_pairs,
+        }),
+    )?;
+    let static_demag_signature = shared_domain_content_digest(
+        "static_demag_signature",
+        &serde_json::json!({
+            "realization": resolved_demag_realization(plan)
+                .map(|value| value.provenance_name()),
+            "h_demag0_a_per_m": observables.demag_field,
+            "phi0_a": phi0,
+        }),
+    )?;
+
+    if let Some(source_artifact) = source_artifact {
+        let compare = |label: &str, difference: Option<f64>, tolerance: f64| {
+            let Some(difference) = difference else {
+                return Err(RunError {
+                    message: format!(
+                        "equilibrium_{label}_comparison_failed: stored field shape does not match the requested mesh"
+                    ),
+                });
+            };
+            if !difference.is_finite() || difference > tolerance {
+                return Err(RunError {
+                    message: format!(
+                        "equilibrium_{label}_comparison_failed: stored/recomputed maximum difference {difference:.3e} exceeds {tolerance:.3e}"
+                    ),
+                });
+            }
+            Ok(())
+        };
+        compare(
+            "m0",
+            max_vector_field_difference(&source_artifact.m0, equilibrium),
+            1.0e-12,
+        )?;
+        compare(
+            "h_eff0",
+            max_vector_field_difference(&source_artifact.h_eff0, &observables.effective_field),
+            1.0e-8,
+        )?;
+        compare(
+            "h_demag0",
+            max_vector_field_difference(&source_artifact.h_demag0, &observables.demag_field),
+            1.0e-8,
+        )?;
+        compare(
+            "phi0",
+            max_scalar_field_difference(&source_artifact.phi0, &phi0),
+            1.0e-10,
+        )?;
+        for (label, expected, actual) in [
+            (
+                "mesh_hash",
+                &mesh_signature,
+                &source_artifact.mesh_signature,
+            ),
+            (
+                "material_hash",
+                &material_signature,
+                &source_artifact.material_signature,
+            ),
+            (
+                "physics_hash",
+                &physics_signature,
+                &source_artifact.physics_signature,
+            ),
+            (
+                "boundary_hash",
+                &boundary_signature,
+                &source_artifact.boundary_signature,
+            ),
+            (
+                "static_demag_hash",
+                &static_demag_signature,
+                &source_artifact.static_demag_signature,
+            ),
+        ] {
+            if expected != actual {
+                return Err(RunError {
+                    message: format!(
+                        "equilibrium_{label}_mismatch: stored '{}' does not match recomputed '{}'",
+                        actual, expected
+                    ),
+                });
+            }
+        }
+    }
+
+    let periodic_certificate = plan
+        .mesh
+        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+            None,
+            None,
+            plan.material.ms_field.as_deref(),
+            plan.material.a_field.as_deref(),
+        )
+        .map_err(|errors| RunError {
+            message: format!(
+                "shared-domain modal equilibrium requires periodic_mesh_certificate.v6: {}",
+                errors.join("; ")
+            ),
+        })?;
+    if periodic_certificate.schema_version != "periodic_mesh_certificate.v6"
+        || periodic_certificate.certificate_status != "accepted"
+    {
+        return Err(RunError {
+            message:
+                "shared-domain modal equilibrium requires an accepted periodic_mesh_certificate.v6"
+                    .to_string(),
+        });
+    }
+    let periodic_certificate_payload =
+        serde_json::to_value(&periodic_certificate).map_err(|error| RunError {
+            message: format!(
+                "failed to serialize periodic_mesh_certificate.v6 for equilibrium handoff: {error}"
+            ),
+        })?;
+    let periodic_certificate_content_sha256 =
+        shared_domain_content_digest("periodic_mesh_certificate", &periodic_certificate_payload)?;
+    let periodic_certificate_id = format!(
+        "periodic_mesh_certificate.v6:{}",
+        periodic_certificate_content_sha256
+            .strip_prefix("sha256:")
+            .unwrap_or(&periodic_certificate_content_sha256)
+    );
+    let periodic_certificate_json = serde_json::json!({
+        "schema_version": "periodic_mesh_certificate.v6",
+        "certificate_id": periodic_certificate_id,
+        "content_sha256": periodic_certificate_content_sha256,
+        "certificate": periodic_certificate_payload,
+    });
+    let periodic_mesh_certificate_digest =
+        shared_domain_content_digest("periodic_mesh_certificate_v6", &periodic_certificate_json)?;
+    let periodic_mesh_certificate_digest = if let Some(source_artifact) = source_artifact {
+        let source_certificate = source_artifact
+            .periodic_mesh_certificate
+            .as_object()
+            .ok_or_else(|| RunError {
+                message: "equilibrium_periodic_certificate_missing_or_stale: certificate is not an object"
+                    .to_string(),
+            })?;
+        for name in ["certificate_id", "content_sha256"] {
+            if source_certificate.get(name) != periodic_certificate_json.get(name) {
+                return Err(RunError {
+                    message: format!(
+                        "equilibrium_periodic_certificate_missing_or_stale: stored certificate '{}' does not match the current mesh certificate",
+                        name
+                    ),
+                });
+            }
+        }
+        source_certificate
+            .get("content_sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| RunError {
+                message: "equilibrium_periodic_certificate_missing_or_stale: stored certificate hash is missing"
+                    .to_string(),
+            })?
+            .to_string()
+    } else {
+        periodic_mesh_certificate_digest
+    };
+
+    let max_m0_norm_error = equilibrium
+        .iter()
+        .zip(topology.magnetic_node_volumes.iter())
+        .filter(|(_, volume)| **volume > 0.0)
+        .map(|(m, _)| (vector_norm(*m) - 1.0).abs())
+        .fold(0.0, f64::max);
+    let max_m0_cross_h_eff0_relative =
+        observables.max_torque_Apm / observables.max_effective_field_amplitude.max(1.0);
+    if !max_m0_norm_error.is_finite()
+        || !max_m0_cross_h_eff0_relative.is_finite()
+        || max_m0_norm_error > 1.0e-8
+        || max_m0_cross_h_eff0_relative > 1.0e-6
+    {
+        return Err(RunError {
+            message: format!(
+                "shared-domain modal equilibrium failed v6 acceptance (m0_norm={max_m0_norm_error:.3e}, torque={max_m0_cross_h_eff0_relative:.3e})"
+            ),
+        });
+    }
+
+    let (
+        equilibrium_artifact,
+        equilibrium_artifact_digest,
+        artifact_h_eff0,
+        artifact_h_demag0,
+        artifact_phi0,
+        artifact_phi0_requirement,
+        artifact_field_source,
+    ) = if let Some(source_artifact) = source_artifact {
+        (
+            source_artifact.value.clone(),
+            source_artifact.content_sha256.clone(),
+            serde_json::json!(source_artifact.h_eff0),
+            serde_json::json!(source_artifact.h_demag0),
+            serde_json::json!(source_artifact.phi0),
+            serde_json::json!(source_artifact.phi0_requirement),
+            "stored_verified",
+        )
+    } else {
+        let mut artifact = serde_json::json!({
+            "schema_version": "equilibrium_artifact.v6",
+            "accepted_for_linearization": true,
+            "stop_reason": "torque_tolerance",
+            "m0": equilibrium,
+            "h_eff0_a_per_m": observables.effective_field,
+            "h_demag0_a_per_m": observables.demag_field,
+            "phi0_requirement": "required_for_restart_or_provenance",
+            "phi0_a": phi0,
+            "mesh_signature": mesh_signature,
+            "material_signature": material_signature,
+            "physics_signature": physics_signature,
+            "boundary_signature": boundary_signature,
+            "static_demag_signature": static_demag_signature,
+            "acceptance_tolerances": {
+                "m0_norm": 1.0e-8,
+                "equilibrium_torque_relative": 1.0e-6,
+            },
+            "max_m0_norm_error": max_m0_norm_error,
+            "max_m0_cross_h_eff0_relative": max_m0_cross_h_eff0_relative,
+            "producer_run_id": "fem_eigen:in_memory_materialization",
+            "demag_model": resolved_demag_realization(plan)
+                .map(|value| value.model_name())
+                .unwrap_or("none"),
+            "periodic_mesh_certificate": periodic_certificate_json,
+        });
+        let digest = shared_domain_content_digest("equilibrium_artifact_v6", &artifact)?;
+        if let Some(object) = artifact.as_object_mut() {
+            object.insert("content_sha256".to_string(), serde_json::json!(digest));
+            object.insert(
+                "equilibrium_id".to_string(),
+                serde_json::json!(format!(
+                    "equilibrium_artifact.v6:{}",
+                    digest.strip_prefix("sha256:").unwrap_or(&digest)
+                )),
+            );
+        }
+        (
+            artifact,
+            digest,
+            serde_json::json!(observables.effective_field),
+            serde_json::json!(observables.demag_field),
+            serde_json::json!(phi0),
+            serde_json::json!("required_for_restart_or_provenance"),
+            "recomputed_verified",
+        )
+    };
+
+    let required_artifact_string = |name: &str| -> Result<String, RunError> {
+        equilibrium_artifact
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "accepted equilibrium artifact is missing required identity field '{name}'"
+                ),
+            })
+    };
+    let equilibrium_id = source_artifact
+        .map(|artifact| artifact.equilibrium_id.clone())
+        .unwrap_or(required_artifact_string("equilibrium_id")?);
+    let producer_run_id = source_artifact
+        .map(|artifact| artifact.producer_run_id.clone())
+        .unwrap_or(required_artifact_string("producer_run_id")?);
+    let equilibrium_content_sha256 = required_artifact_string("content_sha256")?;
+    let demag_model = source_artifact
+        .map(|artifact| artifact.demag_model.clone())
+        .or_else(|| {
+            equilibrium_artifact
+                .get("demag_model")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| {
+            resolved_demag_realization(plan)
+                .map(|value| value.model_name().to_string())
+                .unwrap_or_else(|| "none".to_string())
+        });
+    let (m0_norm_tolerance, equilibrium_torque_relative_tolerance) = source_artifact
+        .map(|artifact| {
+            (
+                artifact.m0_norm_tolerance,
+                artifact.equilibrium_torque_relative_tolerance,
+            )
+        })
+        .unwrap_or((1.0e-8, 1.0e-6));
+
+    let mut linearization_state = serde_json::json!({
+        "schema_version": "LinearizationState.v6",
+        "source_equilibrium_artifact": equilibrium_artifact_digest,
+        "source_equilibrium_id": equilibrium_id,
+        "operator_dictionary": "FrequencyOperatorDictionary.v1",
+        "accepted_for_frequency_operator": true,
+        "m0": equilibrium,
+        "h_eff0_a_per_m": artifact_h_eff0,
+        "h_demag0_a_per_m": artifact_h_demag0,
+        "phi0_requirement": artifact_phi0_requirement,
+        "phi0_a": artifact_phi0,
+        "mesh_signature": mesh_signature,
+        "material_signature": material_signature,
+        "physics_signature": physics_signature,
+        "boundary_signature": boundary_signature,
+        "static_demag_signature": static_demag_signature,
+        "periodic_mesh_certificate": periodic_mesh_certificate_digest,
+        "static_field_provenance": {
+            "field_source": artifact_field_source,
+            "comparison": if source_artifact.is_some() {
+                "stored_vs_recomputed_passed"
+            } else {
+                "recomputed_from_equilibrium"
+            },
+        },
+        "tangent_frame_policy": "orthonormal_right_handed_m0_v1",
+        "acceptance": {
+            "max_m0_norm_error": max_m0_norm_error,
+            "max_m0_cross_h_eff0_relative": max_m0_cross_h_eff0_relative,
+            "m0_norm_tolerance": m0_norm_tolerance,
+            "equilibrium_torque_relative_tolerance": equilibrium_torque_relative_tolerance,
+        },
+        "producer_run_id": producer_run_id,
+        "demag_model": demag_model,
+    });
+    let linearization_state_digest =
+        shared_domain_content_digest("linearization_state_v6", &linearization_state)?;
+    if let Some(object) = linearization_state.as_object_mut() {
+        object.insert(
+            "content_sha256".to_string(),
+            serde_json::json!(linearization_state_digest),
+        );
+        object.insert(
+            "linearization_state_id".to_string(),
+            serde_json::json!(format!(
+                "LinearizationState.v6:{}",
+                linearization_state_digest
+                    .strip_prefix("sha256:")
+                    .unwrap_or(&linearization_state_digest)
+            )),
+        );
+    }
+
+    let (linearization_m0, linearization_h_eff0, linearization_h_demag0) = source_artifact
+        .map(|artifact| {
+            (
+                artifact.m0.clone(),
+                artifact.h_eff0.clone(),
+                artifact.h_demag0.clone(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                equilibrium.to_vec(),
+                observables.effective_field.clone(),
+                observables.demag_field.clone(),
+            )
+        });
+
+    Ok(SharedDomainLinearizationState {
+        equilibrium_artifact,
+        linearization_state,
+        equilibrium_m0: linearization_m0,
+        h_eff0: linearization_h_eff0,
+        h_demag0: linearization_h_demag0,
+        phi0,
+        equilibrium_id,
+        mesh_snapshot_id: mesh_signature,
+        material_snapshot_id: material_signature,
+        physics_snapshot_id: physics_signature,
+        boundary_snapshot_id: boundary_signature,
+        producer_run_id,
+        equilibrium_content_sha256,
+        demag_model,
+        m0_norm_tolerance,
+        equilibrium_torque_relative_tolerance,
+        equilibrium_artifact_digest,
+        linearization_state_digest,
+        periodic_mesh_certificate_digest,
+    })
+}
+
 fn build_native_shared_domain_modal_problem<'a>(
     plan: &'a FemEigenPlanIR,
     topology: &MeshTopology,
     equilibrium: &[Vector3],
     observables: &EffectiveFieldObservables,
+    linearization_state: Option<&SharedDomainLinearizationState>,
 ) -> Result<native_fem::NativeModalEigenSharedDomainProblem<'a>, RunError> {
     if !plan.enable_demag || !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         return Err(RunError {
@@ -1399,17 +1906,103 @@ fn build_native_shared_domain_modal_problem<'a>(
                     .to_string(),
         });
     }
-    let mesh_certificate_digest =
-        shared_domain_content_digest("mesh_certificate", &mesh_certificate)?;
+    let mesh_certificate_digest = if let Some(state) = linearization_state {
+        state.periodic_mesh_certificate_digest.clone()
+    } else {
+        shared_domain_content_digest("mesh_certificate", &mesh_certificate)?
+    };
     let ms_values = plan.material.ms_field.clone().unwrap_or_default();
     if !ms_values.is_empty() && ms_values.len() != topology.n_nodes {
         return Err(RunError {
             message: "shared-domain modal nodal Ms field does not match the mesh".to_string(),
         });
     }
+    let active_nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    let linearization_state = linearization_state;
+    let linearization_m0 = linearization_state
+        .map(|state| state.equilibrium_m0.as_slice())
+        .unwrap_or(equilibrium);
+    let linearization_h_eff0 = linearization_state
+        .map(|state| state.h_eff0.as_slice())
+        .unwrap_or(&observables.effective_field);
+    let linearization_h_demag0 = linearization_state
+        .map(|state| state.h_demag0.as_slice())
+        .unwrap_or(&observables.demag_field);
+    let pack_active_field = |field: &[Vector3], label: &str| -> Result<Vec<f64>, RunError> {
+        if field.len() != topology.n_nodes {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain native {label} field length {} does not match mesh node count {}",
+                    field.len(),
+                    topology.n_nodes
+                ),
+            });
+        }
+        Ok(active_nodes.iter().flat_map(|&node| field[node]).collect())
+    };
+    let linearization_m0_xyz = pack_active_field(linearization_m0, "m0")?;
+    let linearization_h_eff0_xyz = pack_active_field(linearization_h_eff0, "h_eff0")?;
+    let linearization_h_demag0_xyz = pack_active_field(linearization_h_demag0, "h_demag0")?;
+    let linearization_phi0 = linearization_state
+        .map(|state| state.phi0.clone())
+        .unwrap_or_default();
+    if linearization_state.is_some() {
+        if linearization_phi0.len() != topology.n_nodes {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain native phi0 length {} does not match mesh node count {}",
+                    linearization_phi0.len(),
+                    topology.n_nodes
+                ),
+            });
+        }
+    }
     Ok(native_fem::NativeModalEigenSharedDomainProblem {
         mesh: &plan.mesh,
         equilibrium_m0_xyz,
+        linearization_m0_xyz,
+        linearization_h_eff0_xyz,
+        linearization_h_demag0_xyz,
+        linearization_phi0,
+        equilibrium_id: linearization_state
+            .map(|state| state.equilibrium_id.clone())
+            .unwrap_or_else(|| equilibrium_digest.clone()),
+        mesh_snapshot_id: linearization_state
+            .map(|state| state.mesh_snapshot_id.clone())
+            .unwrap_or_else(|| mesh_certificate_digest.clone()),
+        material_snapshot_id: linearization_state
+            .map(|state| state.material_snapshot_id.clone())
+            .unwrap_or_else(|| equilibrium_digest.clone()),
+        physics_snapshot_id: linearization_state
+            .map(|state| state.physics_snapshot_id.clone())
+            .unwrap_or_else(|| equilibrium_digest.clone()),
+        boundary_snapshot_id: linearization_state
+            .map(|state| state.boundary_snapshot_id.clone())
+            .unwrap_or_else(|| mesh_certificate_digest.clone()),
+        producer_run_id: linearization_state
+            .map(|state| state.producer_run_id.clone())
+            .unwrap_or_else(|| "fem_eigen:legacy_native_payload".to_string()),
+        equilibrium_content_sha256: linearization_state
+            .map(|state| state.equilibrium_content_sha256.clone())
+            .unwrap_or_else(|| equilibrium_digest.clone()),
+        demag_model: linearization_state
+            .map(|state| state.demag_model.clone())
+            .unwrap_or_else(|| {
+                resolved_demag_realization(plan)
+                    .map(|value| value.model_name().to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            }),
+        m0_norm_tolerance: linearization_state
+            .map(|state| state.m0_norm_tolerance)
+            .unwrap_or(1.0e-8),
+        equilibrium_torque_relative_tolerance: linearization_state
+            .map(|state| state.equilibrium_torque_relative_tolerance)
+            .unwrap_or(1.0e-6),
         saturation_magnetisation_a_per_m: ms_values,
         uniform_saturation_magnetisation_a_per_m: plan.material.saturation_magnetisation,
         gamma0_m_per_a_s: plan.gyromagnetic_ratio,
@@ -1425,9 +2018,14 @@ fn build_native_shared_domain_modal_problem<'a>(
         boundary_kind: boundary_kind.to_string(),
         robin_beta,
         boundary_marker: config.boundary_marker,
-        equilibrium_digest,
+        equilibrium_digest: linearization_state
+            .map(|state| state.equilibrium_artifact_digest.clone())
+            .unwrap_or(equilibrium_digest),
         mesh_certificate_digest,
         mesh_certificate_schema: "periodic_mesh_certificate.v6".to_string(),
+        linearization_state_digest: linearization_state
+            .map(|state| state.linearization_state_digest.clone())
+            .unwrap_or_default(),
         _marker: std::marker::PhantomData,
     })
 }
@@ -1833,7 +2431,7 @@ fn execute_fem_eigen_inner(
     )?;
 
     let initial_magnetization = plan.equilibrium_magnetization.clone();
-    let (problem, equilibrium, relaxation_steps, observables) =
+    let (problem, equilibrium, relaxation_steps, observables, source_artifact) =
         materialize_equilibrium(plan, &initial_magnetization)?;
     let topology = &problem.topology;
     let mut solver_kind = solver_kind_label(plan);
@@ -1917,6 +2515,8 @@ fn execute_fem_eigen_inner(
                 equilibrium,
                 observables,
                 relaxation_steps,
+                &problem,
+                source_artifact.as_ref(),
                 topology,
                 &reduction,
                 &bases,
@@ -2556,6 +3156,8 @@ fn execute_native_modal_window_from_full_2x2(
     equilibrium: Vec<Vector3>,
     observables: EffectiveFieldObservables,
     relaxation_steps: u64,
+    problem: &FemLlgProblem,
+    source_artifact: Option<&LoadedEquilibriumArtifactV6>,
     topology: &MeshTopology,
     reduction: &ReductionMap,
     bases: &[(Vector3, Vector3)],
@@ -2611,12 +3213,25 @@ fn execute_native_modal_window_from_full_2x2(
         &tangent_mass_row_major,
         &native_floquet_periodic_pairs,
     );
+    let shared_domain_linearization_state = if plan.enable_demag && plan.operator.include_demag {
+        Some(build_shared_domain_linearization_state(
+            plan,
+            topology,
+            problem,
+            source_artifact,
+            &equilibrium,
+            &observables,
+        )?)
+    } else {
+        None
+    };
     let shared_domain_problem = if plan.enable_demag && plan.operator.include_demag {
         Some(build_native_shared_domain_modal_problem(
             plan,
             topology,
             &equilibrium,
             &observables,
+            shared_domain_linearization_state.as_ref(),
         )?)
     } else {
         None
@@ -2633,12 +3248,19 @@ fn execute_native_modal_window_from_full_2x2(
                 "scalar_reduced_node": problem.scalar_reduced_node,
                 "tangent_bases": bases,
             });
-            let linearization_state = serde_json::json!({
-                "equilibrium": equilibrium,
-                "operator_diagnostics": operator_diagnostics_json,
-                "uniform_saturation_magnetisation_a_per_m": problem.uniform_saturation_magnetisation_a_per_m,
-                "gamma0_m_per_a_s": problem.gamma0_m_per_a_s,
-            });
+            let linearization_state =
+                if let Some(state) = shared_domain_linearization_state.as_ref() {
+                    serde_json::json!({
+                        "linearization_state": state.linearization_state_digest,
+                        "equilibrium_artifact": state.equilibrium_artifact_digest,
+                        "periodic_mesh_certificate": state.periodic_mesh_certificate_digest,
+                    })
+                } else {
+                    serde_json::json!({
+                        "equilibrium": equilibrium,
+                        "operator_diagnostics": operator_diagnostics_json,
+                    })
+                };
             Ok(serde_json::json!({
                 "phase_constraint_sha256": shared_domain_content_digest(
                     "phase_constraint",
@@ -2823,6 +3445,7 @@ fn execute_native_modal_window_from_full_2x2(
         artifact_node_mass_weights.as_deref(),
         solver_diagnostics,
         relaxation_steps,
+        shared_domain_linearization_state.as_ref(),
     )?;
 
     let stats = StepStats {
@@ -3045,6 +3668,7 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         None,
         solver_diagnostics,
         relaxation_steps,
+        None,
     )?;
 
     let stats = StepStats {
@@ -4475,6 +5099,7 @@ fn native_modal_artifacts(
     node_mass_weights: Option<&[f64]>,
     solver_diagnostics: serde_json::Value,
     relaxation_steps: u64,
+    linearization_state: Option<&SharedDomainLinearizationState>,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {
     let requested_modes = requested_mode_indices(outputs);
     let wants_spectrum = outputs
@@ -4487,6 +5112,31 @@ fn native_modal_artifacts(
     let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
+    let mut solver_diagnostics = solver_diagnostics;
+    if let Some(state) = linearization_state {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            object.insert(
+                "equilibrium_artifact_sha256".to_string(),
+                serde_json::json!(state.equilibrium_artifact_digest),
+            );
+            object.insert(
+                "linearization_state_sha256".to_string(),
+                serde_json::json!(state.linearization_state_digest),
+            );
+            object.insert(
+                "periodic_mesh_certificate_sha256".to_string(),
+                serde_json::json!(state.periodic_mesh_certificate_digest),
+            );
+            object.insert(
+                "linearization_handoff".to_string(),
+                serde_json::json!({
+                    "equilibrium_artifact_schema": "equilibrium_artifact.v6",
+                    "linearization_state_schema": "LinearizationState.v6",
+                    "accepted_for_frequency_operator": true,
+                }),
+            );
+        }
+    }
     let mut modes_summary = Vec::with_capacity(modes.len());
     let solver_backend = solver_diagnostics
         .get("solver_backend")
@@ -4806,6 +5456,16 @@ fn native_modal_artifacts(
         "eigen/metadata/equilibrium_source.json",
         &equilibrium_source_json(&plan.equilibrium),
     )?);
+    if let Some(state) = linearization_state {
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/metadata/equilibrium_artifact.v6.json",
+            &state.equilibrium_artifact,
+        )?);
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/metadata/linearization_state.v6.json",
+            &state.linearization_state,
+        )?);
+    }
 
     if wants_dispersion {
         let k_vector = k_vector_json(plan.k_sampling.as_ref());
@@ -4942,11 +5602,25 @@ fn native_gpu_k0_kittel_execution_provenance(plan: &FemEigenPlanIR) -> Execution
 fn materialize_equilibrium(
     plan: &FemEigenPlanIR,
     initial_magnetization: &[Vector3],
-) -> Result<(FemLlgProblem, Vec<Vector3>, u64, EffectiveFieldObservables), RunError> {
-    let mut equilibrium_guess = initial_magnetization.to_vec();
-    if let EquilibriumSourceIR::Artifact { path } = &plan.equilibrium {
-        equilibrium_guess = load_equilibrium_artifact(path, plan.mesh.nodes.len())?;
-    }
+) -> Result<
+    (
+        FemLlgProblem,
+        Vec<Vector3>,
+        u64,
+        EffectiveFieldObservables,
+        Option<LoadedEquilibriumArtifactV6>,
+    ),
+    RunError,
+> {
+    let source_artifact = if let EquilibriumSourceIR::Artifact { path } = &plan.equilibrium {
+        Some(load_equilibrium_artifact_v6(path, plan.mesh.nodes.len())?)
+    } else {
+        None
+    };
+    let equilibrium_guess = source_artifact
+        .as_ref()
+        .map(|artifact| artifact.m0.clone())
+        .unwrap_or_else(|| initial_magnetization.to_vec());
 
     let topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
         message: format!("MeshTopology: {}", error),
@@ -5090,10 +5764,14 @@ fn materialize_equilibrium(
         state.magnetization().to_vec(),
         steps_taken,
         observables,
+        source_artifact,
     ))
 }
 
-fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vector3>, RunError> {
+fn load_equilibrium_artifact_v6(
+    path: &str,
+    expected_len: usize,
+) -> Result<LoadedEquilibriumArtifactV6, RunError> {
     let raw = std::fs::read_to_string(path).map_err(|error| RunError {
         message: format!("failed to read equilibrium artifact '{}': {}", path, error),
     })?;
@@ -5142,15 +5820,87 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
         "producer_run_id",
         "content_sha256",
         "equilibrium_id",
-        "mesh_snapshot_id",
-        "material_snapshot_id",
-        "physics_snapshot_id",
-        "boundary_snapshot_id",
+        "mesh_signature",
+        "material_signature",
+        "physics_signature",
+        "boundary_signature",
+        "static_demag_signature",
     ] {
         required_string(name)?;
     }
-    let phi0 = object
+    let stop_reason = required_string("stop_reason")?;
+    if !matches!(
+        stop_reason,
+        "torque_tolerance" | "independent_certificate" | "artifact_accepted"
+    ) {
+        return Err(RunError {
+            message: format!(
+                "equilibrium artifact '{}' has an unaccepted stop_reason '{}'",
+                path, stop_reason
+            ),
+        });
+    }
+    let parse_vector_field = |name: &str| -> Result<Vec<Vector3>, RunError> {
+        let values = object
+            .get(name)
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "equilibrium artifact '{}' is missing required v6 field '{}'",
+                    path, name
+                ),
+            })?;
+        if values.len() != expected_len {
+            return Err(RunError {
+                message: format!(
+                    "equilibrium artifact '{}' has invalid '{}' vector field",
+                    path, name
+                ),
+            });
+        }
+        values
+            .iter()
+            .map(|entry| {
+                let vector = entry.as_array().ok_or_else(|| RunError {
+                    message: format!(
+                        "equilibrium artifact '{}' has invalid '{}' vector field",
+                        path, name
+                    ),
+                })?;
+                if vector.len() != 3
+                    || vector
+                        .iter()
+                        .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "equilibrium artifact '{}' has invalid '{}' vector field",
+                            path, name
+                        ),
+                    });
+                }
+                Ok([
+                    vector[0].as_f64().unwrap(),
+                    vector[1].as_f64().unwrap(),
+                    vector[2].as_f64().unwrap(),
+                ])
+            })
+            .collect()
+    };
+    let h_eff0 = parse_vector_field("h_eff0_a_per_m")?;
+    let h_demag0 = parse_vector_field("h_demag0_a_per_m")?;
+    let phi0_requirement = required_string("phi0_requirement")?;
+    if phi0_requirement != "required_for_restart_or_provenance" {
+        return Err(RunError {
+            message: format!(
+                "equilibrium artifact '{}' has unsupported phi0_requirement '{}'",
+                path, phi0_requirement
+            ),
+        });
+    }
+    let phi0_values = object
         .get("phi0")
+        .or_else(|| object.get("phi0_a"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| RunError {
             message: format!(
@@ -5158,9 +5908,10 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
                 path
             ),
         })?;
-    if phi0
-        .iter()
-        .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+    if phi0_values.is_empty()
+        || phi0_values
+            .iter()
+            .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
     {
         return Err(RunError {
             message: format!("equilibrium artifact '{}' has invalid phi0", path),
@@ -5189,6 +5940,9 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
             });
         }
     }
+    let m0_norm_tolerance = tolerances["m0_norm"].as_f64().unwrap();
+    let equilibrium_torque_relative_tolerance =
+        tolerances["equilibrium_torque_relative"].as_f64().unwrap();
     let certificate = object
         .get("periodic_mesh_certificate")
         .and_then(serde_json::Value::as_object)
@@ -5224,6 +5978,18 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
             ),
         });
     }
+    if certificate
+        .get("certificate")
+        .and_then(serde_json::Value::as_object)
+        .is_none()
+    {
+        return Err(RunError {
+            message: format!(
+                "equilibrium artifact '{}' has no complete periodic mesh certificate payload",
+                path
+            ),
+        });
+    }
     let certificate_id = certificate["certificate_id"].as_str().unwrap();
     let certificate_hash = certificate["content_sha256"].as_str().unwrap();
     let expected_certificate_id = format!(
@@ -5238,49 +6004,50 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
             ),
         });
     }
-    let values = object
-        .get("m0")
-        .and_then(serde_json::Value::as_array)
+    let m0 = parse_vector_field("m0")?;
+    let phi0 = phi0_values
+        .iter()
+        .map(|value| value.as_f64().unwrap())
+        .collect::<Vec<_>>();
+    let required_string_owned = |name: &str| required_string(name).map(str::to_string);
+    let periodic_mesh_certificate = object
+        .get("periodic_mesh_certificate")
         .cloned()
         .ok_or_else(|| RunError {
-            message: format!("equilibrium artifact '{}' is missing v6 m0 vectors", path),
-        })?;
-    if values.len() != expected_len {
-        return Err(RunError {
             message: format!(
-                "equilibrium artifact '{}' contains {} vectors, expected {}",
-                path,
-                values.len(),
-                expected_len
+                "equilibrium artifact '{}' is missing periodic mesh certificate",
+                path
             ),
-        });
-    }
-    values
-        .into_iter()
-        .map(|entry| {
-            let array = entry.as_array().ok_or_else(|| RunError {
-                message: format!(
-                    "equilibrium artifact '{}' contains a non-vector entry",
-                    path
-                ),
-            })?;
-            if array.len() != 3 {
-                return Err(RunError {
-                    message: format!("equilibrium artifact '{}' contains a non-3D vector", path),
-                });
-            }
-            let vector = [array[0].as_f64(), array[1].as_f64(), array[2].as_f64()];
-            if vector
-                .iter()
-                .any(|value| value.is_none_or(|value| !value.is_finite()))
-            {
-                return Err(RunError {
-                    message: format!("equilibrium artifact '{}' contains non-finite m0", path),
-                });
-            }
-            Ok([vector[0].unwrap(), vector[1].unwrap(), vector[2].unwrap()])
-        })
-        .collect()
+        })?;
+    Ok(LoadedEquilibriumArtifactV6 {
+        value: value.clone(),
+        m0,
+        h_eff0,
+        h_demag0,
+        phi0,
+        equilibrium_id: required_string_owned("equilibrium_id")?,
+        producer_run_id: required_string_owned("producer_run_id")?,
+        content_sha256: required_string_owned("content_sha256")?,
+        mesh_signature: required_string_owned("mesh_signature")?,
+        material_signature: required_string_owned("material_signature")?,
+        physics_signature: required_string_owned("physics_signature")?,
+        boundary_signature: required_string_owned("boundary_signature")?,
+        static_demag_signature: required_string_owned("static_demag_signature")?,
+        demag_model: object
+            .get("demag_model")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("poisson_robin")
+            .to_string(),
+        m0_norm_tolerance,
+        equilibrium_torque_relative_tolerance,
+        phi0_requirement: phi0_requirement.to_string(),
+        periodic_mesh_certificate,
+    })
+}
+
+fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vector3>, RunError> {
+    Ok(load_equilibrium_artifact_v6(path, expected_len)?.m0)
 }
 
 fn build_reduction_map(
@@ -8005,6 +8772,25 @@ fn write_eigen_v2_bundle(
             "modal_overlap_available": false,
         },
     });
+    if summary_payload
+        .get("solver_diagnostics")
+        .and_then(|value| value.get("linearization_state_sha256"))
+        .is_some()
+    {
+        if let Some(artifacts) = manifest
+            .get_mut("artifacts")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            artifacts.insert(
+                "equilibrium_artifact_v6_path".to_string(),
+                serde_json::json!("eigen/metadata/equilibrium_artifact.v6.json"),
+            );
+            artifacts.insert(
+                "linearization_state_v6_path".to_string(),
+                serde_json::json!("eigen/metadata/linearization_state.v6.json"),
+            );
+        }
+    }
     if let (Some(manifest_object), Some(diagnostics_object)) = (
         manifest.as_object_mut(),
         summary_payload["solver_diagnostics"].as_object(),
@@ -9723,6 +10509,7 @@ mod tests {
             &topology,
             &plan.equilibrium_magnetization,
             &observables,
+            None,
         )
         .expect("shared-domain payload must rebuild the full physical A_qq matrix");
 
@@ -11267,13 +12054,16 @@ mod tests {
         let artifact = serde_json::json!({
             "schema_version": "equilibrium_artifact.v6",
             "accepted_for_linearization": true,
+            "stop_reason": "torque_tolerance",
             "producer_run_id": "run:eq", "content_sha256": "sha256:eq",
-            "equilibrium_id": "eq:1", "mesh_snapshot_id": "mesh:1",
-            "material_snapshot_id": "material:1", "physics_snapshot_id": "physics:1",
-            "boundary_snapshot_id": "boundary:1", "m0": [[0.0, 0.0, 1.0]],
-            "phi0": [0.0],
+            "equilibrium_id": "eq:1", "mesh_signature": "sha256:mesh",
+            "material_signature": "sha256:material", "physics_signature": "sha256:physics",
+            "boundary_signature": "sha256:boundary", "static_demag_signature": "sha256:static",
+            "m0": [[0.0, 0.0, 1.0]], "h_eff0_a_per_m": [[0.0, 0.0, 1.0]],
+            "h_demag0_a_per_m": [[0.0, 0.0, 0.0]], "phi0_a": [0.0],
+            "phi0_requirement": "required_for_restart_or_provenance",
             "acceptance_tolerances": {"m0_norm": 1e-10, "equilibrium_torque_relative": 1e-6},
-            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:cert", "content_sha256": "sha256:cert"}
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:cert", "content_sha256": "sha256:cert", "certificate": {"certificate_status": "accepted"}}
         });
         std::fs::write(&path, artifact.to_string()).unwrap();
         assert_eq!(
@@ -11289,7 +12079,7 @@ mod tests {
             assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
         }
         let mut missing_phi = artifact.clone();
-        missing_phi.as_object_mut().unwrap().remove("phi0");
+        missing_phi.as_object_mut().unwrap().remove("phi0_a");
         std::fs::write(&path, missing_phi.to_string()).unwrap();
         assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
         let mut missing_certificate = artifact;
@@ -11301,11 +12091,12 @@ mod tests {
         assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
         let mismatched_certificate = serde_json::json!({
             "schema_version": "equilibrium_artifact.v6", "accepted_for_linearization": true,
+            "stop_reason": "torque_tolerance",
             "producer_run_id": "run:eq", "content_sha256": "sha256:eq", "equilibrium_id": "eq:1",
-            "mesh_snapshot_id": "mesh:1", "material_snapshot_id": "material:1", "physics_snapshot_id": "physics:1", "boundary_snapshot_id": "boundary:1",
-            "m0": [[0.0, 0.0, 1.0]], "phi0": [0.0],
+            "mesh_signature": "sha256:mesh", "material_signature": "sha256:material", "physics_signature": "sha256:physics", "boundary_signature": "sha256:boundary", "static_demag_signature": "sha256:static",
+            "m0": [[0.0, 0.0, 1.0]], "h_eff0_a_per_m": [[0.0, 0.0, 1.0]], "h_demag0_a_per_m": [[0.0, 0.0, 0.0]], "phi0_a": [0.0], "phi0_requirement": "required_for_restart_or_provenance",
             "acceptance_tolerances": {"m0_norm": 1e-10, "equilibrium_torque_relative": 1e-6},
-            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:other", "content_sha256": "sha256:cert"}
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:other", "content_sha256": "sha256:cert", "certificate": {"certificate_status": "accepted"}}
         });
         std::fs::write(&path, mismatched_certificate.to_string()).unwrap();
         assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());

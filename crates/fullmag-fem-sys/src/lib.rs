@@ -1161,8 +1161,10 @@ pub struct fullmag_fem_frequency_domain_solve_result {
 }
 
 pub const FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION: u32 = 12;
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION: u32 = 13;
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 14;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_PRIOR_ABI_VERSION: u32 = 13;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION: u32 = 14;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION: u32 = 15;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 16;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1234,6 +1236,25 @@ pub struct FullmagFemModalSharedDomainPayload {
     pub equilibrium_digest: *const c_char,
     pub mesh_certificate_digest: *const c_char,
     pub mesh_certificate_schema: *const c_char,
+    pub linearization_state_digest: *const c_char,
+    pub linearization_m0_xyz: *const f64,
+    pub linearization_m0_xyz_count: u64,
+    pub linearization_h_eff0_xyz: *const f64,
+    pub linearization_h_eff0_xyz_count: u64,
+    pub linearization_h_demag0_xyz: *const f64,
+    pub linearization_h_demag0_xyz_count: u64,
+    pub linearization_phi0: *const f64,
+    pub linearization_phi0_count: u64,
+    pub equilibrium_id: *const c_char,
+    pub mesh_snapshot_id: *const c_char,
+    pub material_snapshot_id: *const c_char,
+    pub physics_snapshot_id: *const c_char,
+    pub boundary_snapshot_id: *const c_char,
+    pub producer_run_id: *const c_char,
+    pub equilibrium_content_sha256: *const c_char,
+    pub demag_model: *const c_char,
+    pub m0_norm_tolerance: f64,
+    pub equilibrium_torque_relative_tolerance: f64,
 }
 
 #[repr(C)]
@@ -2647,9 +2668,10 @@ mod tests {
     }
 
     #[test]
-    fn modal_v14_request_and_result_tails_are_append_only_and_zeroable() {
+    fn modal_v16_request_and_result_tails_are_append_only_and_zeroable() {
         type Request = FullmagFemModalEigenRequest;
         type Result = FullmagFemFrequencyDomainResult;
+        type Shared = FullmagFemModalSharedDomainPayload;
         let request = unsafe { std::mem::MaybeUninit::<Request>::zeroed().assume_init() };
         assert_eq!(request.struct_size, 0);
         assert_eq!(request.execution_target as u32, 0);
@@ -2677,6 +2699,35 @@ mod tests {
         assert!(result.mode_delta_m_xyz_complex.is_null());
         assert!(result.mode_residuals.is_null());
         assert!(result.mode_cluster_ids.is_null());
+        let shared = unsafe { std::mem::MaybeUninit::<Shared>::zeroed().assume_init() };
+        assert!(shared.linearization_state_digest.is_null());
+        assert!(shared.linearization_m0_xyz.is_null());
+        assert!(shared.linearization_h_eff0_xyz.is_null());
+        assert!(shared.linearization_h_demag0_xyz.is_null());
+        assert!(shared.linearization_phi0.is_null());
+        assert!(shared.equilibrium_id.is_null());
+        assert_eq!(shared.m0_norm_tolerance, 0.0);
+        assert_eq!(shared.equilibrium_torque_relative_tolerance, 0.0);
+        assert!(
+            std::mem::offset_of!(Shared, linearization_state_digest)
+                < std::mem::offset_of!(Shared, linearization_m0_xyz)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, linearization_m0_xyz_count)
+                < std::mem::offset_of!(Shared, linearization_h_eff0_xyz)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, linearization_phi0_count)
+                < std::mem::offset_of!(Shared, equilibrium_id)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, equilibrium_content_sha256)
+                < std::mem::offset_of!(Shared, demag_model)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, demag_model)
+                < std::mem::offset_of!(Shared, m0_norm_tolerance)
+        );
         assert!(
             std::mem::offset_of!(Result, mode_count)
                 > std::mem::offset_of!(Result, artifact_manifest_path)
@@ -2690,8 +2741,10 @@ mod tests {
                 < std::mem::offset_of!(Result, struct_size)
         );
         assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION, 12);
-        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION, 13);
-        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION, 14);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_PRIOR_ABI_VERSION, 13);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION, 14);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION, 15);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION, 16);
         assert!(
             std::mem::offset_of!(Request, reserved_modal_contract_flags)
                 < std::mem::offset_of!(Request, shared_domain_payload)

@@ -6,7 +6,7 @@
 //! - native MFEM/libCEED/hypre time-domain FEM execution
 //! - mesh-native Poisson demag on shared-domain meshes with air
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_fem_sys as ffi;
 
 mod availability;
@@ -90,7 +90,7 @@ use std::ffi::c_void;
 use std::ffi::CStr;
 #[cfg(feature = "fem-gpu")]
 use std::io::Write;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "fem-gpu")]
 use std::ptr;
@@ -226,7 +226,7 @@ const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
 #[cfg(feature = "fem-gpu")]
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
     if slice.is_empty() {
         std::ptr::null()
@@ -235,7 +235,7 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) struct PackedNativeMesh {
     nodes_xyz: Vec<f64>,
     cell_types: Vec<u32>,
@@ -245,7 +245,7 @@ pub(crate) struct PackedNativeMesh {
     periodic_boundary_pair_markers: Vec<u32>,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl PackedNativeMesh {
     pub(crate) fn new(mesh: &fullmag_ir::MeshIR) -> Self {
         Self {
@@ -1552,7 +1552,7 @@ fn native_fem_object_ids_match(a: &str, b: &str) -> bool {
     clean_a == clean_b
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn managed_fem_runtime_root() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("FULLMAG_FEM_RUNTIME_ROOT").map(PathBuf::from) {
         if root.join("openmpi/share/openmpi").is_dir() {
@@ -1584,14 +1584,14 @@ fn managed_fem_runtime_root() -> Option<PathBuf> {
     None
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn set_env_if_missing(key: &str, value: impl AsRef<std::ffi::OsStr>) {
     if std::env::var_os(key).is_none() {
         std::env::set_var(key, value);
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn configure_openmpi_loopback_oob_if_missing() {
     set_env_if_missing("OMPI_MCA_oob", "tcp");
     if std::env::var_os("OMPI_MCA_oob_tcp_if_include").is_none()
@@ -1601,7 +1601,7 @@ fn configure_openmpi_loopback_oob_if_missing() {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn configure_pmix_loopback_ptl_if_missing() {
     if std::env::var_os("PMIX_MCA_ptl_tcp_if_include").is_none()
         && std::env::var_os("PMIX_MCA_ptl_tcp_if_exclude").is_none()
@@ -1610,7 +1610,7 @@ fn configure_pmix_loopback_ptl_if_missing() {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn configure_managed_openmpi_environment() {
     let Some(runtime_root) = managed_fem_runtime_root() else {
         return;

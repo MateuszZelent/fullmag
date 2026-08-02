@@ -1001,8 +1001,10 @@ typedef struct {
 } fullmag_fem_frequency_domain_solve_result;
 
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION 12u
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION 13u
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 14u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_PRIOR_ABI_VERSION 13u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION 14u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION 15u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 16u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -1071,6 +1073,27 @@ typedef struct {
     const char *equilibrium_digest;
     const char *mesh_certificate_digest;
     const char *mesh_certificate_schema;
+    /* v15: exact accepted LinearizationState.v6 identity. */
+    const char *linearization_state_digest;
+    /* v16: accepted equilibrium fields consumed by native linearization. */
+    const double *linearization_m0_xyz;
+    uint64_t linearization_m0_xyz_count;
+    const double *linearization_h_eff0_xyz;
+    uint64_t linearization_h_eff0_xyz_count;
+    const double *linearization_h_demag0_xyz;
+    uint64_t linearization_h_demag0_xyz_count;
+    const double *linearization_phi0;
+    uint64_t linearization_phi0_count;
+    const char *equilibrium_id;
+    const char *mesh_snapshot_id;
+    const char *material_snapshot_id;
+    const char *physics_snapshot_id;
+    const char *boundary_snapshot_id;
+    const char *producer_run_id;
+    const char *equilibrium_content_sha256;
+    const char *demag_model;
+    double m0_norm_tolerance;
+    double equilibrium_torque_relative_tolerance;
 } FullmagFemModalSharedDomainPayload;
 
 typedef struct {

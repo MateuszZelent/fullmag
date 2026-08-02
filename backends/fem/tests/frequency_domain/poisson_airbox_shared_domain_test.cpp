@@ -263,17 +263,36 @@ int main()
         0.0, 0.0, 1.0,
         0.0, 0.0, 1.0,
         0.0, 0.0, 1.0};
+    const std::vector<double> payload_h_eff0 = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0};
+    const std::vector<double> payload_h_demag0(12u, 0.0);
+    const std::vector<double> payload_phi0(4u, 0.0);
     const std::vector<std::uint32_t> payload_scalar_classes = {0u, 1u, 2u, 3u};
     const std::vector<std::uint32_t> payload_magnetic_classes = {0u, 1u, 2u, 3u};
     const std::vector<std::uint32_t> payload_a_qq_offsets(9u, 0u);
     const char *payload_boundary = "robin";
     const char *payload_digest = "sha256:payload-test";
+    const char *payload_equilibrium_id = "equilibrium_artifact.v6:payload-test";
+    const char *payload_snapshot_id = "sha256:snapshot-test";
+    const char *payload_producer = "test:poisson-airbox-shared-domain";
+    const char *payload_demag_model = "poisson_robin";
     FullmagFemModalSharedDomainPayload payload{};
     payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
     payload.struct_size = sizeof(FullmagFemModalSharedDomainPayload);
     payload.mesh = &payload_mesh;
     payload.equilibrium_m0_xyz = payload_equilibrium.data();
     payload.equilibrium_m0_xyz_count = payload_equilibrium.size();
+    payload.linearization_m0_xyz = payload_equilibrium.data();
+    payload.linearization_m0_xyz_count = payload_equilibrium.size();
+    payload.linearization_h_eff0_xyz = payload_h_eff0.data();
+    payload.linearization_h_eff0_xyz_count = payload_h_eff0.size();
+    payload.linearization_h_demag0_xyz = payload_h_demag0.data();
+    payload.linearization_h_demag0_xyz_count = payload_h_demag0.size();
+    payload.linearization_phi0 = payload_phi0.data();
+    payload.linearization_phi0_count = payload_phi0.size();
     payload.uniform_saturation_magnetisation_a_per_m = 2.0;
     payload.gamma0_m_per_a_s = 3.0;
     payload.magnetic_a_qq_csr = FullmagFemCsrMatrixView{
@@ -291,6 +310,17 @@ int main()
     payload.equilibrium_digest = payload_digest;
     payload.mesh_certificate_digest = payload_digest;
     payload.mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    payload.linearization_state_digest = payload_digest;
+    payload.equilibrium_id = payload_equilibrium_id;
+    payload.mesh_snapshot_id = payload_snapshot_id;
+    payload.material_snapshot_id = payload_snapshot_id;
+    payload.physics_snapshot_id = payload_snapshot_id;
+    payload.boundary_snapshot_id = payload_snapshot_id;
+    payload.producer_run_id = payload_producer;
+    payload.equilibrium_content_sha256 = payload_digest;
+    payload.demag_model = payload_demag_model;
+    payload.m0_norm_tolerance = 1.0e-8;
+    payload.equilibrium_torque_relative_tolerance = 1.0e-6;
     fd::PoissonAirboxSharedDomainAssemblyResult payload_result{};
     check(
         fd::assemble_poisson_airbox_shared_domain_payload(payload, &payload_result) ==
@@ -300,6 +330,15 @@ int main()
           "public shared-domain payload import preserves production assembly kind");
     check(payload_result.operator_digest[0] != '\0',
           "public shared-domain payload import publishes an operator digest");
+
+    FullmagFemModalSharedDomainPayload missing_linearization_digest = payload;
+    missing_linearization_digest.linearization_state_digest = nullptr;
+    fd::PoissonAirboxSharedDomainAssemblyResult rejected_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain_payload(
+            missing_linearization_digest,
+            &rejected_result) == fd::FrequencyDomainStatus::validation_error,
+        "shared-domain payload rejects a missing LinearizationState.v6 identity");
 #endif
     return 0;
 }

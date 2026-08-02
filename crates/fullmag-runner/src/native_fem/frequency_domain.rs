@@ -1,8 +1,8 @@
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_fem_sys as ffi;
 
 use std::ffi::c_void;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -279,6 +279,20 @@ pub(crate) struct NativeModalEigenRequest<'a> {
 pub(crate) struct NativeModalEigenSharedDomainProblem<'a> {
     pub mesh: &'a fullmag_ir::MeshIR,
     pub equilibrium_m0_xyz: Vec<f64>,
+    pub linearization_m0_xyz: Vec<f64>,
+    pub linearization_h_eff0_xyz: Vec<f64>,
+    pub linearization_h_demag0_xyz: Vec<f64>,
+    pub linearization_phi0: Vec<f64>,
+    pub equilibrium_id: String,
+    pub mesh_snapshot_id: String,
+    pub material_snapshot_id: String,
+    pub physics_snapshot_id: String,
+    pub boundary_snapshot_id: String,
+    pub producer_run_id: String,
+    pub equilibrium_content_sha256: String,
+    pub demag_model: String,
+    pub m0_norm_tolerance: f64,
+    pub equilibrium_torque_relative_tolerance: f64,
     pub saturation_magnetisation_a_per_m: Vec<f64>,
     pub uniform_saturation_magnetisation_a_per_m: f64,
     pub gamma0_m_per_a_s: f64,
@@ -297,11 +311,12 @@ pub(crate) struct NativeModalEigenSharedDomainProblem<'a> {
     pub equilibrium_digest: String,
     pub mesh_certificate_digest: String,
     pub mesh_certificate_schema: String,
+    pub linearization_state_digest: String,
     pub(crate) _marker: std::marker::PhantomData<&'a fullmag_ir::MeshIR>,
 }
 
 impl<'a> NativeModalEigenSharedDomainProblem<'a> {
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     fn ffi_payload<'b>(
         &'b self,
         mesh_descriptor: &'b ffi::fullmag_fem_mesh_desc,
@@ -309,6 +324,15 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
         equilibrium_digest: &'b CString,
         mesh_certificate_digest: &'b CString,
         mesh_certificate_schema: &'b CString,
+        linearization_state_digest: &'b CString,
+        equilibrium_id: &'b CString,
+        mesh_snapshot_id: &'b CString,
+        material_snapshot_id: &'b CString,
+        physics_snapshot_id: &'b CString,
+        boundary_snapshot_id: &'b CString,
+        producer_run_id: &'b CString,
+        equilibrium_content_sha256: &'b CString,
+        demag_model: &'b CString,
     ) -> ffi::FullmagFemModalSharedDomainPayload {
         ffi::FullmagFemModalSharedDomainPayload {
             abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
@@ -316,6 +340,14 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             mesh: mesh_descriptor,
             equilibrium_m0_xyz: self.equilibrium_m0_xyz.as_ptr(),
             equilibrium_m0_xyz_count: self.equilibrium_m0_xyz.len() as u64,
+            linearization_m0_xyz: self.linearization_m0_xyz.as_ptr(),
+            linearization_m0_xyz_count: self.linearization_m0_xyz.len() as u64,
+            linearization_h_eff0_xyz: self.linearization_h_eff0_xyz.as_ptr(),
+            linearization_h_eff0_xyz_count: self.linearization_h_eff0_xyz.len() as u64,
+            linearization_h_demag0_xyz: self.linearization_h_demag0_xyz.as_ptr(),
+            linearization_h_demag0_xyz_count: self.linearization_h_demag0_xyz.len() as u64,
+            linearization_phi0: self.linearization_phi0.as_ptr(),
+            linearization_phi0_count: self.linearization_phi0.len() as u64,
             saturation_magnetisation_a_per_m: if self.saturation_magnetisation_a_per_m.is_empty() {
                 std::ptr::null()
             } else {
@@ -346,6 +378,17 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             equilibrium_digest: equilibrium_digest.as_ptr(),
             mesh_certificate_digest: mesh_certificate_digest.as_ptr(),
             mesh_certificate_schema: mesh_certificate_schema.as_ptr(),
+            linearization_state_digest: linearization_state_digest.as_ptr(),
+            equilibrium_id: equilibrium_id.as_ptr(),
+            mesh_snapshot_id: mesh_snapshot_id.as_ptr(),
+            material_snapshot_id: material_snapshot_id.as_ptr(),
+            physics_snapshot_id: physics_snapshot_id.as_ptr(),
+            boundary_snapshot_id: boundary_snapshot_id.as_ptr(),
+            producer_run_id: producer_run_id.as_ptr(),
+            equilibrium_content_sha256: equilibrium_content_sha256.as_ptr(),
+            demag_model: demag_model.as_ptr(),
+            m0_norm_tolerance: self.m0_norm_tolerance,
+            equilibrium_torque_relative_tolerance: self.equilibrium_torque_relative_tolerance,
         }
     }
 }
@@ -496,7 +539,7 @@ pub(crate) fn solve_native_driven_frequency_response(
 pub(crate) fn solve_native_modal_eigen(
     request: NativeModalEigenRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     super::configure_managed_openmpi_environment();
     solve_native_modal_eigen_impl(request)
 }
@@ -968,7 +1011,7 @@ fn solve_native_driven_frequency_response_impl(
     Ok(ffi_result.to_owned_result())
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 fn validate_floquet_pair_phase_metadata(
     k_vector_rad_per_m: Option<[f64; 3]>,
     pairs: &[NativeDrivenFrequencyResponseFloquetPeriodicPair<'_>],
@@ -1017,7 +1060,7 @@ fn validate_floquet_pair_phase_metadata(
     Ok(())
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 fn canonical_phase_residual_rad(phase_rad: f64) -> f64 {
     let two_pi = 2.0 * std::f64::consts::PI;
     let mut value = (phase_rad + std::f64::consts::PI).rem_euclid(two_pi) - std::f64::consts::PI;
@@ -1027,7 +1070,7 @@ fn canonical_phase_residual_rad(phase_rad: f64) -> f64 {
     value
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn slice_ptr_or_null<T>(values: &[T]) -> *const T {
     if values.is_empty() {
         std::ptr::null()
@@ -1036,7 +1079,7 @@ fn slice_ptr_or_null<T>(values: &[T]) -> *const T {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn csr_matrix_view_or_zero(
     value: Option<&NativeModalEigenCsrMatrixView<'_>>,
 ) -> ffi::FullmagFemCsrMatrixView {
@@ -1072,7 +1115,7 @@ fn solve_native_driven_frequency_response_impl(
     Err("native FEM frequency response requires the fem-gpu feature".to_string())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn solve_native_modal_eigen_impl(
     request: NativeModalEigenRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
@@ -1192,6 +1235,44 @@ fn solve_native_modal_eigen_impl(
         .map(|problem| CString::new(problem.mesh_certificate_schema.as_bytes()))
         .transpose()
         .map_err(|_| "native FEM modal_eigen mesh certificate schema contains NUL".to_string())?;
+    let shared_linearization_state_digest = shared_domain
+        .map(|problem| CString::new(problem.linearization_state_digest.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen linearization state digest contains NUL".to_string()
+        })?;
+    let shared_equilibrium_id = shared_domain
+        .map(|problem| CString::new(problem.equilibrium_id.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen equilibrium id contains NUL".to_string())?;
+    let shared_mesh_snapshot_id = shared_domain
+        .map(|problem| CString::new(problem.mesh_snapshot_id.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen mesh snapshot id contains NUL".to_string())?;
+    let shared_material_snapshot_id = shared_domain
+        .map(|problem| CString::new(problem.material_snapshot_id.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen material snapshot id contains NUL".to_string())?;
+    let shared_physics_snapshot_id = shared_domain
+        .map(|problem| CString::new(problem.physics_snapshot_id.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen physics snapshot id contains NUL".to_string())?;
+    let shared_boundary_snapshot_id = shared_domain
+        .map(|problem| CString::new(problem.boundary_snapshot_id.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen boundary snapshot id contains NUL".to_string())?;
+    let shared_producer_run_id = shared_domain
+        .map(|problem| CString::new(problem.producer_run_id.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen producer run id contains NUL".to_string())?;
+    let shared_equilibrium_content_sha256 = shared_domain
+        .map(|problem| CString::new(problem.equilibrium_content_sha256.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen equilibrium content hash contains NUL".to_string())?;
+    let shared_demag_model = shared_domain
+        .map(|problem| CString::new(problem.demag_model.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen demag model contains NUL".to_string())?;
     let shared_payload = match (
         shared_domain,
         shared_mesh_descriptor.as_ref(),
@@ -1199,6 +1280,15 @@ fn solve_native_modal_eigen_impl(
         shared_equilibrium_digest.as_ref(),
         shared_mesh_certificate_digest.as_ref(),
         shared_mesh_certificate_schema.as_ref(),
+        shared_linearization_state_digest.as_ref(),
+        shared_equilibrium_id.as_ref(),
+        shared_mesh_snapshot_id.as_ref(),
+        shared_material_snapshot_id.as_ref(),
+        shared_physics_snapshot_id.as_ref(),
+        shared_boundary_snapshot_id.as_ref(),
+        shared_producer_run_id.as_ref(),
+        shared_equilibrium_content_sha256.as_ref(),
+        shared_demag_model.as_ref(),
     ) {
         (
             Some(problem),
@@ -1207,12 +1297,30 @@ fn solve_native_modal_eigen_impl(
             Some(equilibrium_digest),
             Some(mesh_certificate_digest),
             Some(mesh_certificate_schema),
+            Some(linearization_state_digest),
+            Some(equilibrium_id),
+            Some(mesh_snapshot_id),
+            Some(material_snapshot_id),
+            Some(physics_snapshot_id),
+            Some(boundary_snapshot_id),
+            Some(producer_run_id),
+            Some(equilibrium_content_sha256),
+            Some(demag_model),
         ) => Some(problem.ffi_payload(
             mesh_descriptor,
             boundary_kind,
             equilibrium_digest,
             mesh_certificate_digest,
             mesh_certificate_schema,
+            linearization_state_digest,
+            equilibrium_id,
+            mesh_snapshot_id,
+            material_snapshot_id,
+            physics_snapshot_id,
+            boundary_snapshot_id,
+            producer_run_id,
+            equilibrium_content_sha256,
+            demag_model,
         )),
         _ => None,
     };
@@ -1580,12 +1688,12 @@ fn solve_native_driven_response_contract_impl(
     Ok(owned)
 }
 
-#[cfg(not(feature = "fem-gpu"))]
+#[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
 fn solve_native_modal_eigen_impl(
     request: NativeModalEigenRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
     let _ = request;
-    Err("native FEM modal eigen solve requires the fem-gpu feature".to_string())
+    Err("native FEM modal eigen solve requires the fem-native feature".to_string())
 }
 
 #[cfg(not(feature = "fem-gpu"))]
@@ -1610,7 +1718,7 @@ fn map_dmi_kind(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn optional_str_ptr(value: Option<&CString>) -> *const std::os::raw::c_char {
     value.map_or(std::ptr::null(), |value| value.as_ptr())
 }
@@ -1632,7 +1740,7 @@ fn map_execution_lane(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn map_phase_convention(
     phase_convention: FrequencyDomainPhaseConvention,
 ) -> ffi::fullmag_fem_frequency_domain_phase_convention {
@@ -1659,7 +1767,7 @@ unsafe extern "C" fn poll_atomic_interrupt_flag(user_data: *mut c_void) -> i32 {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe extern "C" fn dispatch_native_frequency_domain_cancel(user_data: *mut c_void) -> i32 {
     if user_data.is_null() {
         return 0;
@@ -1698,7 +1806,7 @@ unsafe extern "C" fn dispatch_native_frequency_domain_progress(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe extern "C" fn dispatch_native_modal_eigen_progress_json(
     user_data: *mut c_void,
     progress_json: *const c_char,
@@ -1762,12 +1870,12 @@ impl Drop for NativeDrivenFrequencyResponseFfiResult {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 struct NativeFrequencyDomainContractFfiResult {
     inner: ffi::FullmagFemFrequencyDomainResult,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl Default for NativeFrequencyDomainContractFfiResult {
     fn default() -> Self {
         Self {
@@ -1805,7 +1913,7 @@ impl Default for NativeFrequencyDomainContractFfiResult {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFrequencyDomainContractFfiResult {
     fn to_owned_result(&self) -> NativeFrequencyDomainContractResult {
         let modal_eigen = if self.inner.mode_count == 0 {
@@ -1851,7 +1959,7 @@ impl NativeFrequencyDomainContractFfiResult {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn copy_ffi_complex(
     pointer: *const ffi::FullmagFemComplex64,
     count: u64,
@@ -1870,7 +1978,7 @@ fn copy_ffi_complex(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn copy_ffi_values<T: Copy>(pointer: *const T, count: u64) -> Vec<T> {
     if count == 0 || pointer.is_null() || count > usize::MAX as u64 {
         return Vec::new();
@@ -1878,7 +1986,7 @@ fn copy_ffi_values<T: Copy>(pointer: *const T, count: u64) -> Vec<T> {
     unsafe { std::slice::from_raw_parts(pointer, count as usize).to_vec() }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl Drop for NativeFrequencyDomainContractFfiResult {
     fn drop(&mut self) {
         unsafe {
@@ -1887,7 +1995,7 @@ impl Drop for NativeFrequencyDomainContractFfiResult {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn ffi_string(value: *const std::os::raw::c_char) -> String {
     if value.is_null() {
         String::new()
@@ -1925,7 +2033,7 @@ fn map_status(status: ffi::fullmag_fem_frequency_domain_status) -> NativeFrequen
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn map_contract_status(
     status: ffi::FullmagFemFrequencyDomainStatus,
 ) -> NativeFrequencyDomainStatus {
@@ -1994,7 +2102,7 @@ mod tests {
 
     #[test]
     fn native_frequency_domain_unavailable_modal_contract_is_structured() {
-        #[cfg(not(feature = "fem-gpu"))]
+        #[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
         {
             let err = solve_native_modal_eigen(NativeModalEigenRequest {
                 mesh_asset_id: "mesh",
@@ -2031,8 +2139,8 @@ mod tests {
                 poisson_airbox_block_problem: None,
                 shared_domain_problem: None,
             })
-            .expect_err("native modal contract should require fem-gpu feature");
-            assert!(err.contains("fem-gpu"));
+            .expect_err("native modal contract should require fem-native feature");
+            assert!(err.contains("fem-native"));
         }
 
         #[cfg(feature = "fem-gpu")]

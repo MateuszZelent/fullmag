@@ -5,6 +5,7 @@
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/canonical_digest.hpp"
+#include "frequency_domain/linearization_state.hpp"
 
 #include <algorithm>
 #include <array>
@@ -860,6 +861,28 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             payload.equilibrium_digest == nullptr || payload.equilibrium_digest[0] == '\0' ||
             payload.mesh_certificate_digest == nullptr || payload.mesh_certificate_digest[0] == '\0' ||
             payload.mesh_certificate_schema == nullptr ||
+            payload.linearization_state_digest == nullptr ||
+            payload.linearization_state_digest[0] == '\0' ||
+            payload.linearization_m0_xyz == nullptr ||
+            payload.linearization_m0_xyz_count == 0u ||
+            payload.linearization_h_eff0_xyz == nullptr ||
+            payload.linearization_h_eff0_xyz_count == 0u ||
+            payload.linearization_h_demag0_xyz == nullptr ||
+            payload.linearization_h_demag0_xyz_count == 0u ||
+            payload.linearization_phi0 == nullptr ||
+            payload.linearization_phi0_count == 0u ||
+            payload.equilibrium_id == nullptr || payload.equilibrium_id[0] == '\0' ||
+            payload.mesh_snapshot_id == nullptr || payload.mesh_snapshot_id[0] == '\0' ||
+            payload.material_snapshot_id == nullptr || payload.material_snapshot_id[0] == '\0' ||
+            payload.physics_snapshot_id == nullptr || payload.physics_snapshot_id[0] == '\0' ||
+            payload.boundary_snapshot_id == nullptr || payload.boundary_snapshot_id[0] == '\0' ||
+            payload.producer_run_id == nullptr || payload.producer_run_id[0] == '\0' ||
+            payload.equilibrium_content_sha256 == nullptr ||
+            payload.equilibrium_content_sha256[0] == '\0' ||
+            payload.demag_model == nullptr || payload.demag_model[0] == '\0' ||
+            !std::isfinite(payload.m0_norm_tolerance) || payload.m0_norm_tolerance < 0.0 ||
+            !std::isfinite(payload.equilibrium_torque_relative_tolerance) ||
+            payload.equilibrium_torque_relative_tolerance < 0.0 ||
             std::strcmp(payload.mesh_certificate_schema, "periodic_mesh_certificate.v6") != 0) {
             copy_error(out_result->error_message,
                        "shared-domain modal payload is incomplete or uses an unsupported certificate");
@@ -879,6 +902,16 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                        "shared-domain modal payload cardinalities do not match the mesh");
             return out_result->status;
         }
+        if (payload.linearization_m0_xyz_count % 3u != 0u ||
+            payload.linearization_h_eff0_xyz_count != payload.linearization_m0_xyz_count ||
+            payload.linearization_h_demag0_xyz_count != payload.linearization_m0_xyz_count ||
+            payload.linearization_phi0_count != node_count) {
+            copy_error(out_result->error_message,
+                       "shared-domain linearization fields have inconsistent cardinalities");
+            return out_result->status;
+        }
+        const std::uint64_t linearization_magnetic_node_count =
+            payload.linearization_m0_xyz_count / 3u;
         std::vector<double> saturation_magnetization;
         if (payload.saturation_magnetisation_a_per_m != nullptr) {
             if (payload.saturation_magnetisation_count != node_count ||
@@ -920,11 +953,117 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 magnetic_node_mask[source.cell_nodes[cursor]] = 1u;
             }
         }
+        const std::uint64_t magnetic_node_count = static_cast<std::uint64_t>(std::count(
+            magnetic_node_mask.begin(), magnetic_node_mask.end(), static_cast<std::uint8_t>(1u)));
+        if (linearization_magnetic_node_count != magnetic_node_count) {
+            copy_error(out_result->error_message,
+                       "shared-domain linearization fields do not cover exactly the magnetic nodes");
+            return out_result->status;
+        }
+        std::vector<double> linearization_m0_x(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_m0_y(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_m0_z(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_h_eff0_x(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_h_eff0_y(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_h_eff0_z(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_h_demag0_x(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_h_demag0_y(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::vector<double> linearization_h_demag0_z(
+            static_cast<std::size_t>(linearization_magnetic_node_count));
+        std::uint64_t linearization_node = 0u;
+        for (std::uint64_t node = 0u; node < node_count; ++node) {
+            if (magnetic_node_mask[static_cast<std::size_t>(node)] == 0u) {
+                continue;
+            }
+            const std::size_t source_offset = static_cast<std::size_t>(3u * linearization_node);
+            const std::size_t destination = static_cast<std::size_t>(linearization_node);
+            linearization_m0_x[destination] = payload.linearization_m0_xyz[source_offset];
+            linearization_m0_y[destination] = payload.linearization_m0_xyz[source_offset + 1u];
+            linearization_m0_z[destination] = payload.linearization_m0_xyz[source_offset + 2u];
+            linearization_h_eff0_x[destination] = payload.linearization_h_eff0_xyz[source_offset];
+            linearization_h_eff0_y[destination] = payload.linearization_h_eff0_xyz[source_offset + 1u];
+            linearization_h_eff0_z[destination] = payload.linearization_h_eff0_xyz[source_offset + 2u];
+            linearization_h_demag0_x[destination] = payload.linearization_h_demag0_xyz[source_offset];
+            linearization_h_demag0_y[destination] = payload.linearization_h_demag0_xyz[source_offset + 1u];
+            linearization_h_demag0_z[destination] = payload.linearization_h_demag0_xyz[source_offset + 2u];
+            ++linearization_node;
+        }
+        EquilibriumArtifactDescriptor equilibrium_artifact{};
+        equilibrium_artifact.equilibrium_id = payload.equilibrium_id;
+        equilibrium_artifact.mesh_snapshot_id = payload.mesh_snapshot_id;
+        equilibrium_artifact.material_snapshot_id = payload.material_snapshot_id;
+        equilibrium_artifact.physics_snapshot_id = payload.physics_snapshot_id;
+        equilibrium_artifact.boundary_snapshot_id = payload.boundary_snapshot_id;
+        equilibrium_artifact.producer_run_id = payload.producer_run_id;
+        equilibrium_artifact.content_sha256 = payload.equilibrium_content_sha256;
+        equilibrium_artifact.m0_unit = CartesianVectorFieldView{
+            linearization_m0_x.data(),
+            linearization_m0_y.data(),
+            linearization_m0_z.data(),
+            linearization_magnetic_node_count};
+        equilibrium_artifact.h_eff0_a_per_m = CartesianVectorFieldView{
+            linearization_h_eff0_x.data(),
+            linearization_h_eff0_y.data(),
+            linearization_h_eff0_z.data(),
+            linearization_magnetic_node_count};
+        equilibrium_artifact.h_demag0_a_per_m = CartesianVectorFieldView{
+            linearization_h_demag0_x.data(),
+            linearization_h_demag0_y.data(),
+            linearization_h_demag0_z.data(),
+            linearization_magnetic_node_count};
+        equilibrium_artifact.phi0 = payload.linearization_phi0;
+        equilibrium_artifact.magnetic_node_count = linearization_magnetic_node_count;
+        equilibrium_artifact.airbox_node_count = payload.linearization_phi0_count;
+        equilibrium_artifact.accepted_for_linearization = true;
+        equilibrium_artifact.demag_model = payload.demag_model;
+        LinearizationBuildOptions linearization_options{};
+        linearization_options.m0_norm_tolerance = payload.m0_norm_tolerance;
+        linearization_options.equilibrium_torque_relative_tolerance =
+            payload.equilibrium_torque_relative_tolerance;
+        linearization_options.allow_m0_renormalization = false;
+        LinearizationStateNative linearization_state{};
+        LinearizationDiagnostics linearization_diagnostics{};
+        const FrequencyDomainStatus linearization_status =
+            build_linearization_state_from_equilibrium(
+                equilibrium_artifact,
+                linearization_options,
+                linearization_state,
+                linearization_diagnostics);
+        if (linearization_status != FrequencyDomainStatus::ok) {
+            std::string message = "shared-domain equilibrium linearization rejected";
+            if (linearization_diagnostics.reject_reason[0] != '\0') {
+                message += ": ";
+                message += linearization_diagnostics.reject_reason;
+            }
+            if (linearization_diagnostics.error_message[0] != '\0') {
+                message += " (";
+                message += linearization_diagnostics.error_message;
+                message += ')';
+            }
+            copy_error(out_result->error_message, message.c_str());
+            return out_result->status;
+        }
         std::vector<double> equilibrium_for_frames(
             payload.equilibrium_m0_xyz,
             payload.equilibrium_m0_xyz + payload.equilibrium_m0_xyz_count);
+        linearization_node = 0u;
         for (std::uint64_t node = 0; node < node_count; ++node) {
             if (magnetic_node_mask[node] != 0u) {
+                equilibrium_for_frames[3u * node] =
+                    linearization_state.m0_xyz[3u * linearization_node];
+                equilibrium_for_frames[3u * node + 1u] =
+                    linearization_state.m0_xyz[3u * linearization_node + 1u];
+                equilibrium_for_frames[3u * node + 2u] =
+                    linearization_state.m0_xyz[3u * linearization_node + 2u];
+                ++linearization_node;
                 continue;
             }
             equilibrium_for_frames[3u * node] = 0.0;

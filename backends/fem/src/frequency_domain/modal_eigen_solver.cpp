@@ -46,7 +46,9 @@ namespace {
 bool supported_frequency_domain_abi(std::uint32_t version) noexcept
 {
     return version == kFrequencyDomainAbiVersion ||
+        version == kFrequencyDomainV15AbiVersion ||
         version == kFrequencyDomainPreviousAbiVersion ||
+        version == kFrequencyDomainPriorAbiVersion ||
         version == kFrequencyDomainLegacyAbiVersion;
 }
 

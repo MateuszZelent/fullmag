@@ -9,8 +9,10 @@
 namespace fullmag::fem::frequency_domain {
 
 constexpr std::uint32_t kFrequencyDomainLegacyAbiVersion = 12;
-constexpr std::uint32_t kFrequencyDomainPreviousAbiVersion = 13;
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 14;
+constexpr std::uint32_t kFrequencyDomainPriorAbiVersion = 13;
+constexpr std::uint32_t kFrequencyDomainPreviousAbiVersion = 14;
+constexpr std::uint32_t kFrequencyDomainV15AbiVersion = 15;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 16;
 
 enum class ModalExecutionTarget : std::uint32_t {
     auto_select = 0,
