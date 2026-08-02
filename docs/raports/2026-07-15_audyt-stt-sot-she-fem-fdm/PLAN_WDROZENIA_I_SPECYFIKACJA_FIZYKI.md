@@ -4153,3 +4153,106 @@ heterogeniczne N/F/T z `Gi/Gmix`, oraz ilościowe `V`/`S -> V_s`/`mu_s`/`Q_ia`
 z bilansami i residualami po stronie FDM/FEM. Capability matrix i
 `validated_workloads` nie zostały zmienione. Ocena celu pozostaje
 konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.21. FDM CPU M2 — wykonywalny manufactured benchmark iSHE/direct-SHE (2026-08-02)
+
+Zamknięto ograniczoną bramę wykonawczą dla wzajemnej konstytutywnej pary
+iSHE/direct-SHE na ścieżce FDM CPU double. Nie zmieniano równań ani kodu
+produkcyjnego: istniejący operator `fdm_charge_spin_block_gmres_v1` już
+realizował obie składowe, a nowe testy sprawdzają ich materializację od silnika
+do snapshotu runnera. Jest to dowód referencyjnego wycinka M2, a nie promocja
+całego inverse SHE do `validated`.
+
+### 32.21.1. Zamrożony przypadek fizyczno-numeryczny
+
+Przypadek ma cztery komórki wzdłuż `x`, `dx=dy=dz=1`, jednorodne
+`m=(0,0,1)`, bez reakcji spinowych i bez AHE/polaryzacji:
+
+```text
+sigma       = 2 S/m
+sigma_spin  = 4 S/m
+sigma_parallel = sigma_perpendicular = 2 S/m
+theta_SH    = 0.2
+V(x_min)=0 V, V(x_max)=1 V
+mu_s(x_min)=(0,0,0) V, mu_s(x_max)=(0,0,1) V
+```
+
+W konwencji pełnego `mu_s` używanej przez operator gradient manufactured state
+ma `E_x=-0.25 V/m` oraz `g_xz=-0.125 V/m`. Z tej samej macierzy
+konstytutywnej wynika w każdej komórce:
+
+```text
+J_c = (-0.5, 0.05, 0) A/m^2
+Q_xz = -0.5 A/m^2
+Q_yz =  0.1 A/m^2
+```
+
+Pozostałe składowe `Q_ia` są zerowe. Niezerowe `J_c,y` jest kanałem iSHE,
+a niezerowe `Q_yz` kanałem direct-SHE; znaki są sprawdzane względem
+`levi_civita` z `ReciprocalConstitutiveMaterial`, a nie względem niezależnych
+parametrów `SHA/iSHA`.
+
+### 32.21.2. Dowody i komendy
+
+Silnik sprawdza profil potencjałów w środkach komórek, pełne `J_c` i `Q_ia`,
+niezerowe kanały Hall oraz niezależne bilanse:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m2-ishe-red \
+  cargo test -p fullmag-engine --lib \
+  m2_manufactured_linear_state_materializes_reciprocal_ishe_and_direct_she
+test result: ok. 1 passed; 294 filtered out
+```
+
+Runner powtarza ten sam przypadek po przejściu przez
+`ResolvedFdmCoupledSpinTransportIR` i `FdmSpinTransportWorkflow::from_plan`, i sprawdza publikowane
+`potential_volts`, `current_density_apm2`, spłaszczony tensor `Q_ia`, wersje
+operatora oraz telemetryczne residual/balance gates:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m2-ishe-runner \
+  cargo test -p fullmag-runner --lib \
+  reciprocal_m2_runner_materializes_ishe_and_direct_she_channels
+test result: ok. 1 passed; 732 filtered out
+```
+
+Weryfikacja szersza zakończyła się `295 passed; 0 failed` dla całej biblioteki
+`fullmag-engine`. Cała biblioteka `fullmag-runner` dała `732 passed; 1 failed`;
+jedyna porażka to istniejący, niezwiązany z M2 test
+`initial_timestep_tests::adaptive_fdm_cuda_identity_fails_closed_until_controller_abi_is_complete`,
+który na tym checkoutcie obserwuje niekwalifikowaną tożsamość CUDA zamiast
+odrzucenia. Wszystkie cztery testy `reciprocal*` runnera, w tym nowy gate,
+przeszły.
+
+Oba targety są tymczasowymi widokami szybkiego magazynu
+`/zfn2/mateuszz/git/fullmag`; nie zapisano ciężkich artefaktów w checkoutcie.
+Weryfikowane symbole i właściciele to odpowiednio:
+
+| Warstwa | Właściciel | Zakres dowodu |
+|---|---|---|
+| konstytutywna | `crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs` | jedna macierz M2, antysymetryczne SHE/iSHE, nieujemna część symetryczna |
+| operator FDM CPU | `crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` | blokowy GMRES/Picard, pola i bilanse |
+| runner/IR | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | lowering deskryptora, stage evaluation i publikowany snapshot |
+| testy | `coupled_charge_spin_tests.rs` oraz moduł testowy runnera | oracle wartości i granica referencyjnego runtime |
+
+### 32.21.3. Zmiana capability matrix i granice
+
+`transport.spin.inverse_she.fullmag.v1` ma teraz:
+
+- `fdm_cpu_reference=reference_executable` wyłącznie dla powyższego,
+  jednorodnego, czterokomórkowego, liniowego benchmarku M2;
+- `fdm_gpu_production`, `fem_cpu_public` i `fem_gpu_public` nadal
+  `semantic_only`;
+- `validated_workloads=[]`, ponieważ nie wykonano jeszcze sweepu Onsagera,
+  nieliniowej zbieżności, heterogenicznych materiałów, interfejsów N/F/T,
+  porównania z BORIS inverse (`iSHA=SHA`), FEM/GPU ani testu produkcyjnego.
+
+Wiersz direct-SHE M1 pozostaje bez rozszerzenia; nowy przypadek jest osobnym
+wierszem inverse-SHE, aby nie mieszać one-way i reciprocal scope. Python/UI nie
+wymagały zmiany — wszystkie parametry potrzebne do tego przypadku były już w
+`ProblemIR`; zamknięto wyłącznie brak testu wykonawczego na granicy runnera.
+
+Ta brama nie zamyka `SHE-BORIS-001`, M2 nonlinear/interface product gate,
+FDM GPU device proof, FEM reciprocal assembly ani browserowego round-trip dla
+pełnego zestawu parametrów. Zbiorcza ocena pozostaje zatem konserwatywnie
+**84% implementacji / 58% gotowości produkcyjnej**.

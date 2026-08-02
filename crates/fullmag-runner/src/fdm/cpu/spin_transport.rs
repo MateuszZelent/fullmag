@@ -3626,6 +3626,102 @@ mod tests {
     }
 
     #[test]
+    fn reciprocal_m2_runner_materializes_ishe_and_direct_she_channels() {
+        let mut plan = reciprocal_plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let descriptor = resolved
+            .fdm_cpu_double_reciprocal
+            .as_mut()
+            .expect("reciprocal descriptor fixture");
+        for material in &mut descriptor.reciprocal_materials {
+            material.theta_sh = 0.2;
+        }
+        for boundary in &mut descriptor.spin_boundaries {
+            boundary.condition = match boundary.face {
+                StructuredBoundaryFaceIR::XMin => {
+                    ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
+                        value_v: [0.0, 0.0, 0.0],
+                    }
+                }
+                StructuredBoundaryFaceIR::XMax => {
+                    ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
+                        value_v: [0.0, 0.0, 1.0],
+                    }
+                }
+                _ => ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            };
+        }
+
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("reciprocal workflow construction")
+            .expect("spin workflow");
+        let evaluation = workflow
+            .evaluate_stage(&plan.initial_magnetization, 0.0)
+            .expect("reciprocal M2 stage solve");
+        let module = &evaluation.modules[0];
+        let expected = ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 2.0,
+            sigma_spin_s_per_m: 4.0,
+            sigma_parallel_s_per_m: 2.0,
+            sigma_perpendicular_s_per_m: 2.0,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: 0.0,
+            spin_hall_angle: 0.2,
+        }
+        .evaluate(
+            [-0.25, 0.0, 0.0],
+            [[0.0, 0.0, -0.125], [0.0; 3], [0.0; 3]],
+            [0.0, 0.0, 1.0],
+        )
+        .expect("manufactured reciprocal response");
+
+        for cell in 0..4 {
+            let expected_potential = (cell as f64 + 0.5) / 4.0;
+            assert!((module.potential_volts[cell] - expected_potential).abs() < 1.0e-10);
+            assert!((module.spin_potential_volts[cell][2] - expected_potential).abs() < 1.0e-10);
+            assert!(module.spin_potential_volts[cell][0].abs() < 1.0e-10);
+            assert!(module.spin_potential_volts[cell][1].abs() < 1.0e-10);
+            for component in 0..3 {
+                assert!(
+                    (module.current_density_apm2[cell][component]
+                        - expected.charge_current_density_a_per_m2[component])
+                        .abs()
+                        < 1.0e-10,
+                    "cell {cell} charge component {component}: {:?} != {:?}",
+                    module.current_density_apm2[cell],
+                    expected.charge_current_density_a_per_m2
+                );
+            }
+            let tensor = module.spin_current_tensor_apm2[cell];
+            for (index, expected_value) in expected
+                .spin_current_density_a_per_m2
+                .iter()
+                .flatten()
+                .enumerate()
+            {
+                assert!(
+                    (tensor[index] - expected_value).abs() < 1.0e-10,
+                    "cell {cell} spin tensor component {index}: {tensor:?}"
+                );
+            }
+        }
+        assert!(module.current_density_apm2[0][1] > 0.0);
+        assert!(module.spin_current_tensor_apm2[0][5] > 0.0);
+        assert!(module.telemetry.scaled_charge_residual.unwrap() <= 1.0e-9);
+        assert!(module.telemetry.spin_scaled_residual <= 1.0e-9);
+        assert!(module.telemetry.charge_balance_relative.unwrap() <= 1.0e-9);
+        assert!(module.telemetry.spin_balance_relative.unwrap() <= 1.0e-9);
+        assert_eq!(
+            module.constitutive_version,
+            "transport_constitutive.reciprocal.fullmag.v1"
+        );
+        assert_eq!(
+            module.spin_operator_version,
+            "fdm_coupled_charge_spin_fv_block_gmres.v1"
+        );
+    }
+
+    #[test]
     fn reciprocal_descriptor_fails_closed_when_paired_with_one_way_descriptor() {
         let mut plan = reciprocal_plan();
         // Explicitly materialize the illegal dual-descriptor shape from the

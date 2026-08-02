@@ -319,6 +319,99 @@ fn m2_she_ishe_pair_is_reciprocal_and_nondissipative() {
 }
 
 #[test]
+fn m2_manufactured_linear_state_materializes_reciprocal_ishe_and_direct_she() {
+    let count = 4;
+    let mut fields = material(count);
+    for material in &mut fields.reciprocal {
+        material.sigma_s_per_m = 2.0;
+        material.sigma_spin_s_per_m = 4.0;
+        material.sigma_parallel_s_per_m = 2.0;
+        material.sigma_perpendicular_s_per_m = 2.0;
+        material.sigma_ahe_s_per_m = 0.0;
+        material.polarization = 0.0;
+        material.spin_hall_angle = 0.2;
+    }
+    for reaction in &mut fields.reactions {
+        *reaction = SpinReactionLengths::default();
+    }
+    let problem = CoupledChargeSpinProblem::new(
+        GridShape {
+            nx: count,
+            ny: 1,
+            nz: 1,
+        },
+        CellSize {
+            dx: 1.0,
+            dy: 1.0,
+            dz: 1.0,
+        },
+        fields.clone(),
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
+                x_max: ChargeBoundaryCondition::Voltage(1.0),
+                ..Default::default()
+            },
+            spin: SpinBoundaryConditions {
+                x_min: SpinBoundaryCondition::SpecifiedPotential([0.0, 0.0, 0.0]),
+                x_max: SpinBoundaryCondition::SpecifiedPotential([0.0, 0.0, 1.0]),
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let solution = problem
+        .solve(CoupledChargeSpinSolverConfig::default(), None)
+        .unwrap();
+    let expected = fields.reciprocal[0]
+        .evaluate(
+            [-0.25, 0.0, 0.0],
+            [[0.0, 0.0, -0.125], [0.0; 3], [0.0; 3]],
+            [0.0, 0.0, 1.0],
+        )
+        .unwrap();
+
+    for cell in 0..count {
+        let expected_potential = (cell as f64 + 0.5) / count as f64;
+        assert!((solution.potential_volts[cell] - expected_potential).abs() < 1.0e-10);
+        assert!((solution.spin_potential_volts[cell][2] - expected_potential).abs() < 1.0e-10);
+        assert!(solution.spin_potential_volts[cell][0].abs() < 1.0e-10);
+        assert!(solution.spin_potential_volts[cell][1].abs() < 1.0e-10);
+        for component in 0..3 {
+            assert!(
+                (solution.cell_charge_current_density_a_per_m2[cell][component]
+                    - expected.charge_current_density_a_per_m2[component])
+                    .abs()
+                    < 1.0e-10,
+                "cell {cell} charge component {component}: {:?} != {:?}",
+                solution.cell_charge_current_density_a_per_m2[cell],
+                expected.charge_current_density_a_per_m2
+            );
+            for spin_component in 0..3 {
+                assert!(
+                    (solution.cell_spin_current_density_a_per_m2[cell][component][spin_component]
+                        - expected.spin_current_density_a_per_m2[component][spin_component])
+                        .abs()
+                        < 1.0e-10,
+                    "cell {cell} spin component ({component}, {spin_component})",
+                );
+            }
+        }
+    }
+    assert!(
+        solution.cell_charge_current_density_a_per_m2[0][1] > 0.0,
+        "reciprocal iSHE must produce a transverse charge current"
+    );
+    assert!(
+        solution.cell_spin_current_density_a_per_m2[0][1][2] > 0.0,
+        "direct SHE must produce a transverse spin current"
+    );
+    assert!(solution.telemetry.charge_balance_relative <= 1.0e-9);
+    assert!(solution.telemetry.spin_balance_relative <= 1.0e-9);
+}
+
+#[test]
 fn m2_warm_start_requires_exact_revisions_and_failure_is_transactional() {
     let problem = bar(4).with_revisions(12, 34);
     let solution = problem
