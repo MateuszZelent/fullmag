@@ -1,8 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { EChartsCanvasSurface } from "./EChartsCanvasSurface";
 import type { ChartRenderModel } from "./chartRenderer";
+
+const echarts = vi.hoisted(() => ({
+  init: vi.fn(() => ({
+    dispose: vi.fn(),
+    getDataURL: vi.fn(() => "data:image/png;base64,"),
+    resize: vi.fn(),
+    setOption: vi.fn(),
+  })),
+}));
+
+vi.mock("echarts", () => echarts);
+
+afterEach(() => {
+  echarts.init.mockClear();
+});
 
 describe("EChartsCanvasSurface", () => {
   const dummyModel: ChartRenderModel = {
@@ -59,5 +81,64 @@ describe("EChartsCanvasSurface", () => {
     const html = renderToStaticMarkup(<EChartsCanvasSurface model={errorModel} />);
     expect(html).toContain("Resource failed to load");
     expect(html).toContain('role="alert"');
+  });
+
+  it("keeps the same canvas through 100 refreshing rerenders without a loading overlay", async () => {
+    const dom = installSimulationPreparationTestDom();
+    globalThis.getComputedStyle = (() => ({
+      direction: "ltr",
+      getPropertyValue: () => "",
+    })) as unknown as typeof getComputedStyle;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const ready = { kind: "ready" as const, revision: 41 };
+    const refreshing = {
+      kind: "refreshing" as const,
+      requestedRevision: 42,
+      visibleRevision: 41,
+    };
+
+    await act(async () => {
+      root.render(<EChartsCanvasSurface model={dummyModel} presentation={ready} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const canvas = findElement(
+      container,
+      (element) => element.getAttribute("class") === "fm-analysis-plots__echarts",
+      "chart canvas",
+    );
+    canvas.clientHeight = 240;
+    canvas.clientWidth = 480;
+    const bounds = canvas.getBoundingClientRect();
+
+    for (let revision = 42; revision < 142; revision += 1) {
+      await act(async () => {
+        root.render(
+          <EChartsCanvasSurface
+            model={dummyModel}
+            presentation={{ ...refreshing, requestedRevision: revision }}
+          />,
+        );
+      });
+      expect(
+        findElement(
+          container,
+          (element) => element.getAttribute("class") === "fm-analysis-plots__echarts",
+          "retained chart canvas",
+        ),
+      ).toBe(canvas);
+    }
+
+    expect(canvas.getBoundingClientRect()).toMatchObject({
+      height: bounds.height,
+      width: bounds.width,
+    });
+    expect(container.textContent).not.toContain("Loading");
+    expect(echarts.init).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+    dom.restore();
   });
 });

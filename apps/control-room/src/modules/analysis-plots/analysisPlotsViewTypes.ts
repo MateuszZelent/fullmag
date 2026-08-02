@@ -1,4 +1,5 @@
 import type { KernelApi } from "@/kernel/types";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import type { AnalysisChartRangeMode, AnalysisWorkbenchSurface, ChartLiveMode } from "@/kernel/workspace/analysisPlotsWorkspace";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
@@ -37,6 +38,7 @@ export interface AnalysisPlotsViewProps {
   solverEnergySeries: readonly ChartSeries[];
   solverEnergyStatus: string;
   tableRowsStatus: string;
+  tableRowsRefresh?: Pick<ResourceResult<unknown>, "error" | "revision" | "status">;
   targetPoints?: 160 | 400 | 800 | 1600 | 3200 | 5000;
   visibleTable: ChartTableWindow | null;
   xAxisId: string;

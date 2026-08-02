@@ -1,6 +1,7 @@
 "use client";
 
 import type { KernelApi } from "@/kernel/types";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import type { ChartLiveMode } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
@@ -8,6 +9,7 @@ import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import { deriveChartPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import {
   createChartDisplayTransform,
   createChartYAxisDisplayTransforms,
@@ -21,17 +23,6 @@ import {
   tableWindowTotalRows,
 } from "../analysisWorkbenchModel";
 import { EChartsSurface } from "./EChartsSurface";
-
-function statusPrimary(status: string, liveMode: ChartLiveMode): string {
-  if (status === "error") return "Error";
-  if (status === "unsupported") return "Unavailable";
-  if (status === "empty" || status === "idle") return "No table data";
-  if (status === "degraded") return "Degraded";
-  if (status === "loading" || status === "stale") {
-    return liveMode === "paused" ? "Paused" : "Loading…";
-  }
-  return liveMode === "paused" ? "Paused" : "Live";
-}
 
 /**
  * Center surface for an Analysis chart.
@@ -51,6 +42,7 @@ export function AnalysisTableSurface({
   selectedSeriesIds,
   selectedPoint,
   status,
+  tableRowsRefresh,
   table,
   xAxisId,
   xAxisLabel,
@@ -65,6 +57,7 @@ export function AnalysisTableSurface({
   selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   status: string;
+  tableRowsRefresh?: Pick<ResourceResult<unknown>, "error" | "revision" | "status">;
   table: ChartTableWindow | null;
   xAxisId: string;
   xAxisLabel: string;
@@ -109,6 +102,16 @@ export function AnalysisTableSurface({
   const cursorText = selectedPoint && selectedTransform
     ? `cursor ${selectedPoint.label}: ${selectedTransform.formatValue(selectedPoint.point.y)}`
     : "cursor —";
+  const presentation = deriveChartPresentationState({
+    data: table,
+    error: tableRowsRefresh?.error ?? (status === "error" ? new Error("Table samples unavailable") : null),
+    requestedRevision: tableRowsRefresh?.revision ?? table?.revision ?? null,
+    status: tableRowsRefresh?.status ?? resourceStatus(status),
+    visibleRevision: table?.revision ?? null,
+  }, {
+    latestKnownRevision: tableRowsRefresh?.revision ?? null,
+    paused: liveMode === "paused",
+  });
 
   return (
     <ChartSection
@@ -133,12 +136,11 @@ export function AnalysisTableSurface({
         ) : null
       }
       status={{
-        isAlert: status === "error",
         pointSummary: rowCount > 0
           ? `${rowCount.toLocaleString()}${totalRows > rowCount ? ` / ${totalRows.toLocaleString()}` : ""} rows`
           : undefined,
-        primary: statusPrimary(status, liveMode),
-        revision: table?.revision ?? null,
+        presentation,
+        primary: "Live",
         trust: "unknown",
       }}
       title={xAxisId}
@@ -154,9 +156,16 @@ export function AnalysisTableSurface({
           onPointSelect={onPointSelect}
           onRangeChange={onRangeChange}
           series={visibleSeries}
+          presentation={presentation}
           xAxisLabel={xAxisLabel}
         />
       )}
     </ChartSection>
   );
+}
+
+function resourceStatus(status: string): "idle" | "loading" | "ready" | "stale" | "error" {
+  return status === "loading" || status === "ready" || status === "stale" || status === "error"
+    ? status
+    : "idle";
 }

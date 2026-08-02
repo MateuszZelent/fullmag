@@ -338,6 +338,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       liveMode,
       Boolean(tableData.visibleTable && tableData.visibleTable.rowCount > 0),
     ),
+    tableRowsRefresh: tableData.tableRows,
     visibleTable: tableData.visibleTable,
     xAxisId: tableData.xAxisId,
     selectedSeriesIds: tableData.selectedSeriesIds,

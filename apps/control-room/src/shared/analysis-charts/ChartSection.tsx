@@ -6,6 +6,7 @@ import {
   scientificTrustLabel,
   type ChartScientificTrust,
 } from "./chartScientificTrust";
+import type { ChartDataPresentationState } from "./chartPresentationState";
 
 export type { ChartScientificTrust } from "./chartScientificTrust";
 
@@ -18,8 +19,14 @@ export interface ChartSectionStatus {
   trust?: ChartScientificTrust;
   /** Revision or cursor position */
   revision?: string | number | null;
+  /** Newer revision requested during a background refresh. */
+  requestedRevision?: string | number | null;
+  /** Non-blocking explanation for a retained stale payload. */
+  detail?: string;
   /** Visible/total point count */
   pointSummary?: string;
+  /** Resource presentation state, independent from scientific trust. */
+  presentation?: ChartDataPresentationState;
 }
 
 interface ChartSectionProps {
@@ -65,8 +72,9 @@ export function ChartSection({
   footer,
   className,
 }: ChartSectionProps) {
-  const normalizedPrimary = status?.primary.toLowerCase() ?? "";
-  const statusClass = status?.isAlert
+  const displayedStatus = presentationStatus(status);
+  const normalizedPrimary = displayedStatus?.primary.toLowerCase() ?? "";
+  const statusClass = displayedStatus?.isAlert
     ? "fm-chart-section__status--error"
     : normalizedPrimary === "degraded"
       ? "fm-chart-section__status--degraded"
@@ -91,28 +99,38 @@ export function ChartSection({
             <span className="fm-chart-section__subtitle">{subtitle}</span>
           ) : null}
         </div>
-        {status ? (
+        {displayedStatus ? (
           <div className="fm-chart-section__status-group">
             <span
-              aria-live={status.isAlert ? "assertive" : "polite"}
+              aria-live={displayedStatus.isAlert ? "assertive" : "polite"}
               className={`fm-chart-section__status ${statusClass}`}
-              role={status.isAlert ? "alert" : "status"}
+              role={displayedStatus.isAlert ? "alert" : "status"}
             >
-              {status.primary}
+              {displayedStatus.primary}
             </span>
-            {status.trust ? (
+            {status?.trust ? (
               <span className="fm-chart-section__trust">
                 Scientific trust: {scientificTrustLabel(status.trust)}
               </span>
             ) : null}
-            {status.pointSummary ? (
+            {status?.pointSummary ? (
               <span className="fm-chart-section__point-count">
                 {status.pointSummary}
               </span>
             ) : null}
-            {status.revision != null ? (
+            {displayedStatus.revision != null ? (
               <span className="fm-chart-section__revision">
-                rev {status.revision}
+                rev {displayedStatus.revision}
+              </span>
+            ) : null}
+            {displayedStatus.requestedRevision != null ? (
+              <span className="fm-chart-section__revision">
+                → {displayedStatus.requestedRevision}
+              </span>
+            ) : null}
+            {displayedStatus.detail ? (
+              <span className="fm-chart-section__status-detail">
+                {displayedStatus.detail}
               </span>
             ) : null}
           </div>
@@ -130,4 +148,43 @@ export function ChartSection({
       ) : null}
     </section>
   );
+}
+
+function presentationStatus(status: ChartSectionStatus | undefined) {
+  const presentation = status?.presentation;
+  if (!presentation) return status;
+  switch (presentation.kind) {
+    case "ready":
+      return { ...status, primary: "Live", revision: presentation.revision };
+    case "refreshing":
+      return {
+        ...status,
+        primary: "Updating",
+        requestedRevision: presentation.requestedRevision,
+        revision: presentation.visibleRevision,
+      };
+    case "paused":
+      return {
+        ...status,
+        primary: "Paused",
+        requestedRevision: presentation.latestKnownRevision,
+        revision: presentation.visibleRevision,
+      };
+    case "stale":
+      return {
+        ...status,
+        detail: presentation.error.message,
+        isAlert: true,
+        primary: "Refresh failed",
+        revision: presentation.visibleRevision,
+      };
+    case "error":
+      return { ...status, detail: presentation.error.message, isAlert: true, primary: "Error" };
+    case "unsupported":
+      return { ...status, detail: presentation.reason, primary: "Unavailable" };
+    case "empty":
+      return { ...status, primary: "No table data", revision: presentation.revision };
+    case "initial-loading":
+      return { ...status, primary: "Loading…" };
+  }
 }

@@ -418,3 +418,65 @@ Result: exit `0`; all 14 material/runtime targets built and ran.
 
 Final source hygiene: `git diff --check` exited `0`. No commit or staging was
 created.
+
+---
+
+# Task 3 — retained charts during background refresh
+
+## Scope
+
+Added the `ChartDataPresentationState` reducer and changed chart presentation
+only. The table resource hook remains the HTTP v2 snapshot owner; the view now
+receives a read-only status/error/revision projection solely to distinguish the
+retained revision from the requested refresh revision. No endpoint, polling,
+resource authority, or Task 2 semantics changed.
+
+The brief's listed components did not include the owners of the raw refresh
+metadata. The minimal forwarding path is therefore:
+
+`useAnalysisTableData` resource result -> analysis controller -> module/view ->
+`AnalysisTableSurface`.
+
+## RED
+
+The required three-file command failed as intended before implementation:
+
+- `chartPresentationState.test.ts` could not import the missing reducer;
+- the 100-rerender canvas regression had no refresh presentation contract;
+- `EChartsSurface` rendered `Loading chart renderer` with usable data and
+  `Loading table samples` during refresh.
+
+Result: 3 failed files, 3 failed tests, 10 passed tests.
+
+## GREEN
+
+```text
+env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run \
+  src/shared/analysis-charts/chartPresentationState.test.ts \
+  src/shared/analysis-charts/EChartsCanvasSurface.test.tsx \
+  src/shared/analysis-charts/ChartSection.test.tsx \
+  src/modules/analysis-plots/components/EChartsSurface.test.tsx \
+  src/shared/analysis-charts/ChartLegend.rowsBinary.integration.test.tsx
+```
+
+Result: 5 files passed, 23 tests passed. The canvas test rerenders a retained
+chart 100 times and verifies one ECharts owner, stable bounds, and no loading
+overlay. Header tests verify `Updating` with both revisions and retained stale
+data with its error text.
+
+```text
+corepack pnpm --dir apps/control-room typecheck
+git diff --check
+```
+
+Both passed.
+
+## Behavior
+
+- Only an absent payload is allowed to show initial loading or a no-payload
+  error.
+- `refreshing` keeps the existing canvas and reports static `Updating` with
+  the visible and requested revisions.
+- A failed refresh keeps the canvas and reports the error beside the visible
+  revision.
+- `paused` retains the visible revision and adds no activity animation.

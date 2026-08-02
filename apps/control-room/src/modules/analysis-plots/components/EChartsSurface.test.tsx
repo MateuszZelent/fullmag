@@ -80,21 +80,32 @@ describe("EChartsSurface", () => {
     expect(html).toContain("No table samples");
   });
 
-  it("shows renderer loading state while ECharts is not mounted yet", () => {
+  it("keeps loaded chart data visible while ECharts mounts", () => {
     const html = renderToStaticMarkup(
       <EChartsSurface series={series} xAxisLabel="step" />
     );
 
     expect(html).toContain('class="fm-analysis-plots__echarts"');
-    expect(html).toContain('role="status"');
-    expect(html).toContain("Loading chart renderer");
+    expect(html).not.toContain("Loading chart renderer");
   });
 
-  it("distinguishes table loading and error states from an empty sample set", () => {
+  it("distinguishes an initial loading state from a retained-chart refresh", () => {
     const loadingHtml = renderToStaticMarkup(
       <EChartsSurface
         dataStatus="loading"
         series={[]}
+        xAxisLabel="step"
+      />
+    );
+    const refreshingHtml = renderToStaticMarkup(
+      <EChartsSurface
+        dataStatus="loading"
+        presentation={{
+          kind: "refreshing",
+          requestedRevision: 42,
+          visibleRevision: 41,
+        }}
+        series={series}
         xAxisLabel="step"
       />
     );
@@ -106,15 +117,15 @@ describe("EChartsSurface", () => {
       />
     );
 
-    expect(loadingHtml).toContain('role="status"');
     expect(loadingHtml).toContain("Loading table samples");
-    expect(loadingHtml).not.toContain("No table samples");
+    expect(refreshingHtml).toContain("Updating");
+    expect(refreshingHtml).not.toContain("Loading table samples");
     expect(errorHtml).toContain('role="alert"');
     expect(errorHtml).toContain("Table samples unavailable");
   });
 
   it("does not mislabel intentionally hidden series as missing table samples", () => {
-    const model = tableSeriesRenderModel([], series, "step", "ready");
+    const model = tableSeriesRenderModel([], series, "step");
 
     expect(model.status).toBe("empty");
     expect(model.statusMessage).toBe("All selected series are hidden");

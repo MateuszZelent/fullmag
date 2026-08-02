@@ -41,6 +41,7 @@ function AnalysisWorkbenchModule({ kernel }: ModuleProps) {
       solverEnergySeries={controller.solverEnergySeries}
       solverEnergyStatus={controller.solverEnergyStatus}
       tableRowsStatus={controller.tableRowsStatus}
+      tableRowsRefresh={controller.tableRowsRefresh}
       targetPoints={controller.targetPoints}
       visibleTable={controller.visibleTable}
       xAxisId={controller.xAxisId}

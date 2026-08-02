@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { EChartsCanvasSurface } from "@/shared/analysis-charts/EChartsCanvasSurface";
+import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import { PointsTableDialog } from "@/shared/analysis-charts/PointsTableDialog";
 import {
   ChartExportControls,
@@ -38,6 +39,7 @@ interface EChartsSurfaceProps {
   onRangeChange?: (range: ChartValueRange) => void;
   /** Visible series — rendered in the chart */
   series: readonly ChartSeries[];
+  presentation?: ChartDataPresentationState;
   /** All series in this resource family — used for stable axis labels regardless of visibility */
   allSeries?: readonly ChartSeries[];
   xAxisLabel?: string;
@@ -49,6 +51,7 @@ export function EChartsSurface({
   fitRequest = 0,
   onPointSelect,
   onRangeChange,
+  presentation: providedPresentation,
   series,
   allSeries,
   xAxisLabel,
@@ -57,8 +60,8 @@ export function EChartsSurface({
   const exportRef = useRef<ChartRendererOwner | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
   const model = useMemo(
-    () => tableSeriesRenderModel(series, allSeries ?? series, xAxisLabel, dataStatus),
-    [dataStatus, series, allSeries, xAxisLabel],
+    () => tableSeriesRenderModel(series, allSeries ?? series, xAxisLabel, dataStatus, providedPresentation),
+    [dataStatus, providedPresentation, series, allSeries, xAxisLabel],
   );
 
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), []);
@@ -102,6 +105,7 @@ export function EChartsSurface({
         }}
         exportRef={exportRef}
         model={model}
+        presentation={providedPresentation}
         onClick={(event) => {
           const point = chartCursorPointFromEChartsClick(event, series);
           if (point) onPointSelect?.(point);
@@ -131,27 +135,23 @@ export function tableSeriesRenderModel(
   allSeries: readonly ChartSeries[],
   xAxisLabel?: string,
   dataStatus?: string,
+  presentation?: ChartDataPresentationState,
 ): ChartRenderModel {
   // Use allSeries for unit grouping so axis slots are stable when series are hidden
   const units = [...new Set(allSeries.map((item) => item.unit))].slice(0, 2);
   const allSeriesHaveSamples = allSeries.some((item) => item.points.length > 0);
   // X-axis unit comes from the series metadata (xUnit field)
   const xUnit = series.find((s) => s.xUnit)?.xUnit ?? allSeries.find((s) => s.xUnit)?.xUnit ?? "";
-  const status =
-    dataStatus === "error"
-      ? "error"
-      : dataStatus === "loading"
-        ? "loading"
-        : dataStatus === "stale"
-          ? "stale"
-          : series.some((item) => item.points.length > 0)
-            ? "ready"
-            : "empty";
+  const status = renderStatusForPresentation(
+    presentation,
+    dataStatus,
+    series.some((item) => item.points.length > 0),
+  );
   return {
     ariaLabel: "Analysis chart",
     key: JSON.stringify([
       xAxisLabel ?? "x",
-      dataStatus ?? "ready",
+      presentation?.kind ?? dataStatus ?? "ready",
       ...series.map((item) => [
         item.id,
         item.points.length,
@@ -175,15 +175,7 @@ export function tableSeriesRenderModel(
     })),
     status,
     statusMessage:
-      status === "error"
-        ? "Table samples unavailable"
-        : status === "loading" || status === "stale"
-          ? "Loading table samples"
-          : status === "empty"
-            ? allSeriesHaveSamples
-              ? "All selected series are hidden"
-              : "No table samples"
-            : undefined,
+      presentationMessage(presentation, status, allSeriesHaveSamples, dataStatus),
     // Keep semantic label and canonical unit separate. The renderer applies the
     // same auto-scale to ticks, tooltip and axis name (e.g. t [ns]).
     xAxis: { label: xAxisLabel ?? "x", unit: xUnit },
@@ -194,6 +186,55 @@ export function tableSeriesRenderModel(
       unit,
     })),
   };
+}
+
+function renderStatusForPresentation(
+  presentation: ChartDataPresentationState | undefined,
+  dataStatus: string | undefined,
+  hasPoints: boolean,
+): ChartRenderModel["status"] {
+  switch (presentation?.kind) {
+    case "initial-loading": return "loading";
+    case "empty": return "empty";
+    case "unsupported": return "unsupported";
+    case "error": return "error";
+    default:
+      return dataStatus === "error"
+        ? "error"
+        : dataStatus === "loading"
+          ? "loading"
+          : dataStatus === "stale"
+            ? "stale"
+            : hasPoints
+              ? "ready"
+              : "empty";
+  }
+}
+
+function presentationMessage(
+  presentation: ChartDataPresentationState | undefined,
+  status: ChartRenderModel["status"],
+  allSeriesHaveSamples: boolean,
+  dataStatus: string | undefined,
+): string | undefined {
+  switch (presentation?.kind) {
+    case "initial-loading": return "Loading table samples";
+    case "refreshing": return "Updating";
+    case "stale": return `Refresh failed: ${presentation.error.message}`;
+    case "paused": return "Paused";
+    case "unsupported": return presentation.reason;
+    case "error": return presentation.error.message;
+    default:
+      return status === "empty"
+        ? allSeriesHaveSamples
+          ? "All selected series are hidden"
+          : "No table samples"
+        : status === "error"
+          ? "Table samples unavailable"
+          : dataStatus === "loading" || dataStatus === "stale"
+            ? "Loading table samples"
+            : undefined;
+  }
 }
 
 /**
