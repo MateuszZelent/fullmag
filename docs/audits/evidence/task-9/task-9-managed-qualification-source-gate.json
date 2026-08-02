@@ -1,0 +1,52 @@
+{
+  "schema_version": "fullmag.fem_llg_t9_managed_gate.v1",
+  "status": "blocked_by_measurement",
+  "source": {
+    "git_commit": "5079ccd8b6effd12afca3c6303fc378502cab46c",
+    "source_snapshot_sha256": "6a20508f0f1656eba017d6a62242db7871936c125979f239a18a41d467eebc85",
+    "worktree_state": "clean"
+  },
+  "recipe": "just verify-fem-llg-time-domain-qualification-production",
+  "runtime": {
+    "container_execution": true,
+    "managed_runtime_manifest_sha256": null,
+    "exact_managed_runtime_provenance": false,
+    "reason": "The container qualification gate passed, but its CMake runtime was not exported with a current managed runtime manifest. Registry promotion remains fail-closed."
+  },
+  "artifacts": {
+    "cpu": {
+      "path": ".fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json",
+      "sha256": "0193f081c8922b5f0ee251c0cf6a8542e79a72871971616145114bbc97ca19e3",
+      "status": "pass",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "fp64",
+      "integrator": "rk45",
+      "timestep_policies": ["adaptive", "fixed"]
+    },
+    "gpu": {
+      "path": ".fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json",
+      "sha256": "fc31a59970e7afcccf231d1ee889e62deab38efd6f3638369f7eb0746fef45c6",
+      "status": "pass",
+      "backend": "fem",
+      "device": "gpu",
+      "precision": "fp64",
+      "integrator": "rk45",
+      "timestep_policies": ["adaptive", "fixed"]
+    },
+    "parity": {
+      "path": ".fullmag/reports/fem-llg-time-domain-qualification/parity-fp64.json",
+      "sha256": "362e395e8796c433c2bee810db56bafda908cef364170bfe134f76018ce881ac",
+      "status": "pass",
+      "precision": "fp64",
+      "validator": "fem_llg_time_domain_cpu_gpu_parity.v1"
+    }
+  },
+  "promotion": {
+    "registry_status": "unvalidated",
+    "blocked_reasons": [
+      "current managed runtime manifest is missing",
+      "artifact hashes are not yet registered against an exact managed runtime source binding"
+    ]
+  }
+}
