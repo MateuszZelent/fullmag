@@ -2307,6 +2307,10 @@ def test_executed_problem_ir_sha256_hashes_the_exact_canonical_bytes():
 
 def test_executed_problem_ir_sha256_changes_with_physical_inputs(monkeypatch):
     bench = load_benchmark_module()
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
     monkeypatch.setenv("FULLMAG_BENCH_SCENARIO", "box500_airbox_exchange_demag")
     monkeypatch.setenv(
         "FULLMAG_BENCH_DOMAIN_MESH",
@@ -2324,6 +2328,10 @@ def test_executed_problem_ir_sha256_changes_with_physical_inputs(monkeypatch):
 
 def test_executed_problem_ir_sha256_ignores_profiler_only_toggles(monkeypatch):
     bench = load_benchmark_module()
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
     monkeypatch.setenv("FULLMAG_BENCH_SCENARIO", "box500_airbox_exchange_demag")
     monkeypatch.setenv(
         "FULLMAG_BENCH_DOMAIN_MESH",
@@ -2359,6 +2367,24 @@ def test_runtime_helper_writes_hash_of_exact_exported_problem_ir(
         hashlib.sha256(canonical_bytes).hexdigest() + "\n"
     )
     assert list(tmp_path.iterdir()) == [identity_path]
+
+
+def test_runtime_helper_benchmark_identity_ignores_launcher_device_override():
+    from fullmag.runtime import helper
+
+    cpu_ir = {
+        "problem_meta": {
+            "runtime_metadata": {
+                "runtime_device_override": {"device": "cpu", "source": "managed_launcher"}
+            }
+        },
+        "physics": {"exchange": {"a": 1}},
+    }
+    gpu_ir = json.loads(json.dumps(cpu_ir))
+    gpu_ir["problem_meta"]["runtime_metadata"]["runtime_device_override"]["device"] = "gpu"
+
+    assert helper._benchmark_problem_ir_identity(cpu_ir) == helper._benchmark_problem_ir_identity(gpu_ir)
+    assert "runtime_device_override" in cpu_ir["problem_meta"]["runtime_metadata"]
 
 
 def test_analysis_benchmark_rejects_missing_or_malformed_problem_ir_sidecar(

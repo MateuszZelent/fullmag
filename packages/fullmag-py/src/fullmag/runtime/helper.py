@@ -36,6 +36,24 @@ def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
     os.replace(temporary, path)
 
 
+def _benchmark_problem_ir_identity(problem_ir: dict[str, object]) -> dict[str, object]:
+    """Remove launcher-only device resolution from benchmark identity bytes.
+
+    CPU and GPU calibration runs deliberately resolve the same physical FEM
+    problem through different execution devices.  The device override belongs
+    to execution provenance, not to the canonical physical ProblemIR identity
+    used to compare those runs.
+    """
+
+    normalized = copy.deepcopy(problem_ir)
+    problem_meta = normalized.get("problem_meta")
+    if isinstance(problem_meta, dict):
+        runtime_metadata = problem_meta.get("runtime_metadata")
+        if isinstance(runtime_metadata, dict):
+            runtime_metadata.pop("runtime_device_override", None)
+    return normalized
+
+
 def _write_json(value: object) -> None:
     json.dump(value, sys.stdout)
     sys.stdout.write("\n")
@@ -193,7 +211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             runtime_device_override=getattr(args, "runtime_device", None),
             _copy_cached_geometry_assets=False,
         )
-        _write_executed_problem_ir_identity(ir)
+        _write_executed_problem_ir_identity(_benchmark_problem_ir_identity(ir))
         if args.command == "export-ir":
             _write_json(ir)
             return 0

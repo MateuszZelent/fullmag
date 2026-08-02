@@ -225,3 +225,15 @@ def test_v2_benchmark_resolves_signed_typed_solver_meshes() -> None:
         (100e-9, 250e-9),
         (50e-9, 100e-9),
     ]
+
+
+def test_v2_benchmark_recovers_explicit_initial_state_identity() -> None:
+    module = load_benchmark_module()
+
+    assert module.calibration_initial_state_identity(
+        "box500_airbox_exchange_only"
+    ) == "explicit_helical_v1"
+    assert module.calibration_initial_state_identity(
+        "box500_airbox_exchange_demag_multidomain"
+    ) == "explicit_multidomain_v1"
+    assert module.calibration_initial_state_identity("exchange_only") == "uniform_x"
