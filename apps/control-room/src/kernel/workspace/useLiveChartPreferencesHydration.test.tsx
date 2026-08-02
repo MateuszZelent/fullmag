@@ -84,10 +84,19 @@ describe("useLiveChartPreferencesHydration", () => {
         },
       },
     });
+    const values = new Map<string, string>([["fm:analysis-chart-preferences:v1", legacy]]);
+    const readKeys: string[] = [];
+    const writeKeys: string[] = [];
     const storage = {
-      getItem: (key: string) => key === "fm:analysis-chart-preferences:v1" ? legacy : null,
+      getItem: (key: string) => {
+        readKeys.push(key);
+        return values.get(key) ?? null;
+      },
       removeItem: () => undefined,
-      setItem: () => { throw new Error("SecurityError"); },
+      setItem: (key: string) => {
+        writeKeys.push(key);
+        throw new Error("SecurityError");
+      },
     } as unknown as Storage;
     let notifications = 0;
 
@@ -100,6 +109,12 @@ describe("useLiveChartPreferencesHydration", () => {
       selectedSeriesIds: ["mz"],
       xAxisId: "time",
     });
+    expect(readKeys).toEqual([
+      LIVE_CHART_PREFERENCES_STORAGE_KEY,
+      "fm:analysis-chart-preferences:v1",
+    ]);
+    expect(writeKeys).toEqual([LIVE_CHART_PREFERENCES_STORAGE_KEY]);
+    expect(values.get("fm:analysis-chart-preferences:v1")).toBe(legacy);
     expect(notifications).toBe(1);
     unsubscribe();
   });

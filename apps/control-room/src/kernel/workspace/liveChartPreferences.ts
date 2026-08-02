@@ -25,7 +25,10 @@ export interface LiveChartPreferencesV1 {
 
 export const LIVE_CHART_PREFERENCES_STORAGE_KEY = "fm:live-chart-preferences:v1";
 export const MAX_LIVE_CHART_DESCRIPTORS = 50;
-export const MAX_LIVE_CHART_STORAGE_CHARS = 64 * 1024;
+/** Worst-case serialized v1 payload, including JSON escaping of bounded strings. */
+export const MAX_NEW_STORED_BYTES = 8 * 1024 * 1024;
+/** Matches the legacy Analysis writer's storage ceiling. */
+export const MAX_LEGACY_STORED_BYTES = 256 * 1024;
 
 const MAX_DESCRIPTOR_ID_LENGTH = 160;
 const MAX_SELECTED_SERIES_IDS = 100;
@@ -34,6 +37,14 @@ const MAX_DISPLAY_UNIT_LENGTH = 24;
 const MAX_RAW_SELECTED_SERIES_IDS = 256;
 const MAX_DESCRIPTOR_FIELDS = 128;
 const TARGET_POINTS: readonly LiveChartTargetPoints[] = [160, 400, 800, 1600, 3200, 5000];
+
+function storedByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function fitsStoredBytes(value: string, maximum: number): boolean {
+  return storedByteLength(value) <= maximum;
+}
 
 function defaultDescriptorPreferences(): LiveChartDescriptorPreferences {
   return {
@@ -172,7 +183,7 @@ export function parseLiveChartPreferences(value: unknown): LiveChartPreferencesV
 }
 
 export function parseStoredLiveChartPreferences(serialized: string | null): LiveChartPreferencesV1 {
-  if (!serialized || serialized.length > MAX_LIVE_CHART_STORAGE_CHARS) {
+  if (!serialized || !fitsStoredBytes(serialized, MAX_NEW_STORED_BYTES)) {
     return createDefaultLiveChartPreferences();
   }
   try {
@@ -183,7 +194,10 @@ export function parseStoredLiveChartPreferences(serialized: string | null): Live
 }
 
 export function serializeLiveChartPreferences(value: unknown): string {
-  return JSON.stringify(parseLiveChartPreferences(value));
+  const serialized = JSON.stringify(parseLiveChartPreferences(value));
+  return fitsStoredBytes(serialized, MAX_NEW_STORED_BYTES)
+    ? serialized
+    : JSON.stringify(createDefaultLiveChartPreferences());
 }
 
 function storageFromBrowser(): Storage | null {
@@ -210,6 +224,7 @@ function readStorage(storage: Storage, key: string): { available: boolean; value
 }
 
 function writeStorage(storage: Storage | null, key: string, value: string): void {
+  if (!fitsStoredBytes(value, MAX_NEW_STORED_BYTES)) return;
   try {
     storage?.setItem(key, value);
   } catch {
@@ -255,7 +270,7 @@ function legacyMagnetizationSelection(descriptor: Record<string, unknown>): stri
 
 export function migrateLegacyLiveChartPreferences(serialized: string | null): LiveChartPreferencesV1 {
   try {
-    if (!serialized || serialized.length > MAX_LIVE_CHART_STORAGE_CHARS) return createDefaultLiveChartPreferences();
+    if (!serialized || !fitsStoredBytes(serialized, MAX_LEGACY_STORED_BYTES)) return createDefaultLiveChartPreferences();
     const descriptor = legacyDescriptor(serialized ? JSON.parse(serialized) : null);
     if (!descriptor || containsForbiddenPayload(descriptor)) return createDefaultLiveChartPreferences();
     const defaults = defaultDescriptorPreferences();

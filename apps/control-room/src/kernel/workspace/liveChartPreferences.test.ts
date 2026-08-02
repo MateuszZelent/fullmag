@@ -4,6 +4,7 @@ import {
   createDefaultLiveChartPreferences,
   LIVE_CHART_PREFERENCES_STORAGE_KEY,
   MAX_LIVE_CHART_DESCRIPTORS,
+  MAX_NEW_STORED_BYTES,
   parseLiveChartPreferences,
   parseStoredLiveChartPreferences,
   serializeLiveChartPreferences,
@@ -90,9 +91,39 @@ describe("Live Chart preferences", () => {
   });
 
   it("rejects an oversized raw storage value before JSON parsing", () => {
-    expect(parseStoredLiveChartPreferences(" ".repeat(65 * 1024))).toEqual(
+    expect(parseStoredLiveChartPreferences(" ".repeat(MAX_NEW_STORED_BYTES + 1))).toEqual(
       createDefaultLiveChartPreferences(),
     );
+  });
+
+  it("round-trips the largest bounded v1 preference payload", () => {
+    const preferences = {
+      descriptors: Object.fromEntries(Array.from({ length: MAX_LIVE_CHART_DESCRIPTORS }, (_, descriptorIndex) => {
+        const suffix = String(descriptorIndex).padStart(3, "0");
+        const descriptorId = `descriptor-${suffix}`.padEnd(160, "d");
+        const selectedSeriesIds = Array.from({ length: 100 }, (_, seriesIndex) =>
+          `series-${String(seriesIndex).padStart(3, "0")}`.padEnd(160, "s"),
+        );
+        const displayUnits = Object.fromEntries(Array.from({ length: 40 }, (_, unitIndex) => [
+          `unit-${String(unitIndex).padStart(3, "0")}`.padEnd(160, "u"),
+          "T".padEnd(24, "t"),
+        ]));
+        return [descriptorId, {
+          displayUnits,
+          liveMode: "paused",
+          range: { mode: "fixed", fromSI: -1.7976931348623157e308, toSI: 1.7976931348623157e308 },
+          selectedSeriesIds,
+          targetPoints: 5000,
+          xAxisId: "x".padEnd(160, "x"),
+        }];
+      })),
+      schemaVersion: 1,
+    };
+
+    const serialized = serializeLiveChartPreferences(preferences);
+
+    expect(parseStoredLiveChartPreferences(serialized)).toEqual(parseLiveChartPreferences(preferences));
+    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(MAX_NEW_STORED_BYTES);
   });
 
   it("rejects oversized selected-id arrays before visiting their items", () => {
