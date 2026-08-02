@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-29",
+  "updated_at": "2026-07-31",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -149,6 +149,19 @@
       },
       "validated_workloads": [],
       "notes": "Only overdamped LLG owns dynamics, an RK integrator, dt, and a stage-local relaxation clock. Canonical defaults are 1e-4 A/m and 50000 steps. Execution publishes exact accepted-state max_torque_Apm, auxiliary max_torque_T, separate max_rhs_norm_per_s, and authoritative completion."
+    },
+    {
+      "id": "llg_timestep_qualification_registry",
+      "label": "Artifact-bound LLG timestep qualification",
+      "lanes": {
+        "fdm_cpu_reference": "implemented",
+        "fdm_gpu_production": "implemented",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "implemented"
+      },
+      "validated_workloads": [],
+      "notes": "The fail-closed registry key is capability ID + qualification ID + backend + device + precision + integrator + timestep policy. Promotion additionally requires an exact qualification artifact hash, clean managed-runtime source-input hash, validated scope, validation time, validator schema, and all prerequisite gates. Missing, stale, dirty, mismatched, or incomplete evidence resolves to unvalidated. Current entries remain unvalidated until fresh schema-v3 CPU/GPU/parity artifacts satisfy those bindings; FEM single precision cannot be promoted by this registry.",
+      "validation_state": "unvalidated"
     },
     {
       "id": "relaxation_projected_gradient_bb",

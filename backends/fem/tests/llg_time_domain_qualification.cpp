@@ -998,6 +998,12 @@ void write_partial_artifact(
          << "  \"device\": \"" << (g_use_gpu ? "gpu" : "cpu") << "\",\n"
          << "  \"precision\": \"fp64\",\n"
          << "  \"integrator\": \"rk45\",\n"
+         << "  \"energy_balance\": {\n"
+         << "    \"energy_balance_kind\": \"undriven_dissipative\",\n"
+         << "    \"energy_balance_validator\": \"undriven_dissipative_energy_balance.v1\",\n"
+         << "    \"energy_delta_j\": " << json_number(relax_to_run.energy_delta_j) << ",\n"
+         << "    \"energy_balance_tolerance_j\": " << json_number(relax_to_run.energy_budget_j) << "\n"
+         << "  },\n"
          << "  \"macrospin\": [\n";
     for (size_t i = 0; i < macrospin.size(); ++i) {
         const auto &row = macrospin[i];

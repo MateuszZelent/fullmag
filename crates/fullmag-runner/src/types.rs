@@ -2512,16 +2512,32 @@ pub enum LlgTimestepQualificationId {
 #[serde(rename_all = "snake_case")]
 pub enum TimestepValidationState {
     Unvalidated,
+    AlgebraValidated,
+    PhysicsValidated,
+    ProductionQualified,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimestepExecutionIdentity {
     pub capability_id: LlgTimestepCapabilityId,
     pub qualification_id: LlgTimestepQualificationId,
     pub backend: TimestepBackend,
     pub device: TimestepDevice,
     pub precision: fullmag_ir::ExecutionPrecision,
+    pub integrator: fullmag_ir::IntegratorChoice,
+    pub timestep_policy: crate::timestep_qualification::TimestepPolicyKind,
     pub validation_state: TimestepValidationState,
+    pub qualification_registry_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_artifact_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_source_inputs_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validated_scope: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_validated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_validator_schema: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2948,7 +2964,16 @@ mod tests {
             backend: TimestepBackend::Fdm,
             device: TimestepDevice::Cpu,
             precision: ExecutionPrecision::Double,
+            integrator: IntegratorChoice::Heun,
+            timestep_policy: crate::timestep_qualification::TimestepPolicyKind::Fixed,
             validation_state: TimestepValidationState::Unvalidated,
+            qualification_registry_version:
+                "fullmag.llg_timestep_qualification_registry.v1".to_string(),
+            qualification_artifact_sha256: None,
+            runtime_source_inputs_sha256: None,
+            validated_scope: None,
+            qualification_validated_at: None,
+            qualification_validator_schema: None,
         }
     }
 

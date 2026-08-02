@@ -7833,6 +7833,7 @@ export interface components {
             revision: number;
             state: string;
             threading?: null | components["schemas"]["SolverProfileThreadingResource"];
+            timestep_qualification?: null | components["schemas"]["TimestepQualificationResource"];
         };
         /** @enum {string} */
         SolverProfileSampleKindResource: "normal_step" | "publish" | "preview" | "finalization" | "stall";
@@ -8409,6 +8410,24 @@ export interface components {
             /** Format: double */
             t0?: number;
         };
+        TimestepQualificationResource: {
+            backend: string;
+            capability_id: string;
+            device: string;
+            integrator: string;
+            precision: string;
+            qualification_artifact_sha256?: string | null;
+            qualification_id: string;
+            qualification_registry_version: string;
+            qualification_validated_at?: string | null;
+            qualification_validator_schema?: string | null;
+            runtime_source_inputs_sha256?: string | null;
+            timestep_policy: string;
+            validated_scope?: Record<string, never> | null;
+            validation_state: components["schemas"]["TimestepValidationStateResource"];
+        };
+        /** @enum {string} */
+        TimestepValidationStateResource: "unvalidated" | "algebra_validated" | "physics_validated" | "production_qualified";
         TopologicalChargeExecutionProvenance: {
             backend: string;
             device: string;

@@ -26,6 +26,47 @@ def finite_number(value: Any, label: str) -> float:
     return result
 
 
+def validate_energy_balance(case: Any) -> None:
+    require(isinstance(case, dict), "energy_balance evidence is required")
+    kind = case.get("energy_balance_kind")
+    validators = {
+        "undriven_dissipative": "undriven_dissipative_energy_balance.v1",
+        "externally_driven": "externally_driven_power_balance.v1",
+        "spin_torque_driven": "spin_torque_power_balance.v1",
+    }
+    require(kind in validators, "energy_balance_kind is unsupported")
+    require(
+        case.get("energy_balance_validator") == validators[kind],
+        f"{kind} requires {validators[kind]}",
+    )
+    energy_delta = finite_number(case.get("energy_delta_j"), "energy_balance.energy_delta_j")
+    tolerance = finite_number(
+        case.get("energy_balance_tolerance_j"),
+        "energy_balance.energy_balance_tolerance_j",
+    )
+    require(tolerance >= 0.0, "energy balance tolerance must be non-negative")
+    if kind == "undriven_dissipative":
+        require(
+            energy_delta <= tolerance,
+            "undriven dissipative energy increase exceeds the discretization tolerance",
+        )
+        return
+    finite_number(case.get("source_work_j"), "energy_balance.source_work_j")
+    finite_number(
+        case.get("dissipated_energy_j"), "energy_balance.dissipated_energy_j"
+    )
+    residual = finite_number(
+        case.get("energy_balance_residual_j"),
+        "energy_balance.energy_balance_residual_j",
+    )
+    require(abs(residual) <= tolerance, "driven energy balance residual exceeds tolerance")
+    if kind == "spin_torque_driven":
+        finite_number(
+            case.get("nonconservative_work_j"),
+            "energy_balance.nonconservative_work_j",
+        )
+
+
 def validate_macrospin(rows: Any) -> None:
     require(isinstance(rows, list) and len(rows) == 3, "macrospin must contain exactly three damping cases")
     expected_alphas = [0.1, 1.0, 10.0]
@@ -101,6 +142,7 @@ def validate(document: Any, expected_device: str) -> None:
     require(document.get("backend") == "fem", "qualification backend must be fem")
     require(document.get("device") == expected_device, f"qualification device must be {expected_device}")
     require(document.get("precision") == "fp64", "first qualification lane must be FP64")
+    validate_energy_balance(document.get("energy_balance"))
     validate_macrospin(document.get("macrospin"))
     validate_exchange(document.get("exchange_eigenmode"))
     validate_fast_mode(document.get("fast_mode"))

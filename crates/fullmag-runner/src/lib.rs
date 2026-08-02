@@ -49,6 +49,7 @@ mod solver_runtime;
 pub mod spin_wave_response;
 pub mod spin_wave_sampling;
 pub mod table_autosave;
+mod timestep_qualification;
 mod time_dependence;
 mod time_events;
 mod types;
@@ -90,7 +91,13 @@ pub(crate) fn resolve_timestep_policy(
                     integrator,
                     timestep_s,
                 },
-                execution_identity: resolve_timestep_execution_identity(execution_lane, false)?,
+                execution_identity: resolve_timestep_execution_identity(
+                    execution_lane,
+                    integrator,
+                    false,
+                    None,
+                    None,
+                )?,
                 relaxation_controller: None,
             })
         }
@@ -207,7 +214,13 @@ pub(crate) fn resolve_timestep_policy(
                     max_spin_rotation: adaptive.max_spin_rotation,
                     norm_tolerance: adaptive.norm_tolerance,
                 },
-                execution_identity: resolve_timestep_execution_identity(execution_lane, true)?,
+                execution_identity: resolve_timestep_execution_identity(
+                    execution_lane,
+                    integrator,
+                    true,
+                    None,
+                    None,
+                )?,
                 relaxation_controller: None,
             })
         }
@@ -216,7 +229,10 @@ pub(crate) fn resolve_timestep_policy(
 
 fn resolve_timestep_execution_identity(
     lane: TimestepExecutionLane,
+    integrator: fullmag_ir::IntegratorChoice,
     adaptive: bool,
+    qualification_artifact_sha256: Option<&str>,
+    runtime_source_inputs_sha256: Option<&str>,
 ) -> Result<TimestepExecutionIdentity, RunError> {
     use fullmag_ir::ExecutionPrecision::{Double, Single};
     use LlgTimestepQualificationId::*;
@@ -242,14 +258,112 @@ fn resolve_timestep_execution_identity(
         }
     };
 
-    Ok(TimestepExecutionIdentity {
+    let lookup = TimestepExecutionIdentityKey {
         capability_id: LlgTimestepCapabilityId::LlgTdPolicyV1,
         qualification_id,
         backend: lane.backend,
         device: lane.device,
         precision: lane.precision,
-        validation_state: TimestepValidationState::Unvalidated,
+        integrator,
+        timestep_policy: if adaptive {
+            TimestepPolicyKind::Adaptive
+        } else {
+            TimestepPolicyKind::Fixed
+        },
+        qualification_artifact_sha256: qualification_artifact_sha256.map(str::to_string),
+    };
+    let resolution = timestep_qualification::qualification_resolution_for(
+        &lookup,
+        runtime_source_inputs_sha256.unwrap_or_default(),
+    );
+    Ok(TimestepExecutionIdentity {
+        capability_id: lookup.capability_id,
+        qualification_id: lookup.qualification_id,
+        backend: lookup.backend,
+        device: lookup.device,
+        precision: lookup.precision,
+        integrator: lookup.integrator,
+        timestep_policy: lookup.timestep_policy,
+        validation_state: resolution.state,
+        qualification_registry_version:
+            timestep_qualification::QUALIFICATION_REGISTRY_VERSION.to_string(),
+        qualification_artifact_sha256: resolution.artifact_sha256,
+        runtime_source_inputs_sha256: resolution.runtime_source_inputs_sha256,
+        validated_scope: resolution.validated_scope,
+        qualification_validated_at: resolution.validated_at,
+        qualification_validator_schema: resolution.validator_schema,
     })
+}
+
+/// Build the fail-closed LLG qualification identity exposed to runtime/API
+/// diagnostics. This never promotes from the engine name: without an exact
+/// artifact and managed-runtime source binding the registry resolver returns
+/// `Unvalidated`.
+pub fn timestep_qualification_for_plan(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    resolved_device: &str,
+) -> Option<TimestepExecutionIdentity> {
+    timestep_qualification_for_plan_with_binding(plan, resolved_device, None, None)
+}
+
+/// Resolve the fail-closed LLG qualification identity with an exact managed
+/// qualification artifact and runtime source binding. The binding is kept out
+/// of the hot timestep loop; callers provide it once when constructing the
+/// execution provenance.
+pub fn timestep_qualification_for_plan_with_binding(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    resolved_device: &str,
+    qualification_artifact_sha256: Option<&str>,
+    runtime_source_inputs_sha256: Option<&str>,
+) -> Option<TimestepExecutionIdentity> {
+    let (lane, integrator, fixed, adaptive) = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            let device = match resolved_device {
+                "cpu" => TimestepDevice::Cpu,
+                "cuda" | "gpu" => TimestepDevice::Cuda,
+                _ => return None,
+            };
+            (
+                TimestepExecutionLane {
+                    backend: TimestepBackend::Fdm,
+                    device,
+                    precision: fdm.precision,
+                },
+                fdm.integrator?,
+                fdm.fixed_timestep.is_some(),
+                fdm.adaptive_timestep.is_some(),
+            )
+        }
+        BackendPlanIR::Fem(fem) => {
+            let device = match resolved_device {
+                "cpu" => TimestepDevice::Cpu,
+                "cuda" | "gpu" => TimestepDevice::Gpu,
+                _ => return None,
+            };
+            (
+                TimestepExecutionLane {
+                    backend: TimestepBackend::Fem,
+                    device,
+                    precision: fem.precision,
+                },
+                fem.integrator?,
+                fem.fixed_timestep.is_some(),
+                fem.adaptive_timestep.is_some(),
+            )
+        }
+        _ => return None,
+    };
+    if fixed == adaptive {
+        return None;
+    }
+    resolve_timestep_execution_identity(
+        lane,
+        integrator,
+        adaptive,
+        qualification_artifact_sha256,
+        runtime_source_inputs_sha256,
+    )
+    .ok()
 }
 
 // Public re-exports.
@@ -282,6 +396,10 @@ pub use solver_profile::{
     SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
     SolverProfileThreading, SolverProfileTimingSemantic, SolverProfileTimingSemanticKind,
     SolverRateDiagnostics,
+};
+pub use timestep_qualification::{
+    validation_state_for, TimestepExecutionIdentityKey, TimestepPolicyKind,
+    QUALIFICATION_REGISTRY_VERSION,
 };
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
@@ -946,7 +1064,7 @@ mod initial_timestep_tests {
     use super::{
         is_native_fem_cpu_available, is_native_fem_time_domain_available, resolve_timestep_policy,
         InitialTimestepReason, LlgTimestepQualificationId, RequestedTimestepPolicy,
-        ResolvedTimestepPolicy, TimestepExecutionLane,
+        ResolvedTimestepPolicy, TimestepExecutionLane, TimestepValidationState,
     };
 
     fn adaptive(dt_initial: Option<f64>) -> fullmag_ir::AdaptiveTimeStepIR {
@@ -1162,6 +1280,26 @@ mod initial_timestep_tests {
             assert_eq!(roundtrip.execution_identity.backend, lane.backend);
             assert_eq!(roundtrip.execution_identity.device, lane.device);
             assert_eq!(roundtrip.execution_identity.precision, lane.precision);
+            assert_eq!(
+                roundtrip.execution_identity.integrator,
+                fullmag_ir::IntegratorChoice::Rk45
+            );
+            assert_eq!(
+                roundtrip.execution_identity.timestep_policy,
+                super::TimestepPolicyKind::Fixed
+            );
+            assert_eq!(
+                roundtrip.execution_identity.qualification_registry_version,
+                "fullmag.llg_timestep_qualification_registry.v1"
+            );
+            assert_eq!(
+                roundtrip.execution_identity.validation_state,
+                TimestepValidationState::Unvalidated
+            );
+            assert!(roundtrip
+                .execution_identity
+                .qualification_artifact_sha256
+                .is_none());
         }
     }
 

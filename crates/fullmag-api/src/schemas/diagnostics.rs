@@ -277,6 +277,74 @@ pub struct SolverProfileResource {
     pub persistence_failed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_publisher: Option<LivePublisherDiagnosticsResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestep_qualification: Option<TimestepQualificationResource>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepValidationStateResource {
+    Unvalidated,
+    AlgebraValidated,
+    PhysicsValidated,
+    ProductionQualified,
+}
+
+impl TimestepValidationStateResource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unvalidated => "unvalidated",
+            Self::AlgebraValidated => "algebra_validated",
+            Self::PhysicsValidated => "physics_validated",
+            Self::ProductionQualified => "production_qualified",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TimestepQualificationResource {
+    pub capability_id: String,
+    pub qualification_id: String,
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub integrator: String,
+    pub timestep_policy: String,
+    pub validation_state: TimestepValidationStateResource,
+    pub qualification_registry_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_artifact_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_source_inputs_sha256: Option<String>,
+    #[schema(value_type = Object, nullable = true)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validated_scope: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_validated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_validator_schema: Option<String>,
+}
+
+impl Default for TimestepQualificationResource {
+    fn default() -> Self {
+        Self {
+            capability_id: "llg_td_policy_v1".to_string(),
+            qualification_id: "unknown".to_string(),
+            backend: "unknown".to_string(),
+            device: "unknown".to_string(),
+            precision: "unknown".to_string(),
+            integrator: "unknown".to_string(),
+            timestep_policy: "unknown".to_string(),
+            validation_state: TimestepValidationStateResource::Unvalidated,
+            qualification_registry_version:
+                "fullmag.llg_timestep_qualification_registry.v1".to_string(),
+            qualification_artifact_sha256: None,
+            runtime_source_inputs_sha256: None,
+            validated_scope: None,
+            qualification_validated_at: None,
+            qualification_validator_schema: None,
+        }
+    }
 }
 
 impl Default for SolverProfileResource {
@@ -294,13 +362,38 @@ impl Default for SolverProfileResource {
             artifact_refs: Vec::new(),
             persistence_failed: false,
             live_publisher: None,
+            timestep_qualification: None,
         }
     }
 }
 
 #[cfg(test)]
 mod compatibility_tests {
-    use super::{SolverProfileResource, SolverProfileStepSampleResource};
+    use super::{
+        SolverProfileResource, SolverProfileStepSampleResource,
+        TimestepValidationStateResource,
+    };
+
+    #[test]
+    fn timestep_validation_state_vocabulary_roundtrips_exactly() {
+        for (state, expected) in [
+            (TimestepValidationStateResource::Unvalidated, "unvalidated"),
+            (
+                TimestepValidationStateResource::AlgebraValidated,
+                "algebra_validated",
+            ),
+            (
+                TimestepValidationStateResource::PhysicsValidated,
+                "physics_validated",
+            ),
+            (
+                TimestepValidationStateResource::ProductionQualified,
+                "production_qualified",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&state).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn solver_profile_resource_serializes_persistence_failure_state() {
