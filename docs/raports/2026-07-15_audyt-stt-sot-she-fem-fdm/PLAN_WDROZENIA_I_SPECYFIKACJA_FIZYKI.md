@@ -3178,11 +3178,12 @@ użytkownika w `external_solvers/3`.
 
 | Pole | Wartość |
 |---|---|
-| `master` po merge | `211b56dad960ef8ee7ebf774d230b6dfa7ff684a` |
+| merge commit do `master` | `211b56dad960ef8ee7ebf774d230b6dfa7ff684a` |
 | merge parent 1 | `ada50ce635c114b838a97b885a738f002805fd4d` |
 | merge parent 2 | `e740cf90df91c4933186dcfeb9cf1c56de3b8d4d` |
-| stan roboczy | tylko `external_solvers/3` pozostaje zmieniony i niestaged; zmiana została zachowana |
-| relacja do `origin/master` | lokalny `master` jest `131` commitów do przodu; nie wykonywano pushu z tej sesji |
+| aktualny `master` po ledgerze | `bbd6ea74` (zawiera również istniejący commit `1066306c`) |
+| stan roboczy | `external_solvers/3` pozostaje zmieniony i niestaged; istniejący untracked audit nie był dotykany |
+| relacja do `origin/master` | lokalny `master` jest `133` commitów do przodu; nie wykonywano pushu z tej sesji |
 
 Świeże bramy na dokładnym drzewie `master`:
 
