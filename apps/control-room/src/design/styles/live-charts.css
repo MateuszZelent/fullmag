@@ -1,0 +1,26 @@
+.fm-live-charts {
+  display: grid;
+  gap: var(--fm-space-3);
+  height: 100%;
+  min-height: 0;
+  padding: var(--fm-space-3);
+}
+
+.fm-live-charts__controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}
+
+.fm-live-charts__preset { max-width: 13rem; }
+
+.fm-live-charts__surface { min-height: 0; }
+
+.fm-live-charts__empty {
+  align-items: center;
+  color: var(--fm-secondary);
+  display: flex;
+  justify-content: center;
+  min-height: 12rem;
+}
