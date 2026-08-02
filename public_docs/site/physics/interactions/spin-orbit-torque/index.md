@@ -16,6 +16,14 @@ transfer from a prescribed charge-current source in a heavy-metal (HM) layer to
 an adjacent ferromagnet (FM). It is not an energy term and therefore does not
 create an `E_SOT` observable.
 
+This chapter is the prescribed-source compatibility lane. It does **not** solve the
+charge/spin drift-diffusion problem that produces direct or inverse spin Hall effect
+(SHE/iSHE). For that coupled transport model, including `SpinDriftDiffusion`, material
+conductivities, spin boundary conditions, solver tolerances, and the
+`DriftDiffusionSpinTorque` solve reference, use
+{doc}`../drift-diffusion-spin-torque/index`. The deprecated `SpinOrbitTorque` name is
+kept only as a compatibility alias for `PrescribedSpinOrbitTorque`.
+
 The physical model is defined once here. The FDM CPU and FDM GPU sections describe
 two numerical realizations of that model; they do not define two different SOT
 equations. FEM CPU and FEM GPU are documented explicitly as unsupported because
