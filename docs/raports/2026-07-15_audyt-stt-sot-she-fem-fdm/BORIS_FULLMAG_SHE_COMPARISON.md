@@ -317,6 +317,36 @@ wykonywalnego BORIS CPU/CUDA, testu reciprocal `iSHA=SHA`, heterogenicznych
 materiałów, N/F/T mixing/SML oraz wspólnego FDM/FEM/GPU benchmarku. Capability
 nie jest awansowana poza jawnie ograniczony zakres.
 
+## 7.3. FDM CPU workflow gate i synchronizacja capability matrix (2026-08-02)
+
+Silnik FDM miał już niezależny test operatora direct-SHE, ale brakowało testu
+pełnego `FdmSpinTransportWorkflow`. Dodano taki test w
+`crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` dla filmu `3 x 1 x 48`,
+`L_x=3 m`, `L_z=4 m`, `sigma=5 S/m`, `sigma_s=4 S/m`, `theta_SH=0.2` i
+`lambda_sf=1.1 m`. Test przechodzi przez descriptor, charge solve, rekonstrukcję
+`J_c`, spin solve, tensor `Q_ia` i telemetrykę; sprawdza profil `sinh/cosh`,
+`J_x`, zerowe pozostałe składowe, residual oraz wersje konstytutywne/operatora.
+
+Wynik:
+
+```text
+17 FDM spin-transport runner tests: PASS
+analytical_direct_she_film_materializes_signed_profile_and_flux: PASS
+```
+
+Na tej podstawie ujednolicono machine-readable JSON i Markdown capability
+matrix: `transport.spin.steady_drift_diffusion.fullmag.v1` oraz
+`transport.spin.direct_she.fullmag.v1` mają `reference_executable` tylko na
+FDM CPU reference i conforming FEM CPU reference lanes. FDM/FEM GPU, reciprocal
+iSHE, mixing/SML i ogólne cross-backend workloady pozostają `semantic_only`.
+Nie dodano `validated_workloads`: obecne testy są referencyjnymi contract gates,
+nie pełną kwalifikacją produkcyjną.
+
+To usuwa rozbieżność między plannerem/runtime (który już emitował
+`reference_executable` dla ograniczonego FEM descriptoru) a publiczną macierzą.
+Nie zmienia wyniku porównania z BORIS: pełne executable parity nadal wymaga
+zamrożonego binarium BORIS, CPU/CUDA, `iSHA=SHA`, inverse SHE i interfejsów.
+
 ## 8. Źródła i mapowanie symboli
 
 | Twierdzenie | Źródło |

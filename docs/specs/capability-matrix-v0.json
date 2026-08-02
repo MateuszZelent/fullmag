@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-16",
+  "updated_at": "2026-08-02",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -327,11 +327,11 @@
     },
     {
       "id":"transport.spin.steady_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.steady_drift_diffusion", "formula_version":"transport_constitutive.one_way.fullmag.v1",
-      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 spin_1d_diffusion_v1 with explicitly scoped BC/interface.", "validated_workloads":[], "notes":"PR-00 contract only."
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"semantic_only","fem_cpu_public":"reference_executable","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 spin_1d_diffusion_v1 with explicitly scoped BC/interface on the FDM CPU reference lane and conforming H1/P1 transparent-interface FEM CPU lane.", "validated_workloads":[], "notes":"Reference-executable evidence is limited to the managed FDM/FEM CPU double slices and their explicitly resolved BC/interface scope; broken/mortar spaces, mixing/SML, GPU and cross-backend convergence remain outside this row."
     },
     {
       "id":"transport.spin.direct_she.fullmag.v1", "capability_id":"transport.spin.direct_she", "formula_version":"transport_constitutive.one_way.fullmag.v1",
-      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 she_1d_film_v1 with declared spin BC.", "validated_workloads":[], "notes":"Prescribed SOT never satisfies this capability."
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"semantic_only","fem_cpu_public":"reference_executable","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 she_1d_film_v1 with declared spin BC on the FDM CPU reference lane and the conforming H1/P1 transparent-interface FEM CPU reference slice.", "validated_workloads":[], "notes":"Managed evidence includes the FDM engine and workflow sinh/cosh profile gates plus the native FEM signed vector-profile gate (`just verify-fem-steady-transport-native-contract`). This does not establish BORIS executable parity, reciprocal iSHE, heterogeneous materials, N/F/T mixing/SML, GPU or FDM/FEM convergence. Prescribed SOT never satisfies this capability."
     },
     {
       "id":"transport.spin.inverse_she.fullmag.v1", "capability_id":"transport.spin.inverse_she", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",

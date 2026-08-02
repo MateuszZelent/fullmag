@@ -3817,3 +3817,86 @@ jedną bramę referencyjną, ale nie dostarcza jeszcze cross-backend parity,
 GPU/device-residency ani produkcyjnego interfejsu SHE. Następne kroki to
 niezależny cross-check FDM, test trzech rozdzielczości z residualami i bilansami,
 a dopiero potem executable BORIS CPU/CUDA oraz reciprocal/interface workload.
+
+## 32.15. FDM CPU workflow gate i korekta publicznej macierzy capability (2026-08-02)
+
+Silnik FDM posiadał już niezależny test operatora direct-SHE, lecz brakowało
+testu pełnego łańcucha `FdmSpinTransportWorkflow`. Dodano do
+`crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` workload filmu
+`3 x 1 x 48` z jawnym `E_x`, `theta_SH`, `lambda_sf`, `sigma` i `sigma_s`.
+Test materializuje canonical descriptor, rozwiązuje charge i spin, rekonstruuje
+`J_c` oraz `Q_ia`, publikuje telemetrykę i sprawdza:
+
+- profil `sinh/cosh` dla `mu_y(z)`;
+- `J_x = sigma E_x`;
+- zerowe niezamierzone składowe spin potential;
+- spin scaled residual poniżej `1e-10`;
+- wersje `transport_constitutive.one_way.fullmag.v1` i `fv_spin_upwind_v1`;
+- rozmiar kompletnego tensorowego artefaktu `Q_ia`.
+
+Weryfikacja referencyjna:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/shelane-runner \
+cargo test -p fullmag-runner --lib fdm::cpu::spin_transport::tests
+```
+
+zakończyła się wynikiem **17 passed, 0 failed**. To jest dowód pełnego FDM
+CPU reference workflow, nie dowód native CUDA ani produkcyjnej kwalifikacji.
+
+### Synchronizacja capability
+
+Po tym dowodzie zaktualizowano `docs/specs/capability-matrix-v0.json` oraz
+`docs/specs/capability-matrix-v0.md`. Wpisy
+`transport.spin.steady_drift_diffusion.fullmag.v1` i
+`transport.spin.direct_she.fullmag.v1` mają teraz `reference_executable` dla
+FDM CPU reference i ograniczonego conforming H1/P1 FEM CPU reference slice.
+GPU, M2/inverse SHE, mixing/SML, broken/mortar FEM oraz cross-backend pozostają
+`semantic_only`; `validated_workloads` pozostaje puste, ponieważ nie wykonano
+jeszcze pełnej kwalifikacji produkcyjnej.
+
+Ta korekta usuwa rozjazd między plannerem/runtime, raportem i macierzą, ale nie
+zamyka milestone'u M1 ani `SHE-BORIS-001`. Nadal wymagane są wspólny FDM/FEM
+continuum benchmark, trzy poziomy siatki z residualami/bilansami, executable
+BORIS CPU/CUDA, `iSHA=SHA`, inverse SHE i interfejsy N/F/T.
+
+## 32.16. Bramy Python/API/UI dla transportu (2026-08-02)
+
+Po zmianie statusu referencyjnego FDM CPU sprawdzono pełny łańcuch produktu, aby
+`reference_executable` nie oznaczał wyłącznie testu silnika:
+
+```text
+TMPDIR=/tmp/fullmag-py-tmp PYTHONPATH=packages/fullmag-py/src \
+python -m pytest -q \
+  packages/fullmag-py/tests/test_spin_drift_diffusion.py \
+  packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py
+30 passed, 45 subtests passed
+
+pnpm --dir apps/control-room exec vitest run \
+  src/modules/inspector/panels/TransportAuthoringInspectorModel.test.ts \
+  src/modules/inspector/panels/TransportAuthoringInspector.test.ts \
+  src/modules/footer/TransportLogTable.test.ts
+3 files, 26 tests passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/api-transport \
+cargo test -p fullmag-api spin_authoring_
+3 tests passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/plan-spin \
+cargo test -p fullmag-plan spin_transport
+14 tests passed
+```
+
+Testy obejmują typed Python DSL, canonical `ProblemIR`/runtime round-trip,
+resource-first OpenAPI CRUD z revision safety, opaque read-only semantics,
+Control Room inspector validation/mutation oraz plannerowe rozdzielenie
+requested intent od resolved FDM/FEM capability. Nie wykonano browserowego
+smoke na żywym managed runtime w tej bramie; dlatego nie awansuje ona statusu
+GPU, nie dowodzi cross-backend convergence i nie zmienia pustego
+`validated_workloads`.
+
+Walidator `scripts/validate_mixed_p1_capability_contract.py` oraz 20 testów
+`scientific-documentation-contract` również zakończyły się powodzeniem.
+Brakujące bramy pozostają jawne: pełny FDM/FEM continuum benchmark, executable
+BORIS CPU/CUDA z `iSHA=SHA`, M2 inverse SHE/Onsager, interfejsy N/F/T mixing/SML,
+GPU FP64/device residency oraz browser/managed end-to-end proof.
