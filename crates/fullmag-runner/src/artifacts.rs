@@ -3256,6 +3256,9 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
     let base_observable = observable
         .split_once('.')
         .map_or(observable, |(base, _)| base);
+    if observable == "m" {
+        return "1";
+    }
     fullmag_quantities::quantity_spec(base_observable)
         .map(|spec| spec.unit)
         .unwrap_or_else(|| panic!("unsupported observable '{}'", base_observable))
@@ -3442,6 +3445,11 @@ mod tests {
         assert_eq!(field_unit("H_dmi.x"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk.z"), "A/m");
+    }
+
+    #[test]
+    fn final_magnetization_artifact_uses_canonical_unit_one() {
+        assert_eq!(field_unit("m"), "1");
     }
 
     #[test]
