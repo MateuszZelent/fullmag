@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH,
+  readLegacyLiveChartSelectionIdentity,
   parseLiveChartSelectionIdentity,
   serializeLiveChartSelectionIdentity,
 } from "./selectionTypes";
@@ -100,7 +102,7 @@ describe("SelectionController", () => {
         seriesId: "mx",
         type: "live-chart-point",
       },
-    };
+    } as const;
 
     controller.set(livePoint, "live-charts");
     bus.on("workspace:selection-changed", listener);
@@ -116,15 +118,39 @@ describe("SelectionController", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it("reads the old live chart identity but writes only the live namespace", () => {
-    const parsed = parseLiveChartSelectionIdentity(
-      "analysis:charts:default",
-    );
+  it("parses only bounded current live chart identities and serializes canonically", () => {
+    const parsed = parseLiveChartSelectionIdentity("live:chart:custom%20signal");
 
-    expect(parsed).toEqual({ descriptorId: "default", kind: "live.chart" });
+    expect(parsed).toEqual({ descriptorId: "custom signal", kind: "live.chart" });
     expect(serializeLiveChartSelectionIdentity(parsed!)).toBe(
-      "live:chart:default",
+      "live:chart:custom%20signal",
     );
+    expect(parseLiveChartSelectionIdentity("analysis:charts:default")).toBeNull();
+    expect(parseLiveChartSelectionIdentity("analysis:charts:frequency-domain:run-1")).toBeNull();
+    expect(parseLiveChartSelectionIdentity("live:chart:bad%ZZ")).toBeNull();
+    expect(parseLiveChartSelectionIdentity(`live:chart:${"a".repeat(LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH)}`)).toBeNull();
+    expect(serializeLiveChartSelectionIdentity({ descriptorId: "bad/id", kind: "live.chart" })).toBeNull();
+  });
+
+  it("reads the one legacy live identity only through the explicit migration context", () => {
+    expect(
+      readLegacyLiveChartSelectionIdentity(
+        "analysis:charts:default",
+        "legacy-live-preference",
+      ),
+    ).toEqual({ descriptorId: "default", kind: "live.chart" });
+    expect(
+      readLegacyLiveChartSelectionIdentity(
+        "analysis:charts:frequency-domain:run-1",
+        "legacy-live-preference",
+      ),
+    ).toBeNull();
+    expect(
+      readLegacyLiveChartSelectionIdentity(
+        "analysis:charts:default",
+        "current-selection",
+      ),
+    ).toBeNull();
   });
 
   it("clear() resets to null", () => {

@@ -6,6 +6,7 @@ import { liveChartsWorkspaceStore } from "@/kernel/workspace/liveChartsWorkspace
 import { useLiveChartPreferencesHydration } from "@/kernel/workspace/useLiveChartPreferencesHydration";
 import { liveChartPreferencesStore } from "@/kernel/workspace/liveChartPreferences";
 import { useLiveChartsWorkspaceSelector } from "@/kernel/workspace/useLiveChartsWorkspace";
+import type { SelectionController } from "@/kernel/selection/SelectionController";
 import { deriveChartPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import { buildScalarChartSeries } from "@/shared/domain/analysis/scalarTableChart";
 
@@ -14,7 +15,55 @@ import { useLiveTableData } from "./hooks/useLiveTableData";
 import { liveChartDescriptorDefaults, liveChartPreset, type LiveChartPresetId } from "./liveChartsModel";
 import { liveChartsCommandRequests } from "./liveChartsCommandRequests";
 
-export function useLiveChartsController() {
+export function createLiveChartSelectionHandlers({
+  descriptorId,
+  selection,
+}: {
+  descriptorId: string;
+  selection: SelectionController;
+}) {
+  const chartNodeId = `live:chart:${encodeURIComponent(descriptorId)}`;
+  return {
+    onChartSelected: () => {
+      selection.set({
+        kind: "live.chart",
+        label: "Live Chart",
+        nodeId: chartNodeId,
+        objectId: null,
+        ref: {
+          descriptorId,
+          kind: "live.chart",
+          nodeId: chartNodeId,
+          type: "live-chart",
+        },
+      }, "live-charts");
+    },
+    onPointSelected: (
+      seriesId: string,
+      pointIndex: number,
+      revision: string | number,
+    ) => {
+      const nodeId = `${chartNodeId}:point:${encodeURIComponent(seriesId)}:${pointIndex}:${encodeURIComponent(String(revision))}`;
+      selection.set({
+        kind: "live.chart-point",
+        label: `${seriesId} point ${pointIndex}`,
+        nodeId,
+        objectId: null,
+        ref: {
+          descriptorId,
+          kind: "live.chart-point",
+          nodeId,
+          pointIndex,
+          revision,
+          seriesId,
+          type: "live-chart-point",
+        },
+      }, "live-charts");
+    },
+  };
+}
+
+export function useLiveChartsController(selection: SelectionController) {
   const selectedDescriptorId = useLiveChartsWorkspaceSelector((state) => state.selectedDescriptorId);
   const descriptorId = (selectedDescriptorId ?? "magnetization") as LiveChartPresetId;
   const preferences = useLiveChartPreferencesHydration(descriptorId);
@@ -59,6 +108,7 @@ export function useLiveChartsController() {
   );
   const series = selectedSeriesIds.length === 0 ? allSeries : allSeries;
   const resource = descriptorId === "energy" ? energyData.resource : tableData.rows;
+  const selectionHandlers = createLiveChartSelectionHandlers({ descriptorId, selection });
   const presentation = deriveChartPresentationState({
     content: tableData.table && tableData.table.rowCount === 0 ? "empty" : undefined,
     data: descriptorId === "energy" ? energyData.resource.data : tableData.table,
@@ -75,6 +125,7 @@ export function useLiveChartsController() {
     onDescriptorChange: (next: LiveChartPresetId) => liveChartsWorkspaceStore.setSelectedDescriptorId(next),
     onExport: (format: "csv" | "tsv" | "png") => setRequestedExportFormat(format),
     onFit: () => setFitRequest((value) => value + 1),
+    ...selectionHandlers,
     onRangeSelected: (fromSI: number, toSI: number) => {
       liveChartsWorkspaceStore.setRange({ fromSI, toSI });
       preferences.setDescriptorRange(descriptorId, { mode: "fixed", fromSI, toSI });

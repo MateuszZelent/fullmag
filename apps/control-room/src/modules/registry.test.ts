@@ -30,7 +30,7 @@ describe("control room module registry", () => {
 
   it("keeps Live Charts when 3D is disabled", () => {
     expect(
-      resolveControlRoomModules({ viewport3d: { enabled: false } }).map(
+      resolveControlRoomModules({ disableViewport3D: true }).map(
         (module) => module.id,
       ),
     ).toContain("live-charts");

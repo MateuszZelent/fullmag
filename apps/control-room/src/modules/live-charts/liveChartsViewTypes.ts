@@ -9,6 +9,8 @@ export interface LiveChartsViewProps {
   onDescriptorChange: (id: LiveChartPresetId) => void;
   onExport: (format: "csv" | "tsv" | "png") => void;
   onFit: () => void;
+  onChartSelected: () => void;
+  onPointSelected: (seriesId: string, pointIndex: number, revision: string | number) => void;
   onRangeSelected: (fromSI: number, toSI: number) => void;
   onRequestedExportHandled: () => void;
   onSeriesChange: (ids: string[]) => void;

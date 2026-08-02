@@ -6,7 +6,7 @@ import { useLiveChartsController } from "./useLiveChartsController";
 
 export { LiveChartsView } from "./LiveChartsView";
 
-export default function LiveChartsModule(_props: ModuleProps) {
-  const controller = useLiveChartsController();
+export default function LiveChartsModule({ kernel }: ModuleProps) {
+  const controller = useLiveChartsController(kernel.selection);
   return <LiveChartsView {...controller} />;
 }

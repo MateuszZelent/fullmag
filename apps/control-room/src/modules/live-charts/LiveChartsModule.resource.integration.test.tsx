@@ -2,9 +2,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { KernelContext } from "@/kernel/KernelContext";
+import { KernelContext, useKernel } from "@/kernel/KernelContext";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { SelectionController } from "@/kernel/selection/SelectionController";
+import { resolveInspectorPanel } from "@/modules/inspector/inspectorRegistry";
 import { DATA_TABLE_ROWS_PATH } from "@/kernel/api/apiPaths";
 import { findElement, installSimulationPreparationTestDom, TestElement } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
@@ -20,7 +22,8 @@ import { useLiveTableData } from "./hooks/useLiveTableData";
 import { useLiveChartsController } from "./useLiveChartsController";
 
 function MountedLiveChartSurface() {
-  return <LiveChartSurface {...useLiveChartsController()} />;
+  const kernel = useKernel();
+  return <LiveChartSurface {...useLiveChartsController(kernel.selection)} />;
 }
 
 function LiveTableHarness({ active, paused }: { active: boolean; paused: boolean }) {
@@ -175,6 +178,7 @@ describe("LiveChartsModule resource flow", () => {
           config: { enabled: false },
         }),
         resources: resourceInvalidations,
+        selection: new SelectionController(bus),
       } as unknown as KernelApi;
       const container = dom.document.createElement("div");
       dom.document.body.appendChild(container);
@@ -212,6 +216,12 @@ describe("LiveChartsModule resource flow", () => {
       const beforeToggle = rowsBinary.mock.calls.length;
       await act(async () => legend.click());
       expect(rowsBinary).toHaveBeenCalledTimes(beforeToggle);
+      expect(kernel.selection.get().ref).toMatchObject({
+        descriptorId: "magnetization",
+        kind: "live.chart",
+        type: "live-chart",
+      });
+      expect(resolveInspectorPanel(kernel.selection.get())?.id).toBe("live-chart");
       await act(async () => {
         liveChartPreferencesStore.updateDescriptor("magnetization", () => ({
           liveMode: "paused",

@@ -61,30 +61,84 @@ export type LiveChartPointSelectionRef = LiveChartPointSelection & {
   type: "live-chart-point";
 };
 
+export const LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH = 256;
+const LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH = 128;
+const LIVE_CHART_IDENTITY_PREFIX = "live:chart:";
+const LEGACY_LIVE_CHART_IDENTITY = "analysis:charts:default";
+
+export type LiveChartSelectionMigrationSource = "legacy-live-preference";
+
+function parseLiveChartDescriptorId(encoded: string): string | null {
+  if (
+    encoded.length === 0 ||
+    encoded.length > LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH ||
+    !/^(?:[A-Za-z0-9\-_.!~*'()]|%[0-9A-F]{2})+$/.test(encoded)
+  ) {
+    return null;
+  }
+
+  try {
+    const descriptorId = decodeURIComponent(encoded);
+    return descriptorId.length > 0 &&
+      descriptorId.length <= LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH &&
+      !/[/:\\\u0000-\u001F\u007F]/.test(descriptorId) &&
+      encodeURIComponent(descriptorId) === encoded
+      ? descriptorId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Read the legacy live-chart selection only during the preference v1 migration.
- * Remove after one released schema version has written `fm:live-chart-preferences:v1`
- * and browser migration tests prove no old live identity remains.
+ * Parses only the current live-chart identity namespace. Legacy Analysis
+ * identities remain Analysis identities outside the explicit migration reader.
  */
 export function parseLiveChartSelectionIdentity(
   identity: string,
 ): LiveChartSelection | null {
-  const legacyPrefix = "analysis:charts:";
-  const currentPrefix = "live:chart:";
-  const descriptorId = identity.startsWith(legacyPrefix)
-    ? identity.slice(legacyPrefix.length)
-    : identity.startsWith(currentPrefix)
-      ? identity.slice(currentPrefix.length)
-      : "";
-  return descriptorId.length > 0
+  if (
+    identity.length > LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH ||
+    !identity.startsWith(LIVE_CHART_IDENTITY_PREFIX)
+  ) {
+    return null;
+  }
+  const descriptorId = parseLiveChartDescriptorId(
+    identity.slice(LIVE_CHART_IDENTITY_PREFIX.length),
+  );
+  return descriptorId !== null
     ? { descriptorId, kind: "live.chart" }
     : null;
 }
 
 export function serializeLiveChartSelectionIdentity(
   selection: LiveChartSelection,
-): string {
-  return `live:chart:${selection.descriptorId}`;
+): string | null {
+  if (
+    selection.descriptorId.length === 0 ||
+    selection.descriptorId.length > LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH ||
+    /[/:\\\u0000-\u001F\u007F]/.test(selection.descriptorId)
+  ) {
+    return null;
+  }
+  const identity = `${LIVE_CHART_IDENTITY_PREFIX}${encodeURIComponent(selection.descriptorId)}`;
+  return identity.length <= LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH
+    ? identity
+    : null;
+}
+
+/**
+ * Read the one legacy live identity only while migrating old live preferences.
+ * Remove after one released schema version has written `fm:live-chart-preferences:v1`
+ * and browser migration tests prove no old live identity remains.
+ */
+export function readLegacyLiveChartSelectionIdentity(
+  identity: string,
+  source: LiveChartSelectionMigrationSource | "current-selection",
+): LiveChartSelection | null {
+  return source === "legacy-live-preference" && identity === LEGACY_LIVE_CHART_IDENTITY
+    ? { descriptorId: "default", kind: "live.chart" }
+    : null;
 }
 export interface VisualizationMeshPartLike {
   geometry_id?: string | null;
