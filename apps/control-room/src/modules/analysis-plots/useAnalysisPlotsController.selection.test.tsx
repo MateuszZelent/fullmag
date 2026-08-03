@@ -96,6 +96,10 @@ describe("Analysis controller frequency selection", () => {
       await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
       expect(capturedController?.sourceChartId).toBe("frequency-response:artifact://spectrum");
       expect(capturedController?.selectedSeriesIds).toEqual(["frequency:artifact://spectrum"]);
+      expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+        activeDescriptorId: "artifact:frequency-response:v-artifact%3A%2F%2Fspectrum",
+        activeDescriptorSelectedSeriesIds: ["frequency:artifact://spectrum"],
+      });
 
       capturedController?.onSelectedSeriesIdsChange([]);
       expect(setDescriptorPreference).toHaveBeenCalledWith("artifact:frequency-response:v-artifact%3A%2F%2Fspectrum", { displayUnits: {}, range: null, selectedSeriesIds: [] });

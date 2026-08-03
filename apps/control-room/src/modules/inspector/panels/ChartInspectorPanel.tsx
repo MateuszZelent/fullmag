@@ -14,23 +14,25 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
   const activeSurface = useAnalysisWorkspaceSelector((state) => state.activeSurface);
   const activeDescriptorId = useAnalysisWorkspaceSelector((state) => state.activeDescriptorId);
+  const activeDescriptorSelectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.activeDescriptorSelectedSeriesIds);
   const selectedDatasetRef = useAnalysisWorkspaceSelector((state) => state.selectedDatasetRef);
-  const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
   const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId);
-  const descriptorId = activeDescriptorId ?? "unresolved";
   const preferences = useAnalysisViewPreferencesHydration();
   const selectedPoint = selection.ref?.type === "analysis-chart-point" ? selection.ref : null;
-  const range = preferences.preferences.descriptorPreferences[descriptorId]?.range ?? null;
+  const range = activeDescriptorId ? preferences.preferences.descriptorPreferences[activeDescriptorId]?.range ?? null : null;
 
   const clearSelectedSeries = useCallback(() => {
-    analysisWorkspaceStore.setChartState(xAxisId ?? "x", []);
-    const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
-    preferences.setDescriptorPreference(descriptorId, {
+    if (!activeDescriptorId) return;
+    const descriptor = preferences.preferences.descriptorPreferences[activeDescriptorId];
+    preferences.setDescriptorPreference(activeDescriptorId, {
       displayUnits: descriptor?.displayUnits ?? {},
       range: descriptor?.range ?? null,
       selectedSeriesIds: [],
     });
-  }, [descriptorId, preferences, xAxisId]);
+    analysisWorkspaceStore.setActiveDescriptorSelection(activeDescriptorId, []);
+    if (activeSurface === "comparison") analysisWorkspaceStore.setComparisonSelection([]);
+    if (activeSurface === "dynamics") analysisWorkspaceStore.setChartState(xAxisId ?? "x", []);
+  }, [activeDescriptorId, activeSurface, preferences, xAxisId]);
 
   return (
     <div className="fm-inspector-panel">
@@ -39,7 +41,7 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Dataset" value={selectedDatasetRef ?? "not selected"} />
         <FieldRow label="X axis" value={xAxisId ?? "not selected"} />
         <FieldRow label="Range" value={range ? `${range.fromSI}–${range.toSI}` : "full dataset"} />
-        <FieldRow label="Series" value={selectedSeriesIds.length ? selectedSeriesIds.join(", ") : "none"} />
+        <FieldRow label="Series" value={activeDescriptorSelectedSeriesIds.length ? activeDescriptorSelectedSeriesIds.join(", ") : "none"} />
       </InspectorGroup>
       {selectedPoint ? (
         <InspectorGroup title="Selected Point">
@@ -50,7 +52,7 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
         </InspectorGroup>
       ) : null}
       <InspectorGroup title="Series selection">
-        <Button disabled={selectedSeriesIds.length === 0} onClick={clearSelectedSeries} size="sm" type="button" variant="secondary">
+        <Button disabled={!activeDescriptorId || activeDescriptorSelectedSeriesIds.length === 0} onClick={clearSelectedSeries} size="sm" type="button" variant="secondary">
           Clear selected series
         </Button>
       </InspectorGroup>

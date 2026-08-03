@@ -97,7 +97,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const activeDescriptorId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
   useEffect(() => {
     analysisWorkspaceStore.setActiveDescriptorId(activeDescriptorId);
-  }, [activeDescriptorId]);
+    analysisWorkspaceStore.setActiveDescriptorSelection(activeDescriptorId, effectiveDescriptorSelection);
+  }, [activeDescriptorId, effectiveDescriptorSelection]);
   useEffect(() => {
     if (!selectedDatasetRef || !dataset.visibleTable || hasChartState) return;
     const xAxisId = dataset.visibleTable.columns[0]?.column_id ?? "x";

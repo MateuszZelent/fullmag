@@ -57,6 +57,19 @@ describe("analysis workspace", () => {
     expect(analysisWorkspaceStore.getSnapshot().focusedChartId).toBeNull();
   });
 
+  it("projects the effective active descriptor selection separately from a dynamics chart selection", () => {
+    resetAnalysisWorkspaceForTests();
+    analysisWorkspaceStore.setChartState("step", ["data.table:table-a:step:mx"]);
+    analysisWorkspaceStore.setActiveDescriptorId("artifact:frequency-response:v-response");
+    analysisWorkspaceStore.setActiveDescriptorSelection("artifact:frequency-response:v-response", ["frequency:artifact://response"]);
+
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+      activeDescriptorId: "artifact:frequency-response:v-response",
+      activeDescriptorSelectedSeriesIds: ["frequency:artifact://response"],
+      selectedSeriesIds: ["data.table:table-a:step:mx"],
+    });
+  });
+
   it("rebases a focused comparison pane to the primary chart when dataset B changes", () => {
     resetAnalysisWorkspaceForTests();
     analysisWorkspaceStore.setActiveSurface("comparison");
@@ -79,11 +92,15 @@ describe("analysis workspace", () => {
     analysisWorkspaceStore.setComparisonDatasetRef("table-b");
     analysisWorkspaceStore.setComparisonSelection(["mx|1"]);
     analysisWorkspaceStore.setFocusedChartId("comparison:table-b");
+    analysisWorkspaceStore.setActiveDescriptorId("comparison:v-table-a:v-table-b");
+    analysisWorkspaceStore.setActiveDescriptorSelection("comparison:v-table-a:v-table-b", ["mx|1"]);
 
     analysisWorkspaceStore.setSelectedDatasetRef("table-b");
     expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
       comparisonDatasetRef: null,
       comparisonSelectedSeriesKeys: [],
+      activeDescriptorId: null,
+      activeDescriptorSelectedSeriesIds: [],
       focusedChartId: "comparison:table-b",
       hasComparisonSelection: false,
       selectedDatasetRef: "table-b",
