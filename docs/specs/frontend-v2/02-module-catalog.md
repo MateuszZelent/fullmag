@@ -7,7 +7,7 @@ Each module below maps to `apps/control-room/src/modules/<module-id>/`. Modules 
 
 ## 0. Current Implementation Snapshot
 
-As of 2026-05-22, `apps/control-room` registers these manifests through `src/modules/index.ts`:
+As of 2026-08-03, `apps/control-room` registers these manifests through `src/modules/index.ts`:
 
 | Manifest id | Directory | Slot | Status |
 |---|---|---|---|

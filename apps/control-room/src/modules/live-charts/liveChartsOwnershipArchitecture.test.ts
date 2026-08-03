@@ -12,6 +12,7 @@ const governingDocuments = [
   "docs/specs/frontend-v2/16-charts-analysis-module.md",
   "docs/analysis-tab-refactoring-plan.md",
 ] as const;
+const migrationStrategyPath = "docs/specs/frontend-v2/07-migration-strategy.md";
 
 function repoSource(path: string): string {
   return readFileSync(join(repoRoot, path), "utf8");
@@ -32,6 +33,31 @@ describe("Live Charts, Analysis, and Quick Chart ownership", () => {
 
     expect(source).not.toMatch(/Analysis[^\n]*(?:Follow\/Pause|live table|implicitly follows)/i);
     expect(source).not.toMatch(/Quick Chart[^\n]*MountedModule\(analysis-plots/i);
+  });
+
+  it("marks migration as Phase 6 reference-only work without declaring cutover", () => {
+    const source = repoSource(migrationStrategyPath);
+
+    expect(source).toContain("**Current phase:** Phase 6 — modules/parity.");
+    expect(source).toContain("`apps/legacy_web` remains reference-only.");
+    expect(source).toContain("This marker does not declare cutover, freeze, or removal.");
+  });
+
+  it("documents one renderer owner per chart, including both comparison panes", () => {
+    const source = repoSource("docs/specs/frontend-v2/16-charts-analysis-module.md");
+
+    expect(source).toMatch(
+      /Each mounted\s+chart or comparison pane owns at most one ECharts instance/,
+    );
+    expect(source).toMatch(/Comparison surface intentionally owns two pane instances/);
+    expect(source).not.toContain("Each mounted surface owns at most one instance");
+  });
+
+  it("dates the module catalog implementation snapshot to the current update", () => {
+    const source = repoSource("docs/specs/frontend-v2/02-module-catalog.md");
+
+    expect(source).toContain("As of 2026-08-03");
+    expect(source).not.toContain("As of 2026-05-22");
   });
 
   it("keeps old preference and descriptor identities read-only", () => {

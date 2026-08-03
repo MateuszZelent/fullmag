@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -28,6 +29,30 @@ describe("TableColumnList", () => {
 
     expect(html).toContain('name="fm-analysis-plots-x-axis"');
     expect(html).toContain("mx");
+  });
+
+  it("keeps the quantity-id markup backed by its exact design selector", () => {
+    const html = renderToStaticMarkup(
+      <TableColumnList
+        columns={columns}
+        onSelectXAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
+        showQuantityId
+        xAxisId="step"
+        xAxisRadioName="fm-analysis-plots-x-axis"
+        selectedSeriesIds={[]}
+      />,
+    );
+    const styles = readFileSync(
+      new URL("../../../design/styles/analysis-plots.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(html).toContain('class="fm-analysis-plots__column-id"');
+    expect(styles).toMatch(
+      /\.fm-analysis-plots__column-id\s*\{[^}]*margin-left:\s*var\(--fm-space-1\);[^}]*color:\s*var\(--fm-text-muted\);[^}]*font-family:\s*var\(--fm-font-mono\);[^}]*font-size:\s*var\(--fm-font-size-2xs\);[^}]*\}/,
+    );
   });
 
   it("allows disabling the last selected Y axis", () => {

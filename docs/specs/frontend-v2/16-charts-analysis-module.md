@@ -97,9 +97,10 @@ remains reference-only under Phase 6 governance and is not imported or modified.
 ## 7. Renderer and accessibility
 
 ECharts Canvas remains behind the module-neutral renderer owner. Each mounted
-surface owns at most one instance and disposes it on unmount. Data animation is
-off; short chrome transitions use central Catppuccin Mocha/Latte tokens and
-respect `prefers-reduced-motion`.
+chart or comparison pane owns at most one ECharts instance and disposes every
+instance on unmount. A Comparison surface intentionally owns two pane instances
+while both panes are mounted. Data animation is off; short chrome transitions
+use central Catppuccin Mocha/Latte tokens and respect `prefers-reduced-motion`.
 
 Every chart has a readable title, labelled axes, visible units, DOM summary,
 keyboard-accessible series controls, explicit unsupported/degraded reasons, and

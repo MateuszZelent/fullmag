@@ -29,10 +29,16 @@ their hydration hooks have no file or consumer. Import scans also proved the old
 Analysis Quick Chart dock, legacy legend, status-pill, workbench, and quantity
 availability CSS selectors were unreferenced before removal.
 
+Follow-up review found that `TableColumnList` still renders
+`.fm-analysis-plots__column-id`; its exact token-based selector remains in
+`analysis-plots.css` and a selector-reference regression test protects it. The
+other selectors listed above remain removed.
+
 ## Verification
 
 - consolidated focused gate: 22 files, 210/210 tests passed;
-- ownership architecture test: 12/12 passed;
+- follow-up ownership/design review gate: 6 files, 101/101 tests passed;
+- ownership architecture test: 15/15 passed;
 - registry, preference, Quick Chart, Explorer, manifest, and chart CSS tests:
   100/100 passed;
 - Analysis dataset/comparison/controller and Quick Chart integration tests:
@@ -48,3 +54,7 @@ The design-style gate exposed an undefined `--fm-secondary` token in Live Charts
 it now uses the canonical `--fm-text-secondary` token. API hygiene exposed four
 test fixtures with hand-built `/v2/...` strings; they now consume `apiPaths`
 constants. Neither correction changes runtime contracts.
+
+Independent review also corrected the renderer wording: a Comparison surface
+mounts two panes, so ownership is one ECharts instance per mounted chart/pane,
+with every instance disposed on unmount.

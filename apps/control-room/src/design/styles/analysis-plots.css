@@ -230,6 +230,13 @@
   white-space: nowrap;
 }
 
+.fm-analysis-plots__column-id {
+  margin-left: var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+}
+
 .fm-analysis-plots__column-row:hover {
   background: var(--fm-bg-panel);
 }
