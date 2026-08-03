@@ -9,6 +9,7 @@
  */
 
 #include <cstdint>
+#include <array>
 
 namespace fullmag::fem {
 
@@ -18,6 +19,8 @@ struct FemGpuReductionWorkspaceDeviceState {
     double *scalar_workspace = nullptr;
     double *scalar_result = nullptr;
     double *host_scalar_result = nullptr;
+    std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> pageable_scalar_result{};
+    bool scalar_result_pinned = false;
     void *temp_storage = nullptr;
     uint64_t temp_storage_bytes = 0;
 };

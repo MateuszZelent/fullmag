@@ -483,6 +483,18 @@ caller. This does not remove the required host wait for RK/adaptive/Armijo
 control decisions, but it removes pageable host destinations from the scalar
 D2H path and keeps the transfer-audit accounting unchanged.
 
+Update 2026-08-03 pinned-host allocation fallback: the pinned scalar staging
+buffer remains the primary GPU readback path. If the CUDA driver rejects only
+the 256-byte `cudaHostAlloc` request with `cudaErrorMemoryAllocation`, the
+reductions workspace binds the same fixed 32-slot host array as a pageable
+fallback and emits an explicit runtime warning. Scalar copies still use
+`cudaMemcpyAsync` followed by the existing stream synchronization, so the
+device result, precision, ordering, transfer-audit byte counts, and all
+demag/RK control decisions are unchanged; only overlap between copy and host
+execution may be lost. Any other CUDA allocation error remains fatal. The
+fallback is therefore a resource-degraded transfer realization, never a demag
+solver or physics fallback, and it must be reported as such in runtime logs.
+
 Update 2026-06-05 solver-mesh size gate: the managed production relaxation
 benchmark now requires completed rows to report at least
 `FULLMAG_BENCH_MIN_SOLVER_NODES` solver nodes. The default managed threshold is

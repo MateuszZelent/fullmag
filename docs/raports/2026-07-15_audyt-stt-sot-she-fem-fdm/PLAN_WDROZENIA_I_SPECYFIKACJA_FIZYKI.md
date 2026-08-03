@@ -5263,10 +5263,10 @@ wiarygodność diagnostyki BORIS, ale nie zwiększa oceny produkcyjnej: nadal
 ### 32.36.1. Synchronizacja z `master`
 
 Wykonano `git fetch origin master` oraz `git pull --ff-only origin master`.
-Pull był bez zmian: lokalny `master` ma `HEAD=96b84512d` i jest 62 commity
-przed `origin/master=3082ec244`; zdalny branch nie dostarczył nowszej poprawki
-demaga. Niezależne zmiany robocze w `apps/legacy_web` i `external_solvers/3`
-pozostały nietknięte.
+Pull zakończył się `Already up to date`: lokalny `master` i
+`origin/master` wskazują `762aeffbfd7dce60791fc93533bee4ba1d117265`
+(`git rev-list --left-right --count HEAD...origin/master = 0 0`). Niezależne
+zmiany robocze w `apps/legacy_web` i `external_solvers/3` pozostały nietknięte.
 
 ### 32.36.2. Zidentyfikowana rozbieżność walidatorów
 
@@ -5336,11 +5336,12 @@ Po przeniesieniu starego, ignorowanego `native/build` wykonano oficjalną ście�
 wynikiem `35 passed; 0 failed`. Zarządzany bundle pozostaje ważny:
 
 ```text
-git_commit=96b84512d4ae435f5198f73f9d56feaa96670d9e
-source_snapshot_sha256=758692f014a72720261f107284ee9be505b6168e624a88c2fb33cb24f9dec96b
-variant=hypre-baseline-a0c783ccaaf838d7eb2b0609605e5362b550f1ca65ae28801e386158f52c7a02
+git_commit=762aeffbfd7dce60791fc93533bee4ba1d117265
+source_snapshot_sha256=965a5412c4fb2b8aa6d1a95a025165240424657605701e986e9e446462ece3ac
+variant=hypre-baseline
+runtime_variant_id=2a8ffa520dfbb43caf8910366058d2a4ec92673d62f8f750a181645b10fef303
 compute_capability=8.9
-hypre_binding_count=1537
+hypre_version=3.1.0
 ```
 
 ### 32.37.2. Wykonane przypadki SP4
@@ -5355,8 +5356,9 @@ Dynamiczny przypadek A zakończył się na czterech krokach po `1e-14 s`:
 `E_demag` CPU `7.096161633027042e-19 J`, GPU
 `7.096161633026972e-19 J`, a `E_total` różni się o około `2.1e-32 J`.
 CPU przypadek B również zakończył się poprawnie (cztery kroki,
-`E_demag=7.096159932911980e-19 J`). GPU przypadek B nie uzyskał jeszcze
-wyniku wykonawczego.
+`E_demag=7.096159932911980e-19 J`). W tamtym przebiegu GPU przypadek B nie
+uzyskał jeszcze wyniku wykonawczego; wynik po korekcie readback jest zapisany
+w §32.38.
 
 GPU A raportował jawnie `engine=fem_native_gpu`,
 `demag_mode=device_hypre_poisson`, `hypre_gpu_policy=device`,
@@ -5367,7 +5369,7 @@ kwalifikacja macierzy SP4.
 ### 32.37.3. Otwarta brama zasobowa
 
 GPU dynamiczny przypadek B zatrzymał się przed pierwszym krokiem z dokładnym
-błędem:
+błędem. Jest to zapis historyczny sprzed korekty opisanej w §32.38:
 
 ```text
 RunError: cudaHostAlloc FemGpuState scalar readback staging failed: out of memory
@@ -5385,7 +5387,92 @@ sprawdzić limit pamięci zablokowanej. Do czasu tego dowodu GPU SP4 pozostaje
 ### 32.37.4. Status celu
 
 Korekta OCC, świeży build z PETSc 3.15.5/SLEPc 3.15.2, CPU demag oraz GPU
-demag dla relaksacji i przypadku A są potwierdzone. Brama GPU B readback,
-pełne parity dla obu przypadków, workloady `validated`, SHE/BORIS, skin-effect,
-M3 `C_s` i pełny Python/UI round-trip pozostają otwarte. Ocena pozostaje
+demag dla relaksacji i przypadku A są potwierdzone. W chwili zapisu tego
+historycznego wpisu brama GPU B readback pozostawała otwarta; aktualny stan
+po jej naprawie podano w §32.38. Ocena szerokiego celu pozostawała
 **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.38. Pull z mastera i zamknięcie obserwowanej bramy GPU B (2026-08-03)
+
+### 32.38.1. Synchronizacja i zakres zmiany
+
+`git pull --ff-only origin master` nie pobrał nowych zmian: `HEAD` oraz
+`origin/master` są równe `762aeffbfd7dce60791fc93533bee4ba1d117265`. Zmiana
+robocza dotyczy wyłącznie błędu alokacji 256-bajtowego bufora scalar
+readback w CUDA; nie zmienia równania Poissona, warunku Robin, HYPRE,
+energii ani kryteriów zbieżności.
+
+W `reduction_workspace_memory.cpp` pinned host staging pozostaje ścieżką
+podstawową. Tylko `cudaErrorMemoryAllocation` przełącza 32-slotowy bufor
+pageable; `cudaMemcpyAsync` i istniejąca synchronizacja strumienia pozostają
+bez zmian, więc wynik numeryczny i kolejność decyzji solvera są zachowane,
+a tracone jest wyłącznie nakładanie transferu z pracą hosta. Emitowane jest
+jawne ostrzeżenie, a każdy inny błąd CUDA pozostaje fatalny. Flaga
+`scalar_result_pinned` zapobiega błędnemu `cudaFreeHost` dla bufora pageable.
+Kontrakt źródłowy i nota fizyczna są zaktualizowane odpowiednio w
+`backends/fem/tests/source_facade_gpu_state_contract.cpp` oraz
+`docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md`.
+
+### 32.38.2. Dowód kompilacji i managed runtime
+
+Oficjalna receptura `just verify-fem-time-domain-native-contract` przeszła:
+kontrolę dokumentacji, świeży build CUDA/MFEM/SLEPc, kontrakty czasu
+rzeczywistego oraz `fullmag-fem-sys` ABI (`35 passed; 0 failed`).
+`FULLMAG_RUNTIME_PRUNE=0 just ensure-managed-fem-runtime` zakończyło się
+poprawną walidacją bundle. Manifest aktywnego wariantu podaje:
+
+```text
+git_commit=762aeffbfd7dce60791fc93533bee4ba1d117265
+source_snapshot_sha256=965a5412c4fb2b8aa6d1a95a025165240424657605701e986e9e446462ece3ac
+variant=hypre-baseline
+compute_capability=8.9
+hypre_version=3.1.0
+```
+
+Szersza receptura `verify-fem-mixed-p1-native-contract` nadal ma osobną,
+niestabilną bramę dynamicznego dowodu Armijo; jej nonzero nie jest przypisywane
+tej zmianie readback.
+
+### 32.38.3. Reprodukcja SP4 GPU B
+
+W managed runtime wykonano `coarse/baseline`, `duration=1e-14 s`,
+`FULLMAG_SP4_QUALIFYING=0`, z `fallback_policy=forbidden`. Generator siatki
+odrzucił degenerate tetrahedra w Delaunay i HXT, po czym poprawnie przeszedł
+na Frontal; końcowa siatka miała `371527` tetrahedrów i `n_below=0` względem
+progu Rust.
+
+Relaksacja GPU zakończyła się jednym zaakceptowanym krokiem,
+`E_total=7.096178733169550e-19 J`, `CG/AMG`, `actual_iterations=1` i
+`final_residual_norm=6.269382070830224e-13`. Dynamiczny GPU `case-b`
+zakończył się czterema krokami do `1e-14 s`:
+
+```text
+E_demag=7.096159932911974e-19 J
+E_total=6.102220917941828e-18 J
+actual_iterations=1
+final_residual_norm=6.06259661355375e-13
+execution_engine=fem_native_gpu
+fem_demag_operator_mode=device_hypre_poisson
+hypre_execution_policy=device
+lossy_fallback_used=false
+```
+
+Scalone artefakty CPU/GPU coarse A/B poddano walidatorowi
+`tests.standard_problems.mumag.sp4.fem.verify --smoke`; wynik to `status=passed`,
+cztery przebiegi, po cztery próbki i zero failures. Dodany `tests/__init__.py`
+usuwa kolizję z obcym pakietem `tests` podczas uruchamiania oficjalnego
+walidatora.
+
+### 32.38.4. Granica kwalifikacji i aktualny status
+
+Obserwowany przebieg GPU B nie wymusił `cudaErrorMemoryAllocation`: przeszedł
+ścieżką pinned. Fallback pageable ma kontrakt statyczny i został zbudowany,
+lecz wymaga osobnego testu z kontrolowanym odrzuceniem `cudaHostAlloc`, zanim
+można uznać go za runtime-qualified. Naprawa zamyka więc bramę wykonawczą
+GPU B dla bieżącego procesu, ale nie awansuje SP4 do `validated`: czas
+`1e-14 s`, `--smoke`, brak pełnego medium/fine, parity i map przestrzennych.
+SHE/BORIS, cross-backend parity, skin-effect/MQS, FEM Oersted RT0/KKT,
+fizyczny M3 `C_s` oraz pełny Python/UI round-trip nadal pozostają otwarte.
+Szeroka ocena celu pozostaje **86% implementacji / 60% gotowości produkcyjnej**;
+zmienił się wyłącznie status obserwowanej bramy GPU B oraz jakość artefaktów
+demaga.
