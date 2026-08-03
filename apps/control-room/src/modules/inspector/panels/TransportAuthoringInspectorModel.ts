@@ -19,7 +19,7 @@ export interface CurrentTransportDraft {
   domain: string;
   gauge: "dirichlet_reference" | "zero_mean";
   materials: string;
-  model: "prescribed_density" | "ohmic_poisson";
+  model: "prescribed_density" | "ohmic_poisson" | "magnetoresistive_poisson";
   name: string;
   solveRegion: string;
   solverAbsoluteTolerance: string;
@@ -51,6 +51,7 @@ export interface SpinTransportDraft {
   solverOperatorVersion: string;
   solverPhysicalResidualVersion: string;
   solverRelativeTolerance: string;
+  reciprocalNonlinear: string;
 }
 
 export function transportSelectionKey(
@@ -154,6 +155,7 @@ export function spinTransportDraft(value?: KnownSceneSpinTransport | null): Spin
     solverOperatorVersion: value?.solver.operator_version ?? "fv_spin_upwind_v1",
     solverPhysicalResidualVersion: value?.solver.physical_residual_version ?? "transport_balance_integrated_l2.v1",
     solverRelativeTolerance: value?.solver.linear.relative_tolerance.toString() ?? "1e-10",
+    reciprocalNonlinear: pretty(value?.solver.reciprocal_nonlinear ?? {}),
   };
 }
 
@@ -176,19 +178,42 @@ function json<T>(value: string, label: string): T {
 
 export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurrentTransport {
   if (!draft.name.trim()) throw new Error("Name is required.");
+  const model = draft.coupling === "bidirectional"
+    ? "magnetoresistive_poisson"
+    : draft.model;
   const resource: KnownSceneCurrentTransport = {
     kind: "current_transport",
-    model: draft.model,
+    model,
     name: draft.name,
     coupling: draft.coupling,
   };
-  if (draft.model === "prescribed_density") {
+  if (model === "prescribed_density") {
     resource.current_density = json<number[]>(draft.currentDensity, "Current density");
     if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
     return resource;
   }
   resource.domain = json(draft.domain, "Charge domain");
   resource.materials = json(draft.materials, "Charge materials");
+  if (!Array.isArray(resource.materials)) throw new Error("Charge materials must be a JSON array.");
+  if (draft.coupling === "bidirectional") {
+    resource.materials.forEach((assignment, index) => {
+      const material = assignment.material as {
+        sigma_parallel_Spm?: unknown;
+        sigma_perpendicular_Spm?: unknown;
+        sigma_AHE_Spm?: unknown;
+      };
+      const sigmaParallel = Number(material.sigma_parallel_Spm);
+      const sigmaPerpendicular = Number(material.sigma_perpendicular_Spm);
+      const sigmaAhe = Number(material.sigma_AHE_Spm);
+      if (!Number.isFinite(sigmaParallel)
+        || sigmaParallel <= 0
+        || !Number.isFinite(sigmaPerpendicular)
+        || sigmaPerpendicular <= 0
+        || !Number.isFinite(sigmaAhe)) {
+        throw new Error(`Charge material ${index + 1}: bidirectional coupling requires finite sigma_parallel_Spm, sigma_perpendicular_Spm, and sigma_AHE_Spm.`);
+      }
+    });
+  }
   resource.boundaries = json(draft.boundaries, "Charge boundaries");
   resource.gauge = draft.gauge;
   resource.solver = {
@@ -245,6 +270,28 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
       throw new Error(`Spin material ${index + 1}: unsupported capacitance_formula_version; expected dos_isotropic_nonmagnetic.fullmag.v1.`);
     }
   });
+  const reciprocalNonlinear = json<Record<string, unknown>>(
+    draft.reciprocalNonlinear,
+    "Reciprocal nonlinear solver policy",
+  );
+  const hasReciprocalNonlinear = Object.keys(reciprocalNonlinear).length > 0;
+  if (draft.constitutiveVersion === "transport_constitutive.reciprocal.fullmag.v1") {
+    if (!hasReciprocalNonlinear) {
+      throw new Error("Reciprocal M2 transport requires reciprocal_nonlinear solver policy.");
+    }
+    const gmresRestart = Number(reciprocalNonlinear.gmres_restart);
+    const maxPicardIterations = Number(reciprocalNonlinear.max_picard_iterations);
+    const relativeUpdateTolerance = Number(reciprocalNonlinear.relative_update_tolerance);
+    const etaTransport = Number(reciprocalNonlinear.eta_transport);
+    if (!Number.isInteger(gmresRestart) || gmresRestart <= 0
+      || !Number.isInteger(maxPicardIterations) || maxPicardIterations <= 0
+      || !Number.isFinite(relativeUpdateTolerance) || relativeUpdateTolerance <= 0
+      || !Number.isFinite(etaTransport) || etaTransport <= 0 || etaTransport > 1) {
+      throw new Error("Reciprocal nonlinear policy has invalid GMRES/Picard/tolerance parameters.");
+    }
+  } else if (hasReciprocalNonlinear) {
+    throw new Error("reciprocal_nonlinear is valid only for reciprocal M2 transport.");
+  }
   return {
     boundaries: json(draft.boundaries, "Spin boundaries"),
     constitutive_version: draft.constitutiveVersion.trim(),
@@ -271,6 +318,9 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
       },
       operator_version: draft.solverOperatorVersion.trim(),
       physical_residual_version: draft.solverPhysicalResidualVersion.trim(),
+      ...(hasReciprocalNonlinear
+        ? { reciprocal_nonlinear: reciprocalNonlinear as NonNullable<KnownSceneSpinTransport["solver"]["reciprocal_nonlinear"]> }
+        : {}),
     },
   };
 }

@@ -2213,7 +2213,11 @@ async fn status_returns_200_with_live_session() {
     );
     assert_eq!(
         json["capabilities"]["transport_authoring"]["m2_reciprocal"]["status"],
-        "unsupported"
+        "semantic_only"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m2_reciprocal"]["authoring_allowed"],
+        true
     );
     assert_eq!(
         json["capabilities"]["transport_authoring"]["m3_transient"]["status"],

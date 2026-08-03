@@ -24,6 +24,7 @@ pub enum CurrentTransportKind {
 pub enum CurrentTransportModel {
     PrescribedDensity,
     OhmicPoisson,
+    MagnetoresistivePoisson,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, ToSchema)]
@@ -76,6 +77,24 @@ pub struct UnsupportedAuthoringRecord {
 pub struct SceneChargeTransportMaterial {
     #[serde(rename = "sigma_Spm")]
     pub sigma_spm: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_parallel_Spm"
+    )]
+    pub sigma_parallel_spm: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_perpendicular_Spm"
+    )]
+    pub sigma_perpendicular_spm: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_AHE_Spm"
+    )]
+    pub sigma_ahe_spm: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
@@ -262,6 +281,16 @@ pub struct SceneSpinSolverPolicy {
     pub physical_residual_version: String,
     pub operator_version: String,
     pub default_external_boundary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reciprocal_nonlinear: Option<SceneReciprocalNonlinearSolverPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneReciprocalNonlinearSolverPolicy {
+    pub gmres_restart: u32,
+    pub max_picard_iterations: u32,
+    pub relative_update_tolerance: f64,
+    pub eta_transport: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]

@@ -17,11 +17,11 @@ describe("transport authoring drafts", () => {
   it("round-trips every complete charge-transport field", () => {
     const resource = {
       kind: "current_transport" as const,
-      model: "ohmic_poisson" as const,
+      model: "magnetoresistive_poisson" as const,
       name: " charge ",
       coupling: "bidirectional" as const,
       domain: [{ object_id: "stack", region_id: "normal" }],
-      materials: [{ region: { object_id: "stack", region_id: "normal" }, material: { sigma_Spm: 5.8e7 } }],
+      materials: [{ region: { object_id: "stack", region_id: "normal" }, material: { sigma_Spm: 5.8e7, sigma_parallel_Spm: 5.9e7, sigma_perpendicular_Spm: 5.7e7, sigma_AHE_Spm: 1.2e5 } }],
       boundaries: [{ id: "left", kind: "voltage_electrode" as const, potential_V: 0.1, surfaces: [{ object_id: "stack", surface_id: "x_min", orientation: [-1, 0, 0] }] }],
       gauge: "dirichlet_reference" as const,
       solver: { engine: "block_gmres", linear: { relative_tolerance: 1e-10, absolute_tolerance: 1e-14, max_iterations: 123 }, operator_version: "fdm_coupled_charge_spin_fv_block_gmres.v1", physical_residual_version: "transport_balance_integrated_l2.v1" },
@@ -30,6 +30,10 @@ describe("transport authoring drafts", () => {
     };
     expect(isKnownCurrentTransport(resource)).toBe(true);
     expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
+    expect(isKnownCurrentTransport({
+      ...resource,
+      materials: [{ region: { object_id: "stack" }, material: { sigma_Spm: 5.8e7 } }],
+    })).toBe(false);
   });
 
   it("round-trips every spin-transport field including requested execution", () => {
@@ -53,8 +57,22 @@ describe("transport authoring drafts", () => {
       solver: {
         ...resource.solver,
         operator_version: "fdm_coupled_charge_spin_fv_block_gmres.v1",
+        reciprocal_nonlinear: {
+          gmres_restart: 40,
+          max_picard_iterations: 4,
+          relative_update_tolerance: 1e-9,
+          eta_transport: 0.25,
+        },
       },
     })).toBe(true);
+    expect(isKnownSpinTransport({
+      ...resource,
+      constitutive_version: "transport_constitutive.reciprocal.fullmag.v1",
+      solver: {
+        ...resource.solver,
+        operator_version: "fdm_coupled_charge_spin_fv_block_gmres.v1",
+      },
+    })).toBe(false);
     expect(buildSpinTransport(spinTransportDraft(resource))).toEqual(resource);
   });
 

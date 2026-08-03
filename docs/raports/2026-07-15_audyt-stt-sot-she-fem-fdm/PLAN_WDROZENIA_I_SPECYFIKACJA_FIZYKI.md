@@ -7,7 +7,7 @@
 **Dedykowany worktree:** `/tmp/fullmag-spin-transport`, `codex/spin-transport-m0-m3@ab2f686afe0aaa60d269966bd87388c0e59e14c6`  \
 **Merge-base:** `0612941f3b99137cbb171c183452368cc0f71029`; gałąź ma `109` własnych commitów i jest `271` commitów za aktualnym `master`  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-07-28  \
+**Ostatnia aktualizacja:** 2026-08-03  \
 **Raport źródłowy:** [README.md](./README.md)
 
 ---
@@ -4397,3 +4397,87 @@ siatki oraz sweep tolerancji, BORIS CPU↔CUDA, Fullmag FDM/FEM/GPU i artefakt
 provenance z adapterem jednostek. Capability matrix pozostaje bez zmian, a
 ocena celu nadal wynosi konserwatywnie **84% implementacji / 58% gotowości
 produkcyjnej**.
+
+## 32.25. Domknięcie authoringu reciprocal M2 w Python/IR/SceneDocument/Control Room (2026-08-03)
+
+Ta iteracja zamyka brakujący kontrakt authoringu M2, ale nie promuje żadnego
+nowego lane'u wykonawczego do `production_executable` ani `validated`. Zmiana
+została wykonana przez pełny łańcuch źródła, a nie przez testowy wyjątek:
+
+| Warstwa | Zrealizowany kontrakt | Dowód / właściciel |
+|---|---|---|
+| Python DSL | `CurrentTransport` rozpoznaje `magnetoresistive_poisson` albo `coupling="bidirectional"`; wymagane są `sigma_parallel_Spm`, `sigma_perpendicular_Spm`, `sigma_AHE_Spm`, `block_gmres`, operator blokowy i residual transportowy | `packages/fullmag-py/src/fullmag/model/current_transport.py`, `world.py` |
+| Python spin | `ReciprocalNonlinearSolverPolicy` z walidacją restartu GMRES, limitu Picarda, tolerancji i `eta_transport`; sprzężenie źródłowe decyduje o wersji konstytutywnej | `packages/fullmag-py/src/fullmag/model/spin_transport.py`, `problem.py` |
+| Round-trip | pełny graf M2 przechodzi Python → ProblemIR → canonical script → SceneDocument → builder bez utraty tensora przewodności, coupling, BC, gauge, solvera ani polityki nonlinear | `runtime/script_builder.py`, `runtime/scene_document.py`, `test_current_transport.py`, `test_spin_drift_diffusion.py` |
+| Rust authoring | typy SceneDocument i walidacja odrzucają niepełny tensor, zły operator/residual, M2 poza steady oraz brak polityki nonlinear; one-way odrzuca pola reciprocal | `crates/fullmag-authoring/src/spin_transport.rs`, `validation.rs` |
+| API/OpenAPI | M2 jest jawnie `semantic_only`, ale `authoring_allowed=true`; wygenerowane schematy zawierają MRP, tensor conductance i `SceneReciprocalNonlinearSolverPolicy` | `crates/fullmag-api/src/router_v2/handlers/{model/authoring.rs,sessions/status.rs}`, `apps/control-room/src/kernel/api/generated/openapi-v2.*` |
+| Control Room | inspector zachowuje M2 tensor, reciprocal coupling i JSON polityki nonlinear; rozpoznanie niepełnego/nieznanego grafu jest fail-closed | `TransportAuthoringInspectorModel.ts`, `TransportAuthoringInspector.tsx`, `transportRecognition.ts` |
+
+Pierwsza regresja, która ujawniła lukę, była konkretna i została usunięta:
+
+```text
+TypeError: ChargeTransportMaterial.__init__() got unexpected keyword argument
+  'sigma_parallel_Spm'
+AttributeError: module 'fullmag' has no attribute
+  'ReciprocalNonlinearSolverPolicy'
+```
+
+### 32.25.1. Weryfikacja
+
+Wyniki wykonane po zmianie:
+
+```text
+PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-py-m2-regression \
+pytest -q \
+  packages/fullmag-py/tests/test_current_transport.py \
+  packages/fullmag-py/tests/test_spin_drift_diffusion.py \
+  packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py \
+  packages/fullmag-py/tests/test_public_python_api_documentation.py
+51 passed, 45 subtests passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/authoring-m2 \
+cargo test -p fullmag-authoring
+68 passed, 0 failed; doc tests 0 passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/api-openapi-m2 \
+cargo test -p fullmag-api spin_authoring_
+3 passed, 0 failed; 737 filtered out
+
+pnpm --dir apps/control-room exec tsc --noEmit
+pnpm --dir apps/control-room exec vitest run \
+  src/modules/inspector/panels/TransportAuthoringInspectorModel.test.ts \
+  src/modules/inspector/panels/TransportAuthoringInspector.test.ts
+24 passed, 0 failed
+
+PYTHONPATH=packages/fullmag-py/src \
+TMPDIR=/tmp/fullmag-zfn2-build/python-targets/m2-suite-2 \
+pytest -q packages/fullmag-py/tests
+1406 passed, 46 failed, 3 skipped, 550 subtests passed
+```
+
+Pełna suita jest wynikiem diagnostycznym całego checkoutu, nie bramą M2:
+46 porażek grupuje istniejący drift benchmarków FEM, schematu mesh/persistence,
+GPU-RK, przykładu periodic-antidot i importu SP4. Żadna porażka nie wskazuje na
+nowy kod M2; zielone testy M2 są uruchamiane osobno z izolowanym `TMPDIR`.
+Ciężkie targety Cargo i tymczasowe artefakty testów kierowano do szybkiego
+magazynu `/zfn2/mateuszz/git/fullmag`; checkout nie został zapełniony buildami.
+
+### 32.25.2. Granica kwalifikacji po iteracji
+
+Capability matrix i status API pozostają konserwatywne:
+
+- M2 reciprocal authoring: `semantic_only`, `authoring_allowed=true`;
+- FDM CPU/GPU, FEM CPU/GPU i pełny runtime nonlinear: bez promocji;
+- `validated_workloads` pozostaje puste dla reciprocal SHE;
+- `SHE-BORIS-001` nadal wymaga stabilnego N/F/T przypadku z niezerowym `S`,
+  `Gi/Gmix`, adaptera `S ↔ V_s ↔ mu_s`, niezależnych residuali/bilansów,
+  trzech siatek, sweepu tolerancji i CPU↔CUDA;
+- nadal otwarte są interfejsy SML/mixing, FEM reciprocal assembly, GPU device
+  proof, cross-backend parity, pełny browserowy round-trip oraz produkcyjny
+  dynamiczny Oersted.
+
+Authoring M2 jest więc spójny w publicznym modelu i UI, lecz nie jest jeszcze
+wykonywalnym, ilościowo zwalidowanym solverem. Uczciwa ocena celu pozostaje
+**84% implementacji / 58% gotowości produkcyjnej**: wzrosła kompletność
+kontraktu authoringowego, ale nie zamknięto żadnej z dominujących bram fizyki,
+numeryki ani runtime'u.

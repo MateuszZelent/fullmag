@@ -36,14 +36,14 @@ use crate::types::{
     AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
 };
 use fullmag_authoring::{
-    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
-    GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
-    GeometryRealizationSnapshot, GeometryRegionCandidate, GeometryValidationResource,
-    MagnetizationAsset, SceneCurrentTransport, SceneDocument, SceneGeometry, SceneMaterialAsset,
-    SceneMaterialReference, SceneObject, SceneOerstedField, SceneRegionOverride,
-    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneTransportCoupling,
-    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
-    ScriptBuilderUniverseState, Transform3D,
+    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, CurrentTransportModel,
+    GeometryBackendTarget, GeometryCapabilitiesResource, GeometryDiagnostic,
+    GeometryDiagnosticsResource, GeometryRealizationSnapshot, GeometryRegionCandidate,
+    GeometryValidationResource, MagnetizationAsset, SceneCurrentTransport, SceneDocument,
+    SceneGeometry, SceneMaterialAsset, SceneMaterialReference, SceneObject, SceneOerstedField,
+    SceneRegionOverride, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
+    SceneTransportCoupling, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
 };
 
 fn spin_commit_scene_resource(scene: SceneDocument) -> Result<SceneResource, ApiError> {
@@ -300,11 +300,12 @@ fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportEx
                     resolved_lane: None,
                 };
             }
-            let reciprocal = resource
-                .known()
-                .is_some_and(|value| value.coupling == SceneTransportCoupling::Bidirectional);
+            let reciprocal = resource.known().is_some_and(|value| {
+                value.coupling == SceneTransportCoupling::Bidirectional
+                    || value.model == CurrentTransportModel::MagnetoresistivePoisson
+            });
             if reciprocal {
-                ("unsupported", false, Some("Bidirectional charge transport is an M2 authoring capability.".to_string()), None)
+                ("semantic_only", true, Some("M2 reciprocal authoring is available; executable qualification remains workload-scoped.".to_string()), None)
             } else {
                 ("semantic_only", true, Some("M1 authoring is available; executable qualification remains workload-scoped.".to_string()), None)
             }
@@ -330,7 +331,7 @@ fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportEx
             });
             let transient = serde_json::to_value(known.mode).ok().and_then(|v| v.as_str().map(str::to_string)).as_deref() == Some("transient");
             if reciprocal {
-                ("unsupported", false, Some("Reciprocal spin transport is an M2 authoring capability.".to_string()), requested)
+                ("semantic_only", true, Some("M2 reciprocal authoring is available; executable qualification remains workload-scoped.".to_string()), requested)
             } else if transient {
                 ("unsupported", false, Some("Transient spin transport is an M3 authoring capability.".to_string()), requested)
             } else if lane_blocked {

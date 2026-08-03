@@ -3874,7 +3874,7 @@ export interface components {
             scene_revision: number;
         };
         /** @enum {string} */
-        CurrentTransportModel: "prescribed_density" | "ohmic_poisson";
+        CurrentTransportModel: "prescribed_density" | "ohmic_poisson" | "magnetoresistive_poisson";
         CurrentTransportMutationRequest: {
             /** Format: int64 */
             base_revision: number;
@@ -7495,7 +7495,13 @@ export interface components {
         };
         SceneChargeTransportMaterial: {
             /** Format: double */
+            sigma_AHE_Spm?: number | null;
+            /** Format: double */
             sigma_Spm: number;
+            /** Format: double */
+            sigma_parallel_Spm?: number | null;
+            /** Format: double */
+            sigma_perpendicular_Spm?: number | null;
         };
         SceneChargeTransportMaterialAssignment: {
             material: components["schemas"]["SceneChargeTransportMaterial"];
@@ -7810,6 +7816,16 @@ export interface components {
             kind: "legacy_current_source_norm";
         };
         SceneReactionLength: number | components["schemas"]["SceneDisabledReaction"];
+        SceneReciprocalNonlinearSolverPolicy: {
+            /** Format: double */
+            eta_transport: number;
+            /** Format: int32 */
+            gmres_restart: number;
+            /** Format: int32 */
+            max_picard_iterations: number;
+            /** Format: double */
+            relative_update_tolerance: number;
+        };
         /** @enum {string} */
         SceneRegionConflictPolicy: "error" | "higher_priority_wins" | "min_mesh_size_wins";
         /** @enum {string} */
@@ -7975,6 +7991,7 @@ export interface components {
             linear: components["schemas"]["SceneLinearTransportSolverPolicy"];
             operator_version: string;
             physical_residual_version: string;
+            reciprocal_nonlinear?: null | components["schemas"]["SceneReciprocalNonlinearSolverPolicy"];
         };
         SceneSpinTorque: components["schemas"]["KnownSceneSpinTorque"] | components["schemas"]["UnsupportedAuthoringRecord"];
         SceneSpinTransport: components["schemas"]["KnownSceneSpinTransport"] | components["schemas"]["UnsupportedAuthoringRecord"];

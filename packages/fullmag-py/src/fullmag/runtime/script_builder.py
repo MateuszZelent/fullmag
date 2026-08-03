@@ -2013,6 +2013,145 @@ def _render_external_field(
     ]
 
 
+def _render_region_ref_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    object_id = str(entry.get("object_id") or "")
+    if not object_id:
+        raise ValueError("current transport region reference requires object_id")
+    args = [_py_repr(object_id)]
+    region_id = entry.get("region_id")
+    if isinstance(region_id, str) and region_id.strip():
+        args.append(f"region_id={_py_repr(region_id.strip())}")
+    return f"fm.RegionRef({', '.join(args)})"
+
+
+def _render_surface_ref_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    object_id = str(entry.get("object_id") or "")
+    surface_id = str(entry.get("surface_id") or "")
+    orientation = _optional_vec3(entry.get("orientation"))
+    if not object_id or not surface_id or orientation is None:
+        raise ValueError("current transport surface reference is incomplete")
+    return (
+        "fm.SurfaceRef("
+        f"{_py_repr(object_id)}, {_py_repr(surface_id)}, "
+        f"orientation={_py_tuple3(orientation)})"
+    )
+
+
+def _render_charge_material_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    sigma = _number_or_none(entry.get("sigma_Spm"))
+    if sigma is None:
+        raise ValueError("current transport material requires sigma_Spm")
+    kwargs = [f"sigma_Spm={_py_number(sigma)}"]
+    for key in ("sigma_parallel_Spm", "sigma_perpendicular_Spm", "sigma_AHE_Spm"):
+        value = _number_or_none(entry.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    return f"fm.ChargeTransportMaterial({', '.join(kwargs)})"
+
+
+def _render_charge_boundary_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kind = str(entry.get("kind") or "")
+    boundary_id = str(entry.get("id") or "")
+    surfaces = entry.get("surfaces")
+    if not boundary_id or not isinstance(surfaces, list) or not surfaces:
+        raise ValueError("current transport boundary is incomplete")
+    surfaces_expr = "[" + ", ".join(_render_surface_ref_payload(item) for item in surfaces) + "]"
+    if kind == "voltage_electrode":
+        potential = _number_or_none(entry.get("potential_V"))
+        if potential is None:
+            raise ValueError("voltage electrode requires potential_V")
+        return (
+            f"fm.VoltageElectrode({_py_repr(boundary_id)}, {surfaces_expr}, "
+            f"potential_V={_py_number(potential)})"
+        )
+    if kind == "normal_current_electrode":
+        current = _number_or_none(entry.get("outward_current_density_Apm2"))
+        if current is None:
+            raise ValueError("normal current electrode requires outward_current_density_Apm2")
+        return (
+            f"fm.NormalCurrentElectrode({_py_repr(boundary_id)}, {surfaces_expr}, "
+            f"outward_current_density_Apm2={_py_number(current)})"
+        )
+    if kind == "insulating":
+        return f"fm.ChargeInsulating({_py_repr(boundary_id)}, {surfaces_expr})"
+    raise ValueError(f"unsupported current transport boundary kind {kind!r}")
+
+
+def _render_charge_solver_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kwargs: list[str] = []
+    engine = entry.get("engine")
+    if isinstance(engine, str) and engine:
+        kwargs.append(f"engine={_py_repr(engine)}")
+    linear = _normalize_mapping(entry.get("linear"))
+    for key in ("relative_tolerance", "absolute_tolerance"):
+        value = _number_or_none(linear.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    max_iterations = linear.get("max_iterations")
+    if isinstance(max_iterations, int):
+        kwargs.append(f"max_iterations={max_iterations}")
+    for key in ("physical_residual_version", "operator_version"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            kwargs.append(f"{key}={_py_repr(value)}")
+    return f"fm.ChargeSolverPolicy({', '.join(kwargs)})"
+
+
+def _render_current_transport_payload(payload: object, *, surface: str) -> str:
+    entry = _normalize_mapping(payload)
+    kwargs = [f"name={_py_repr(str(entry.get('name') or 'transport'))}"]
+    model = str(entry.get("model") or "prescribed_density")
+    if model != "prescribed_density":
+        kwargs.append(f"model={_py_repr(model)}")
+    coupling = str(entry.get("coupling") or "one_way")
+    if coupling != "one_way":
+        kwargs.append(f"coupling={_py_repr(coupling)}")
+    current_density = _optional_vec3(entry.get("current_density"))
+    if current_density is not None:
+        kwargs.append(f"current_density={_py_tuple3(current_density)}")
+    solve_region = entry.get("solve_region")
+    if isinstance(solve_region, str) and solve_region.strip():
+        kwargs.append(f"solve_region={_py_repr(solve_region.strip())}")
+    conductivity = _number_or_none(entry.get("conductivity_s_per_m"))
+    if conductivity is not None:
+        kwargs.append(f"conductivity_s_per_m={_py_number(conductivity)}")
+    domain = entry.get("domain")
+    if isinstance(domain, list) and domain:
+        kwargs.append(
+            "domain=[" + ", ".join(_render_region_ref_payload(item) for item in domain) + "]"
+        )
+    materials = entry.get("materials")
+    if isinstance(materials, list) and materials:
+        assignments: list[str] = []
+        for item in materials:
+            assignment = _normalize_mapping(item)
+            assignments.append(
+                "fm.ChargeTransportMaterialAssignment("
+                f"{_render_region_ref_payload(assignment.get('region'))}, "
+                f"{_render_charge_material_payload(assignment.get('material'))})"
+            )
+        kwargs.append("materials=[" + ", ".join(assignments) + "]")
+    boundaries = entry.get("boundaries")
+    if isinstance(boundaries, list) and boundaries:
+        kwargs.append(
+            "boundaries=["
+            + ", ".join(_render_charge_boundary_payload(item) for item in boundaries)
+            + "]"
+        )
+    gauge = entry.get("gauge")
+    if isinstance(gauge, str) and gauge:
+        kwargs.append(f"gauge=fm.ChargePotentialGauge({_py_repr(gauge)})")
+    solver = entry.get("solver")
+    if isinstance(solver, Mapping):
+        kwargs.append(f"solver={_render_charge_solver_payload(solver)}")
+    return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
+
+
 def _render_current_modules(
     problem: Problem,
     *,
@@ -2057,20 +2196,7 @@ def _render_current_modules(
             lines.append(f"{_surface_call(surface, 'antenna_field_source')}({', '.join(kwargs)})")
             continue
         if isinstance(module, CurrentTransport):
-            kwargs = [
-                f"name={_py_repr(module.name)}",
-            ]
-            if module.model != "prescribed_density":
-                kwargs.append(f"model={_py_repr(module.model)}")
-            if module.current_density is not None:
-                kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
-            if module.solve_region is not None:
-                kwargs.append(f"solve_region={_py_repr(module.solve_region)}")
-            if module.conductivity_s_per_m is not None:
-                kwargs.append(
-                    f"conductivity_s_per_m={_py_number(module.conductivity_s_per_m)}"
-                )
-            lines.append(f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})")
+            lines.append(_render_current_transport_payload(module.to_ir(), surface=surface))
             continue
         if isinstance(module, dict):
             lines.append(_render_current_module_override(module, surface=surface))
@@ -5168,20 +5294,7 @@ def _render_antenna_expr(antenna: object) -> str:
 def _render_current_module_override(module: dict[str, object], *, surface: str) -> str:
     kind = str(module.get("kind") or "antenna_field_source")
     if kind == "current_transport":
-        kwargs = [f"name={_py_repr(str(module.get('name') or 'transport'))}"]
-        model = str(module.get("model") or "prescribed_density")
-        if model != "prescribed_density":
-            kwargs.append(f"model={_py_repr(model)}")
-        current_density = _optional_vec3(module.get("current_density"))
-        if current_density is not None:
-            kwargs.append(f"current_density={_py_tuple3(current_density)}")
-        solve_region = module.get("solve_region")
-        if isinstance(solve_region, str) and solve_region.strip():
-            kwargs.append(f"solve_region={_py_repr(solve_region.strip())}")
-        conductivity_s_per_m = _number_or_none(module.get("conductivity_s_per_m"))
-        if conductivity_s_per_m is not None:
-            kwargs.append(f"conductivity_s_per_m={_py_number(conductivity_s_per_m)}")
-        return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
+        return _render_current_transport_payload(module, surface=surface)
 
     model = str(module.get("model") or "mqs_2p5d_az")
     if model == "prescribed_zeeman_mask":
@@ -6076,18 +6189,7 @@ def _export_auxiliary_geometry_entry(
 
 def _export_current_module_entry(module: object) -> dict[str, object]:
     if isinstance(module, CurrentTransport):
-        entry = {
-            "kind": "current_transport",
-            "name": module.name,
-            "model": module.model,
-        }
-        if module.current_density is not None:
-            entry["current_density"] = list(module.current_density)
-        if module.solve_region is not None:
-            entry["solve_region"] = module.solve_region
-        if module.conductivity_s_per_m is not None:
-            entry["conductivity_s_per_m"] = module.conductivity_s_per_m
-        return entry
+        return copy.deepcopy(module.to_ir())
     if not isinstance(module, AntennaFieldSource):
         raise ValueError(f"unsupported current module kind: {type(module).__name__}")
     if module.model == "prescribed_zeeman_mask":

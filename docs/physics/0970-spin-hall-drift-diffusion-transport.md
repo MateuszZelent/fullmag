@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-07-15
+- Last updated: 2026-08-03
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -463,6 +463,26 @@ carry signed `theta_sh/P`, conductivities, lengths, and optional physical
 `spin_capacitance`. `DriftDiffusionSpinTorque` consumes a named solve and may
 not accept a private current or polarization shortcut.
 
+For the reciprocal M2 authoring contract, `CurrentTransport` accepts
+`coupling="bidirectional"` (or the resolved model name
+`model="magnetoresistive_poisson"`) only with a complete Ohmic charge solve.
+Every charge-material assignment must carry the base `sigma_Spm` plus finite,
+positive `sigma_parallel_Spm` and `sigma_perpendicular_Spm`, and finite
+`sigma_AHE_Spm`. The charge policy is the block operator
+`fdm_coupled_charge_spin_fv_block_gmres.v1`; its physical residual is
+`transport_balance_integrated_l2.v1`. `ReciprocalNonlinearSolverPolicy`
+provides positive `gmres_restart` and `max_picard_iterations`, positive
+`relative_update_tolerance`, and `0 < eta_transport <= 1`.
+
+`Problem` owns the source coupling and lowers the linked spin module to
+`transport_constitutive.reciprocal.fullmag.v1`; a spin module cannot override
+the source with an independent coupling. Reciprocal authoring is steady-only
+until a transient M2 contract is published. Python, SceneDocument, the
+resource-first Rust authoring schema, and the Control Room inspector preserve
+these fields. This is an authoring/reference contract: the UI advertises the
+M2 lane as `semantic_only`, and it must not be interpreted as a production
+FDM/FEM/GPU execution guarantee.
+
 ### 4.2 ProblemIR representation
 
 Typed IR includes `SpinTransportModuleIR`, charge/spin materials,
@@ -505,7 +525,11 @@ Resource-first API projects current transports, spin transports, interfaces,
 and torques from one revisioned SceneDocument; heavy tensors remain on the
 binary data plane. Dedicated Explorer/Inspector nodes author and inspect model,
 units, orientation, qualification, residual, and freshness. UI/Python export
-must satisfy normalized four-path round-trip equality.
+must satisfy normalized four-path round-trip equality. The current inspector
+round-trips M2 conductivity tensors and reciprocal nonlinear solver policy as
+typed fields; unknown or incomplete M2 records stay read-only/fail-closed, and
+the capability result remains `semantic_only` until the workload gates below
+are closed.
 
 The executable FEM M1 v1 slice is deliberately narrower than the general
 model: CPU, double precision, `execution_mode=strict`, conforming H1/P1,

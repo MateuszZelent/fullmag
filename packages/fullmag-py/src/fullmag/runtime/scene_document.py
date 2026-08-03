@@ -172,7 +172,31 @@ def _decode_current_transport(value: object) -> CurrentTransport:
                     _finite_number(
                         material.get("sigma_Spm"),
                         f"current_transport.materials[{index}].material.sigma_Spm",
-                    )
+                    ),
+                    sigma_parallel_Spm=(
+                        _finite_number(
+                            material.get("sigma_parallel_Spm"),
+                            f"current_transport.materials[{index}].material.sigma_parallel_Spm",
+                        )
+                        if material.get("sigma_parallel_Spm") is not None
+                        else None
+                    ),
+                    sigma_perpendicular_Spm=(
+                        _finite_number(
+                            material.get("sigma_perpendicular_Spm"),
+                            f"current_transport.materials[{index}].material.sigma_perpendicular_Spm",
+                        )
+                        if material.get("sigma_perpendicular_Spm") is not None
+                        else None
+                    ),
+                    sigma_AHE_Spm=(
+                        _finite_number(
+                            material.get("sigma_AHE_Spm"),
+                            f"current_transport.materials[{index}].material.sigma_AHE_Spm",
+                        )
+                        if material.get("sigma_AHE_Spm") is not None
+                        else None
+                    ),
                 ),
             )
         )

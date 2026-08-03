@@ -295,14 +295,14 @@ function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTrans
   const field = (key: keyof CurrentTransportDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
   return <>
     <FormField label="Name" readOnly={identityReadOnly} value={draft.name} onChange={field("name")} />
-    <FormField label="Model" type="select" value={draft.model} onChange={field("model")}><option value="prescribed_density">Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option></FormField>
+    <FormField label="Model" type="select" value={draft.model} onChange={field("model")}><option value="prescribed_density">Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
     <FormField label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
     {draft.model === "prescribed_density" ? <FormField label="Current density vector" unit="A/m²" type="textarea" value={draft.currentDensity} onChange={field("currentDensity")} /> : <>
       <FormField label="Domain region refs" type="textarea" rows={5} value={draft.domain} onChange={field("domain")} />
-      <FormField label="Material assignments (sigma_Spm)" type="textarea" rows={7} value={draft.materials} onChange={field("materials")} />
+      <FormField label="Material assignments (sigma_Spm; M2: sigma_parallel_Spm, sigma_perpendicular_Spm, sigma_AHE_Spm)" type="textarea" rows={9} value={draft.materials} onChange={field("materials")} />
       <FormField label="Charge boundaries" type="textarea" rows={9} value={draft.boundaries} onChange={field("boundaries")} />
       <FormField label="Gauge" type="select" value={draft.gauge} onChange={field("gauge")}><option value="dirichlet_reference">Dirichlet reference</option><option value="zero_mean">Zero mean</option></FormField>
-      <SolverFields draft={draft} field={field} />
+      <SolverFields draft={draft} field={field} patch={patch} />
     </>}
     <FormField label="Legacy solve region" value={draft.solveRegion} onChange={field("solveRegion")} />
     <FormField label="Legacy conductivity" unit="S/m" value={draft.conductivity} onChange={field("conductivity")} />
@@ -320,7 +320,7 @@ function SpinFields({ draft, identityReadOnly, patch }: { draft: SpinTransportDr
     <FormField label="Spin material assignments (includes spin_capacitance_As_per_V_m3 and capacitance_formula_version)" type="textarea" rows={9} value={draft.materials} onChange={field("materials")} />
     <FormField label="Interfaces" type="textarea" rows={9} value={draft.interfaces} onChange={field("interfaces")} />
     <FormField label="Spin boundaries" type="textarea" rows={9} value={draft.boundaries} onChange={field("boundaries")} />
-    <SolverFields draft={draft} field={field} />
+    <SolverFields draft={draft} field={field} patch={patch} />
     <FormField label="Default external boundary" value={draft.solverDefaultExternalBoundary} onChange={field("solverDefaultExternalBoundary")} />
     <FormField label="Requested discretization" type="select" value={draft.executionDiscretization} onChange={field("executionDiscretization")}><option value="auto">Auto</option><option value="fdm">FDM</option><option value="fem">FEM</option><option value="hybrid">Hybrid</option></FormField>
     <FormField label="Requested device" type="select" value={draft.executionDevice} onChange={field("executionDevice")}><option value="auto">Auto</option><option value="cpu">CPU</option><option value="gpu">GPU</option></FormField>
@@ -330,9 +330,10 @@ function SpinFields({ draft, identityReadOnly, patch }: { draft: SpinTransportDr
   </>;
 }
 
-function SolverFields<T extends CurrentTransportDraft | SpinTransportDraft>({ draft, field }: {
+function SolverFields<T extends CurrentTransportDraft | SpinTransportDraft>({ draft, field, patch }: {
   draft: T;
   field: (key: keyof T) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void;
+  patch: (value: Partial<Draft>) => void;
 }) {
   return <>
     <FormField label="Solver engine" value={draft.solverEngine} onChange={field("solverEngine")} />
@@ -341,5 +342,6 @@ function SolverFields<T extends CurrentTransportDraft | SpinTransportDraft>({ dr
     <FormField label="Maximum iterations" value={draft.solverMaxIterations} onChange={field("solverMaxIterations")} />
     <FormField label="Physical residual version" value={draft.solverPhysicalResidualVersion} onChange={field("solverPhysicalResidualVersion")} />
     <FormField label="Operator version" value={draft.solverOperatorVersion} onChange={field("solverOperatorVersion")} />
+    {"reciprocalNonlinear" in draft && <FormField label="Reciprocal nonlinear policy (M2 JSON)" type="textarea" rows={6} value={String(draft.reciprocalNonlinear)} onChange={(event) => patch({ reciprocalNonlinear: event.target.value } as Partial<Draft>)} />}
   </>;
 }
