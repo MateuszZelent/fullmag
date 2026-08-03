@@ -4716,6 +4716,14 @@ iteracji zakończył się poprawnie, co wskazuje na osobną granicę limitu
 iteracji w harnessie, nie na zgodność fizyczną; limit referencyjny musi zostać
 zweryfikowany na całej macierzy przed zmianą statusu.
 
+Kontrolna próba drobnej siatki z limitem 2000 nie zbiegała również po tym
+zwiększeniu i zakończyła się `M2 block GMRES did not converge in 2000
+iterations` w artefakcie
+`/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-fine-max2000-run1`.
+Wynik wyklucza interpretację, że sama zmiana limitu 500→2000 zamyka bramę;
+potrzebna jest poprawa/kwalifikacja strategii preconditionera lub rozdzielczości
+referencyjnej, z zachowaniem fail-closed physical-balance gate.
+
 Wniosek bramy: lokalna korekta skalowania i coarse execution są potwierdzone,
 lecz `SHE-BORIS-001`, reciprocal parity, torque normalization, CPU↔CUDA,
 FEM/FDM oraz `validated_workloads` pozostają otwarte. Capability matrix nie

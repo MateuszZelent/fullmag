@@ -593,6 +593,13 @@ następny krok musi ustalić uzasadniony limit/strategię preconditionera i
 powtórzyć wszystkie sześć przypadków. Do tego czasu `SHE-BORIS-001`, parity,
 torque normalization i `validated_workloads` pozostają otwarte.
 
+Kontrolna próba drobnej siatki z limitem 2000 również zakończyła się
+`M2 block GMRES did not converge in 2000 iterations` w
+`/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-fine-max2000-run1`.
+Zwiększenie limitu z 500 do 2000 nie jest więc wystarczającą naprawą; trzeba
+zweryfikować strategię preconditionera/restartu albo jawnie ograniczyć
+kwalifikowany zakres rozdzielczości.
+
 ## 8. Źródła i mapowanie symboli
 
 | Twierdzenie | Źródło |

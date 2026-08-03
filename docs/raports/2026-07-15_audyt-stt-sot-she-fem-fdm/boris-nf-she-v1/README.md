@@ -97,6 +97,11 @@ GMRES, a dwa fine przekroczyły 300 s. Średnia siatka uruchomiona diagnostyczni
 z limitem 2000 iteracji przeszła, więc limit w harnessie jest osobną otwartą
 kwestią numeryczną. Nie zmienia to statusu capability ani kwalifikacji.
 
+Kontrolna próba drobnej siatki z limitem 2000 zakończyła się również
+`M2 block GMRES did not converge in 2000 iterations` w
+`/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-fine-max2000-run1`;
+nie wystarcza więc samo zwiększenie limitu iteracji.
+
 ## Bramy pozostające otwarte
 
 1. ustalić i udokumentować limit/strategię GMRES dla średniej i drobnej siatki,
