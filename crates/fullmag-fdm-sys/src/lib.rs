@@ -91,6 +91,13 @@ pub enum fullmag_fdm_zhang_li_formula {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_slonczewski_formula {
+    FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0 = 0,
+    FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2 = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fdm_boundary_correction {
     FULLMAG_FDM_BOUNDARY_NONE = 0,
     FULLMAG_FDM_BOUNDARY_VOLUME = 1,
@@ -310,6 +317,10 @@ pub struct fullmag_fdm_plan_desc {
     pub stt_epsilon_prime: f64,
     pub stt_free_layer_thickness: f64,
     pub stt_current_sign: f64,
+    pub slonczewski_formula: fullmag_fdm_slonczewski_formula,
+    pub stt_stack_normal: [f64; 3],
+    pub slonczewski_active_mask: *const u8,
+    pub slonczewski_active_mask_len: u64,
 
     // Spin-Orbit Torque (SOT)
     pub has_sot: i32,

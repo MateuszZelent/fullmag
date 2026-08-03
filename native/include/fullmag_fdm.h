@@ -101,6 +101,13 @@ typedef enum {
 } fullmag_fdm_zhang_li_formula;
 
 typedef enum {
+    /* Zero preserves the historical hbar/(2e) Slonczewski ABI behavior. */
+    FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0 = 0,
+    /* Canonical SI evaluator: signed J_n and hbar/e Omega_J. */
+    FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2 = 1,
+} fullmag_fdm_slonczewski_formula;
+
+typedef enum {
     FULLMAG_FDM_BOUNDARY_NONE   = 0,  /* binary active_mask (current) */
     FULLMAG_FDM_BOUNDARY_VOLUME = 1,  /* T0: face-link + φ weighting */
     FULLMAG_FDM_BOUNDARY_FULL   = 2,  /* T1: ECB stencil + H_corr    */
@@ -296,6 +303,10 @@ typedef struct {
     double                     stt_epsilon_prime;      /* epsilon' (secondary spin-transfer term) */
     double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = use dz */
     double                     stt_current_sign;       /* +1 top/default, -1 bottom fixed layer */
+    fullmag_fdm_slonczewski_formula slonczewski_formula;
+    double                     stt_stack_normal[3];    /* canonical signed-current normal */
+    const uint8_t              *slonczewski_active_mask; /* canonical target mask */
+    uint64_t                   slonczewski_active_mask_len;
 
     /* Spin-Orbit Torque (SOT) — Manchon-Zhang damping-like + field-like model */
     int                        has_sot;                /* 1 = enabled */

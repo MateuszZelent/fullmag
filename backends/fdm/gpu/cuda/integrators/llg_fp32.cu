@@ -185,7 +185,9 @@ __global__ void llg_rhs_fp32_kernel(
     
     // --- Slonczewski STT (CPP/SOT) ---
     // Explicit Gilbert form of Slonczewski field-equivalent direct RHS.
-    if (stt.has_slonczewski_stt) {
+    if (stt.has_slonczewski_stt &&
+        (!stt.active_mask || stt.active_mask[idx] != 0) &&
+        (!stt.has_slonczewski_active_mask || stt.slonczewski_active_mask[idx] != 0)) {
         float px = static_cast<float>(stt.stt_p_x);
         float py = static_cast<float>(stt.stt_p_y);
         float pz = static_cast<float>(stt.stt_p_z);
@@ -200,8 +202,17 @@ __global__ void llg_rhs_fp32_kernel(
         float beta_STT = static_cast<float>(stt.stt_cpp_pf) * g;
         float inv_gilbert_stt = 1.0f / (1.0f + alpha * alpha);
         float e_prime = static_cast<float>(stt.stt_epsilon_prime);
-        float damping_like_scale = beta_STT * (1.0f + alpha * e_prime) * inv_gilbert_stt;
-        float field_like_scale = beta_STT * (e_prime - alpha) * inv_gilbert_stt;
+        float damping_like_scale;
+        float field_like_scale;
+        if (stt.slonczewski_formula == FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2) {
+            damping_like_scale =
+                static_cast<float>(stt.stt_cpp_pf) * (g + alpha * e_prime) * inv_gilbert_stt;
+            field_like_scale =
+                static_cast<float>(stt.stt_cpp_pf) * (e_prime - alpha * g) * inv_gilbert_stt;
+        } else {
+            damping_like_scale = beta_STT * (1.0f + alpha * e_prime) * inv_gilbert_stt;
+            field_like_scale = beta_STT * (e_prime - alpha) * inv_gilbert_stt;
+        }
         
         // m x p
         float m_cross_px = m1 * pz - m2 * py;

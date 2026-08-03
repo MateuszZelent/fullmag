@@ -416,20 +416,50 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->stt_p_z = pz;
     ctx->stt_lambda = plan->stt_lambda;
     ctx->stt_epsilon_prime = plan->stt_epsilon_prime;
+    ctx->slonczewski_formula = plan->slonczewski_formula;
+    ctx->has_slonczewski_active_mask = plan->slonczewski_active_mask != nullptr;
+    ctx->stt_stack_normal[0] = plan->stt_stack_normal[0];
+    ctx->stt_stack_normal[1] = plan->stt_stack_normal[1];
+    ctx->stt_stack_normal[2] = plan->stt_stack_normal[2];
     
     if (ctx->has_slonczewski_stt && ctx->Ms > 0 && ctx->dz > 0) {
         double hbar = 1.054571817e-34; // Reduced Planck constant (J s)
-        double e = 1.60217662e-19;     // Elementary charge (C)
+        double e = ctx->slonczewski_formula == FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2
+            ? 1.602176634e-19
+            : 1.60217662e-19;          // Elementary charge (C)
         double mu_0 = 4.0 * M_PI * 1e-7; // Vacuum permeability
         double js = sqrt(ctx->current_density_x*ctx->current_density_x +
                          ctx->current_density_y*ctx->current_density_y +
                          ctx->current_density_z*ctx->current_density_z);
-        // Explicit-RHS prefactor: gamma_mu0 * j * hbar / (2 * e * mu_0 * M_s * d)
+        // Explicit-RHS prefactor: gamma_mu0 * J_n * hbar /
+        // (e * mu_0 * M_s * d) for canonical v2; the legacy branch keeps
+        // the historical 1/(2e) evaluator byte-for-byte.
         // Use explicit free layer thickness if provided, otherwise cell dz
         double d_free = plan->stt_free_layer_thickness > 0.0
                       ? plan->stt_free_layer_thickness : ctx->dz;
         double current_sign = plan->stt_current_sign == 0.0 ? 1.0 : plan->stt_current_sign;
-        ctx->stt_cpp_pf = current_sign * (js * hbar * ctx->gamma) / (2.0 * e * mu_0 * ctx->Ms * d_free);
+        double signed_current = current_sign * js;
+        double denominator_factor = 2.0;
+        if (ctx->slonczewski_formula == FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2) {
+            const double normal_norm = std::sqrt(
+                ctx->stt_stack_normal[0] * ctx->stt_stack_normal[0] +
+                ctx->stt_stack_normal[1] * ctx->stt_stack_normal[1] +
+                ctx->stt_stack_normal[2] * ctx->stt_stack_normal[2]);
+            if (!std::isfinite(normal_norm) || normal_norm <= 0.0) {
+                ctx->last_error = "slonczewski.fullmag.v2 requires a finite nonzero stack normal";
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+            ctx->stt_stack_normal[0] /= normal_norm;
+            ctx->stt_stack_normal[1] /= normal_norm;
+            ctx->stt_stack_normal[2] /= normal_norm;
+            signed_current =
+                ctx->current_density_x * ctx->stt_stack_normal[0] +
+                ctx->current_density_y * ctx->stt_stack_normal[1] +
+                ctx->current_density_z * ctx->stt_stack_normal[2];
+            denominator_factor = 1.0;
+        }
+        ctx->stt_cpp_pf = (signed_current * hbar * ctx->gamma) /
+            (denominator_factor * e * mu_0 * ctx->Ms * d_free);
     } else {
         ctx->stt_cpp_pf = 0.0;
     }
@@ -510,6 +540,28 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         (!ctx->has_sot_active_mask || plan->sot_active_mask_len != ctx->cell_count))
     {
         ctx->last_error = "prescribed SOT requires sot_active_mask_len equal to cell_count";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_slonczewski_stt &&
+        ctx->slonczewski_formula != FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0 &&
+        ctx->slonczewski_formula != FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2)
+    {
+        ctx->last_error = "unsupported Slonczewski formula discriminator";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_slonczewski_stt &&
+        ctx->slonczewski_formula == FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2 &&
+        (!ctx->has_slonczewski_active_mask ||
+         plan->slonczewski_active_mask_len != ctx->cell_count))
+    {
+        ctx->last_error = "slonczewski.fullmag.v2 requires slonczewski_active_mask_len equal to cell_count";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if ((!ctx->has_slonczewski_stt ||
+         ctx->slonczewski_formula != FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2) &&
+        (ctx->has_slonczewski_active_mask || plan->slonczewski_active_mask_len != 0))
+    {
+        ctx->last_error = "slonczewski_active_mask requires slonczewski.fullmag.v2";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (ctx->has_sot && ctx->sot_formula == FULLMAG_FDM_PRESCRIBED_SOT_V1 &&
@@ -653,6 +705,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (ctx->has_sot_active_mask &&
         !context_upload_sot_active_mask(
             *ctx, plan->sot_active_mask, plan->sot_active_mask_len))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_slonczewski_active_mask &&
+        !context_upload_slonczewski_active_mask(
+            *ctx, plan->slonczewski_active_mask, plan->slonczewski_active_mask_len))
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
