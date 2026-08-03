@@ -5658,3 +5658,55 @@ skin/MQS, pełny Python/OpenAPI/UI round-trip oraz produkcyjna kwalifikacja
 FEM GPU. Szeroka ocena celu pozostaje konserwatywnie **86% implementacji /
 60% gotowości produkcyjnej**; zmiana podnosi jedynie wykonawczą granicę FEM
 GPU z fail-closed do ograniczonego `reference_executable`.
+
+## 32.42. Stałokrokowa trajektoria Slonczewskiego v2 FDM CUDA (2026-08-04)
+
+### 32.42.1. Zakres bramy
+
+Po synchronizacji z `origin/master` wybrano następną małą bramę P0 dla już
+istniejącego, wykonywalnego deskryptora FDM CUDA. Nie zmieniano równania
+Slonczewskiego, demaga, schematu Heun ani ABI. Test wykonuje ten sam plan
+`slonczewski.fullmag.v2` w `double`, ze stałym `dt=2.5e-13 s`, z wektorem
+prądu `J_c=(1.4e11,0,0) A/m^2`, normalną `n_stack=(2,0,0)` oraz rozdzielną
+maską celu. Po każdym z ośmiu zaakceptowanych kroków pobiera pełną
+magnetyzację CUDA i porównuje ją z niezależnym CPU-reference uruchomionym do
+tego samego prefiksu czasowego. Dzięki temu test nie ogranicza się do
+zgodności pojedynczego RHS-a ani końcowego stanu.
+
+### 32.42.2. RED → GREEN
+
+Dodano test:
+
+```text
+native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available
+```
+
+oraz rozszerzono recepturę `just verify-fdm-slonczewski-native-contract`, aby
+uruchamiała zarówno istniejący test one-step, jak i nowy test trajectory.
+Pierwsze uruchomienie po zmianie receptury zbudowało pełny `fullmag_fdm` w
+zarządzanym kontenerze CUDA; wynik końcowy:
+
+```text
+just verify-fdm-slonczewski-native-contract
+running 2 tests
+...with_target_mask_when_cuda_is_available ... ok
+...for_fixed_trajectory_when_cuda_is_available ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 781 filtered out
+```
+
+Brama obejmuje osiem prefiksów czasowych, nie osiem niezależnych przebiegów z
+ponownie ustawionym stanem CUDA. Porównanie zachowuje tolerancję
+`rtol=1e-6`, `atol=1e-10` dla każdej składowej `m` i każdego kroku.
+
+### 32.42.3. Granica kwalifikacji
+
+To jest bounded FP64 FDM CPU↔CUDA temporal-parity evidence dla jednego
+małego, stałokrokowego workloadu. Nie zamyka obecnie: sweepu skali prądu,
+zbieżności `dt` i siatki, FP32, adaptacyjnego RK, FEM/GPU, zgodności z
+MuMax3/BORIS ani fizycznego workloadu skyrmionu/racetrack/Hall angle.
+Capability matrix zachowuje `production_executable` dla FDM GPU oraz
+`reference_executable` dla FEM GPU; zmieniono wyłącznie opis dowodu FDM.
+Szeroka ocena celu pozostaje konserwatywnie **86% implementacji / 60%
+gotowości produkcyjnej**. Następne P0 pozostają: SHE/BORIS i wzajemność,
+pełna trajektoria FEM/GPU, current-scaling i cross-backend, skin/MQS,
+fizyczny adapter DOS→`C_s`, SML v2 oraz pełny Python/OpenAPI/UI round-trip.

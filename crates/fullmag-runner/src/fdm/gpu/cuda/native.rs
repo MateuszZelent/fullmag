@@ -3198,6 +3198,56 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM canonical Slonczewski trajectory parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.current_density = Some([1.4e11, 0.0, 0.0]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.8);
+        plan.stt_epsilon_prime = Some(0.03);
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+        plan.slonczewski_stack_normal = Some([2.0, 0.0, 0.0]);
+        plan.slonczewski_active_mask = Some(vec![
+            true, false, true, false, true, false, true, false, true,
+        ]);
+
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        for step in 1..=8 {
+            backend
+                .step(dt)
+                .expect("native fdm canonical Slonczewski trajectory step");
+            let expected = crate::fdm::cpu::reference::execute_reference_fdm(
+                &plan,
+                dt * step as f64,
+                &[],
+                None,
+                None,
+            )
+            .expect("cpu reference canonical Slonczewski trajectory");
+            let actual_m = backend
+                .copy_m(plan.initial_magnetization.len())
+                .expect("copy canonical Slonczewski trajectory m");
+
+            assert_vector_field_close(
+                &format!("canonical Slonczewski trajectory step {step}"),
+                &actual_m,
+                &expected.result.final_magnetization,
+                1e-6,
+                1e-10,
+            );
+        }
+    }
+
+    #[test]
     fn native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available()
     {
         if !is_cuda_available() {

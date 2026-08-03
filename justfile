@@ -302,7 +302,7 @@ verify-fdm-zhang-li-native-contract:
 
 verify-fdm-slonczewski-native-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-slonczewski-build && cargo_target=/tmp/fullmag-fdm-slonczewski-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_canonical_slonczewski_matches_cpu_reference_with_target_mask_when_cuda_is_available -- --nocapture'
+      fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-slonczewski-build && cargo_target=/tmp/fullmag-fdm-slonczewski-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_canonical_slonczewski_matches_cpu_reference -- --nocapture'
 
 verify-fem-relaxation-source-contract:
     bash scripts/verify_fem_mesh_hot_loop_source_contract.sh

@@ -314,6 +314,12 @@ qualification. Before this descriptor was present, a requested
 `slonczewski.fullmag.v2` CUDA execution failed before native construction; it
 must never reuse the legacy current norm, fixed-layer sign, or global-only
 mask.
+The managed FDM-CUDA lane additionally has a bounded eight-step fixed-step
+trajectory contract: after every accepted Heun step, the complete magnetization
+is compared with an independently executed CPU reference prefix using the same
+canonical descriptor and target mask. This is a temporal parity gate for one
+small double-precision workload, not a current-scaling, grid-convergence,
+FP32, FEM, or cross-backend qualification.
 Likewise, an FDM request for `slonczewski_interface_flux.v1` fails in planning;
 FDM may not replace the oriented interface functional with the homogenized
 bulk `1/t_F` source.
@@ -525,6 +531,7 @@ hidden change to `alpha`.
 | `backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp` | `initialize_context_gpu_state` | Bootstrap upload ordering |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
 | `backends/fem/tests/cuda_slonczewski_contract.cpp` | `main` | Managed one-step CPU↔GPU numeric contract |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA trajectory parity against CPU reference prefixes |
 | `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
 
 ```{math}
