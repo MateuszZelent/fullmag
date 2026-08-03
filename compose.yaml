@@ -49,6 +49,7 @@ services:
       FULLMAG_FEM_MFEM_DEVICE: ceed-cuda:/gpu/cuda/shared
       FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
       CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      PKG_CONFIG_PATH: /opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig
       LD_LIBRARY_PATH: /opt/fullmag-deps/lib
     gpus: all
     profiles:
