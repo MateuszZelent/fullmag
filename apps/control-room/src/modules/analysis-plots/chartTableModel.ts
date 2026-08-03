@@ -3,7 +3,6 @@ import type {
 } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartPoint, ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import {
-  buildScalarChartSeries,
   type TableRowsLike,
 } from "@/shared/domain/analysis/scalarTableChart";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";

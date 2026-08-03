@@ -5,7 +5,6 @@ import type {
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeCouplingSnapshot,
-  ModelTreeFieldDriveSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 

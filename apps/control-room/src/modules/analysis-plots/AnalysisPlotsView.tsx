@@ -145,10 +145,10 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   </div>;
 }
 
-function ignorePointSelection(_point: AnalysisChartCursorPoint): void {}
-function ignoreRangeSelection(_range: ChartValueRange): void {}
-function ignoreSeriesSelection(_seriesIds: string[]): void {}
-function ignoreDisplayUnitsChange(_patch: Record<string, string>): void {}
+function ignorePointSelection(): void {}
+function ignoreRangeSelection(): void {}
+function ignoreSeriesSelection(): void {}
+function ignoreDisplayUnitsChange(): void {}
 
 export function comparisonSeriesKey(series: Pick<ChartSeries, "quantity" | "unit">): string {
   return `${encodeURIComponent(series.quantity)}|${encodeURIComponent(series.unit)}`;

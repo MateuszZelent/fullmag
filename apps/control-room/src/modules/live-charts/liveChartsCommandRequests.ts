@@ -9,6 +9,7 @@ interface PendingRequest {
 }
 
 class LiveChartsCommandRequests {
+  private fitRequest = 0;
   private listeners = new Set<() => void>();
   private pending: PendingRequest | null = null;
 
@@ -16,9 +17,14 @@ class LiveChartsCommandRequests {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
-      if (this.listeners.size === 0) this.failPending();
+      if (this.listeners.size === 0) {
+        this.failPending();
+        this.fitRequest = 0;
+      }
     };
   };
+
+  getFitRequestSnapshot = () => this.fitRequest;
 
   getSnapshot = () => this.pending?.action ?? null;
 
@@ -26,6 +32,7 @@ class LiveChartsCommandRequests {
     if (this.listeners.size === 0 || this.pending) return Promise.resolve("failed");
     return new Promise((resolve) => {
       this.pending = { action, resolve };
+      if (action.kind === "fit") this.fitRequest += 1;
       this.listeners.forEach((listener) => listener());
     });
   }

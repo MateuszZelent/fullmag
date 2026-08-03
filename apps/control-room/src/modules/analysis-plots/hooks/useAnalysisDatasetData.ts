@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   useTableColumnsResource,
@@ -42,9 +42,6 @@ export function useAnalysisDatasetData({ datasetRef, enabled }: { datasetRef: st
   const columnIds = useMemo(() => columns.data?.map((column) => column.column_id) ?? [], [columns.data]);
   const [pinned, setPinned] = useState<{ datasetRef: string; revision: string | number | null; table: ReturnType<typeof chartTableWindowFromBinary> } | null>(null);
   const pinnedForDataset = pinned?.datasetRef === datasetRef ? pinned : null;
-  useEffect(() => {
-    if (pinned && pinned.datasetRef !== datasetRef) setPinned(null);
-  }, [datasetRef, pinned]);
   const rows = useTableRowsBinaryResource(tableId ?? "default", {
     columns: columnIds,
     enabled: shouldLoadAnalysisDatasetRows({ datasetRef: tableId ? datasetRef : null, enabled: enabled && !pinnedForDataset, hasSchema: columnIds.length > 0 }),
@@ -58,10 +55,11 @@ export function useAnalysisDatasetData({ datasetRef, enabled }: { datasetRef: st
       ? chartTableWindowFromBinary({ columns: selected, decoded: rows.data.data, tableId })
       : null;
   }, [columnIds, columns.data, rows.data, tableId]);
-  useEffect(() => {
-    if (!datasetRef || !decodedTable || pinnedForDataset) return;
+  if (pinned && pinned.datasetRef !== datasetRef) {
+    setPinned(null);
+  } else if (datasetRef && decodedTable && !pinnedForDataset) {
     setPinned({ datasetRef, revision: decodedTable.revision, table: decodedTable });
-  }, [datasetRef, decodedTable, pinnedForDataset]);
+  }
   const visibleTable = pinnedForDataset?.table ?? decodedTable;
   const unsupportedReason = enabled && datasetRef !== null && tableList.status === "ready" && !tableId
     ? "The selected dataset is not available in this session."

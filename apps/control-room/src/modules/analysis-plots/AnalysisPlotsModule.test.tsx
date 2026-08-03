@@ -87,10 +87,6 @@ const mockKernel = {
   visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
 
-function renderExplicitAnalysisSurface(surface: "frequency-response" | "eigenmodes" | "dispersion") {
-  return renderToStaticMarkup(<AnalysisPlotsView activeSurface={surface} datasetRefs={["table:run-7:stage-2:table-4"]} dynamicStructureFactor={null} dynamicStructureFactorStatus="ready" frequencyDomainSeries={[]} frequencyDomainStatus="ready" frequencyDomainTitle="Frequency-domain artifact" frequencyDomainUnavailableReason={null} kernel={mockKernel} onDatasetRefChange={() => undefined} onSurfaceChange={() => undefined} selectedDatasetRef="table:run-7:stage-2:table-4" selectedStageId={null} spinWaveGamma={null} spinWaveGammaStatus="ready" table={null} tableStatus="ready" tableUnsupportedReason={null} />);
-}
-
 const table = {
   columns: [
     {

@@ -2,7 +2,6 @@ import {
   buildTableRowsQuery,
   type ChartSeries,
   type ChartValueRange,
-  DEFAULT_TABLE_CHART_COLUMNS,
   isTableTimeAxisId,
   type TableRowsQuery,
   tableRowsVisibleRangeQuery,

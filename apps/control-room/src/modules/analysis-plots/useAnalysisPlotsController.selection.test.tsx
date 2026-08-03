@@ -1,4 +1,4 @@
-import { act, useEffect } from "react";
+import { act, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,7 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { SelectionController } from "@/kernel/selection/SelectionController";
+import type { KernelApi } from "@/kernel/types";
 import { analysisWorkspaceStore, resetAnalysisWorkspaceForTests } from "@/kernel/workspace/analysisWorkspace";
 
 let activeSurface = "eigenmodes";
@@ -23,11 +24,44 @@ vi.mock("./hooks/useAnalysisFrequencyData", () => ({ useAnalysisFrequencyData: (
 
 import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
 
-function Probe({ kernel }: { kernel: any }) { const controller = useAnalysisPlotsController(kernel); useEffect(() => { const isComparison = activeSurface === "comparison"; controller.onPointSelect({ label: "Mode", point: { rowIndex: 0, x: activeSurface === "frequency-response" ? 12.5 : 1, y: 9 }, quantity: "frequency", seriesId: "eigen", source: { kind: isComparison ? "data.table.rows" : "analysis.frequency_domain", resourceKey: isComparison ? "table-b" : "artifact://spectrum", tableId: isComparison ? "table-b" : "eigen" }, unit: "GHz", xUnit: "index" }); }, []); return null; }
-function FocusProbe({ kernel }: { kernel: any }) { useAnalysisPlotsController(kernel); return null; }
-function RangeProbe({ kernel }: { kernel: any }) { const controller = useAnalysisPlotsController(kernel); useEffect(() => { controller.onRangeChange({ fromValue: 1e-9, toValue: 2e-9 }); }, []); return null; }
+type TestKernel = Pick<KernelApi, "selection">;
+
+function Probe({ kernel }: { kernel: TestKernel }) {
+  const controller = useAnalysisPlotsController(kernel as KernelApi);
+  const didSelect = useRef(false);
+  useEffect(() => {
+    if (didSelect.current) return;
+    didSelect.current = true;
+    const isComparison = activeSurface === "comparison";
+    controller.onPointSelect({ label: "Mode", point: { rowIndex: 0, x: activeSurface === "frequency-response" ? 12.5 : 1, y: 9 }, quantity: "frequency", seriesId: "eigen", source: { kind: isComparison ? "data.table.rows" : "analysis.frequency_domain", resourceKey: isComparison ? "table-b" : "artifact://spectrum", tableId: isComparison ? "table-b" : "eigen" }, unit: "GHz", xUnit: "index" });
+  }, [controller]);
+  return null;
+}
+
+function FocusProbe({ kernel }: { kernel: TestKernel }) {
+  useAnalysisPlotsController(kernel as KernelApi);
+  return null;
+}
+
+function RangeProbe({ kernel }: { kernel: TestKernel }) {
+  const controller = useAnalysisPlotsController(kernel as KernelApi);
+  const didSelectRange = useRef(false);
+  useEffect(() => {
+    if (didSelectRange.current) return;
+    didSelectRange.current = true;
+    controller.onRangeChange({ fromValue: 1e-9, toValue: 2e-9 });
+  }, [controller]);
+  return null;
+}
+
 let capturedController: ReturnType<typeof useAnalysisPlotsController> | null = null;
-function CaptureProbe({ kernel }: { kernel: any }) { capturedController = useAnalysisPlotsController(kernel); return null; }
+function CaptureProbe({ kernel }: { kernel: TestKernel }) {
+  const controller = useAnalysisPlotsController(kernel as KernelApi);
+  useEffect(() => {
+    capturedController = controller;
+  }, [controller]);
+  return null;
+}
 
 describe("Analysis controller frequency selection", () => {
   it("mounts eigenmode selection with field-vector and parent artifact provenance", async () => {

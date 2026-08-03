@@ -70,11 +70,16 @@ export function useLiveChartsController(selection: SelectionController) {
   const defaults = liveChartDescriptorDefaults(descriptorId);
   const descriptor = preferences.descriptor ?? defaults;
   const commandAction = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getSnapshot, liveChartsCommandRequests.getSnapshot);
+  const commandFitRequest = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getFitRequestSnapshot, liveChartsCommandRequests.getFitRequestSnapshot);
   const paused = descriptor.liveMode === "paused";
   const tableData = useLiveTableData({ active: descriptorId !== "energy", paused, range: descriptor.range, targetPoints: descriptor.targetPoints, xAxisId: descriptor.xAxisId });
   const energyData = useLiveEnergyData({ active: true, descriptorId, paused });
-  const [fitRequest, setFitRequest] = useState(0);
-  const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
+  const [localFitRequest, setLocalFitRequest] = useState(0);
+  const [localRequestedExportFormat, setLocalRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
+  const fitRequest = commandFitRequest + localFitRequest;
+  const requestedExportFormat = commandAction?.kind === "export"
+    ? commandAction.format
+    : localRequestedExportFormat;
   useEffect(() => {
     if (!preferences.isHydrated || preferences.descriptor) return;
     liveChartPreferencesStore.updateDescriptor(descriptorId, () => defaults);
@@ -82,7 +87,6 @@ export function useLiveChartsController(selection: SelectionController) {
   useEffect(() => {
     if (!commandAction) return;
     if (commandAction.kind === "fit") {
-      setFitRequest((value) => value + 1);
       liveChartsCommandRequests.complete();
       return;
     }
@@ -91,7 +95,6 @@ export function useLiveChartsController(selection: SelectionController) {
       liveChartsCommandRequests.complete();
       return;
     }
-    setRequestedExportFormat(commandAction.format);
   }, [commandAction, descriptorId, preferences]);
   const tableSeries = useMemo(() => tableData.table ? buildScalarChartSeries({ ...tableData.table, valueAt: (rowIndex, columnIndex) => tableData.table!.values[rowIndex * tableData.table!.columnCount + columnIndex] }, {
     dataRevision: tableData.table.revision,
@@ -123,8 +126,8 @@ export function useLiveChartsController(selection: SelectionController) {
     fitRequest,
     isFollowing: !paused,
     onDescriptorChange: (next: LiveChartPresetId) => liveChartsWorkspaceStore.setSelectedDescriptorId(next),
-    onExport: (format: "csv" | "tsv" | "png") => setRequestedExportFormat(format),
-    onFit: () => setFitRequest((value) => value + 1),
+    onExport: (format: "csv" | "tsv" | "png") => setLocalRequestedExportFormat(format),
+    onFit: () => setLocalFitRequest((value) => value + 1),
     ...selectionHandlers,
     onRangeSelected: (fromSI: number, toSI: number) => {
       liveChartsWorkspaceStore.setRange({ fromSI, toSI });
@@ -132,7 +135,7 @@ export function useLiveChartsController(selection: SelectionController) {
     },
     onSeriesChange: (ids: string[]) => preferences.setDescriptorSelectedSeriesIds(descriptorId, ids),
     onRequestedExportHandled: () => {
-      setRequestedExportFormat(null);
+      setLocalRequestedExportFormat(null);
       liveChartsCommandRequests.complete();
     },
     onToggleFollow: () => preferences.setDescriptorLiveMode(descriptorId, paused ? "following" : "paused"),

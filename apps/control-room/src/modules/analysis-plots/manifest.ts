@@ -24,7 +24,7 @@ export const analysisPlotsManifest: ModuleManifest = {
         group: "quick-chart",
         category: "View",
         scope: "workspace",
-        isEnabled: (_context: CommandContext) =>
+        isEnabled: () =>
           resolveQuickChartDescriptor(analysisWorkspaceStore.getSnapshot()).descriptor !== null,
         run: (context: CommandContext) => {
           const analysis = analysisWorkspaceStore.getSnapshot();

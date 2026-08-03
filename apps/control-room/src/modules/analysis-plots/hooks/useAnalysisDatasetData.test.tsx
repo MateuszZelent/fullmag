@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,7 +25,9 @@ async function flushUntil(predicate: () => boolean): Promise<void> {
 
 function DatasetHarness({ datasetRef, onRevision }: { datasetRef: string | null; onRevision: (revision: string | number | null) => void }) {
   const result = useAnalysisDatasetData({ datasetRef, enabled: true });
-  onRevision(result.visibleRevision);
+  useEffect(() => {
+    onRevision(result.visibleRevision);
+  }, [onRevision, result.visibleRevision]);
   return null;
 }
 

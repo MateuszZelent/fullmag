@@ -12,7 +12,10 @@ import { useAnalysisViewPreferencesHydration } from "@/kernel/workspace/useAnaly
 import { useAnalysisWorkspaceSelector } from "@/kernel/workspace/useAnalysisWorkspace";
 
 import { useAnalysisDatasetData } from "./hooks/useAnalysisDatasetData";
-import { useAnalysisFrequencyData } from "./hooks/useAnalysisFrequencyData";
+import {
+  useAnalysisFrequencyData,
+  type AnalysisFrequencyDataResult,
+} from "./hooks/useAnalysisFrequencyData";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartValueRange } from "./chartTableModel";
 
@@ -271,14 +274,25 @@ function completeDescriptorPreference(
 export { frequencyDomainChartRouteOverrideFromSelection } from "@/shared/domain/analysis/frequencyDomainChartModels";
 export { frequencyDomainChartTitle } from "./hooks/useAnalysisFrequencyData";
 /** Compatibility export while point ownership moves to the selected artifact surface. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function frequencyDomainSelectionFromPoint(input: any): any {
+export function frequencyDomainSelectionFromPoint(input: {
+  chartId?: string;
+  dispersionModel: AnalysisFrequencyDataResult["frequencyDomainDispersionModel"];
+  point: AnalysisChartCursorPoint;
+  responseModel: AnalysisFrequencyDataResult["frequencyDomainResponseModel"];
+  routeMode: AnalysisFrequencyDataResult["frequencyDomainRoute"]["mode"];
+  spectrumModel: AnalysisFrequencyDataResult["frequencyDomainSpectrumModel"];
+}) {
   const point = input.point;
   const nodeId = `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
   if (input.routeMode === "fmr_response") {
-    const match = input.responseModel?.points?.find((entry: any) => entry.frequencyIndex === point.point.rowIndex || entry.frequency_index === point.point.rowIndex || entry.frequencyHz / 1e9 === point.point.x || entry.frequencyGHz === point.point.x);
-    return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: { calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? match?.field_resource_id, frequencyIndex: match?.frequencyIndex ?? match?.frequency_index, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId ?? match?.observable_id, resourceRef: point.source.resourceKey, type: "frequency-domain" } };
+    const match = input.responseModel.points.find((entry) =>
+      entry.frequencyIndex === point.point.rowIndex ||
+      entry.frequencyHz / 1e9 === point.point.x
+    );
+    return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: { calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, type: "frequency-domain" as const } };
   }
-  const mode = input.routeMode === "dispersion_modal" ? input.dispersionModel?.points?.[point.point.rowIndex] : input.spectrumModel?.points?.[point.point.rowIndex];
-  return { kind: "results.eigen.mode", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: { artifactPath: point.source.resourceKey, branchId: mode?.branchId ?? mode?.branch_id, calculationMode: input.routeMode, chartId: input.chartId, fieldId: mode?.fieldId ?? mode?.modeFieldId ?? mode?.mode_field_id, kind: "results.eigen.mode", modeIndex: mode?.rawModeIndex ?? mode?.raw_mode_index, nodeId, resourceRef: mode?.resourceRef ?? mode?.modeFieldResourceKey ?? mode?.mode_field_resource_key ?? point.source.resourceKey, sampleIndex: mode?.sampleIndex ?? mode?.sample_index, type: "frequency-domain" } };
+  const mode = input.routeMode === "dispersion_modal"
+    ? input.dispersionModel.points[point.point.rowIndex]
+    : input.spectrumModel.points[point.point.rowIndex];
+  return { kind: "results.eigen.mode", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: { artifactPath: point.source.resourceKey, branchId: mode?.branchId ?? undefined, calculationMode: input.routeMode, chartId: input.chartId, fieldId: mode?.modeFieldId ?? undefined, kind: "results.eigen.mode", modeIndex: mode?.rawModeIndex, nodeId, resourceRef: mode?.modeFieldResourceKey ?? point.source.resourceKey, sampleIndex: mode?.sampleIndex, type: "frequency-domain" as const } };
 }
