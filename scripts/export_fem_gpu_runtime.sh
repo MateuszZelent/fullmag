@@ -392,6 +392,12 @@ cargo +nightly clean -p fullmag-build-info
 if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then
   echo "[export_fem_gpu_runtime] clearing release artifacts before a clean rebuild"
   cargo +nightly clean --workspace --release
+  # The persistent target is shared by immutable source snapshots. Cargo only
+  # knows how to clean build-script directories belonging to the current
+  # snapshot path, so remove stale fullmag-fem-sys native outputs explicitly.
+  # This remains scoped to the one package; the shared target cache is kept.
+  find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*" \
+    -exec rm -rf -- {} +
   mapfile -t stale_fem_native_artifacts < <(
     find target/release/build \
       -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
@@ -505,6 +511,26 @@ resolve_pkg_library_path() {
     return 0
   fi
   find /lib /usr/lib -name "${stem}.so*" -print | sort | head -n1
+}
+resolve_pkg_primary_library_stem() {
+  local pkg="$1"
+  local libdir
+  local linker_flag
+  local stem
+  libdir="$(pkg-config --variable=libdir "$pkg")"
+  while IFS= read -r linker_flag; do
+    case "$linker_flag" in
+      -l*)
+        stem="lib${linker_flag#-l}"
+        if [ -e "$libdir/${stem}.so" ]; then
+          printf '%s\n' "$stem"
+          return 0
+        fi
+        ;;
+    esac
+  done < <(pkg-config --libs-only-l "$pkg" | tr ' ' '\n')
+  echo "[export_fem_gpu_runtime] failed to resolve the primary shared library stem for $pkg" >&2
+  return 1
 }
 copy_pkg_library_group() {
   local pkg="$1"
@@ -663,11 +689,13 @@ petsc_version="$(pkg-config --modversion PETSc)"
 slepc_version="$(pkg-config --modversion SLEPc)"
 petsc_pkgconfig_dir="$(pkg-config --variable=pcfiledir PETSc)"
 slepc_pkgconfig_dir="$(pkg-config --variable=pcfiledir SLEPc)"
+petsc_library_stem="$(resolve_pkg_primary_library_stem PETSc)"
+slepc_library_stem="$(resolve_pkg_primary_library_stem SLEPc)"
 echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc shared libraries"
-copy_pkg_library_group PETSc libpetsc_real
-copy_pkg_library_group SLEPc libslepc_real
-copy_shared_library_dependency_closure ${runtime_root}/lib/libpetsc_real.so
-copy_shared_library_dependency_closure ${runtime_root}/lib/libslepc_real.so
+copy_pkg_library_group PETSc $petsc_library_stem
+copy_pkg_library_group SLEPc $slepc_library_stem
+copy_shared_library_dependency_closure ${runtime_root}/lib/${petsc_library_stem}.so
+copy_shared_library_dependency_closure ${runtime_root}/lib/${slepc_library_stem}.so
 for dep_entry in /opt/fullmag-deps/lib/*; do
   dep_name="$(basename "$dep_entry")"
   dep_dest="${runtime_root}/lib/$dep_name"
@@ -771,8 +799,8 @@ require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_pmix_isolated.so 
 require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_btl_self.so "OpenMPI self BTL component"
 require_exported_path ${runtime_root}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so "PMIx compression component"
 require_exported_path ${runtime_root}/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
-require_exported_path ${runtime_root}/lib/libpetsc_real.so "PETSc shared library"
-require_exported_path ${runtime_root}/lib/libslepc_real.so "SLEPc shared library"
+require_exported_path ${runtime_root}/lib/${petsc_library_stem}.so "PETSc shared library"
+require_exported_path ${runtime_root}/lib/${slepc_library_stem}.so "SLEPc shared library"
 require_exported_path ${runtime_root}/_fullmag_core.so "PyO3 _fullmag_core module"
 require_exported_path ${runtime_root}/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake "PETSc CMake find module"
 require_exported_path ${runtime_root}/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake "SLEPc CMake find module"
@@ -780,6 +808,8 @@ export PETSC_VERSION="$petsc_version"
 export SLEPC_VERSION="$slepc_version"
 export PETSC_PKGCONFIG_DIR="$petsc_pkgconfig_dir"
 export SLEPC_PKGCONFIG_DIR="$slepc_pkgconfig_dir"
+export PETSC_LIBRARY_STEM="$petsc_library_stem"
+export SLEPC_LIBRARY_STEM="$slepc_library_stem"
 python3 - <<PY
 import json
 import os
@@ -794,9 +824,17 @@ payload = {
     "slepc_version": os.environ["SLEPC_VERSION"],
     "petsc_pkgconfig_dir": os.environ["PETSC_PKGCONFIG_DIR"],
     "slepc_pkgconfig_dir": os.environ["SLEPC_PKGCONFIG_DIR"],
+    "petsc_library_stem": os.environ["PETSC_LIBRARY_STEM"],
+    "slepc_library_stem": os.environ["SLEPC_LIBRARY_STEM"],
     "exported_runtime_library_paths": sorted(
-        [f"lib/{path.name}" for path in runtime.joinpath("lib").glob("libpetsc_real.so*")]
-        + [f"lib/{path.name}" for path in runtime.joinpath("lib").glob("libslepc_real.so*")]
+        [
+            f"lib/{path.name}"
+            for stem in (
+                os.environ["PETSC_LIBRARY_STEM"],
+                os.environ["SLEPC_LIBRARY_STEM"],
+            )
+            for path in runtime.joinpath("lib").glob(f"{stem}.so*")
+        ]
     ),
     "exported_cmake_module_paths": [
         "lib/cmake/fullmag-frequency-domain/FindPETSc.cmake",

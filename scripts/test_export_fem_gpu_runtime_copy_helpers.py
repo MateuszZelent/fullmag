@@ -450,6 +450,20 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
     assert 'copy_native_library_group "$FDM_LIB" libfullmag_fdm' in script
 
 
+def test_export_script_resolves_petsc_and_slepc_library_names_from_pkg_config() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "resolve_pkg_primary_library_stem()" in script
+    assert 'petsc_library_stem="$(resolve_pkg_primary_library_stem PETSc)"' in script
+    assert 'slepc_library_stem="$(resolve_pkg_primary_library_stem SLEPc)"' in script
+    assert "copy_pkg_library_group PETSc $petsc_library_stem" in script
+    assert "copy_pkg_library_group SLEPc $slepc_library_stem" in script
+    assert 'copy_shared_library_dependency_closure ${runtime_root}/lib/${petsc_library_stem}.so' in script
+    assert 'copy_shared_library_dependency_closure ${runtime_root}/lib/${slepc_library_stem}.so' in script
+    assert '"petsc_library_stem": os.environ["PETSC_LIBRARY_STEM"]' in script
+    assert '"slepc_library_stem": os.environ["SLEPC_LIBRARY_STEM"]' in script
+
+
 def test_export_script_refreshes_identity_before_configured_release_clean() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     identity_clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
@@ -462,6 +476,10 @@ def test_export_script_refreshes_identity_before_configured_release_clean() -> N
     assert build_index != -1
     assert copy_index != -1
     assert identity_clean_index < release_clean_index < build_index < copy_index
+    stale_native_clean_index = script.find(
+        'find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*"'
+    )
+    assert release_clean_index < stale_native_clean_index < build_index
     assert "stale_fem_native_artifacts" in script
     assert "stale fullmag-fem-sys native artifacts remain after targeted clean" in script
 

@@ -128,9 +128,18 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert exporter.index(clean) < exporter.index(build)
     assert "inherited RUSTFLAGS contains fullmag_enable_nvtx" in exporter
     assert "only_native_lib_dir" in exporter
+    stale_native_clean = (
+        'find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*"'
+    )
+    assert stale_native_clean in exporter
     stale_guard = "stale fullmag-fem-sys native artifacts remain after targeted clean"
     assert stale_guard in exporter
-    assert exporter.index(clean) < exporter.index(stale_guard) < exporter.index(build)
+    assert (
+        exporter.index(clean)
+        < exporter.index(stale_native_clean)
+        < exporter.index(stale_guard)
+        < exporter.index(build)
+    )
     assert "validate_nvtx_artifact" in exporter
     assert "validate_nvtx_symbol_contract" in exporter
     assert "nm -D --defined-only" in exporter
