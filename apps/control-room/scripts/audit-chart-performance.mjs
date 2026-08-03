@@ -953,14 +953,14 @@ async function verifyQuickChartViewportIsolation({
 
   for (let index = 0; index < switchCount; index += 1) {
     const startedAt = performance.now();
-    await quickChartTab.first().evaluate((button) => button.click());
+    await quickChartTab.first().click({ timeout: timeoutMs });
     await waitForQuickChartCanvas(page);
     const mounted = await collectLifecycleSnapshot(page);
     peakEchartsCanvases = Math.max(
       peakEchartsCanvases,
       mounted.echartsCanvases,
     );
-    await logsTab.first().evaluate((button) => button.click());
+    await logsTab.first().click({ timeout: timeoutMs });
     await waitForQuickChartUnmount(page);
     transitionDurationsMs.push(performance.now() - startedAt);
   }
