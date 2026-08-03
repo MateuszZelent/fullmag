@@ -4980,3 +4980,51 @@ matrix pozostaje bez zmian (`direct/inverse SHE` nie otrzymują
 `validated_workloads`). Konserwatywna ocena celu rośnie do **86% implementacji /
 60% gotowości produkcyjnej**; wzrost dotyczy dowodu referencyjnego CPU, nie
 deklaracji produkcyjnej całego programu.
+
+## 32.33. Izolowana brama CPU↔CUDA dla MuMax3 Zhang–Li (2026-08-03)
+
+### 32.33.1. Zakres korekty
+
+Po synchronizacji `FdmPlanIR` nowe pola provenance Zhang–Li nie były obecne w
+trzech istniejących fixture'ach inline testów CUDA. Dodanie `..Default::default()`
+uzupełnia wyłącznie pola nieistotne dla tych fixture'ów i usuwa błąd kompilacji;
+nie zmienia operatora ani jego znaków. Osobny test parzystości został umieszczony
+w aktywnym inline `#[cfg(test)] mod tests` w
+`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`. Wcześniejszy osierocony
+`native/tests.rs` nie jest modułem kompilowanym i nie stanowi dowodu wykonania.
+
+### 32.33.2. Zarządzany dowód wykonawczy
+
+Recepta:
+
+```text
+just verify-fdm-zhang-li-native-contract
+```
+
+wykonała w kontenerze `fem-gpu` konfigurację i budowę natywnego CUDA
+`fullmag_fdm`, zbudowała i uruchomiła `stt_pbc_contract`, a następnie uruchomiła
+aktywny test:
+
+```text
+fdm::gpu::cuda::native::tests::native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available
+test result: 1 passed; 0 failed
+```
+
+Test jest świadomie izolowany: FP64 Heun, stały krok `2.5e-13 s`, maskowany plan
+FDM `3×3×1`, `J=(1.4e11,-2.0e10,3.0e10) A/m²`, `P=0.62`, `beta=0.07`,
+`g=2.0`, `formula_version=zhang_li.mumax3.v1` i
+`operator_version=zl_mumax3_central_v1`. Wymiana, demagnetyzacja i pole
+zewnętrzne są wyłączone, aby porównanie obejmowało wyłącznie wspólny operator
+Zhang–Li oraz aktualizację jednego kroku. Akceptacja wymaga tolerancji
+względnej `5e-8` i bezwzględnej `1e-10` dla całego pola wektorowego.
+
+### 32.33.3. Granica kwalifikacji
+
+Brama zamyka niskopoziomowy kontrakt CPU↔CUDA dla operatora MuMax3 Zhang–Li.
+Nie jest to kwalifikacja pełnego SP5: nadal brakuje pełnej trajektorii CPU/GPU,
+adaptive accepted-step parity, sweepu `dt`/siatki, niezależnej zbieżności stanu
+relaksacji i demagnetyzacji, kontroli kolejności aktualizacji, porównania z
+BORIS, FEM/GPU, pełnego round-trip Python/UI, skin-effect/MQS, FEM Oersted
+RT0/KKT, fizycznego M3 `C_s` oraz zielonego full-suite. Ocena pozostaje
+**86% implementacji / 60% gotowości produkcyjnej**; ten wynik nie zmienia
+capability matrix ani statusu `validated_workloads`.

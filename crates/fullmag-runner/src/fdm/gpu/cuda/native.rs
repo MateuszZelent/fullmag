@@ -2482,6 +2482,7 @@ mod tests {
             mel_b2: None,
             mel_uniform_strain: None,
             antenna_zeeman_masks: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -2576,6 +2577,7 @@ mod tests {
             mel_b2: None,
             mel_uniform_strain: None,
             antenna_zeeman_masks: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -2660,6 +2662,7 @@ mod tests {
             mel_b2: None,
             mel_uniform_strain: None,
             antenna_zeeman_masks: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -3110,6 +3113,46 @@ mod tests {
             &actual_m,
             &expected.result.final_magnetization,
             1e-6,
+            1e-10,
+        );
+    }
+
+    #[test]
+    fn native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM MuMax3 Zhang-Li parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.enable_exchange = false;
+        plan.external_field = None;
+        plan.current_density = Some([1.4e11, -2.0e10, 3.0e10]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_beta = Some(0.07);
+        plan.zhang_li_formula_version = Some("zhang_li.mumax3.v1".to_string());
+        plan.zhang_li_operator_version = Some("zl_mumax3_central_v1".to_string());
+        plan.zhang_li_lande_g = Some(2.0);
+
+        let expected =
+            crate::fdm::cpu::reference::execute_reference_fdm(&plan, 2.5e-13, &[], None, None)
+                .expect("cpu reference MuMax3 Zhang-Li run");
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm MuMax3 Zhang-Li step");
+        let actual_m = backend
+            .copy_m(plan.initial_magnetization.len())
+            .expect("copy m");
+
+        assert_vector_field_close(
+            "m",
+            &actual_m,
+            &expected.result.final_magnetization,
+            5e-8,
             1e-10,
         );
     }

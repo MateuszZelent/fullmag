@@ -1,7 +1,7 @@
 # Standard Problem 5: reprodukcja Fullmag i porównanie z MuMax3
 
-**Data audytu:** 2026-08-02
-**Status:** reprodukcja źródła, wersjonowany operator MuMax3 Python → `ProblemIR` → FDM CPU/CUDA oraz świeży przebieg na RTX 4080 SUPER wykonane; trajektoria nie spełnia tolerancji MuMax3, więc kwalifikacja produkcyjna pozostaje otwarta.
+**Data audytu:** 2026-08-03
+**Status:** reprodukcja źródła, wersjonowany operator MuMax3 Python → `ProblemIR` → FDM CPU/CUDA oraz świeży przebieg na RTX 4080 SUPER wykonane; izolowana brama jednego kroku CPU↔CUDA przechodzi, ale pełna trajektoria nie spełnia tolerancji MuMax3, więc kwalifikacja produkcyjna pozostaje otwarta.
 **Źródło:** [`external_solvers/3/test/standardproblem5.mx3`](../../../external_solvers/3/test/standardproblem5.mx3)
 **Implementacja:** [`examples/mumax_standard_problem_5_fdm.py`](../../../examples/mumax_standard_problem_5_fdm.py)
 **Test kontraktu:** [`test_standard_problem_5_fdm.py`](../../../packages/fullmag-py/tests/test_standard_problem_5_fdm.py)
@@ -163,8 +163,16 @@ Dodano `zhang_li.mumax3.v1` / `zl_mumax3_central_v1`:
 - oracle jednego kroku oraz zgodność AoS/SoA przechodzą w `fullmag-engine`.
 
 To jest dowód implementacji operatora, nie dowód zgodności całego SP5. Wymagane
-są nowy managed CUDA build, porównanie CPU↔CUDA i ponowne uruchomienie całej
-trajektorii.
+są porównanie CPU↔CUDA na pełnej trajektorii i ponowne uruchomienie całej
+trajektorii. Izolowana brama operatora jest już zamknięta: zarządzana recepta
+`just verify-fdm-zhang-li-native-contract` zbudowała `fullmag_fdm` i
+`stt_pbc_contract`, a aktywny test
+`native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available`
+wykonał jeden krok FP64 Heun na zamaskowanym planie $3\times3\times1$ i
+zakończył się `1 passed`. Test używa
+`J=(1.4e11,-2e10,3e10) A/m²`, `P=0.62`, `beta=0.07`, wersji
+`zhang_li.mumax3.v1` / `zl_mumax3_central_v1`, a wymiana, demagnetyzacja i pole
+zewnętrzne są wyłączone, aby nie maskować operatora innymi różnicami.
 
 ### 3.4. Naprawa publikacji skalarów
 
@@ -218,6 +226,8 @@ zielone, ale nie zastępują pełnego CPU trajectory gate.
 
 Potwierdzone:
 
+- zarządzany test jednego kroku CPU↔CUDA dla izolowanego operatora Zhang–Li
+  przechodzi z tolerancją względną `5e-8` i bezwzględną `1e-10`;
 - literalny rozmiar i topologia siatki są zgodne ze źródłem;
 - inicjalizacja vortex i parametry materiału są zachowane w `ProblemIR`;
 - `J`, `Pol`, `xi` są mapowane na signed CIP Zhang–Li (`current_density`,
@@ -246,14 +256,16 @@ demagnetyzacji.
 
 ## 5. Kryteria zamknięcia SP5
 
-1. Zakończyć CPU adaptive RK45 z `tolT=1e-6 T` i zapisać accepted-step
+1. Utrzymywać zieloną bramę jednego kroku CPU↔CUDA i rozszerzyć ją do accepted-step
+   parity na pełnej trajektorii.
+2. Zakończyć CPU adaptive RK45 z `tolT=1e-6 T` i zapisać accepted-step
    telemetry oraz `m_final`.
-2. Przeprowadzić sweep kroku i sprawdzić, czy różnica jest zbieżna do stałej.
-3. Porównać osobno stan relaksacji i operator Zhang–Li z niezależnym oracle.
-4. Zidentyfikować rozbieżność między centralnym v1 a trajektorią MuMax3
+3. Przeprowadzić sweep kroku i sprawdzić, czy różnica jest zbieżna do stałej.
+4. Porównać osobno stan relaksacji i operator Zhang–Li z niezależnym oracle.
+5. Zidentyfikować rozbieżność między centralnym v1 a trajektorią MuMax3
    (demag, relaksacja, kolejność aktualizacji lub prefaktor) na kontrolowanych
    testach, zanim zmieni się wzór produkcyjny.
-5. Dopiero po przejściu tych punktów oznaczyć FDM CPU/GPU jako `validated`;
+6. Dopiero po przejściu tych punktów oznaczyć FDM CPU/GPU jako `validated`;
    obecny GPU fixed-step pozostaje `diagnostic-unqualified`.
 
 ### 5.1. Korekta telemetryki accepted-step

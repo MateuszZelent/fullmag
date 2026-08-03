@@ -1,8 +1,8 @@
 # MuMax3 Standard Problem 5 as a Fullmag FDM validation contract
 
-- Status: frozen source-to-IR reproduction; fresh MuMax3/Fullmag CUDA trajectory is executed but not qualified
+- Status: frozen source-to-IR reproduction; isolated CPU↔CUDA MuMax3-operator step is qualified, but the fresh full trajectory is not
 - Owners: Fullmag FDM validation
-- Last updated: 2026-08-02
+- Last updated: 2026-08-03
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -308,6 +308,19 @@ RTX 4080 SUPER, compute capability 8.9, CUDA driver 13010, runtime 12060, and
 cuFFT. That trajectory fails the MuMax3 tolerance, so `qualification.json`
 correctly remains `status=not_evaluated`.
 
+The isolated operator gate is executable on the managed CUDA lane. The recipe
+`just verify-fdm-zhang-li-native-contract` builds the native FDM library and
+runs
+`fdm::gpu::cuda::native::tests::native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available`.
+The FP64 Heun step uses a masked $3\times3\times1$ plan, all three signed
+current components, and explicit `zhang_li.mumax3.v1` /
+`zl_mumax3_central_v1`. Exchange, demagnetization, and external field are
+disabled deliberately so the assertion isolates Zhang--Li. CPU reference and
+native CUDA agree under relative tolerance $5\times10^{-8}$ and absolute
+tolerance $10^{-10}$ (`1 passed`). This is a one-step operator/integrator gate
+only; it does not qualify relaxation, demagnetization, or the $1\,\mathrm{ns}$
+SP5 trajectory.
+
 ### 6.3 FEM
 
 No FEM SP5 reproduction is claimed. A FEM comparison would require an explicit
@@ -342,6 +355,10 @@ and lowered by `StudyBuilder`/`StudyStagesBuilder` into per-stage `ProblemIR`.
 formula-version fields. The regression test checks the geometry, stage-local
 damping, vortex preset, exact torque IR, and one-nanosecond horizon.
 
+The native CUDA one-step parity test is kept in the active inline CUDA test
+module in `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`; the historical
+orphan `native/tests.rs` file is not runtime evidence.
+
 No native FEM or GPU code is inferred from the Python presence. Source-visible,
 compiled, executed-device, parity, and scientific qualification statuses remain
 separate evidence levels.
@@ -375,6 +392,8 @@ the one-step oracle does not substitute for that run.
 The required final matrix is: CPU adaptive RK45 at the source horizon; fixed
 step refinement; independent equilibrium convergence; GPU adaptive capability
 identity and device-resident parity; then (only then) an FDM/FEM comparison.
+The isolated CPU↔CUDA MuMax3-operator step is green, but is a lower-level gate
+and does not remove these trajectory requirements.
 
 (limitations)=
 ## 9. Limitations and deferred work
@@ -391,6 +410,8 @@ identity and device-resident parity; then (only then) an FDM/FEM comparison.
    published equation.
 5. Add a FEM realization only after its own mesh, demag, and cross-backend
    convergence gates.
+6. Keep the one-step CPU↔CUDA gate green while extending it to an accepted-step
+   trajectory and a device-resident parity matrix.
 
 (scientific-bibliography)=
 ## 10. Scientific bibliography
@@ -423,4 +444,5 @@ identity and device-resident parity; then (only then) an FDM/FEM comparison.
 | `sp5-mumax3-zhangli` | `external_solvers/3/cuda/zhangli2.cu` | `addzhanglitorque2` | external MuMax3 central clamped/PBC stencil and constants |
 | `sp5-cpu-mumax3` | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `zhang_li_mumax3_torque_at_with` | FDM CPU MuMax3 operator |
 | `sp5-cuda-mumax3` | `backends/fdm/gpu/cuda/integrators/llg_fp64.cu` | `zhang_li_neighbor_index` | native CUDA central/PBC neighbour realization |
+| `sp5-cuda-cpu-parity-test` | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available` | managed FP64 one-step CPU↔CUDA operator gate |
 | `sp5-ir-mumax3` | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | execution provenance fields for formula/operator/target/Landé |

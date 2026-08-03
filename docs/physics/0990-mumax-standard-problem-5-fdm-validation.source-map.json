@@ -52,6 +52,7 @@
     {"id": "sp5-mumax3-zhangli", "path": "external_solvers/3/cuda/zhangli2.cu", "symbol": "addzhanglitorque2", "responsibility": "Define the external MuMax3 central clamped/PBC stencil, constants, and Gilbert projection."},
     {"id": "sp5-cpu-mumax3", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "zhang_li_mumax3_torque_at", "responsibility": "Execute the versioned MuMax3 operator in the FDM CPU reference lane."},
     {"id": "sp5-cuda-mumax3", "path": "backends/fdm/gpu/cuda/integrators/llg_fp64.cu", "symbol": "zhang_li_neighbor_index", "responsibility": "Execute the versioned MuMax3 central stencil in native CUDA FP64/FP32 kernels."},
+    {"id": "sp5-cuda-cpu-parity-test", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available", "responsibility": "Execute the managed FP64 one-step CPU↔CUDA operator parity gate."},
     {"id": "sp5-ir-mumax3", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Carry formula, operator, target, and Landé provenance through FdmPlanIR."}
   ],
   "public_api": {"parameters": [
