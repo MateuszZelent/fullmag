@@ -42,10 +42,25 @@ describe("analysis preference hydration", () => {
     try {
       await act(async () => root.render(<MountedPreferencesProbe />));
       expect(container.textContent).toBe("mJ");
-      mountedPreferences?.setDescriptorPreference("artifact:frequency-response:artifact://response", { displayUnits: { amplitude: "nJ" } });
+      await act(async () => {
+        mountedPreferences?.setDescriptorPreference("artifact:frequency-response:artifact://response", {
+          displayUnits: { amplitude: "nJ" },
+          range: null,
+          selectedSeriesIds: ["response"],
+        });
+      });
       await act(async () => root.render(<MountedPreferencesProbe />));
       expect(container.textContent).toBe("nJ");
       expect(values.get(ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY)).toContain("nJ");
+
+      await act(async () => {
+        (mountedPreferences?.setDescriptorPreference as unknown as ((id: string, value: unknown) => void))(
+          "artifact:frequency-response:partial",
+          { displayUnits: { amplitude: "J" } },
+        );
+      });
+      await act(async () => root.render(<MountedPreferencesProbe />));
+      expect(mountedPreferences?.preferences.descriptorPreferences["artifact:frequency-response:partial"]).toBeUndefined();
     } finally {
       mountedPreferences = null;
       await act(async () => root.unmount());

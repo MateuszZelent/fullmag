@@ -14,7 +14,7 @@ let comparisonDatasetRef: string | null = null;
 let descriptorPreferences: Record<string, { displayUnits: Record<string, string>; range: null; selectedSeriesIds: string[] }> = {};
 const setDescriptorPreference = vi.fn();
 
-vi.mock("@/kernel/workspace/useAnalysisWorkspace", () => ({ useAnalysisWorkspaceSelector: (selector: (state: { activeSurface: string; selectedDatasetRef: string | null; comparisonDatasetRef: string | null }) => unknown) => selector({ activeSurface, selectedDatasetRef, comparisonDatasetRef }) }));
+vi.mock("@/kernel/workspace/useAnalysisWorkspace", () => ({ useAnalysisWorkspaceSelector: (selector: (state: { activeSurface: string; selectedDatasetRef: string | null; comparisonDatasetRef: string | null; comparisonSelectedSeriesKeys: string[]; hasChartState: boolean; hasComparisonSelection: boolean; selectedSeriesIds: string[]; sourceChartId: string | null; xAxisId: string | null }) => unknown) => selector({ activeSurface, comparisonDatasetRef, comparisonSelectedSeriesKeys: [], hasChartState: false, hasComparisonSelection: false, selectedDatasetRef, selectedSeriesIds: [], sourceChartId: null, xAxisId: null }) }));
 vi.mock("@/kernel/workspace/useAnalysisViewPreferencesHydration", () => ({ useAnalysisViewPreferencesHydration: () => ({ isHydrated: false, preferences: { descriptorPreferences, selectedDatasetRef: null }, setActiveSurface: vi.fn(), setDescriptorPreference, setSelectedDatasetRef: vi.fn() }) }));
 vi.mock("@/kernel/resources/spinWaveResources", () => ({ useDynamicStructureFactorResource: () => ({ data: null, status: "idle" }), useSpinWaveGammaResource: () => ({ data: null, status: "idle" }) }));
 vi.mock("@/kernel/selection/useSelection", () => ({ useSelectionSelector: () => null }));
@@ -80,7 +80,7 @@ describe("Analysis controller frequency selection", () => {
     const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
     try {
       await act(async () => root.render(<RangeProbe kernel={{ selection }} />));
-      expect(setDescriptorPreference).toHaveBeenCalledWith("dynamics:table-a", { range: { fromSI: 1e-9, toSI: 2e-9 } });
+      expect(setDescriptorPreference).toHaveBeenCalledWith("dynamics:v-table-a", { displayUnits: {}, range: { fromSI: 1e-9, toSI: 2e-9 }, selectedSeriesIds: [] });
     } finally {
       activeSurface = "eigenmodes"; selectedDatasetRef = null;
       await act(async () => root.unmount()); dom.restore();
@@ -98,9 +98,9 @@ describe("Analysis controller frequency selection", () => {
       expect(capturedController?.selectedSeriesIds).toEqual(["frequency:artifact://spectrum"]);
 
       capturedController?.onSelectedSeriesIdsChange([]);
-      expect(setDescriptorPreference).toHaveBeenCalledWith("artifact:frequency-response:artifact://spectrum", { selectedSeriesIds: [] });
+      expect(setDescriptorPreference).toHaveBeenCalledWith("artifact:frequency-response:v-artifact%3A%2F%2Fspectrum", { displayUnits: {}, range: null, selectedSeriesIds: [] });
 
-      descriptorPreferences = { "artifact:frequency-response:artifact://spectrum": { displayUnits: {}, range: null, selectedSeriesIds: [] } };
+      descriptorPreferences = { "artifact:frequency-response:v-artifact%3A%2F%2Fspectrum": { displayUnits: {}, range: null, selectedSeriesIds: [] } };
       await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
       expect(capturedController?.selectedSeriesIds).toEqual([]);
     } finally {
@@ -117,9 +117,24 @@ describe("Analysis controller frequency selection", () => {
     try {
       await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
       capturedController?.onDisplayUnitsChange({ frequency: "GHz" });
-      expect(setDescriptorPreference).toHaveBeenCalledWith("artifact:eigenmodes:artifact://spectrum", { displayUnits: { frequency: "GHz" } });
+      expect(setDescriptorPreference).toHaveBeenCalledWith("artifact:eigenmodes:v-artifact%3A%2F%2Fspectrum", { displayUnits: { frequency: "GHz" }, range: null, selectedSeriesIds: ["frequency:artifact://spectrum"] });
     } finally {
       selectedDatasetRef = null; descriptorPreferences = {}; capturedController = null;
+      await act(async () => root.unmount()); dom.restore();
+    }
+  });
+  it("persists frequency range under the artifact descriptor without a selected table", async () => {
+    activeSurface = "frequency-response";
+    selectedDatasetRef = null;
+    descriptorPreferences = {};
+    setDescriptorPreference.mockClear();
+    const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
+    try {
+      await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
+      capturedController?.onRangeChange({ fromValue: 1, toValue: 2 });
+      expect(setDescriptorPreference).toHaveBeenCalledWith("artifact:frequency-response:v-artifact%3A%2F%2Fspectrum", { displayUnits: {}, range: { fromSI: 1, toSI: 2 }, selectedSeriesIds: ["frequency:artifact://spectrum"] });
+    } finally {
+      activeSurface = "eigenmodes"; descriptorPreferences = {}; capturedController = null;
       await act(async () => root.unmount()); dom.restore();
     }
   });

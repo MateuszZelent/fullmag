@@ -12,7 +12,7 @@ import {
   formatChartDisplayValue,
 } from "@/shared/analysis-charts/chartScalePolicy";
 
-import type { ChartSeries } from "../chartTableModel";
+import type { ChartSeries, ChartValueRange } from "../chartTableModel";
 import {
   buildFrequencyDomainCursorSummary,
   buildFrequencyDomainWorkbenchSummary,
@@ -26,26 +26,32 @@ import { EChartsSurface } from "./EChartsSurface";
 export function AnalysisFrequencySurface({
   chartId,
   displayUnits,
+  descriptorId,
   kernel,
   onPointSelect,
+  onRangeChange = () => undefined,
   onDisplayUnitsChange = () => undefined,
   onSelectedSeriesIdsChange,
   selectedSeriesIds,
   selectedPoint,
   series,
+  range = null,
   status,
   title,
   unavailableReason,
 }: {
   chartId?: string;
   displayUnits?: Readonly<Record<string, string>>;
+  descriptorId?: string;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
+  onRangeChange?: (range: ChartValueRange) => void;
   onDisplayUnitsChange?: (patch: Record<string, string>) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
   selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   series: readonly ChartSeries[];
+  range?: ChartValueRange | null;
   status: string;
   title: string;
   unavailableReason: string | null;
@@ -202,8 +208,11 @@ export function AnalysisFrequencySurface({
             bus={kernel.bus}
             chartId={chartId}
             dataStatus={status}
+            descriptorId={descriptorId}
             displayUnits={displayUnits}
+            initialRange={range}
             onPointSelect={onPointSelect}
+            onRangeChange={onRangeChange}
             series={visibleSeries}
             xAxisLabel={frequencyDomainXAxisLabel(series)}
           />

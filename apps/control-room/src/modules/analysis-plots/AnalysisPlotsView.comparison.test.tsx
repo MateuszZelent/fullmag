@@ -97,4 +97,25 @@ describe("Analysis comparison selection", () => {
       dom.restore();
     }
   });
+
+  it("routes each comparison-pane display-unit selector to its own persisted callback", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const onComparisonPrimaryDisplayUnitsChange = vi.fn();
+    const onComparisonSecondaryDisplayUnitsChange = vi.fn();
+    try {
+      await act(async () => root.render(<AnalysisPlotsView activeSurface="comparison" comparisonDatasetRef="table-b" comparisonPrimaryDisplayUnits={{}} comparisonSecondaryDisplayUnits={{}} comparisonTable={table("table-b", 2)} comparisonTableStatus="ready" datasetRefs={["table-a", "table-b"]} kernel={kernel} onComparisonPrimaryDisplayUnitsChange={onComparisonPrimaryDisplayUnitsChange} onComparisonSecondaryDisplayUnitsChange={onComparisonSecondaryDisplayUnitsChange} selectedDatasetRef="table-a" table={table("table-a", 1)} tableStatus="ready" />));
+      const controls = nodesWithAttribute(container, "aria-label", "Display unit for energy");
+      expect(controls).toHaveLength(2);
+      await act(async () => controls[0]!.click());
+      expect(onComparisonPrimaryDisplayUnitsChange).toHaveBeenCalledWith({ energy: "table-c" });
+      expect(onComparisonSecondaryDisplayUnitsChange).not.toHaveBeenCalled();
+      await act(async () => controls[1]!.click());
+      expect(onComparisonSecondaryDisplayUnitsChange).toHaveBeenCalledWith({ energy: "table-c" });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

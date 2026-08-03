@@ -52,6 +52,6 @@ export function useAnalysisViewPreferencesHydration() {
   const state = useSyncExternalStore(subscribe, () => snapshot, () => SERVER);
   const setActiveSurface = useCallback((activeSurface: AnalysisSurface) => update((preferences) => ({ ...preferences, activeSurface })), []);
   const setSelectedDatasetRef = useCallback((selectedDatasetRef: string | null) => update((preferences) => ({ ...preferences, selectedDatasetRef })), []);
-  const setDescriptorPreference = useCallback((descriptorId: string, patch: Partial<AnalysisDescriptorPreference>) => update((preferences) => ({ ...preferences, descriptorPreferences: { ...preferences.descriptorPreferences, [descriptorId]: { ...(preferences.descriptorPreferences[descriptorId] ?? { displayUnits: {}, range: null, selectedSeriesIds: [] }), ...patch } } })), []);
+  const setDescriptorPreference = useCallback((descriptorId: string, descriptor: AnalysisDescriptorPreference) => update((preferences) => ({ ...preferences, descriptorPreferences: { ...preferences.descriptorPreferences, [descriptorId]: descriptor } })), []);
   return { ...state, setActiveSurface, setDescriptorPreference, setSelectedDatasetRef };
 }

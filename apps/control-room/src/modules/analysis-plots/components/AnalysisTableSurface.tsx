@@ -34,6 +34,7 @@ export function AnalysisTableSurface({
   chartSeries,
   chartId,
   displayUnits,
+  descriptorId,
   kernel,
   onPointSelect,
   onRangeChange,
@@ -52,6 +53,7 @@ export function AnalysisTableSurface({
   chartSeries: readonly ChartSeries[];
   chartId?: string;
   displayUnits?: Readonly<Record<string, string>>;
+  descriptorId?: string;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
@@ -175,6 +177,7 @@ export function AnalysisTableSurface({
           bus={kernel.bus}
           chartId={chartId}
           dataStatus={status}
+          descriptorId={descriptorId}
           displayUnits={displayUnits}
           initialRange={range}
           onPointSelect={onPointSelect}

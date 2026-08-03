@@ -34,6 +34,7 @@ interface EChartsSurfaceProps {
   bus?: EventBus<KernelEventMap>;
   chartId?: string;
   dataStatus?: string;
+  descriptorId?: string;
   displayUnits?: Readonly<Record<string, string>>;
   fitRequest?: number;
   initialRange?: ChartValueRange | null;
@@ -49,6 +50,7 @@ export function EChartsSurface({
   bus,
   chartId,
   dataStatus,
+  descriptorId,
   displayUnits,
   fitRequest,
   initialRange,
@@ -61,8 +63,8 @@ export function EChartsSurface({
   const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
   const surface = useMemo(
-    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits),
-    [chartId, dataStatus, displayUnits, presentation, series, xAxisLabel],
+    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits, descriptorId),
+    [chartId, dataStatus, descriptorId, displayUnits, presentation, series, xAxisLabel],
   );
 
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
@@ -124,6 +126,7 @@ function analysisChartSurfaceIdentity(
   presentation: ChartDataPresentationState | undefined,
   chartId?: string,
   displayUnits?: Readonly<Record<string, string>>,
+  descriptorId?: string,
 ): InteractiveChartSurfaceIdentity {
   return {
     ariaLabel: "Analysis chart",
@@ -141,7 +144,7 @@ function analysisChartSurfaceIdentity(
     provenance: {
       dataRevision: series[0]?.dataRevision ?? null,
       decimation: "minmax_lttb",
-      descriptorId: `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
+      descriptorId: descriptorId ?? `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
       displayUnits: Object.fromEntries(series.flatMap((item) => {
         const unit = displayUnits?.[item.quantity];
         return unit ? [[`y:${item.id}`, unit]] : [];

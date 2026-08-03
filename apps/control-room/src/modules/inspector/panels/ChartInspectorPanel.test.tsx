@@ -30,5 +30,6 @@ describe("ChartInspectorPanel", () => {
     expect(html).toContain("full dataset");
     expect(html).not.toContain("Follow");
     expect(html).not.toContain("Pause");
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Clear selected series<\/button>/);
   });
 });

@@ -71,4 +71,22 @@ describe("analysis workspace", () => {
     analysisWorkspaceStore.setComparisonDatasetRef(null);
     expect(analysisWorkspaceStore.getSnapshot().focusedChartId).toBe("comparison:table-a");
   });
+
+  it("clears comparison state when primary dataset A changes so A can never equal B", () => {
+    resetAnalysisWorkspaceForTests();
+    analysisWorkspaceStore.setActiveSurface("comparison");
+    analysisWorkspaceStore.setSelectedDatasetRef("table-a");
+    analysisWorkspaceStore.setComparisonDatasetRef("table-b");
+    analysisWorkspaceStore.setComparisonSelection(["mx|1"]);
+    analysisWorkspaceStore.setFocusedChartId("comparison:table-b");
+
+    analysisWorkspaceStore.setSelectedDatasetRef("table-b");
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+      comparisonDatasetRef: null,
+      comparisonSelectedSeriesKeys: [],
+      focusedChartId: "comparison:table-b",
+      hasComparisonSelection: false,
+      selectedDatasetRef: "table-b",
+    });
+  });
 });

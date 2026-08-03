@@ -13,17 +13,23 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 
 export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
   const activeSurface = useAnalysisWorkspaceSelector((state) => state.activeSurface);
+  const activeDescriptorId = useAnalysisWorkspaceSelector((state) => state.activeDescriptorId);
   const selectedDatasetRef = useAnalysisWorkspaceSelector((state) => state.selectedDatasetRef);
   const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
   const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId);
-  const descriptorId = `${activeSurface}:${selectedDatasetRef ?? "none"}`;
+  const descriptorId = activeDescriptorId ?? "unresolved";
   const preferences = useAnalysisViewPreferencesHydration();
   const selectedPoint = selection.ref?.type === "analysis-chart-point" ? selection.ref : null;
   const range = preferences.preferences.descriptorPreferences[descriptorId]?.range ?? null;
 
   const clearSelectedSeries = useCallback(() => {
     analysisWorkspaceStore.setChartState(xAxisId ?? "x", []);
-    preferences.setDescriptorPreference(descriptorId, { selectedSeriesIds: [] });
+    const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
+    preferences.setDescriptorPreference(descriptorId, {
+      displayUnits: descriptor?.displayUnits ?? {},
+      range: descriptor?.range ?? null,
+      selectedSeriesIds: [],
+    });
   }, [descriptorId, preferences, xAxisId]);
 
   return (

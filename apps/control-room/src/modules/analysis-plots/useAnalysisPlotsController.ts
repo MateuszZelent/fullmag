@@ -7,6 +7,7 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { analysisWorkspaceStore } from "@/kernel/workspace/analysisWorkspace";
+import { analysisDescriptorId, type AnalysisDescriptorPreference } from "@/kernel/workspace/analysisViewPreferences";
 import { useAnalysisViewPreferencesHydration } from "@/kernel/workspace/useAnalysisViewPreferencesHydration";
 import { useAnalysisWorkspaceSelector } from "@/kernel/workspace/useAnalysisWorkspace";
 
@@ -53,48 +54,64 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const selectedStageId = useSelectionSelector(selectedHysteresisStageIdFromSelection);
   const [selectedPoint, setSelectedPoint] = useState<AnalysisChartCursorPoint | null>(null);
   const descriptorId = useMemo(
-    () => `${activeSurface}:${selectedDatasetRef ?? "none"}`,
+    () => analysisDescriptorId({ kind: "dataset", surface: activeSurface, datasetRef: selectedDatasetRef }),
     [activeSurface, selectedDatasetRef],
   );
   const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
-  const frequencyDescriptorId = frequencyChartId ? `artifact:${frequencyChartId}` : null;
+  const frequencyDescriptorId = frequencyChartId
+    ? analysisDescriptorId({ kind: "artifact", surface: activeSurface === "eigenmodes" ? "eigenmodes" : "frequency-response", resourceKey: frequency.frequencyDomainSeries[0]!.source.resourceKey })
+    : null;
   const frequencyDescriptor = frequencyDescriptorId
     ? preferences.preferences.descriptorPreferences[frequencyDescriptorId]
     : undefined;
-  const effectiveSelectedSeriesIds = frequencyChartId
-    ? frequencyDescriptor
-      ? frequencyDescriptor.selectedSeriesIds
-      : frequency.frequencyDomainSeries.map((series) => series.id)
+  const tableDefaultSeriesIds = dataset.visibleTable
+    ? dataset.visibleTable.columns.slice(1).map((column) => `data.table:${dataset.visibleTable!.tableId}:${dataset.visibleTable!.columns[0]?.column_id ?? "x"}:${column.column_id}`)
     : selectedSeriesIds;
-  const effectiveDescriptor = frequencyChartId ? frequencyDescriptor : descriptor;
+  const effectiveSelectedSeriesIds = frequencyChartId
+    ? frequencyDescriptor?.selectedSeriesIds ?? frequency.frequencyDomainSeries.map((series) => series.id)
+    : selectedSeriesIds;
   const comparisonDescriptorId = useMemo(
-    () => `comparison:${selectedDatasetRef ?? "none"}:${comparisonDatasetRef ?? "none"}`,
+    () => analysisDescriptorId({ kind: "comparison", primaryDatasetRef: selectedDatasetRef, secondaryDatasetRef: comparisonDatasetRef }),
     [comparisonDatasetRef, selectedDatasetRef],
   );
   const comparisonDescriptor = preferences.preferences.descriptorPreferences[comparisonDescriptorId];
+  const comparisonDefaultSeriesIds = useMemo(() => {
+    if (!comparisonDataset.visibleTable || !dataset.visibleTable) return [];
+    const secondary = new Set(comparisonDataset.visibleTable.columns.slice(1).map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`));
+    return dataset.visibleTable.columns.slice(1)
+      .map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`)
+      .filter((key) => secondary.has(key));
+  }, [comparisonDataset.visibleTable, dataset.visibleTable]);
+  const comparisonAxesCompatible = dataset.visibleTable?.columns[0]?.column_id === comparisonDataset.visibleTable?.columns[0]?.column_id &&
+    dataset.visibleTable?.columns[0]?.unit === comparisonDataset.visibleTable?.columns[0]?.unit;
+  const effectiveDescriptor = frequencyDescriptorId
+    ? frequencyDescriptor
+    : activeSurface === "comparison"
+      ? comparisonDescriptor
+      : descriptor;
+  const effectiveDescriptorSelection = frequencyDescriptorId
+    ? effectiveSelectedSeriesIds
+    : activeSurface === "comparison"
+      ? comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds
+      : descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds;
+  const activeDescriptorId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+  useEffect(() => {
+    analysisWorkspaceStore.setActiveDescriptorId(activeDescriptorId);
+  }, [activeDescriptorId]);
   useEffect(() => {
     if (!selectedDatasetRef || !dataset.visibleTable || hasChartState) return;
     const xAxisId = dataset.visibleTable.columns[0]?.column_id ?? "x";
-    const defaultSeriesIds = dataset.visibleTable.columns.slice(1).map(
-      (column) => `data.table:${dataset.visibleTable!.tableId}:${xAxisId}:${column.column_id}`,
-    );
     analysisWorkspaceStore.setChartState(
       xAxisId,
-      descriptor ? descriptor.selectedSeriesIds : defaultSeriesIds,
+      descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds,
     );
-  }, [dataset.visibleTable, descriptor, hasChartState, selectedDatasetRef]);
+  }, [dataset.visibleTable, descriptor, hasChartState, selectedDatasetRef, tableDefaultSeriesIds]);
   useEffect(() => {
     if (!comparisonDataset.visibleTable || !dataset.visibleTable || hasComparisonSelection) return;
-    const secondary = new Set(
-      comparisonDataset.visibleTable.columns.slice(1).map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`),
-    );
-    const defaults = dataset.visibleTable.columns.slice(1)
-      .map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`)
-      .filter((key) => secondary.has(key));
     analysisWorkspaceStore.setComparisonSelection(
-      comparisonDescriptor?.comparisonSelectedSeriesKeys ?? defaults,
+      comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds,
     );
-  }, [comparisonDataset.visibleTable, comparisonDescriptor?.comparisonSelectedSeriesKeys, dataset.visibleTable, hasComparisonSelection]);
+  }, [comparisonDataset.visibleTable, comparisonDefaultSeriesIds, comparisonDescriptor?.selectedSeriesIds, dataset.visibleTable, hasComparisonSelection]);
   return {
     activeSurface,
     datasetRefs: dataset.tableList.data?.tables.map((table) => table.table_id) ?? [],
@@ -106,6 +123,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     frequencyDomainUnavailableReason: frequency.frequencyDomainUnavailableReason,
     frequencyDomainProvenance: frequency.frequencyDomainSeries[0] ? `${frequency.frequencyDomainSeries[0].source.resourceKey} · revision ${frequency.frequencyDomainSeries[0].dataRevision}` : null,
     selectedDatasetRef,
+    descriptorId: activeDescriptorId,
     sourceChartId: frequencyChartId ?? sourceChartId,
     comparisonDatasetRef,
     comparisonSelectedSeriesKeys,
@@ -113,6 +131,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     comparisonTableStatus: comparisonDataset.rows.status,
     comparisonTableUnsupportedReason: comparisonDataset.unsupportedReason,
     comparisonVisibleRevision: comparisonDataset.visibleRevision,
+    comparisonPrimaryDisplayUnits: comparisonDescriptor?.displayUnits ?? {},
+    comparisonSecondaryDisplayUnits: comparisonDescriptor?.displayUnits ?? {},
     hasComparisonSelection,
     selectedStageId,
     surfaceProvenance: {
@@ -123,7 +143,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     selectedPoint,
     selectedSeriesIds: effectiveSelectedSeriesIds,
     displayUnits: effectiveDescriptor?.displayUnits ?? {},
-    range: effectiveDescriptor?.range ? { fromValue: effectiveDescriptor.range.fromSI, toValue: effectiveDescriptor.range.toSI } : null,
+    range: comparisonAxesCompatible || activeSurface !== "comparison"
+      ? effectiveDescriptor?.range ? { fromValue: effectiveDescriptor.range.fromSI, toValue: effectiveDescriptor.range.toSI } : null
+      : null,
     setActiveSurface: (surface: typeof activeSurface) => {
       preferences.setActiveSurface(surface);
       analysisWorkspaceStore.setActiveSurface(surface);
@@ -135,8 +157,14 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setComparisonDatasetRef: (datasetRef: string | null) => analysisWorkspaceStore.setComparisonDatasetRef(datasetRef),
     onComparisonSelectedSeriesKeysChange: (seriesKeys: string[]) => {
       analysisWorkspaceStore.setComparisonSelection(seriesKeys);
-      preferences.setDescriptorPreference(comparisonDescriptorId, { comparisonSelectedSeriesKeys: seriesKeys });
+      preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, { selectedSeriesIds: seriesKeys }));
     },
+    onComparisonPrimaryDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, {
+      displayUnits: { ...(comparisonDescriptor?.displayUnits ?? {}), ...patch },
+    })),
+    onComparisonSecondaryDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, {
+      displayUnits: { ...(comparisonDescriptor?.displayUnits ?? {}), ...patch },
+    })),
     onPointSelect: (point: AnalysisChartCursorPoint) => {
       setSelectedPoint(point);
       const chartId = activeSurface === "comparison" && point.source.tableId === comparisonDatasetRef
@@ -175,18 +203,25 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         },
       }, "analysis-plots");
     },
-    onRangeChange: (range: ChartValueRange) => preferences.setDescriptorPreference(frequencyDescriptorId ?? descriptorId, { range: { fromSI: range.fromValue, toSI: range.toValue } }),
+    onRangeChange: (range: ChartValueRange) => {
+      if (activeSurface === "comparison" && !comparisonAxesCompatible) return;
+      const targetId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+      preferences.setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, { range: { fromSI: range.fromValue, toSI: range.toValue } }));
+    },
     onSelectedSeriesIdsChange: (nextSelectedSeriesIds: string[]) => {
       if (frequencyDescriptorId) {
-        preferences.setDescriptorPreference(frequencyDescriptorId, { selectedSeriesIds: nextSelectedSeriesIds });
+        preferences.setDescriptorPreference(frequencyDescriptorId, completeDescriptorPreference(frequencyDescriptor, effectiveSelectedSeriesIds, { selectedSeriesIds: nextSelectedSeriesIds }));
         return;
       }
-      preferences.setDescriptorPreference(descriptorId, { selectedSeriesIds: nextSelectedSeriesIds });
+      preferences.setDescriptorPreference(descriptorId, completeDescriptorPreference(descriptor, tableDefaultSeriesIds, { selectedSeriesIds: nextSelectedSeriesIds }));
       analysisWorkspaceStore.setChartState(dataset.visibleTable?.columns[0]?.column_id ?? "x", nextSelectedSeriesIds);
     },
-    onDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(frequencyDescriptorId ?? descriptorId, {
-      displayUnits: { ...(effectiveDescriptor?.displayUnits ?? {}), ...patch },
-    }),
+    onDisplayUnitsChange: (patch: Record<string, string>) => {
+      const targetId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+      preferences.setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, {
+        displayUnits: { ...(effectiveDescriptor?.displayUnits ?? {}), ...patch },
+      }));
+    },
     spinWaveGamma: gamma.data ?? null,
     spinWaveGammaStatus: gamma.status,
     table: dataset.visibleTable,
@@ -203,6 +238,18 @@ export function selectedHysteresisStageIdFromSelection(selection: Selection | nu
   return (ref.type === "study-stage" && selection?.nodeId?.includes("hysteresis")) || ref.type === "hysteresis-snapshot" || ref.type === "analysis-chart-point"
     ? ref.stageId
     : null;
+}
+
+function completeDescriptorPreference(
+  descriptor: AnalysisDescriptorPreference | undefined,
+  defaults: readonly string[],
+  patch: Partial<AnalysisDescriptorPreference>,
+): AnalysisDescriptorPreference {
+  return {
+    displayUnits: patch.displayUnits ?? descriptor?.displayUnits ?? {},
+    range: patch.range ?? descriptor?.range ?? null,
+    selectedSeriesIds: patch.selectedSeriesIds ?? descriptor?.selectedSeriesIds ?? [...defaults],
+  };
 }
 
 export { frequencyDomainChartRouteOverrideFromSelection } from "@/shared/domain/analysis/frequencyDomainChartModels";
