@@ -5481,3 +5481,41 @@ fizyczny M3 `C_s` oraz pełny Python/UI round-trip nadal pozostają otwarte.
 Szeroka ocena celu pozostaje **86% implementacji / 60% gotowości produkcyjnej**;
 zmienił się wyłącznie status obserwowanej bramy GPU B oraz jakość artefaktów
 demaga.
+
+## 32.39. Ponowny pull z mastera i weryfikacja demaga (2026-08-03)
+
+Wykonano ponownie `git fetch origin master` oraz `git pull --ff-only origin
+master`. Pull zwrócił `Already up to date`; bieżący lokalny `master` i
+`origin/master` wskazują ten sam commit:
+
+```text
+HEAD=02f7bf813c97193ff4f39df719da2afe4376e29e
+origin/master=02f7bf813c97193ff4f39df719da2afe4376e29e
+git rev-list --left-right --count HEAD...origin/master = 0 0
+```
+
+Istniejące, niepowiązane zmiany robocze w `apps/legacy_web` oraz
+`external_solvers/3` pozostały nietknięte. Nie wykonano push.
+
+Po pullu wykonano dwa aktualne poziomy dowodu:
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=packages/fullmag-py/src:. \
+  pytest -q --capture=sys \
+  packages/fullmag-py/tests/test_conformal_occ_degenerate_retry_regression.py
+2 passed
+
+just verify-fem-time-domain-native-contract
+LLG time-domain documentation contract: passed
+managed CUDA/MFEM/SLEPc native build and contracts: passed
+fullmag-fem-sys ABI: 35 passed; 0 failed
+```
+
+Wynik potwierdza, że poprawka progu objętości OCC oraz zarządzany runtime
+demaga są obecne na zsynchronizowanym `master` i nie wykazują regresji w
+kontraktach natywnych. Nie jest to jeszcze pełna kwalifikacja naukowa SP4:
+fallback pageable nadal nie został wymuszony w runtime, a pełne medium/fine,
+mapy przestrzenne i cross-backend parity pozostają otwarte. Pełna suita Python
+pozostaje niezielona (`1406 passed, 49 failed, 3 skipped` w bieżącym rerunie),
+więc nie zmieniam szerokiej oceny **86% implementacji / 60% gotowości
+produkcyjnej**.
