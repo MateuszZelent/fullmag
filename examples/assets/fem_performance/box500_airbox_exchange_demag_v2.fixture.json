@@ -1,0 +1,32 @@
+{
+  "airbox_factor": 2.0,
+  "airbox_hmax_m": 1e-07,
+  "demag_policy": {
+    "amg_aggressive_coarsening": 1,
+    "amg_coarsening": 8,
+    "amg_interpolation": 6,
+    "amg_relax_type": 6,
+    "preconditioner": "AMG",
+    "rtol": 1e-12,
+    "solver": "CG"
+  },
+  "domain_hmax_m": 5e-08,
+  "problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c",
+  "relaxation_algorithm": "nonlinear_cg",
+  "resolution": "fine",
+  "scenario": "box500_airbox_exchange_demag",
+  "schema": "fullmag.fem_gpu.performance_fixture.v2",
+  "solver_mesh_cell_count": 5138,
+  "solver_mesh_exterior_facet_count": 1440,
+  "solver_mesh_facet_count": 1504,
+  "solver_mesh_interface_facet_count": 64,
+  "solver_mesh_node_count": 1200,
+  "solver_mesh_path": "box500_airbox_exchange_demag_v2.mesh.json",
+  "solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
+  "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+  "stop_condition": {
+    "benchmark_only_torque_target_apm": 1e-06,
+    "kind": "torque_or_max_steps",
+    "max_steps": 64
+  }
+}

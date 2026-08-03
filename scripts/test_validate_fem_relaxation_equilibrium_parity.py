@@ -17,6 +17,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = REPO_ROOT / "scripts" / "validate_fem_relaxation_equilibrium_parity.py"
 SUITE_PATH = REPO_ROOT / "examples" / "assets" / "fem_performance" / "equilibrium_qualification_suite_v1.json"
+TYPED_SUITE_PATH = REPO_ROOT / "examples" / "assets" / "fem_performance" / "amg_qualification_suite_v2.json"
 
 
 def load_validator():
@@ -96,6 +97,7 @@ def state_row(*, backend: str, steps: int = 11, stop_reason: str = "torque") -> 
         "final_magnetization_node_count": 2,
         "final_magnetization_sha256": final_magnetization_sha256(steps),
         "final_magnetization_values_json": "[[1.0,0.0,0.0],[0.0,1.0,0.0]]",
+        "resolved_relaxation_direction_policy": "exchange_plus_mass_tangent_gradient",
     }
 
 
@@ -108,6 +110,45 @@ def test_stop_state_requires_torque_and_convergence() -> None:
     row["converged"] = False
     failures = validator.stop_state_failures(row, label="gpu")
     assert any("converged" in failure for failure in failures)
+
+
+def test_equilibrium_rows_expose_backend_direction_realizations() -> None:
+    benchmark = load_benchmark()
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_cpu", "nonlinear_cg"
+    ) == "exchange_plus_mass_tangent_gradient"
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_gpu", "projected_gradient_bb"
+    ) == "device_tangent_gradient"
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_cpu", "tangent_plane_implicit"
+    ) is None
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fdm_cpu", "nonlinear_cg"
+    ) is None
+
+
+def test_shared_tangent_policy_is_explicit_for_cpu_gpu_parity() -> None:
+    benchmark = load_benchmark()
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_cpu", "nonlinear_cg", shared_tangent_gradient=True
+    ) == "device_tangent_gradient"
+    assert benchmark.relaxation_direction_policy_for_backend(
+        "fem_gpu", "projected_gradient_bb", shared_tangent_gradient=True
+    ) == "device_tangent_gradient"
+
+
+def test_equilibrium_backend_env_cannot_leak_gpu_strategy_into_cpu() -> None:
+    benchmark = load_benchmark()
+    inherited = {
+        "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": "lumped_exchange_mass_cg8"
+    }
+    cpu_env = benchmark.sanitize_relaxation_backend_env("fem_cpu", inherited)
+    gpu_env = benchmark.sanitize_relaxation_backend_env("fem_gpu", inherited)
+    assert "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY" not in cpu_env
+    assert gpu_env["FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY"] == (
+        "lumped_exchange_mass_cg8"
+    )
 
 
 def test_comparator_accepts_different_step_counts_and_reports_metrics() -> None:
@@ -123,6 +164,48 @@ def test_comparator_accepts_different_step_counts_and_reports_metrics() -> None:
     assert comparison.rms_component_difference == 0.0
     assert comparison.p99_vector_difference == 0.0
     assert comparison.mean_vector_difference == 0.0
+
+
+def test_comparator_rejects_different_direction_contracts() -> None:
+    validator = load_validator()
+    cpu = state_row(backend="fem_cpu")
+    gpu = state_row(backend="fem_gpu", steps=29)
+    gpu["resolved_relaxation_direction_policy"] = "device_tangent_gradient"
+
+    comparison = validator.compare_equilibrium_states(
+        cpu, gpu, validator.EquilibriumThresholds()
+    )
+
+    assert comparison.passed is False
+    assert any("direction policy mismatch" in failure for failure in comparison.failures)
+
+
+def test_comparator_accepts_any_shared_direction_contract() -> None:
+    validator = load_validator()
+    cpu = state_row(backend="fem_cpu")
+    gpu = state_row(backend="fem_gpu")
+    cpu["resolved_relaxation_direction_policy"] = "device_tangent_gradient"
+    gpu["resolved_relaxation_direction_policy"] = "device_tangent_gradient"
+
+    comparison = validator.compare_equilibrium_states(
+        cpu, gpu, validator.EquilibriumThresholds()
+    )
+
+    assert comparison.passed is True
+
+
+def test_comparator_rejects_missing_direction_contract() -> None:
+    validator = load_validator()
+    cpu = state_row(backend="fem_cpu")
+    gpu = state_row(backend="fem_gpu")
+    gpu.pop("resolved_relaxation_direction_policy")
+
+    comparison = validator.compare_equilibrium_states(
+        cpu, gpu, validator.EquilibriumThresholds()
+    )
+
+    assert comparison.passed is False
+    assert any("direction policy is missing" in failure for failure in comparison.failures)
 
 
 def test_comparator_rejects_signature_drift_and_field_drift() -> None:
@@ -209,7 +292,10 @@ def test_immutable_qualification_suite_is_explicit() -> None:
     assert suite["demag_policy"]["rtol"] == 1.0e-12
     assert suite["torque_tolerance_apm"] == 8000.0
     assert suite["algorithms"] == ["projected_gradient_bb", "nonlinear_cg"]
-    assert suite["scenarios"] == ["exchange_only", "exchange_demag"]
+    assert suite["scenarios"] == [
+        "box500_airbox_exchange_only",
+        "box500_airbox_exchange_demag",
+    ]
     assert [fixture["resolution"] for fixture in suite["fixtures"]] == [
         "coarse",
         "medium",
@@ -220,6 +306,20 @@ def test_immutable_qualification_suite_is_explicit() -> None:
         == "fullmag.fem.solver_mesh_signature.v2"
         for fixture in suite["fixtures"]
     )
+
+
+def test_equilibrium_suite_signatures_match_current_typed_fixture_suite() -> None:
+    equilibrium = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+    typed = json.loads(TYPED_SUITE_PATH.read_text(encoding="utf-8"))
+    typed_by_resolution = {
+        fixture["resolution"]: fixture["solver_mesh_signature"]
+        for fixture in typed["fixtures"]
+    }
+    actual = {
+        fixture["resolution"]: fixture["solver_mesh_signature"]
+        for fixture in equilibrium["fixtures"]
+    }
+    assert actual == typed_by_resolution
 
 
 def test_required_matrix_does_not_accept_a_single_passing_pair() -> None:
@@ -243,7 +343,7 @@ def test_suite_loader_exposes_immutable_fixture_signatures() -> None:
     suite = validator.load_qualification_suite(SUITE_PATH)
     assert suite["resolutions"] == ("coarse", "medium", "fine")
     assert suite["fixture_signatures"]["coarse"] == (
-        "0bcaf9731f36f911f8af210037eeadf1d6555446534e25cc977da6408b014412"
+        "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
     )
 
 
@@ -287,3 +387,81 @@ def test_solver_time_to_tolerance_stops_at_first_accepted_state() -> None:
         2,
         5,
     )
+
+
+def test_authoritative_payload_derives_solver_time_from_step_diagnostics(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 2,
+                "fem_gpu_relaxation_qualification": {
+                    "executed_steps": 2,
+                    "stop_threshold": 8000.0,
+                    "final_torque_apm": 7000.0,
+                },
+                "demag_runtime": {"timings_ns": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "time,E_ex,E_demag,E_ext,E_ani,E_dmi,E_total,max_torque_Apm,max_torque_T\n"
+        "0.0,-1.0e-18,0.0,0.0,0.0,0.0,-1.0e-18,7000.0,0.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "solver_steps.csv").write_text(
+        "step,wall_time_ns,demag_solves,max_torque_apm\n"
+        "1,1000000,2,9000.0\n"
+        "2,2000000,3,7000.0\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["time_to_tolerance_seconds"] == pytest.approx(0.003)
+    assert payload["time_to_tolerance_source"] == (
+        "accepted_step_diagnostics_wall_time_ns"
+    )
+    assert payload["accepted_steps_to_tolerance"] == 2
+    assert payload["demag_solve_count_total"] == 5
+
+
+def test_execution_plan_mesh_stats_publishes_signature_schema() -> None:
+    benchmark = load_benchmark()
+    mesh_path = (
+        SUITE_PATH.parent / "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json"
+    )
+    mesh = json.loads(mesh_path.read_text(encoding="utf-8"))
+    stats = benchmark.execution_plan_mesh_stats(
+        {"execution_plan": {"backend_plan": {"kind": "fem", "mesh": mesh}}}
+    )
+    assert stats["solver_mesh_signature_schema"] == (
+        "fullmag.fem.solver_mesh_signature.v2"
+    )
+
+
+def test_equilibrium_scope_expectations_follow_selected_meshes() -> None:
+    benchmark = load_benchmark()
+    suite = benchmark.load_equilibrium_qualification_suite(SUITE_PATH)
+    resolutions, signatures = benchmark.equilibrium_scope_expectations(
+        [benchmark.PRESET_MESHES["coarse"]], suite["fixtures"]
+    )
+    assert resolutions == ("coarse",)
+    assert signatures == {
+        "coarse": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
+    }
+
+
+def test_stop_state_allows_initial_state_already_at_torque_target() -> None:
+    validator = load_validator()
+    row = state_row(backend="fem_cpu", steps=0)
+    row["accepted_steps_to_tolerance"] = 0
+    row["time_to_tolerance_seconds"] = 0.0
+    row["final_magnetization_step"] = 0
+    failures = validator.stop_state_failures(row, label="initial-equilibrium")
+    assert failures == []

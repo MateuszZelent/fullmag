@@ -914,6 +914,20 @@ target_include_directories(fem_rk_explicit_contract PRIVATE
 add_test(NAME fem_rk_explicit_contract COMMAND fem_rk_explicit_contract)
 
 add_executable(
+    fem_rk_transaction_fault_injection_contract
+    tests/rk_transaction_fault_injection_contract.cpp
+)
+target_link_libraries(fem_rk_transaction_fault_injection_contract PRIVATE fullmag_fem)
+target_include_directories(fem_rk_transaction_fault_injection_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_rk_transaction_fault_injection_contract
+    COMMAND fem_rk_transaction_fault_injection_contract
+)
+
+add_executable(
     fem_llg_time_domain_qualification
     tests/llg_time_domain_qualification.cpp
 )

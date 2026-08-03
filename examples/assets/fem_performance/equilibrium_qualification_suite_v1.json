@@ -10,8 +10,8 @@
     "nonlinear_cg"
   ],
   "scenarios": [
-    "exchange_only",
-    "exchange_demag"
+    "box500_airbox_exchange_only",
+    "box500_airbox_exchange_demag"
   ],
   "demag_policy": {
     "solver": "CG",
@@ -28,7 +28,7 @@
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json",
       "solver_mesh_sha256": "6db5b18ffb49a3dc486920e94a1356828c549e09ce0c6c7ee5638cd6c20b993b",
       "solver_mesh_signature_schema": "fullmag.fem.solver_mesh_signature.v2",
-      "solver_mesh_signature": "0bcaf9731f36f911f8af210037eeadf1d6555446534e25cc977da6408b014412",
+      "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
       "solver_mesh_node_count": 52,
       "solver_mesh_cell_count": 149,
       "solver_mesh_facet_count": 96,
@@ -40,7 +40,7 @@
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_medium_v2.mesh.json",
       "solver_mesh_sha256": "e8b22e7942ab5d9ccbe77912359f83214486a6142ff1ef95d70095d84c7fb8ef",
       "solver_mesh_signature_schema": "fullmag.fem.solver_mesh_signature.v2",
-      "solver_mesh_signature": "4fc2f54b24c29e2eb3d1b7592d181b01d4fcec907e8aa025715ce3a33ed5f1fa",
+      "solver_mesh_signature": "4d11de54405620b611a4a1221bd86bd4622d56d3c09142eac68bde6884e56fca",
       "solver_mesh_node_count": 153,
       "solver_mesh_cell_count": 473,
       "solver_mesh_facet_count": 280,
@@ -52,7 +52,7 @@
       "solver_mesh_path": "box500_airbox_exchange_demag_v2.mesh.json",
       "solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
       "solver_mesh_signature_schema": "fullmag.fem.solver_mesh_signature.v2",
-      "solver_mesh_signature": "bfa43b5222ef73a99ab62cb7b1d3e8b8d4bba0a31feb0888c6f7ccd3affc8d2b",
+      "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
       "solver_mesh_node_count": 1200,
       "solver_mesh_cell_count": 5138,
       "solver_mesh_facet_count": 1504,

@@ -1457,10 +1457,80 @@ fn finalize_current_live_apply(
     Ok(())
 }
 
+fn annotate_solver_profile_api_visibility(
+    profile: &mut crate::schemas::diagnostics::SolverProfileResource,
+    duration_ns: u64,
+) {
+    let revision = profile.revision;
+    let Some(trace) = profile
+        .latest_samples
+        .iter_mut()
+        .rev()
+        .find_map(|sample| sample.trace.as_mut())
+    else {
+        return;
+    };
+    if trace.api_revision.is_some() {
+        return;
+    }
+    trace.segments.insert(
+        "api_revision_visibility_ns".to_string(),
+        crate::schemas::diagnostics::SolverTraceSegmentResource {
+            kind: crate::schemas::diagnostics::SolverTraceSegmentKindResource::
+                ApiRevisionVisibility,
+            duration_ns,
+            clock_domain:
+                crate::schemas::diagnostics::SolverTraceClockDomainResource::ServerMonotonic,
+        },
+    );
+    trace.api_revision = Some(revision);
+    if matches!(
+        trace.completeness,
+        crate::schemas::diagnostics::SolverTraceCompletenessResource::ServerOnly
+    ) {
+        trace.completeness =
+            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
+    }
+}
+
+fn annotate_solver_profile_publisher_apply(
+    profile: &mut crate::schemas::diagnostics::SolverProfileResource,
+    duration_ns: u64,
+) {
+    let Some(trace) = profile
+        .latest_samples
+        .iter_mut()
+        .rev()
+        .find_map(|sample| sample.trace.as_mut())
+    else {
+        return;
+    };
+    if trace.segments.contains_key("publisher_apply_ns") {
+        return;
+    }
+    trace.segments.insert(
+        "publisher_apply_ns".to_string(),
+        crate::schemas::diagnostics::SolverTraceSegmentResource {
+            kind: crate::schemas::diagnostics::SolverTraceSegmentKindResource::PublisherApply,
+            duration_ns,
+            clock_domain:
+                crate::schemas::diagnostics::SolverTraceClockDomainResource::ServerMonotonic,
+        },
+    );
+    if matches!(
+        trace.completeness,
+        crate::schemas::diagnostics::SolverTraceCompletenessResource::ServerOnly
+    ) {
+        trace.completeness =
+            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
+    }
+}
+
 pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
+    let apply_start = std::time::Instant::now();
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = req.latest_fields.as_ref() {
         affected_field_quantities.extend(
@@ -1584,16 +1654,28 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
     }
+    let profile_visibility_start = std::time::Instant::now();
     if let Some(mut solver_profile) = req.solver_profile {
         if solver_profile.timestep_qualification.is_none() {
             solver_profile.timestep_qualification =
                 current.solver_profile.timestep_qualification.clone();
         }
         current.solver_profile = solver_profile;
+        annotate_solver_profile_api_visibility(
+            &mut current.solver_profile,
+            profile_visibility_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
 
-    finalize_current_live_apply(current, flags)
+    let result = finalize_current_live_apply(current, flags);
+    if result.is_ok() {
+        annotate_solver_profile_publisher_apply(
+            &mut current.solver_profile,
+            apply_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
+    }
+    result
 }
 
 pub(crate) fn apply_current_live_session_frame(
@@ -1645,6 +1727,7 @@ pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
+    let apply_start = std::time::Instant::now();
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(preview_field) = current
         .live_state
@@ -1703,16 +1786,28 @@ pub(crate) fn apply_current_live_runtime_frame(
     if let Some(engine_log) = frame.engine_log {
         current.engine_log = engine_log;
     }
+    let profile_visibility_start = std::time::Instant::now();
     if let Some(mut solver_profile) = frame.solver_profile {
         if solver_profile.timestep_qualification.is_none() {
             solver_profile.timestep_qualification =
                 current.solver_profile.timestep_qualification.clone();
         }
         current.solver_profile = solver_profile;
+        annotate_solver_profile_api_visibility(
+            &mut current.solver_profile,
+            profile_visibility_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
 
-    finalize_current_live_apply(current, CurrentLiveApplyFlags::default())
+    let result = finalize_current_live_apply(current, CurrentLiveApplyFlags::default());
+    if result.is_ok() {
+        annotate_solver_profile_publisher_apply(
+            &mut current.solver_profile,
+            apply_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
+    }
+    result
 }
 
 pub(crate) fn apply_current_live_scalar_frame(
@@ -1893,6 +1988,97 @@ pub(crate) fn unix_time_millis_now() -> u128 {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn api_visibility_annotation_binds_trace_to_profile_revision() {
+        let mut runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
+            &fullmag_runner::StepStats {
+                step: 4,
+                ..fullmag_runner::StepStats::default()
+            },
+        );
+        runner_sample.trace = Some(fullmag_runner::SolverTrace::server_only(
+            fullmag_runner::SolverTraceId::new("run-1", 0, 4, 0).unwrap(),
+        ));
+        let mut profile = crate::schemas::diagnostics::SolverProfileResource::default();
+        profile.revision = 17;
+        profile.latest_samples = vec![
+            serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap(),
+        ];
+
+        annotate_solver_profile_api_visibility(&mut profile, 23);
+
+        let trace = profile.latest_samples[0]
+            .trace
+            .as_ref()
+            .expect("trace should be present");
+        assert_eq!(trace.api_revision, Some(17));
+        assert_eq!(trace.completeness, crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial);
+        assert_eq!(
+            trace
+                .segments
+                .get("api_revision_visibility_ns")
+                .expect("API visibility segment")
+                .duration_ns,
+            23
+        );
+
+        annotate_solver_profile_publisher_apply(&mut profile, 41);
+        assert_eq!(
+            profile.latest_samples[0]
+                .trace
+                .as_ref()
+                .expect("trace should remain present")
+                .segments
+                .get("publisher_apply_ns")
+                .expect("publisher apply segment")
+                .duration_ns,
+            41
+        );
+    }
+
+    #[test]
+    fn api_trace_annotations_do_not_relabel_profile_history() {
+        let mut profile = crate::schemas::diagnostics::SolverProfileResource::default();
+        profile.revision = 9;
+        profile.latest_samples = (0..2)
+            .map(|step| {
+                let mut sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
+                    &fullmag_runner::StepStats {
+                        step,
+                        ..fullmag_runner::StepStats::default()
+                    },
+                );
+                sample.trace = Some(fullmag_runner::SolverTrace::server_only(
+                    fullmag_runner::SolverTraceId::new("run-1", 0, step, step).unwrap(),
+                ));
+                serde_json::from_value(serde_json::to_value(sample).unwrap()).unwrap()
+            })
+            .collect();
+
+        annotate_solver_profile_api_visibility(&mut profile, 5);
+        annotate_solver_profile_publisher_apply(&mut profile, 7);
+
+        assert!(profile.latest_samples[0]
+            .trace
+            .as_ref()
+            .expect("historical trace")
+            .api_revision
+            .is_none());
+        assert!(profile.latest_samples[0]
+            .trace
+            .as_ref()
+            .expect("historical trace")
+            .segments
+            .get("publisher_apply_ns")
+            .is_none());
+        let newest = profile.latest_samples[1]
+            .trace
+            .as_ref()
+            .expect("newest trace");
+        assert_eq!(newest.api_revision, Some(9));
+        assert_eq!(newest.segments["publisher_apply_ns"].duration_ns, 7);
+    }
 
     fn simulation_preparation(revision: u64) -> SimulationPreparationSnapshot {
         serde_json::from_value(json!({

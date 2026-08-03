@@ -1999,9 +1999,13 @@ def test_exchange_demag_build_uses_shared_domain_mesh_contract():
     assert problem.runtime_metadata["mesh_workflow"]["build_target"] == "domain"
 
 
-def test_exchange_only_box500_airbox_build_uses_requested_relaxation_contract():
+def test_exchange_only_box500_airbox_build_uses_requested_relaxation_contract(monkeypatch):
     bench = load_benchmark_module()
     mesh_path = REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json"
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
 
     problem = bench.build(
         mesh_path=mesh_path,
@@ -2229,6 +2233,10 @@ def test_benchmark_build_can_request_adaptive_timestep():
 def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
     bench = load_benchmark_module()
     monkeypatch.setenv("FULLMAG_BENCH_RELAX_ALGORITHM", algorithm)
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
     relaxation_kwargs = []
     relaxation = bench.fm.Relaxation
 
@@ -2242,7 +2250,8 @@ def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
         dt=1e-13,
         steps=4,
         scenario="box500_airbox_exchange_demag",
-        integrator="heun",
+        integrator="none",
+        timestep_policy="budget",
     )
 
     assert problem.study.algorithm == algorithm
@@ -2253,6 +2262,10 @@ def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
 def test_benchmark_llg_relaxation_keeps_dynamics(monkeypatch):
     bench = load_benchmark_module()
     monkeypatch.setenv("FULLMAG_BENCH_RELAX_ALGORITHM", "llg_overdamped")
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
 
     problem = bench.build(
         dt=1e-13,
@@ -2294,6 +2307,10 @@ def test_executed_problem_ir_sha256_hashes_the_exact_canonical_bytes():
 
 def test_executed_problem_ir_sha256_changes_with_physical_inputs(monkeypatch):
     bench = load_benchmark_module()
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
     monkeypatch.setenv("FULLMAG_BENCH_SCENARIO", "box500_airbox_exchange_demag")
     monkeypatch.setenv(
         "FULLMAG_BENCH_DOMAIN_MESH",
@@ -2311,6 +2328,10 @@ def test_executed_problem_ir_sha256_changes_with_physical_inputs(monkeypatch):
 
 def test_executed_problem_ir_sha256_ignores_profiler_only_toggles(monkeypatch):
     bench = load_benchmark_module()
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+        repr(bench.RELAX_TORQUE_TOLERANCE_APM),
+    )
     monkeypatch.setenv("FULLMAG_BENCH_SCENARIO", "box500_airbox_exchange_demag")
     monkeypatch.setenv(
         "FULLMAG_BENCH_DOMAIN_MESH",
@@ -2346,6 +2367,24 @@ def test_runtime_helper_writes_hash_of_exact_exported_problem_ir(
         hashlib.sha256(canonical_bytes).hexdigest() + "\n"
     )
     assert list(tmp_path.iterdir()) == [identity_path]
+
+
+def test_runtime_helper_benchmark_identity_ignores_launcher_device_override():
+    from fullmag.runtime import helper
+
+    cpu_ir = {
+        "problem_meta": {
+            "runtime_metadata": {
+                "runtime_device_override": {"device": "cpu", "source": "managed_launcher"}
+            }
+        },
+        "physics": {"exchange": {"a": 1}},
+    }
+    gpu_ir = json.loads(json.dumps(cpu_ir))
+    gpu_ir["problem_meta"]["runtime_metadata"]["runtime_device_override"]["device"] = "gpu"
+
+    assert helper._benchmark_problem_ir_identity(cpu_ir) == helper._benchmark_problem_ir_identity(gpu_ir)
+    assert "runtime_device_override" in cpu_ir["problem_meta"]["runtime_metadata"]
 
 
 def test_analysis_benchmark_rejects_missing_or_malformed_problem_ir_sidecar(
@@ -2497,6 +2536,12 @@ def test_emit_summary_includes_demag_phase_timing_fields(capsys):
         demag_wall_time_ns = 29
         demag_assemble_wall_time_ns = 3
         demag_solve_wall_time_ns = 5
+        demag_hypre_wait_in_enqueue_wall_time_ns = 2
+        demag_hypre_host_api_wall_time_ns = 3
+        demag_hypre_device_elapsed_time_ns = 4
+        demag_hypre_wait_out_enqueue_wall_time_ns = 5
+        demag_hypre_event_wait_count = 6
+        demag_hypre_timed_solve_count = 1
         demag_recover_wall_time_ns = 7
         demag_energy_wall_time_ns = 11
         rhs_wall_time_ns = 13
@@ -2531,6 +2576,12 @@ def test_emit_summary_includes_demag_phase_timing_fields(capsys):
     assert payload["demag_solve_wall_time_ns"] == 5
     assert payload["demag_recover_wall_time_ns"] == 7
     assert payload["demag_energy_wall_time_ns"] == 11
+    assert payload["demag_hypre_wait_in_enqueue_wall_time_ns"] == 2
+    assert payload["demag_hypre_host_api_wall_time_ns"] == 3
+    assert payload["demag_hypre_device_elapsed_time_ns"] == 4
+    assert payload["demag_hypre_wait_out_enqueue_wall_time_ns"] == 5
+    assert payload["demag_hypre_event_wait_count"] == 6
+    assert payload["demag_hypre_timed_solve_count"] == 1
 
 
 def test_preflight_finds_mfem_config_from_mfem_dir(tmp_path):
@@ -2721,6 +2772,12 @@ def test_run_backend_carries_demag_phase_timing_from_payload(monkeypatch, tmp_pa
                     "final_time_s": 2e-13,
                     "demag_assemble_wall_time_ns": 3_000_000,
                     "demag_solve_wall_time_ns": 5_000_000,
+                    "demag_hypre_wait_in_enqueue_wall_time_ns": 2_000_000,
+                    "demag_hypre_host_api_wall_time_ns": 3_000_000,
+                    "demag_hypre_device_elapsed_time_ns": 4_000_000,
+                    "demag_hypre_wait_out_enqueue_wall_time_ns": 5_000_000,
+                    "demag_hypre_event_wait_count": 6,
+                    "demag_hypre_timed_solve_count": 1,
                     "demag_recover_wall_time_ns": 7_000_000,
                     "demag_energy_wall_time_ns": 11_000_000,
                 }
@@ -2745,6 +2802,12 @@ def test_run_backend_carries_demag_phase_timing_from_payload(monkeypatch, tmp_pa
     assert row["demag_solve_wall_time_ms"] == 5.0
     assert row["demag_recover_wall_time_ms"] == 7.0
     assert row["demag_energy_wall_time_ms"] == 11.0
+    assert row["demag_hypre_wait_in_enqueue_wall_time_ms"] == 2.0
+    assert row["demag_hypre_host_api_wall_time_ms"] == 3.0
+    assert row["demag_hypre_device_elapsed_time_ms"] == 4.0
+    assert row["demag_hypre_wait_out_enqueue_wall_time_ms"] == 5.0
+    assert row["demag_hypre_event_wait_count"] == 6
+    assert row["demag_hypre_timed_solve_count"] == 1
 
 
 def test_run_backend_propagates_requested_gmsh_threads(monkeypatch, tmp_path):
@@ -3255,6 +3318,108 @@ def test_run_backend_prefers_execution_plan_mesh_stats_from_metadata(monkeypatch
     assert row["element_count"] == 1
     assert row["boundary_face_count"] == 1
     assert row["solver_mesh_signature"]
+
+
+def test_run_backend_uses_canonical_solver_mesh_for_identity_check(monkeypatch, tmp_path):
+    bench = load_analysis_benchmark_module()
+    binary = tmp_path / "fullmag"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    domain_input = tmp_path / "domain-input.mesh.json"
+    domain_input.write_text(
+        json.dumps(
+            {
+                "mesh_name": "domain-input",
+                "nodes": [[0, 0, 0]],
+                "elements": [],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    typed_mesh = {
+        "mesh_name": "canonical-solver",
+        "nodes": [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        "cells": {
+            "types": ["tet4", "tet4"],
+            "offsets": [0, 4, 8],
+            "nodes": [0, 1, 2, 3, 0, 2, 1, 4],
+            "global_ordinals": [0, 1],
+        },
+        "facets": {
+            "types": ["tri3", "tri3"],
+            "offsets": [0, 3, 6],
+            "nodes": [0, 1, 3, 0, 2, 1],
+            "roles": ["exterior", "material_interface"],
+        },
+        "element_markers": [1, 1],
+        "boundary_markers": [1, 1],
+    }
+    canonical_output = tmp_path / "canonical-solver.mesh.json"
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        run_dir = Path(env["FULLMAG_RUN_DIR"])
+        (run_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "execution_plan": {
+                        "backend_plan": {
+                            "kind": "fem",
+                            "mesh_name": "canonical-solver",
+                            "mesh": typed_mesh,
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return bench.subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='BENCHMARK_RESULT={"executed_steps": 1}\n',
+            stderr="",
+        )
+
+    captured_paths = []
+    original_stats = bench.execution_plan_mesh_stats
+
+    def capture_stats(metadata, *, input_mesh_path=None, solver_mesh_path=None):
+        captured_paths.append(solver_mesh_path)
+        return original_stats(
+            metadata,
+            input_mesh_path=input_mesh_path,
+            solver_mesh_path=solver_mesh_path,
+        )
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(bench, "execution_plan_mesh_stats", capture_stats)
+
+    row = bench.run_backend(
+        backend_label="fem_cpu",
+        binary=binary,
+        mesh_path=domain_input,
+        scenario="exchange_demag",
+        integrator="heun",
+        steps=1,
+        dt=1e-13,
+        extra_env={
+            "FULLMAG_FEM_EXECUTION": "cpu",
+            "FULLMAG_BENCH_DOMAIN_MESH": str(domain_input),
+        },
+        canonical_mesh_output_path=canonical_output,
+    )
+
+    assert row["status"] == "ok"
+    assert captured_paths == [canonical_output]
+    assert json.loads(canonical_output.read_text(encoding="utf-8")) == typed_mesh
+    assert row["solver_mesh_sha256"] == hashlib.sha256(
+        canonical_output.read_bytes()
+    ).hexdigest()
 
 
 def test_input_mesh_summary_distinguishes_input_asset_from_solver_mesh():

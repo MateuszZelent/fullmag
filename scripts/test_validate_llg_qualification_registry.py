@@ -84,7 +84,21 @@ def registry(entry: dict[str, object]) -> dict[str, object]:
 def write_artifact(tmp_path: Path) -> Path:
     artifact = tmp_path / "artifacts" / "qualification.json"
     artifact.parent.mkdir()
-    artifact.write_text('{"status":"pass"}\n', encoding="utf-8")
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": "fem_llg_time_domain_qualification.v1",
+                "status": "pass",
+                "backend": "fem",
+                "device": "cpu",
+                "precision": "fp64",
+                "integrator": "rk45",
+                "timestep_policies": ["adaptive", "fixed"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return artifact
 
 
@@ -135,6 +149,39 @@ def test_artifact_hash_mismatch_is_rejected_and_resolves_unvalidated(
     assert registry_validator.resolve_validation_state(
         document, qualification_identity(), SOURCE_HASH, tmp_path
     ) == "unvalidated"
+
+
+def test_promoted_artifact_identity_must_match_registry_lane(tmp_path: Path) -> None:
+    artifact = write_artifact(tmp_path)
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8").replace('"device": "cpu"', '"device": "gpu"'),
+        encoding="utf-8",
+    )
+    entry = registry_entry(artifact)
+    entry["artifact_sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    with pytest.raises(registry_validator.RegistryError, match="device does not match"):
+        registry_validator.validate_registry(registry(entry), tmp_path)
+
+
+def test_promoted_artifact_must_declare_the_registry_timestep_policy(tmp_path: Path) -> None:
+    artifact = write_artifact(tmp_path)
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8").replace('["adaptive", "fixed"]', '["adaptive"]'),
+        encoding="utf-8",
+    )
+    entry = registry_entry(artifact)
+    entry["artifact_sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    with pytest.raises(registry_validator.RegistryError, match="timestep policy"):
+        registry_validator.validate_registry(registry(entry), tmp_path)
+
+
+def test_promoted_artifact_without_identity_schema_is_rejected(tmp_path: Path) -> None:
+    artifact = write_artifact(tmp_path)
+    artifact.write_text('{"status":"pass"}\n', encoding="utf-8")
+    entry = registry_entry(artifact)
+    entry["artifact_sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    with pytest.raises(registry_validator.RegistryError, match="schema"):
+        registry_validator.validate_registry(registry(entry), tmp_path)
 
 
 def test_fem_single_precision_cannot_be_promoted(tmp_path: Path) -> None:

@@ -1713,7 +1713,6 @@ int gpu_relax_nonlinear_cg_step(
         armijo_increment_rhs_j;
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
-    update_stage_completion_from_stats(ctx, out_stats);
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

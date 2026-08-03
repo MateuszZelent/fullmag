@@ -1,0 +1,52 @@
+{
+  "schema": "fullmag.fem.demag_p1_root_cause_gate.v1",
+  "date": "2026-08-03",
+  "status": "diagnostic_root_cause_identified",
+  "promotion": "blocked_by_measurement",
+  "scope": {
+    "backend": "fem_cpu_native",
+    "precision": "double",
+    "demag_model": "poisson_robin",
+    "potential_space": "P1",
+    "mesh_mode": "fixed identical mesh",
+    "nodes": 171808,
+    "elements": 1080866,
+    "boundary_faces": 60304,
+    "potential_dof": 171808
+  },
+  "evidence_origin": {
+    "source_thread_id": "019fc0da-3979-7663-964d-649042726e5a",
+    "original_report": "/tmp/fullmag-sp4-demag-diagnostic.nGZsgE/p1-refined-fixed-mesh-final-v5/root-cause-report.json",
+    "identity_boundary": "The delegated result did not include a source commit or managed runtime manifest; this repository copy records the result but does not promote it as a production runtime artifact."
+  },
+  "checks": {
+    "snapshot_step_0": {
+      "independent_mu0_over_2_btu_energy_j": 6.76482362617742e-19,
+      "production_demag_energy_j": 6.76482362617736e-19,
+      "relative_gap": 8.97e-15
+    },
+    "terminal_step_1": {
+      "variational_energy_j": 6.71383345661579e-19,
+      "recovered_energy_j": 6.713833456615825e-19,
+      "relative_gap": 5.16e-15
+    },
+    "fdm_newell_oracle_energy_j": 7.137838407337884e-19,
+    "p1_relative_error_vs_fdm": 0.052258788
+  },
+  "verdict": {
+    "code": "p1_approximation_error",
+    "operator_rhs_recovery_energy_consistency": "passed_at_binary64_roundoff_scale",
+    "root_cause": "P1 potential-space approximation error",
+    "excluded_root_causes": [
+      "demag operator assembly mismatch",
+      "demag right-hand-side construction mismatch",
+      "potential recovery mismatch",
+      "production demag-energy reconstruction mismatch"
+    ]
+  },
+  "next_gate": {
+    "p2_status": "not_promoted",
+    "reason": "A separate managed P2 result was reported below 1% versus the FDM oracle, but same-run telemetry and exact runtime identity are still required.",
+    "required_follow_up": "Run the analytic sphere/ellipsoid and airbox-convergence qualification on the same managed runtime before changing the production potential order."
+  }
+}

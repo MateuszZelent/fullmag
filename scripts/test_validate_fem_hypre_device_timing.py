@@ -75,3 +75,30 @@ def test_profiled_row_rejects_compute_synchronization():
     )
     assert summary["status"] == "fail"
     assert any("synchronization count" in failure for failure in summary["failures"])
+
+
+def test_hypre_timing_recipe_supplies_resolved_relaxation_torque_policy():
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = justfile.split("verify-fem-hypre-device-timing:", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert (
+        'FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE="${'
+        'FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE:-8000.0}"'
+    ) in recipe
+
+
+def test_hypre_timing_recipe_mounts_the_resolved_runtime_bundle():
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = justfile.split("verify-fem-hypre-device-timing:", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert 'runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"' in recipe
+    assert '-v "$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
+    assert "FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime" in recipe
+    assert "FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu" in recipe
+    assert (
+        "--relaxation-torque-calibration-suite "
+        "examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json"
+    ) in recipe
+    assert "--generated-domain-mesh-cache-dir" not in recipe

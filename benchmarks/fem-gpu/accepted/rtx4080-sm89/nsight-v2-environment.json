@@ -1,0 +1,20 @@
+{
+  "schema": "fullmag.fem_gpu.nsight_environment.v1",
+  "evidence_kind": "managed_container_rtx4080_super",
+  "captured_at": "2026-08-02T00:00:00+02:00",
+  "gpu": {
+    "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937",
+    "name": "NVIDIA GeForce RTX 4080 SUPER",
+    "compute_capability": "8.9",
+    "target_architecture": "sm_89",
+    "driver_version": "591.86",
+    "memory_total_mib": 16376
+  },
+  "fixture": {
+    "manifest_path": "examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json",
+    "manifest_sha256": "d40522cc13b255afa5dda7a09cf2aeb591eec02ae4c0629d38b283a047a2f591",
+    "solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
+    "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+    "problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c"
+  }
+}
