@@ -19468,16 +19468,14 @@
         "enum": [
           "fdm",
           "fem",
-          "auto",
-          "hybrid"
+          "auto"
         ],
         "type": "string"
       },
       "SceneTransportExecutionMode": {
         "enum": [
           "strict",
-          "extended",
-          "hybrid"
+          "extended"
         ],
         "type": "string"
       },

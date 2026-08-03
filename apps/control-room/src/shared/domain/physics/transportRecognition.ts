@@ -282,8 +282,8 @@ function isRequestedExecution(value: unknown): boolean {
   return isObject(value)
     && hasOnlyKeys(value, ["device", "discretization", "execution_mode", "precision"])
     && ["auto", "cpu", "gpu"].includes(value.device as string)
-    && ["auto", "fdm", "fem", "hybrid"].includes(value.discretization as string)
-    && ["extended", "hybrid", "strict"].includes(value.execution_mode as string)
+    && ["auto", "fdm", "fem"].includes(value.discretization as string)
+    && ["extended", "strict"].includes(value.execution_mode as string)
     && ["double", "single"].includes(value.precision as string);
 }
 

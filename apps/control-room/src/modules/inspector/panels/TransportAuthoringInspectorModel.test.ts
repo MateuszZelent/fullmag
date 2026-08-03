@@ -76,6 +76,16 @@ describe("transport authoring drafts", () => {
     expect(buildSpinTransport(spinTransportDraft(resource))).toEqual(resource);
   });
 
+  it("rejects transport hybrid lanes that the Python and planner contracts cannot execute", () => {
+    const discretization = spinTransportDraft();
+    (discretization as unknown as { executionDiscretization: string }).executionDiscretization = "hybrid";
+    expect(() => buildSpinTransport(discretization)).toThrow(/hybrid.*not supported|unsupported.*hybrid/i);
+
+    const executionMode = spinTransportDraft();
+    (executionMode as unknown as { executionMode: string }).executionMode = "hybrid";
+    expect(() => buildSpinTransport(executionMode)).toThrow(/hybrid.*not supported|unsupported.*hybrid/i);
+  });
+
   it("preserves transient spin capacitance provenance in every material assignment", () => {
     const draft = spinTransportDraft();
     draft.mode = "transient";

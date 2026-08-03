@@ -36,8 +36,8 @@ export interface SpinTransportDraft {
   currentSourceId: string;
   domain: string;
   executionDevice: "auto" | "cpu" | "gpu";
-  executionDiscretization: "auto" | "fdm" | "fem" | "hybrid";
-  executionMode: "strict" | "extended" | "hybrid";
+  executionDiscretization: "auto" | "fdm" | "fem";
+  executionMode: "strict" | "extended";
   executionPrecision: "single" | "double";
   id: string;
   interfaces: string;
@@ -234,6 +234,11 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
 export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTransport {
   if (!draft.id.trim()) throw new Error("Spin transport id is required.");
   if (!draft.currentSourceId.trim()) throw new Error("Current source id is required.");
+  const requestedDiscretization = draft.executionDiscretization as string;
+  const requestedExecutionMode = draft.executionMode as string;
+  if (requestedDiscretization === "hybrid" || requestedExecutionMode === "hybrid") {
+    throw new Error("Transport hybrid execution is not supported by the Python and planner contracts.");
+  }
   const materials = json<SpinMaterialAssignmentDraftValue[]>(draft.materials, "Spin materials");
   if (!Array.isArray(materials)) throw new Error("Spin materials must be a JSON array.");
   materials.forEach(({ material }, index) => {

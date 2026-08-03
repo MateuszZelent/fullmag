@@ -326,8 +326,6 @@ fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportEx
             let lane_blocked = requested.as_ref().is_some_and(|lane| {
                 lane.device == "gpu"
                     || lane.precision == "single"
-                    || lane.execution_mode == "hybrid"
-                    || lane.discretization == "hybrid"
             });
             let transient = serde_json::to_value(known.mode).ok().and_then(|v| v.as_str().map(str::to_string)).as_deref() == Some("transient");
             if reciprocal {

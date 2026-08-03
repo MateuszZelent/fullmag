@@ -299,7 +299,6 @@ pub enum SceneTransportDiscretization {
     Fdm,
     Fem,
     Auto,
-    Hybrid,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -322,7 +321,6 @@ pub enum SceneTransportPrecision {
 pub enum SceneTransportExecutionMode {
     Strict,
     Extended,
-    Hybrid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]

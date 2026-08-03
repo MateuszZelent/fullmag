@@ -58,9 +58,6 @@ function requestedCapability(
   if (spin.mode === "transient") return capabilities.m3_transient;
   if (spin.executionDevice === "gpu") return capabilities.gpu;
   if (spin.executionPrecision === "single") return capabilities.single_precision;
-  if (spin.executionDiscretization === "hybrid" || spin.executionMode === "hybrid") {
-    return capabilities.hybrid;
-  }
   return capabilities.m1_one_way_steady;
 }
 
@@ -322,10 +319,10 @@ function SpinFields({ draft, identityReadOnly, patch }: { draft: SpinTransportDr
     <FormField label="Spin boundaries" type="textarea" rows={9} value={draft.boundaries} onChange={field("boundaries")} />
     <SolverFields draft={draft} field={field} patch={patch} />
     <FormField label="Default external boundary" value={draft.solverDefaultExternalBoundary} onChange={field("solverDefaultExternalBoundary")} />
-    <FormField label="Requested discretization" type="select" value={draft.executionDiscretization} onChange={field("executionDiscretization")}><option value="auto">Auto</option><option value="fdm">FDM</option><option value="fem">FEM</option><option value="hybrid">Hybrid</option></FormField>
+    <FormField label="Requested discretization" type="select" value={draft.executionDiscretization} onChange={field("executionDiscretization")}><option value="auto">Auto</option><option value="fdm">FDM</option><option value="fem">FEM</option></FormField>
     <FormField label="Requested device" type="select" value={draft.executionDevice} onChange={field("executionDevice")}><option value="auto">Auto</option><option value="cpu">CPU</option><option value="gpu">GPU</option></FormField>
     <FormField label="Requested precision" type="select" value={draft.executionPrecision} onChange={field("executionPrecision")}><option value="double">Double</option><option value="single">Single</option></FormField>
-    <FormField label="Requested execution mode" type="select" value={draft.executionMode} onChange={field("executionMode")}><option value="strict">Strict</option><option value="extended">Extended</option><option value="hybrid">Hybrid</option></FormField>
+    <FormField label="Requested execution mode" type="select" value={draft.executionMode} onChange={field("executionMode")}><option value="strict">Strict</option><option value="extended">Extended</option></FormField>
     <FormField label="Constitutive version" value={draft.constitutiveVersion} onChange={field("constitutiveVersion")} />
   </>;
 }

@@ -231,7 +231,10 @@ verify-fdm-pbc-production:
 # workload proves exact 300 K continuation through the built resume-json process.
 verify-fdm-transient-spin-m3-reference:
     cargo build -p fullmag-cli --bin fullmag
-    PYTHONPATH=packages/fullmag-py/src python3 scripts/verify_fdm_transient_spin_m3_public_e2e.py --fullmag target/debug/fullmag
+    mkdir -p /tmp/fullmag-zfn2-build/m3-pytest; \
+    fullmag_bin="${CARGO_TARGET_DIR:-target}/debug/fullmag"; \
+    TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
+      python3 scripts/verify_fdm_transient_spin_m3_public_e2e.py --fullmag "$fullmag_bin"
     cargo test -p fullmag-engine --lib transient_spin --no-fail-fast
     cargo test -p fullmag-runner --lib coupled_ars232 --no-fail-fast
     cargo test -p fullmag-runner --lib adaptive_norm_detects_each_dimensional_observable_family --no-fail-fast
@@ -247,7 +250,8 @@ verify-fdm-transient-spin-m3-reference:
     cargo test -p fullmag-api api_rejects_missing_or_malformed_coupled_identity_classes --no-fail-fast
     cargo test -p fullmag-cli cli_parses_exact_coupled_checkpoint_resume_entrypoint --no-fail-fast
     cargo test -p fullmag-cli cli_resume_unwraps_only_the_exact_backend_state_envelope --no-fail-fast
-    PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
+    TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
+      python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
 
 verify-fdm-prescribed-sot-native-contract:
     docker compose --profile fem-gpu run --rm \

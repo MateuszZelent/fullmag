@@ -8097,9 +8097,9 @@ export interface components {
         /** @enum {string} */
         SceneTransportDevice: "cpu" | "gpu" | "auto";
         /** @enum {string} */
-        SceneTransportDiscretization: "fdm" | "fem" | "auto" | "hybrid";
+        SceneTransportDiscretization: "fdm" | "fem" | "auto";
         /** @enum {string} */
-        SceneTransportExecutionMode: "strict" | "extended" | "hybrid";
+        SceneTransportExecutionMode: "strict" | "extended";
         /** @enum {string} */
         SceneTransportPrecision: "single" | "double";
         ScriptSourceResponse: {

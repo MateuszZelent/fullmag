@@ -141,6 +141,43 @@ schema za kompletne pokrycie parametrów. Przed promocją wymagany jest gate
 6. Zintegrować gałąź z aktualnym `master`, rozwiązać kolizje not i uruchomić
    wszystkie bramki ponownie na czystym indeksie oraz świeżych artefaktach.
 
+### 0.5. Reconciliacja wykonawcza po porównaniu z BORIS (2026-08-03)
+
+Ta sekcja jest nowsza niż snapshoty w tabeli 0.3 i opisuje stan bieżącego
+`master`; historycznych wyników nie nadpisujemy. Najważniejsza korekta
+interpretacyjna pozostaje bez zmian: BORIS jest obecnie szerszym wykonywalnym
+wzorcem SHE/iSHE, natomiast Fullmag M2 jest docelowym, jawnie reciprocal
+kontraktem fizycznym. Żaden z tych faktów nie oznacza ilościowej zgodności.
+
+| Zakres | Świeży dowód | Uczciwy status po tej iteracji |
+|---|---|---|
+| Dokumentacja SHE ↔ BORIS | `BORIS_FULLMAG_SHE_COMPARISON.md`, odczyt `STransport.h`, `Transport_Spin.cpp`, `TransportCUDA.cu`, managed `BorisLin` smoke i adapter `S -> V_s -> mu_s` | `source_visible` + ograniczony `diagnostic`; **brak parity** |
+| Python/IR/OpenAPI/UI execution request | usunięto nieobsługiwane `hybrid` z UI, modelu authoringu, Rust API i wygenerowanego OpenAPI; 25 testów Inspector oraz 68 testów `fullmag-authoring` przechodzi | drift `hybrid` zamknięty; pełny leaf-by-leaf parity nadal otwarty |
+| FDM prescribed SOT | `just verify-fdm-prescribed-sot-native-contract`: algebra, CUDA FP64/FP32 i `cargo +nightly check --features cuda` przechodzą | natywny contract gate `pass`; brak pełnej kwalifikacji produktu |
+| FDM dynamiczny Oersted | `just verify-fdm-oersted-native-contract`: stage-time, rollback, adaptive, FSAL, ABM3 i axis oracle przechodzą | natywny contract gate `pass`; nie jest to jeszcze ogólny current-solve/airbox gate |
+| FEM OE-T0/OE-F1/OE-F2 CPU | zarządzane `just verify-fem-oersted-oet0-cpu-contract`, `...oef1...`, `...oef2...` przechodzą; wszystkie zawierają current-view MPI n1/n2 i tetra/direct/vector-potential contracts | `reference_executable` dla operator-contract slice; airbox, RT0/KKT, MPI race/skalowanie i zbieżność nadal otwarte |
+| FEM OE TSan | instrumentation audit przechodzi, runtime kończy się `ThreadSanitizer: unexpected memory mapping` | blokada środowiskowa; **nie** dowód błędu fizyki |
+| M3 FDM CPU/double/strict | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m3-reference CARGO_INCREMENTAL=0 just verify-fdm-transient-spin-m3-reference`: `RC:0`; public subprocess resume, 15 komend Rust (26 przypadków testowych) i `11 passed` Python | `reference_executable` gate zamknięty dla jawnego seed/noise workloadu |
+| FEM STT | `just verify-fem-stt-native-contract` zatrzymuje się przy konfiguracji kontenera na brakującym include PETSc `petsc3.15/.../include` | blokada obrazu/środowiska; brak awansu FEM STT |
+| Cały pakiet Python | bieżący rerun: `1407 passed, 46 failed, 2 skipped, 69 warnings, 550 subtests`; porażki dotyczą istniejących benchmark/mesh/SP4 fixtures, nie nowego `hybrid` slice | repozytorium nie ma zielonego full-suite; nie wolno twierdzić o pełnej integracji |
+
+Naprawiono również receptę M3, która ignorowała `CARGO_TARGET_DIR` i szukała
+`target/debug/fullmag` w checkoutcie. Recepta używa teraz binarium i katalogu
+tymczasowego na `/tmp/fullmag-zfn2-build`, zgodnie z trwałym magazynem
+`/zfn2/mateuszz/git/fullmag`; jest to warunek odtwarzalności, a nie obejście
+solvera. Publiczny M3 workload ma jawny `ThermalNoise(seed=77)`: pozostawienie
+samego `Problem.temperature` słusznie wybiera system entropy i uniemożliwia
+byte-exact porównanie niezależnych procesów.
+
+Capability matrix, `validated_workloads` i status Fullmag M2
+`semantic_only` pozostają bez zmian. W szczególności coarse M2 nadal przechodzi
+do runtime, ale pełna macierz BORIS–Fullmag nie zbiega się na drobnych siatkach,
+a `mu_s`, `Q_ia`, flux i torque nie są jeszcze porównywalne ilościowo.
+Ocena celu pozostaje konserwatywnie **84% implementacji / 58% gotowości
+produkcyjnej**: zamknięte contract gates nie kompensują otwartych bram
+reciprocal parity, FEM STT, GPU/FEM cross-backend, pełnej macierzy i zielonego
+full-suite.
+
 ---
 
 ## 1. Cel, zakres i definicja ukończenia
@@ -4729,3 +4766,80 @@ lecz `SHE-BORIS-001`, reciprocal parity, torque normalization, CPU↔CUDA,
 FEM/FDM oraz `validated_workloads` pozostają otwarte. Capability matrix nie
 zmienia się, a ocena pozostaje konserwatywnie **84% implementacji / 58%
 gotowości produkcyjnej**.
+
+## 32.30. Aktualizacja bram UI, M3 i Oersted/SOT (2026-08-03)
+
+### 32.30.1. Zgodność publicznego execution request
+
+Audyt porównawczy wykazał, że Control Room dopuszczał wartości
+`requested_execution.discretization=hybrid` i `execution_mode=hybrid`, mimo że
+Python DSL, `ProblemIR` i planner nie miały takiej realizacji. Był to błąd
+kontraktu, nie brak capability solvera. Wartość usunięto z modelu authoringu,
+Rust API, UI selectów i wygenerowanego OpenAPI; ścieżka dynamiczna kończy się
+jawnie błędem „Transport hybrid execution is not supported...”, zamiast
+wyemitować obiekt, którego runtime nie potrafi wykonać.
+
+Dowód: `TransportAuthoringInspectorModel` + komponent Inspector — `25 passed`,
+`openapiV2GeneratedContract`/`generationIdContract` — `6 passed`,
+`fullmag-authoring` — `68 passed`. To zamyka konkretny drift, ale nie zastępuje
+planowanego leaf-by-leaf round-trip wszystkich parametrów SHE/STT/SOT.
+
+### 32.30.2. M3: seed termiczny i artefakty na szybkim dysku
+
+Pierwszy uruchomiony M3 po naprawie ścieżki binarium ujawnił rzeczywistą
+niedeterministyczność: `Problem.temperature=300 K` bez `ThermalNoise.seed`
+wybiera system entropy, więc dwa niezależne procesy generowały różne
+`spin_current_tensor_apm2`. Nie zmieniono RNG ani nie poluzowano porównania;
+workload publiczny deklaruje teraz `fm.ThermalNoise(temperature=300.0,
+seed=77)`. Recepta rozwiązuje binarium jako
+`${CARGO_TARGET_DIR:-target}/debug/fullmag` i ustawia `TMPDIR` na
+`/tmp/fullmag-zfn2-build/m3-pytest`.
+
+Świeży wynik:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m3-reference \
+CARGO_INCREMENTAL=0 just verify-fdm-transient-spin-m3-reference
+RC:0
+M3 public canonical authoring, planner/runner, and subprocess resume: PASS
+12 transient_spin + 14 one-case runner/API/plan/CLI identity tests: PASS
+test_spin_drift_diffusion.py: 11 passed
+```
+
+To jest referencyjny CPU/double/strict gate dla jawnie stochastycznego
+workloadu. Nie jest to dowód jakości GPU, FEM, długiego czasu ani zgodności z
+BORIS.
+
+### 32.30.3. Natywne SOT i Oersted oraz blokady FEM
+
+`just verify-fdm-prescribed-sot-native-contract` przechodzi: algebra SOT,
+CUDA FP64/FP32 i managed `cargo +nightly check --features cuda` są zielone.
+`just verify-fdm-oersted-native-contract` przechodzi dla stage-time,
+rollbacku, adaptive, FSAL, ABM3 i osiowego oracle. Są to contract gates
+realizacji operatora; nie awansują ogólnego current-solve/airbox ani pełnej
+kwalifikacji GPU.
+
+Normalne zarządzane bramy FEM OE-T0/OE-F1/OE-F2 przechodzą aktualne kontrakty
+current-view, tetra/direct i vector-potential. TSan zatrzymuje się wyłącznie na
+`ThreadSanitizer: unexpected memory mapping`, a `verify-fem-stt-native-contract`
+na brakującym katalogu PETSc w obrazie (`petsc3.15/.../include`). Obie
+obserwacje zapisujemy jako blokady środowiskowe; nie zmieniamy progów fizycznych
+ani capability.
+
+### 32.30.4. Granica porównania z BORIS
+
+Porównanie z `external_solvers/BORIS/Boris` jest wykonane na poziomie źródeł,
+kontraktu i ograniczonego executable smoke. BORIS rozwiązuje sekwencyjnie `V`
+i `S`, ma jawne `SHA`/`iSHA`, `Gi/Gmix` oraz CUDA kernel; Fullmag M2 używa
+`mu_s`, jednego reciprocal bloku i block-GMRES. Adapter `S -> V_s -> mu_s`
+oraz korekta `mu_s` jako pełnego rozszczepienia są zapisane w
+`BORIS_FULLMAG_SHE_COMPARISON.md`.
+
+Aktualny managed N/F coarse run ma poprawne residuale Fullmag, ale porównanie
+jest `incomparable`: po dopuszczalnym gauge shift potencjału profil `V` ma
+`3.098487032667977e-4` błędu względnego, natomiast `mu_s`, `Q_ia`, flux i
+torque różnią się na poziomie rzędu jedności lub mają różne jednostki.
+Macierz sześciu siatek nie zamknęła GMRES dla drobnych przypadków. Wniosek
+fizyczny pozostaje więc rozdzielony: BORIS jest obecnie lepszym wykonywalnym
+wzorcem zakresu, Fullmag M2 lepszym docelowym kontraktem, ale żaden wynik nie
+uprawnia do deklaracji parity ani do awansu `validated_workloads`.

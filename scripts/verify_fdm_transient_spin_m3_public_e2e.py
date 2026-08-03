@@ -74,7 +74,13 @@ def canonical_problem_ir() -> dict[str, object]:
     problem = fm.Problem(
         name="m3_public_process_qualification",
         magnets=[magnet],
-        energy=[fm.Zeeman((0.0, 0.0, 0.0))],
+        # M3 compares independent subprocesses and a resumed process byte-for-byte.
+        # The thermal seed must therefore be part of the public physical problem;
+        # Problem.temperature alone intentionally uses system entropy.
+        energy=[
+            fm.Zeeman((0.0, 0.0, 0.0)),
+            fm.ThermalNoise(temperature=300.0, seed=77),
+        ],
         study=fm.TimeEvolution(
             dynamics=fm.LLG(
                 integrator="coupled_imex_ark2", fixed_timestep=1.0e-13

@@ -1381,6 +1381,7 @@ impl CurrentLivePublisher {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::time::Instant;
 
     use super::{
@@ -1442,6 +1443,7 @@ mod tests {
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
             finished: false,
+            coupled_checkpoint: None,
         }
     }
 
