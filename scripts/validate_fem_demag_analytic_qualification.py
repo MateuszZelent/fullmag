@@ -103,6 +103,14 @@ def _case_oracle(case: dict[str, Any], axis: str) -> float:
     return _osborn_factors(values)[{"x": 0, "y": 1, "z": 2}[axis]]
 
 
+def _case_volume(case: dict[str, Any]) -> float:
+    axes = _list(case.get("semi_axes_m"), f"suite case {case.get('case_id')}.semi_axes_m")
+    _require(len(axes) == 3, f"suite case {case.get('case_id')}.semi_axes_m must contain three values")
+    values = [_finite(value, f"suite case {case.get('case_id')}.semi_axes_m") for value in axes]
+    _require(all(value > 0.0 for value in values), f"suite case {case.get('case_id')}.semi_axes_m must be positive")
+    return 4.0 * math.pi * math.prod(values) / 3.0
+
+
 def _identity(row: dict[str, Any]) -> tuple[str, str, str, float, str]:
     return (
         str(row.get("case_id")),
@@ -128,7 +136,14 @@ def _load_artifact(path: Path) -> dict[str, Any]:
     return _object(value, "analytic qualification artifact")
 
 
-def _validate_provenance(artifact: dict[str, Any]) -> None:
+def _validate_provenance(
+    artifact: dict[str, Any],
+    *,
+    expected_source_snapshot_sha256: str | None,
+    expected_runtime_manifest_sha256: str | None,
+    expected_native_library_sha256: str | None,
+    expected_container_image: str | None,
+) -> None:
     runtime = _object(artifact.get("managed_runtime_identity"), "managed_runtime_identity")
     for key in ("runtime_manifest_sha256", "native_library_sha256"):
         _sha256(runtime.get(key), f"managed_runtime_identity.{key}")
@@ -137,18 +152,32 @@ def _validate_provenance(artifact: dict[str, Any]) -> None:
     source = _object(artifact.get("source_provenance"), "source_provenance")
     for key in ("source_snapshot_sha256", "qualification_suite_sha256"):
         _sha256(source.get(key), f"source_provenance.{key}")
+    if expected_source_snapshot_sha256 is not None:
+        _require(source["source_snapshot_sha256"] == expected_source_snapshot_sha256, "source_provenance.source_snapshot_sha256 does not match the current expected identity")
+    if expected_runtime_manifest_sha256 is not None:
+        _require(runtime["runtime_manifest_sha256"] == expected_runtime_manifest_sha256, "managed_runtime_identity.runtime_manifest_sha256 does not match the current managed runtime")
+    if expected_native_library_sha256 is not None:
+        _require(runtime["native_library_sha256"] == expected_native_library_sha256, "managed_runtime_identity.native_library_sha256 does not match the current managed runtime")
+    if expected_container_image is not None:
+        _require(runtime["container_image"] == expected_container_image, "managed_runtime_identity.container_image does not match the current managed runtime")
 
 
-def _validate_row_policy(row: dict[str, Any], index: int) -> None:
+def _validate_row_policy(row: dict[str, Any], index: int, policy: dict[str, Any] | None = None) -> None:
     label = f"physics_rows[{index}]"
     _require(row.get("initial_state_kind") == "prescribed_uniform", f"{label}: initial_state_kind must be prescribed_uniform")
     _require(row.get("demag_evaluation_count") == 1, f"{label}: demag_evaluation_count must be 1")
     _require(row.get("relaxation_algorithm") == "none", f"{label}: relaxation_algorithm must be none")
+    if policy is not None:
+        for key in ("demag_solver", "demag_preconditioner", "fresh_zero_solve", "precision", "demag_realization"):
+            _require(row.get(key) == policy.get(key), f"{label}: {key} differs from suite solve policy")
+        expected_rtol = _finite(policy.get("demag_rtol"), "suite.physics_row_policy.demag_rtol")
+        actual_rtol = _finite(row.get("demag_rtol"), f"{label}.demag_rtol")
+        _require(math.isclose(actual_rtol, expected_rtol, rel_tol=0.0, abs_tol=1.0e-30), f"{label}: demag_rtol differs from suite solve policy")
 
 
-def _validate_row(row: dict[str, Any], index: int, case: dict[str, Any], source_snapshot_sha256: str) -> None:
+def _validate_row(row: dict[str, Any], index: int, case: dict[str, Any], source_snapshot_sha256: str, policy: dict[str, Any], transverse_rtol: float) -> None:
     label = f"physics_rows[{index}]"
-    _validate_row_policy(row, index)
+    _validate_row_policy(row, index, policy)
     _require(row.get("backend") in BACKENDS, f"{label}: backend must be one of {BACKENDS}")
     _require(row.get("mesh_refinement") in REFINEMENTS, f"{label}: mesh_refinement is invalid")
     _require(_finite(row.get("airbox_scale"), f"{label}.airbox_scale") in AIRBOX_SCALES, f"{label}: airbox_scale is invalid")
@@ -166,22 +195,34 @@ def _validate_row(row: dict[str, Any], index: int, case: dict[str, Any], source_
     _require(len(field) == 3, f"{label}.h_demag_mean_magnetic_Apm must have 3 components")
     field_values = [_finite(value, f"{label}.h_demag_mean_magnetic_Apm") for value in field]
     axis_index = {"x": 0, "y": 1, "z": 2}[str(row["axis"])]
+    prescribed_m = _list(row.get("prescribed_m"), f"{label}.prescribed_m")
+    _require(len(prescribed_m) == 3, f"{label}.prescribed_m must have 3 components")
+    for component, value in enumerate(prescribed_m):
+        expected = 1.0 if component == axis_index else 0.0
+        _require(abs(_finite(value, f"{label}.prescribed_m") - expected) <= 1.0e-15, f"{label}.prescribed_m must be the declared principal-axis uniform state")
     n_from_field = -field_values[axis_index] / ms
     n_from_energy = 2.0 * _finite(row["e_demag_J"], f"{label}.e_demag_J") / (
-        4.0e-7 * math.pi * ms * ms * _finite(row["magnetic_volume_m3"], f"{label}.magnetic_volume_m3")
+        4.0e-7 * math.pi * ms * ms * _case_volume(case)
     )
     n_analytic = _finite(row["n_analytic"], f"{label}.n_analytic")
     oracle = _case_oracle(case, str(row["axis"]))
     _require(_relative_error(n_analytic, oracle) <= 1.0e-12, f"{label}: n_analytic is not the geometry-derived sphere/Osborn oracle")
     _require(n_analytic > 0.0, f"{label}.n_analytic must be positive")
+    expected_volume = _case_volume(case)
+    _require(_relative_error(_finite(row["magnetic_volume_m3"], f"{label}.magnetic_volume_m3"), expected_volume) <= 1.0e-12, f"{label}: magnetic_volume_m3 differs from suite geometry")
+    expected_energy = 0.5 * 4.0e-7 * math.pi * oracle * ms * ms * expected_volume
+    _require(_relative_error(_finite(row["e_demag_analytic_J"], f"{label}.e_demag_analytic_J"), expected_energy) <= 1.0e-12, f"{label}: e_demag_analytic_J is not geometry-derived")
+    _require(row.get("magnetic_region_only") is True, f"{label}: magnetic_region_only must be true")
+    field_weights = _sha256(row.get("field_lumped_weight_sha256"), f"{label}.field_lumped_weight_sha256")
+    _require(field_weights == _sha256(row.get("energy_lumped_weight_sha256"), f"{label}.energy_lumped_weight_sha256"), f"{label}: field and energy must use the same lumped-volume weights")
+    for component, value in enumerate(field_values):
+        if component != axis_index:
+            _require(abs(value) <= transverse_rtol * max(abs(oracle * ms), 1.0), f"{label}: transverse H_demag component exceeds oracle tolerance")
     _require(_finite(row.get("demag_linear_residual"), f"{label}.demag_linear_residual") <= RESIDUAL_ATOL, f"{label}: demag_linear_residual exceeds 1e-12")
     _finite(row.get("demag_linear_iterations"), f"{label}.demag_linear_iterations")
     row["_field_factor_relative_error"] = _relative_error(n_from_field, n_analytic)
     row["_energy_factor_relative_error"] = _relative_error(n_from_energy, n_analytic)
-    row["_energy_relative_error"] = _relative_error(
-        _finite(row["e_demag_J"], f"{label}.e_demag_J"),
-        _finite(row["e_demag_analytic_J"], f"{label}.e_demag_analytic_J"),
-    )
+    row["_energy_relative_error"] = _relative_error(_finite(row["e_demag_J"], f"{label}.e_demag_J"), expected_energy)
     row["_n_from_field"] = n_from_field
     row["_n_from_energy"] = n_from_energy
 
@@ -208,18 +249,21 @@ def _validate_exact_matrix(rows: list[dict[str, Any]], suite: dict[str, Any]) ->
 
 
 def _validate_timing_rows(rows: list[dict[str, Any]], timing_rows: list[Any]) -> None:
-    physics = {_identity(row) for row in rows}
+    physics = {_identity(row): row for row in rows}
     expected = {(identity, repeat) for identity in physics for repeat in TIMING_REPEATS}
     actual: set[tuple[tuple[str, str, str, float, str], int]] = set()
     for index, candidate in enumerate(timing_rows):
         row = _object(candidate, f"timing_rows[{index}]")
-        _require(row.get("initial_state_kind") == "prescribed_uniform", f"timing_rows[{index}]: initial_state_kind must be prescribed_uniform")
-        _require(row.get("demag_evaluation_count") == 1, f"timing_rows[{index}]: demag_evaluation_count must be 1")
-        _require(row.get("relaxation_algorithm") == "none", f"timing_rows[{index}]: relaxation_algorithm must be none")
         repeat = row.get("repeat_index")
         _require(isinstance(repeat, int) and repeat in TIMING_REPEATS, f"timing_rows[{index}]: repeat_index must be 0, 1, or 2")
-        _finite(row.get("demag_wall_time_ns"), f"timing_rows[{index}].demag_wall_time_ns")
-        actual.add((_identity(row), repeat))
+        _require(_finite(row.get("demag_wall_time_ns"), f"timing_rows[{index}].demag_wall_time_ns") > 0.0, f"timing_rows[{index}].demag_wall_time_ns must be positive")
+        identity = _identity(row)
+        reference = physics.get(identity)
+        _require(reference is not None, f"timing_rows[{index}]: no matching physics identity")
+        for key, expected_value in reference.items():
+            if not key.startswith("_"):
+                _require(row.get(key) == expected_value, f"timing_rows[{index}]: {key} differs from matching physics identity")
+        actual.add((identity, repeat))
     _require(actual == expected, "timing matrix must contain exactly three repeats for every physics identity")
 
 
@@ -240,12 +284,9 @@ def _validate_refinement_and_airbox(rows: list[dict[str, Any]]) -> None:
         by_key[(case_id, axis, scale, backend)][refinement] = row
     for key, levels in by_key.items():
         _require(set(levels) == set(REFINEMENTS), f"{key}: refinement rows must include coarse, medium, and fine")
-        coarse, fine = levels["coarse"], levels["fine"]
-        _require(
-            fine["_field_factor_relative_error"] + fine["_energy_relative_error"]
-            < coarse["_field_factor_relative_error"] + coarse["_energy_relative_error"],
-            f"{key}: refinement must decrease combined field/energy error",
-        )
+        coarse, medium, fine = levels["coarse"], levels["medium"], levels["fine"]
+        errors = [row["_field_factor_relative_error"] + row["_energy_relative_error"] for row in (coarse, medium, fine)]
+        _require(errors[1] < errors[0] and errors[2] < errors[1], f"{key}: all three refinement levels must monotonically decrease combined field/energy error")
     by_airbox: dict[tuple[str, str, str, str], dict[float, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
         case_id, axis, refinement, scale, backend = _identity(row)
@@ -281,11 +322,65 @@ def _validate_cpu_gpu_parity(rows: list[dict[str, Any]]) -> None:
         _require(set(pair) == set(BACKENDS), f"{key}: CPU/GPU pair is incomplete")
         cpu, gpu = pair["fem_cpu"], pair["fem_gpu"]
         _require(cpu["solver_mesh_signature"] == gpu["solver_mesh_signature"], f"{key}: CPU/GPU typed mesh mismatch")
+        _require(cpu["source_provenance"]["serialized_typed_mesh_sha256"] == gpu["source_provenance"]["serialized_typed_mesh_sha256"], f"{key}: CPU/GPU serialized typed mesh bytes mismatch")
         _require(_relative_error(cpu["_n_from_field"], gpu["_n_from_field"]) <= CPU_GPU_RTOL, f"{key}: CPU/GPU field mismatch exceeds 1e-6")
         _require(_relative_error(_finite(cpu["e_demag_J"], "cpu energy"), _finite(gpu["e_demag_J"], "gpu energy")) <= CPU_GPU_RTOL, f"{key}: CPU/GPU energy mismatch exceeds 1e-6")
 
 
-def validate_qualification(artifact_path: Path, suite_path: Path | None = None) -> dict[str, Any]:
+def _validate_mesh_airbox_identities(rows: list[dict[str, Any]]) -> None:
+    groups: dict[tuple[str, str, float], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        case_id, _, refinement, scale, _ = _identity(row)
+        groups[(case_id, refinement, scale)].append(row)
+    by_case: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    for key, group in groups.items():
+        mesh_hashes = {row["source_provenance"]["serialized_typed_mesh_sha256"] for row in group}
+        signatures = {row["solver_mesh_signature"] for row in group}
+        airboxes = {_sha256(row.get("airbox_identity_sha256"), f"{key}.airbox_identity_sha256") for row in group}
+        topology = {
+            (
+                int(_finite(row.get("solver_mesh_node_count"), f"{key}.solver_mesh_node_count")),
+                int(_finite(row.get("solver_mesh_cell_count"), f"{key}.solver_mesh_cell_count")),
+            )
+            for row in group
+        }
+        _require(all(node > 0 and cell > 0 for node, cell in topology), f"{key}: mesh topology counts must be positive")
+        _require(len(mesh_hashes) == len(signatures) == len(airboxes) == len(topology) == 1, f"{key}: same refinement/airbox must have one exact mesh, signature, airbox, and topology identity")
+        by_case[key[0]].add((next(iter(mesh_hashes)), next(iter(airboxes))))
+    expected_count = len(REFINEMENTS) * len(AIRBOX_SCALES)
+    for case_id, identities in by_case.items():
+        _require(len(identities) == expected_count, f"{case_id}: each refinement/airbox point must use a distinct typed-mesh/airbox identity")
+
+
+def _expected_source_snapshot_sha256(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    return _sha256(
+        _load_artifact(path).get("source_snapshot_sha256"),
+        "expected source identity.source_snapshot_sha256",
+    )
+
+
+def _expected_runtime_identity(path: Path | None) -> tuple[str | None, str | None, str | None]:
+    if path is None:
+        return None, None, None
+    manifest_bytes = path.read_bytes()
+    try:
+        manifest = _object(json.loads(manifest_bytes), "expected managed runtime manifest")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid expected managed runtime manifest: {exc}") from exc
+    native = _object(_object(manifest.get("native_libraries"), "expected managed runtime native_libraries").get("fullmag_fem"), "expected managed runtime native_libraries.fullmag_fem")
+    image = manifest.get("docker_image_id")
+    _require(isinstance(image, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image) is not None, "expected managed runtime docker_image_id must be an immutable SHA-256 digest")
+    return hashlib.sha256(manifest_bytes).hexdigest(), _sha256(native.get("sha256"), "expected managed runtime native library sha256"), image
+
+
+def validate_qualification(
+    artifact_path: Path,
+    suite_path: Path | None = None,
+    expected_source_identity_path: Path | None = None,
+    expected_runtime_manifest_path: Path | None = None,
+) -> dict[str, Any]:
     """Validate an existing managed analytic artifact and return its summary.
 
     A missing artifact is a failure, not a skipped or inferred qualification.
@@ -296,7 +391,15 @@ def validate_qualification(artifact_path: Path, suite_path: Path | None = None) 
     _require(rows, "physics_rows must not be empty")
     for index, row in enumerate(rows):
         _validate_row_policy(row, index)
-    _validate_provenance(artifact)
+    expected_source_snapshot_sha256 = _expected_source_snapshot_sha256(expected_source_identity_path)
+    expected_runtime_manifest_sha256, expected_native_library_sha256, expected_container_image = _expected_runtime_identity(expected_runtime_manifest_path)
+    _validate_provenance(
+        artifact,
+        expected_source_snapshot_sha256=expected_source_snapshot_sha256,
+        expected_runtime_manifest_sha256=expected_runtime_manifest_sha256,
+        expected_native_library_sha256=expected_native_library_sha256,
+        expected_container_image=expected_container_image,
+    )
     suite = _object(artifact.get("suite") if suite_path is None else _load_artifact(suite_path), "analytic qualification suite")
     if suite_path is not None:
         expected_suite_sha256 = hashlib.sha256(suite_path.read_bytes()).hexdigest()
@@ -315,16 +418,19 @@ def validate_qualification(artifact_path: Path, suite_path: Path | None = None) 
         _object(artifact["source_provenance"], "source_provenance").get("source_snapshot_sha256"),
         "source_provenance.source_snapshot_sha256",
     )
+    policy = _object(suite.get("physics_row_policy"), "suite.physics_row_policy")
+    transverse_rtol = _finite(_object(suite.get("acceptance"), "suite.acceptance").get("transverse_field_relative_error_max"), "suite.acceptance.transverse_field_relative_error_max")
     for index, row in enumerate(rows):
         case_id = str(row.get("case_id"))
         _require(case_id in cases, f"physics_rows[{index}]: unknown suite case_id {case_id}")
-        _validate_row(row, index, cases[case_id], source_snapshot_sha256)
+        _validate_row(row, index, cases[case_id], source_snapshot_sha256, policy, transverse_rtol)
     _validate_exact_matrix(rows, suite)
     _validate_timing_rows(rows, _list(artifact.get("timing_rows"), "timing_rows"))
     _validate_fine_errors(rows)
     _validate_refinement_and_airbox(rows)
     _validate_ellipsoid_sums(rows, suite)
     _validate_cpu_gpu_parity(rows)
+    _validate_mesh_airbox_identities(rows)
     return {
         "schema_version": SCHEMA,
         "qualified": True,
@@ -338,10 +444,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--suite", type=Path)
+    parser.add_argument("--expected-source-identity", type=Path)
+    parser.add_argument("--expected-runtime-manifest", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
-        summary = validate_qualification(args.artifact, args.suite)
+        summary = validate_qualification(
+            args.artifact,
+            args.suite,
+            args.expected_source_identity,
+            args.expected_runtime_manifest,
+        )
     except ValueError as exc:
         summary = {"schema_version": SCHEMA, "qualified": False, "decision": "no_go", "reason": str(exc)}
         if args.output:

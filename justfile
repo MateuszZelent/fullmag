@@ -3511,9 +3511,15 @@ verify-fem-demag-analytic-qualification artifact=".fullmag/reports/fem-demag-ana
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
         python3 -m pytest -q -s tests/fem_demag_validation/test_acceptance.py scripts/test_validate_fem_demag_analytic_qualification.py scripts/test_validate_fem_demag_mesh_airbox_convergence.py; \
+        report_dir=.fullmag/reports/fem-demag-analytic-qualification; \
+        mkdir -p "$report_dir"; \
+        python3 scripts/capture_source_snapshot_identity.py --repo-root /workspace --output "$report_dir/current-source-identity.v1.json"; \
+        test -f .fullmag/runtimes/fem-gpu-host/manifest.json; \
         python3 scripts/validate_fem_demag_analytic_qualification.py \
           --suite examples/assets/fem_demag_analytic_qualification_suite_v1.json \
           --artifact "{{artifact}}" \
+          --expected-source-identity "$report_dir/current-source-identity.v1.json" \
+          --expected-runtime-manifest .fullmag/runtimes/fem-gpu-host/manifest.json \
           --output .fullmag/reports/fem-demag-analytic-qualification/summary.v1.json'
 
 resource-first-gates mode="strict":
