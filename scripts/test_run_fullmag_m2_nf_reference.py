@@ -7,6 +7,7 @@ import pytest
 
 from run_fullmag_m2_nf_reference import (
     Resolution,
+    _materialize_comparison_artifact,
     build_fullmag_nf_problem,
     run_fullmag_nf_reference,
 )
@@ -73,3 +74,54 @@ def test_reference_runner_reports_not_run_when_binary_is_missing(tmp_path: Path)
 def test_reference_request_is_json_serializable() -> None:
     problem = build_fullmag_nf_problem(Resolution(4, 2, 2, 2))
     json.dumps(problem, allow_nan=False)
+
+
+def test_materializer_averages_all_in_plane_interface_observations(tmp_path: Path) -> None:
+    request = build_fullmag_nf_problem(Resolution(4, 2, 2, 2))
+    accepted_path = tmp_path / "spin_transport_accepted.json"
+    interface_fluxes = [
+        {
+            "absorbed_transverse_apm2": [1.0, 2.0, 3.0],
+            "from_side_outgoing_apm2": [4.0, 5.0, 6.0],
+            "to_side_transmitted_apm2": [7.0, 8.0, 9.0],
+        },
+        {
+            "absorbed_transverse_apm2": [3.0, 4.0, 5.0],
+            "from_side_outgoing_apm2": [6.0, 7.0, 8.0],
+            "to_side_transmitted_apm2": [8.0, 10.0, 12.0],
+        },
+    ]
+    accepted_path.write_text(
+        json.dumps(
+            {
+                "schema": "fullmag.fdm.spin_transport.accepted.v1",
+                "evaluation": {
+                    "modules": [
+                        {
+                            "telemetry": {
+                                "charge_balance_relative": 1.0e-12,
+                                "spin_balance_relative": 2.0e-12,
+                            },
+                            "interface_fluxes": interface_fluxes,
+                            "transport_torque_per_s": [
+                                [0.0, 0.0, 0.0]
+                            ]
+                            * 32,
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = _materialize_comparison_artifact(
+        accepted_path,
+        request,
+        tmp_path / "fullmag_m2_nf_reference.json",
+    )
+    artifact = json.loads(output.read_text(encoding="utf-8"))
+    balances = artifact["interface_balances"]
+    assert balances["absorbed_spin_flux"] == [2.0, 3.0, 4.0]
+    assert balances["normal_spin_flux"] == [5.0, 6.0, 7.0]
+    assert balances["ferromagnet_spin_flux"] == [7.5, 9.0, 10.5]

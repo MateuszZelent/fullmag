@@ -348,6 +348,26 @@ def _sum_vectors(values: object) -> list[float]:
     return result
 
 
+def _mean_interface_vectors(interface_fluxes: list[object], key: str) -> list[float]:
+    total = [0.0, 0.0, 0.0]
+    for index, observation in enumerate(interface_fluxes):
+        if not isinstance(observation, dict):
+            raise RuntimeError(f"not_run: Fullmag interface observation {index} is malformed")
+        value = observation.get(key)
+        if not isinstance(value, list) or len(value) != 3:
+            raise RuntimeError(f"not_run: Fullmag interface observation is missing {key}")
+        for component, raw in enumerate(value):
+            number = float(raw)
+            if not math.isfinite(number):
+                raise RuntimeError(
+                    f"not_run: Fullmag interface observation {index} has non-finite {key}"
+                )
+            total[component] += number
+    if not interface_fluxes:
+        raise RuntimeError("not_run: Fullmag transport interface flux is empty")
+    return [value / len(interface_fluxes) for value in total]
+
+
 def _materialize_comparison_artifact(
     accepted_path: Path, request: Mapping[str, object], output_path: Path
 ) -> Path:
@@ -367,12 +387,14 @@ def _materialize_comparison_artifact(
     if not isinstance(telemetry, dict):
         raise RuntimeError("not_run: Fullmag transport telemetry is missing")
     interface_fluxes = module.get("interface_fluxes")
-    if not isinstance(interface_fluxes, list) or len(interface_fluxes) != 1 or not isinstance(interface_fluxes[0], dict):
+    if not isinstance(interface_fluxes, list) or not interface_fluxes:
         raise RuntimeError("not_run: Fullmag transport interface flux is missing")
-    interface_flux = interface_fluxes[0]
-    absorbed = interface_flux.get("absorbed_transverse_apm2")
-    if not isinstance(absorbed, list) or len(absorbed) != 3:
-        raise RuntimeError("not_run: Fullmag absorbed interface flux is missing")
+    absorbed = _mean_interface_vectors(interface_fluxes, "absorbed_transverse_apm2")
+    normal_spin_flux = _mean_interface_vectors(interface_fluxes, "from_side_outgoing_apm2")
+    ferromagnet_spin_flux = _mean_interface_vectors(interface_fluxes, "to_side_transmitted_apm2")
+    spin_flux_jump = [
+        normal_spin_flux[index] - ferromagnet_spin_flux[index] for index in range(3)
+    ]
     mesh = request["mesh"]
     if not isinstance(mesh, dict):
         raise RuntimeError("not_run: Fullmag request mesh metadata is missing")
@@ -406,6 +428,10 @@ def _materialize_comparison_artifact(
         },
         "interface_balances": {
             "absorbed_spin_flux": absorbed,
+            "normal_spin_flux": normal_spin_flux,
+            "ferromagnet_spin_flux": ferromagnet_spin_flux,
+            "spin_flux_jump": spin_flux_jump,
+            "interface_observation_count": len(interface_fluxes),
             "torque": torque,
             "charge_closure": telemetry.get("charge_net_boundary_current_a", 0.0),
             "torque_source": "sum of Fullmag cellwise Gilbert transport torque; not BORIS Tsi",

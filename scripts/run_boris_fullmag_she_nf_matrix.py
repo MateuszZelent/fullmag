@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -72,6 +73,7 @@ def run_resolution_matrix(
         raise ValueError("matrix tolerances must be finite and positive")
     report_root = report_root.expanduser().resolve()
     report_root.mkdir(parents=True, exist_ok=True)
+    runtime_container = os.environ.get("FULLMAG_BORIS_RUNTIME_CONTAINER")
     runs: list[dict[str, object]] = []
     for resolution in resolutions:
         for tolerance in normalized_tolerances:
@@ -111,6 +113,7 @@ def run_resolution_matrix(
                     boris_build_root,
                     boris_root,
                     "cpu",
+                    runtime_container=runtime_container,
                 )
                 fullmag_artifact = run_fullmag_nf_reference(
                     fullmag_binary,

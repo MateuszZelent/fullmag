@@ -472,6 +472,17 @@ def _interface_value(artifact: NormalizedTransportArtifact, key: str) -> object:
     return artifact.interface_balances[key]
 
 
+def _gauge_aligned_potential(
+    boris: NormalizedTransportArtifact, fullmag: NormalizedTransportArtifact
+) -> tuple[dict[str, float], float]:
+    offset = sum(
+        boris_value - fullmag_value
+        for boris_value, fullmag_value in zip(boris.potential_v, fullmag.potential_v)
+    ) / len(boris.potential_v)
+    aligned_fullmag = tuple(value + offset for value in fullmag.potential_v)
+    return _metric(boris.potential_v, aligned_fullmag), offset
+
+
 def _compatible_conventions(
     boris: NormalizedTransportArtifact, fullmag: NormalizedTransportArtifact
 ) -> str | None:
@@ -501,18 +512,19 @@ def compare_transport_artifacts(
         raise ValueError("incomparable: mesh shape differs")
     if boris.normal_axis != fullmag.normal_axis or boris.normal_sign != fullmag.normal_sign:
         raise ValueError("incomparable: interface normal orientation differs")
-    for label, left, right in (
-        ("origin", boris.origin_m, fullmag.origin_m),
-        ("step", boris.step_m, fullmag.step_m),
-    ):
+    for label, left, right in (("step", boris.step_m, fullmag.step_m),):
         if any(
             not math.isclose(a, b, rel_tol=_MESH_REL_TOLERANCE, abs_tol=_MESH_ABS_TOLERANCE)
             for a, b in zip(left, right)
         ):
             raise ValueError(f"incomparable: mesh {label} differs")
+    translation = [
+        fullmag.origin_m[index] - boris.origin_m[index] for index in range(3)
+    ]
     torque_issue = _compatible_conventions(boris, fullmag)
+    potential_metric, potential_offset = _gauge_aligned_potential(boris, fullmag)
     observables = {
-        "potential_v": _metric(boris.potential_v, fullmag.potential_v),
+        "potential_v": potential_metric,
         "mu_s": _metric(boris.mu_s_v, fullmag.mu_s_v),
         "charge_current": _metric(boris.charge_current_apm2, fullmag.charge_current_apm2),
         "spin_current_qia": _metric(boris.spin_current_qia_apm2, fullmag.spin_current_qia_apm2),
@@ -548,8 +560,19 @@ def compare_transport_artifacts(
             "status": "diagnostic",
             "reason": "normalized field comparison; no production or solver-equivalence claim",
         },
-        "mesh": {"shape": list(boris.shape), "origin_m": list(boris.origin_m), "step_m": list(boris.step_m)},
+        "mesh": {
+            "shape": list(boris.shape),
+            "origin_m": list(boris.origin_m),
+            "fullmag_origin_m": list(fullmag.origin_m),
+            "translation_fullmag_minus_boris_m": translation,
+            "step_m": list(boris.step_m),
+        },
         "normal_orientation": {"axis": boris.normal_axis, "sign": boris.normal_sign},
+        "gauge_alignment": {
+            "mode": "constant_offset_mean",
+            "fullmag_added_offset_V": potential_offset,
+            "meaning": "charge potential is compared modulo its arbitrary additive gauge",
+        },
         "formula_versions": {"boris": boris.formula_version, "fullmag": fullmag.formula_version},
         "conventions": {"boris": dict(boris.conventions), "fullmag": dict(fullmag.conventions)},
         "observables": observables,

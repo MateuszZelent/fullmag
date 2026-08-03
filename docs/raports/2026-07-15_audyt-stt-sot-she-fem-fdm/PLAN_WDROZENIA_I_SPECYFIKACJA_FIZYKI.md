@@ -4610,7 +4610,7 @@ wyniku.
 Zamknięte: Task 4 (normalizacja/metryki), Task 5.1–5.5 (builder, fail-closed
 runner i testy) oraz Task 6.1–6.5 (macierz trzech siatek, dwóch tolerancji,
 walidacja monotoniczności i receptura `just verify-boris-fullmag-she-nf`).
-Task 5/6 nie mają jeszcze pozytywnego runtime evidence; pozostaje
+Task 5/6 nie miały jeszcze pozytywnego runtime evidence; pozostawała
 brama otwarta do czasu przejścia physical balance. Testy focused harnessu:
 
 ```text
@@ -4619,7 +4619,105 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile ...  # pass
 git diff --check                                             # pass
 ```
 
-Nie zmieniono capability matrix ani `validated_workloads`. Ocena celu pozostaje
-konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**: adapter i
-provenance są zaimplementowane, ale brak wykonania Fullmag na wspólnym N/F
-mesh, trzech siatek, sweepu tolerancji, torque normalization i CPU↔CUDA.
+Nie zmieniono capability matrix ani `validated_workloads`. Zidentyfikowana
+przyczyna została naprawiona w solverze i pokryta testem regresyjnym; przed
+ponownym uruchomieniem managed runnera status nadal jest `not_run`, więc ocena
+pozostaje konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.28. Korekta skalowania GMRES dla cienkiej siatki M2 (2026-08-03)
+
+Blokada z sekcji 32.27 była błędem kryterium numerycznego, a nie powodem do
+poluzowania physical-balance gate. `CoupledChargeSpinSolver` wyznacza normę
+prawej strony po block-Jacobi preconditionerze, czyli w normie bezwymiarowej.
+Kod stosował jednak `max(||P b||_2, 1)`. Dla stosu `100 nm × 100 nm × 1 nm`
+zamieniało to żądaną tolerancję względną w zbyt luźną tolerancję absolutną i
+pozostawiało bilans elektrod/spinu na poziomie `10^-7`–`10^-6`.
+
+Poprawka w
+`crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` używa
+rzeczywistej normy `||P b||_2`; dla dokładnie zerowego RHS stosuje wyłącznie
+`absolute_tolerance`. Nie zmieniono progu physical balance, równań, znaków,
+jednostek ani publicznego ProblemIR. Nota `docs/physics/0970-...` zamraża tę
+definicję skalowania jako część kontraktu M2.
+
+Dowód regresyjny:
+
+```text
+RED: m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance
+     charge=1.608465e-7, spin=2.345993e-7 (stary floor, rel_tol=1e-9)
+GREEN: ten sam test po korekcie
+22/22 coupled_charge_spin tests passed
+```
+
+Test obejmuje rzeczywisty układ N/F z `SHA=iSHA=0.1`, `P_F=0.4`, `Gi/Gmix`,
+reakcją spin-flip, orientacją `+z`, komórką `1e-7,1e-7,1e-9 m` i torque
+targets po stronie F. To jest naprawa lokalnego kryterium zbieżności; nie jest
+jeszcze dowodem parity z BORIS ani kwalifikacji GPU/FEM.
+
+Następna brama: przebudować launcher przez `just`, wykonać sześć tuplek
+macierzy BORIS–Fullmag, zapisać artefakty z nową tożsamością binarium i
+sprawdzić monotoniczną zbieżność. Dopiero wtedy wolno zaktualizować status
+`not_run`/`diagnostic_match`; capability matrix pozostaje bez zmian.
+
+## 32.29. Świeży coarse run i wynik pierwszej macierzy (2026-08-03)
+
+Po korekcie z sekcji 32.28 przebudowano launcher przez repozytoryjny `just`
+z zachowaniem artefaktów poza checkoutem. Tożsamość uruchomienia Fullmag jest
+zamrożona w `runtime_identity`:
+
+```text
+commit=813332079e01838f976acee521326b643dce7aaa (dirty working tree)
+native_sha256=284c14c86212cc918c1ad1770d70049e1918b3271fb0d8545d08f865f65e627b
+launcher_sha256=27d7c5ebb3bd1aa47391fc9bc6313d052a6e2b42f05e8cf5f183a84b12ea1843
+```
+
+Świeży workload N/F `4×2×2+2`, `FDM/CPU/double/strict`, został zaakceptowany
+przez runtime i zapisał pełny artefakt:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-nf-coarse-run22/
+transport/fullmag_m2_nf_reference.json
+```
+
+W telemetry zapisano `scaled_charge_residual=6.423463949700895e-15`,
+`scaled_spin_residual=3.691253818811614e-15`, bilans ładunku
+`3.5205103056502695e-11` i bilans spinu `2.371483382809825e-12`. Runtime
+zwrócił osiem obserwacji interfejsu (po jednej na komórkę płaszczyzny); adapter
+nie wybiera jednej komórki, tylko publikuje średnią jawną wraz z
+`interface_observation_count=8` i zachowuje sumę torque komórkowego osobno.
+
+Porównanie z managed BORIS (`boris-nf-runtime`, binary SHA-256
+`5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997`, obraz
+`nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`)
+ma status **`incomparable`**, a nie `diagnostic_match`. Usunięto wyłącznie
+dozwoloną różnicę stałej cechy potencjału (`Fullmag + -3.4482757355128163e-4 V`)
+i zapisano translację początku siatki `Fullmag-BORIS=(0,0,-2e-9) m`. Po tej
+normalizacji potencjał ma maksymalny błąd względny `3.098487032667977e-4`,
+ale `mu_s`, `Q_ia`, absorbowany flux i prąd poprzeczny różnią się na poziomie
+rzędu jedności. Torque pozostaje jawnie nieporównywalny: BORIS publikuje
+`Tsi [A/(m s)]`, a Fullmag źródło Gilberta `[1/s]`; nie wolno przemnożyć go
+przez arbitralne `gamma` po obejrzeniu wykresu.
+
+Pierwsza pełna macierz sześciu przypadków
+(`10×4×2+2`, `20×8×4+4`, `40×16×8+8` × `1e-8`, `1e-10`) została uruchomiona
+w kontenerze `boris-nf-runtime` i zapisana w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-boris-she-nf-matrix-run24/matrix.json
+```
+
+Macierz prawidłowo zakończyła się fail-closed, ale nie jest jeszcze wspólną
+macierzą solverów: cztery pierwsze Fullmag przypadki odrzucił komunikat
+`M2 block GMRES did not converge in 500 iterations`, a dwa najdrobniejsze
+przypadki przekroczyły limit 300 s. BORIS artefakty są zachowane, lecz bez
+drugiego solvera nie wolno liczyć metryk ani twierdzić o zbieżności między
+solverami. Diagnostyczny test tej samej średniej siatki z limitem 2000
+iteracji zakończył się poprawnie, co wskazuje na osobną granicę limitu
+iteracji w harnessie, nie na zgodność fizyczną; limit referencyjny musi zostać
+zweryfikowany na całej macierzy przed zmianą statusu.
+
+Wniosek bramy: lokalna korekta skalowania i coarse execution są potwierdzone,
+lecz `SHE-BORIS-001`, reciprocal parity, torque normalization, CPU↔CUDA,
+FEM/FDM oraz `validated_workloads` pozostają otwarte. Capability matrix nie
+zmienia się, a ocena pozostaje konserwatywnie **84% implementacji / 58%
+gotowości produkcyjnej**.

@@ -348,10 +348,18 @@ impl CoupledChargeSpinProblem {
         let preconditioner_applications = Cell::new(0usize);
         let preconditioned_rhs = preconditioner.apply(&rhs);
         preconditioner_applications.set(preconditioner_applications.get() + 1);
-        let rhs_norm = norm(&preconditioned_rhs).max(1.0);
-        let linear_tolerance = config
-            .absolute_tolerance
-            .max(config.relative_tolerance * rhs_norm);
+        // The preconditioner makes this norm dimensionless.  Do not impose a
+        // unit floor: for nanometre-scale cells the physical RHS can be much
+        // smaller than one after block scaling, and a floor would turn the
+        // requested relative tolerance into an unrelated absolute residual.
+        let rhs_norm = norm(&preconditioned_rhs);
+        let linear_tolerance = if rhs_norm == 0.0 {
+            config.absolute_tolerance
+        } else {
+            config
+                .absolute_tolerance
+                .max(config.relative_tolerance * rhs_norm)
+        };
 
         let mut total_linear_iterations = 0;
         let mut previous_current = self.cell_currents(&state)?.0;

@@ -497,7 +497,7 @@ tolerancji, CPU↔CUDA, N/T/F, zgodności `Tsi` z torque Fullmag ani
 `SHE-BORIS-001`. Capability matrix i `validated_workloads` pozostają bez
 zmian.
 
-## 7.3. Adapter porównawczy Fullmag FDM M2 — wykonanie zablokowane przez bilans (2026-08-03)
+## 7.3. Adapter porównawczy Fullmag FDM M2 — korekta skalowania i ponowienie bramy (2026-08-03)
 
 Dodano niezależny adapter `scripts/compare_boris_fullmag_she_nf.py` oraz
 runner `scripts/run_fullmag_m2_nf_reference.py`. Builder przechodzi przez
@@ -525,24 +525,73 @@ without committing state: charge=7.139977e-6, spin=5.450726e-8
 ```
 
 Runner zachował `problem_ir.json`, `request.json` oraz pełne stdout/stderr i
-zwrócił `not_run`; nie utworzono sztucznego pola Fullmag. To jest konkretna
-blokada numeryczna referencji M2 dla cienkiej komórki `1e-7×1e-7×1e-9 m`, a
-nie porównanie wyników ani dowód niezgodności fizyki z BORIS. Pełne dane i
-status bram znajdują się w
-`boris-nf-she-v1/README.md`.
+zwrócił `not_run`; nie utworzono sztucznego pola Fullmag. Analiza kodu i test
+RED/GREEN wykazały, że przyczyną był sztuczny `max(||P b||_2,1)` w skali
+tolerancji GMRES. Dla cienkiej komórki `1e-7×1e-7×1e-9 m` floor zmieniał
+tolerancję względną w zbyt luźny próg absolutny. Usunięto floor, pozostawiając
+bez zmian physical-balance gate; rzeczywisty test N/F z `SHA=iSHA=0.1`,
+`P_F=0.4`, `Gi/Gmix` przechodzi, a wszystkie 22 testy M2 CPU są zielone. To
+nie jest jeszcze porównanie wyników ani dowód parity z BORIS. Pełne dane i
+status bram znajdują się w `boris-nf-she-v1/README.md`.
 
 Dodano także fail-closed orchestration `scripts/run_boris_fullmag_she_nf_matrix.py`
 i recepturę `just verify-boris-fullmag-she-nf`. Kontrakt wymaga trzech siatek,
 dwóch tolerancji, unikalnych identyfikatorów, skończonych metryk i monotonicznej
 redukcji błędu; przy `not_run` macierz zapisuje dokładny `failure.json`, ale
 walidator odmawia statusu `diagnostic_match`. Test kontraktu macierzy daje
-`4 passed`; sama macierz nie została uruchomiona, ponieważ pojedynczy
-Fullmag M2 coarse run zatrzymuje się na physical-balance gate.
+`4 passed`; macierz wymaga ponowienia po przebudowie launchera z poprawką.
 
-Do zamknięcia pozostają: niezależny próg/skalowanie physical balance z
-uzasadnieniem, wspólne trzy siatki i sweep tolerancji, zgodność `Tsi` z torque,
-CPU↔CUDA oraz N/T/F. `SHE-BORIS-001`, capability matrix i
-`validated_workloads` pozostają bez zmian.
+Do wykonania pozostają: przebudowa managed launchera z poprawką, wspólne trzy
+siatki i sweep tolerancji, zgodność `Tsi` z torque, CPU↔CUDA oraz N/T/F.
+`SHE-BORIS-001`, capability matrix i `validated_workloads` pozostają bez zmian
+do czasu pozytywnego runtime matrix.
+
+## 7.4. Świeży artefakt Fullmag i wynik macierzy (2026-08-03)
+
+Po poprawce GMRES wykonano świeży coarse run na tym samym workloadzie. Tożsamość
+launchera jest częścią artefaktu:
+
+```text
+commit=813332079e01838f976acee521326b643dce7aaa (dirty)
+native_sha256=284c14c86212cc918c1ad1770d70049e1918b3271fb0d8545d08f865f65e627b
+launcher_sha256=27d7c5ebb3bd1aa47391fc9bc6313d052a6e2b42f05e8cf5f183a84b12ea1843
+artifact=/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-nf-coarse-run22/
+transport/fullmag_m2_nf_reference.json
+```
+
+Run zaakceptował stan M2 i zapisał residuale przeskalowane przez preconditioner
+`6.423463949700895e-15` (charge) i `3.691253818811614e-15` (spin) oraz fizyczne
+bilansy `3.5205103056502695e-11` i `2.371483382809825e-12`. Ponieważ runtime
+zwraca osiem komórek płaszczyzny N/F, adapter publikuje średnią obserwacji i
+liczbę próbek, zamiast wybierać jedną komórkę.
+
+Jednoprzypadkowe porównanie z artefaktem BORIS `runner-coarse-4` jest zapisane
+w `/zfn2/mateuszz/git/fullmag/boris-build/reports/` i ma status
+**`incomparable`**. Porównywarka usuwa tylko stały gauge potencjału
+(`-3.4482757355128163e-4 V`) i dopuszcza globalne przesunięcie początku siatki
+`(0,0,-2e-9) m`; nie remapuje tablic ani nie odwraca znaków. Po tym zabiegu
+potencjał ma `max_relative_error=3.098487032667977e-4`, natomiast `mu_s`,
+`Q_ia`, absorbowany flux i prąd poprzeczny nie spełniają kryterium match (błędy
+rzędu jedności). Torque jest nadal oznaczony `incomparable` z powodu
+`Tsi [A/(m s)]` BORIS kontra Gilbert source `[1/s]` Fullmag. Wynik jest więc
+negatywnym, użytecznym testem zgodności kontraktów, a nie awansem któregokolwiek
+solvera.
+
+Pełna macierz `run24` znajduje się w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-boris-she-nf-matrix-run24/matrix.json
+```
+
+Została wykonana w zarządzanym kontenerze `boris-nf-runtime`, ale walidator
+odmówił `diagnostic_match`: wszystkie cztery tuple z siatkami `10×4×2+2` i
+`20×8×4+4` kończą się `M2 block GMRES did not converge in 500 iterations`, a
+dwie tuple `40×16×8+8` przekraczają 300 s. To nie jest porażka BORIS ani
+dowód różnicy fizycznej; to niekompletna macierz po stronie Fullmag. Osobny
+test średniej siatki z limitem 2000 iteracji został zaakceptowany, dlatego
+następny krok musi ustalić uzasadniony limit/strategię preconditionera i
+powtórzyć wszystkie sześć przypadków. Do tego czasu `SHE-BORIS-001`, parity,
+torque normalization i `validated_workloads` pozostają otwarte.
 
 ## 8. Źródła i mapowanie symboli
 

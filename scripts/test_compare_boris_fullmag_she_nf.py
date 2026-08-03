@@ -16,6 +16,8 @@ def _artifact(
     *,
     shape: tuple[int, int, int] = (1, 1, 1),
     mu_s: tuple[tuple[float, float, float], ...] = ((1.0, 2.0, 3.0),),
+    origin_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    potential_v: tuple[float, ...] | None = None,
     normal_axis: str = "z",
     normal_sign: int = 1,
     conventions: dict[str, object] | None = None,
@@ -26,9 +28,9 @@ def _artifact(
     return NormalizedTransportArtifact(
         source="fixture",
         shape=shape,
-        origin_m=(0.0, 0.0, 0.0),
+        origin_m=origin_m,
         step_m=(1.0e-9, 1.0e-9, 1.0e-9),
-        potential_v=tuple(float(index) for index in range(count)),
+        potential_v=potential_v or tuple(float(index) for index in range(count)),
         mu_s_v=mu_s,
         charge_current_apm2=tuple((1.0, 0.0, 0.0) for _ in range(count)),
         spin_current_qia_apm2=tuple(
@@ -61,6 +63,25 @@ def test_comparison_rejects_mesh_and_convention_mismatch() -> None:
         compare_transport_artifacts(_artifact(), _artifact(shape=(2, 1, 1)))
     with pytest.raises(ValueError, match="incomparable"):
         compare_transport_artifacts(_artifact(normal_sign=1), _artifact(normal_sign=-1))
+
+
+def test_comparison_records_global_mesh_translation_without_remapping_fields() -> None:
+    result = compare_transport_artifacts(
+        _artifact(),
+        _artifact(origin_m=(0.0, 0.0, -2.0e-9)),
+    )
+    assert result["status"] == "diagnostic_match"
+    assert result["mesh"]["translation_fullmag_minus_boris_m"] == [0.0, 0.0, -2.0e-9]
+
+
+def test_comparison_removes_only_the_constant_charge_potential_gauge() -> None:
+    result = compare_transport_artifacts(
+        _artifact(potential_v=(1.0,)),
+        _artifact(potential_v=(4.0,)),
+    )
+    assert result["status"] == "diagnostic_match"
+    assert result["observables"]["potential_v"]["max_relative_error"] == 0.0
+    assert result["gauge_alignment"]["fullmag_added_offset_V"] == -3.0
 
 
 def test_comparison_reports_diagnostic_mismatch_without_validation_claim() -> None:

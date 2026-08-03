@@ -40,11 +40,12 @@ w `summary.json` i opisane w `BORIS_FULLMAG_SHE_COMPARISON.md`.
 
 Świeży binarny launcher zbudowano przez repozytoryjne `just` w trybie
 `cuda-fem-gpu`; ścieżka: `.fullmag/local/bin/fullmag`, commit źródłowy
-`ec82cde0e5a23335ac34a15fda770e669977f200`, hash artefaktu launchera należy do
-`runtime_identity` generowanego przez runner. Build i ciężkie dane pozostały
-poniżej `/zfn2/mateuszz/git/fullmag`.
+`813332079e01838f976acee521326b643dce7aaa` (dirty),
+`native_sha256=284c14c86212cc918c1ad1770d70049e1918b3271fb0d8545d08f865f65e627b`,
+`launcher_sha256=27d7c5ebb3bd1aa47391fc9bc6313d052a6e2b42f05e8cf5f183a84b12ea1843`.
+Build i ciężkie dane pozostały poniżej `/zfn2/mateuszz/git/fullmag`.
 
-Próba referencyjna:
+Pierwsza próba referencyjna:
 
 ```text
 runner=scripts/run_fullmag_m2_nf_reference.py
@@ -60,18 +61,48 @@ Step 0: coupled charge-spin solve: M2 physical balance gate rejected
 without committing state: charge=7.139977e-6, spin=5.450726e-8
 ```
 
-Jest to blokada kwalifikacyjna, nie wynik porównania pól. Runner zachował
-`problem_ir.json`, `request.json`, `fullmag.stdout.log` i
-`fullmag.stderr.log`; nie wolno tworzyć zastępczego artefaktu na podstawie
-częściowego stanu.
+Jest to zachowany dowód `not_run`, nie wynik porównania pól. Analiza kodu
+wykazała, że przyczyną był sztuczny floor `max(||P b||_2,1)` w tolerancji
+GMRES. Floor usunięto bez zmiany fizycznego progu bilansu; regresyjny N/F
+case na tej samej cienkiej komórce oraz 22 testy M2 CPU przechodzą. Runner
+zachował `problem_ir.json`, `request.json`, `fullmag.stdout.log` i
+`fullmag.stderr.log`; nie utworzono zastępczego artefaktu.
+
+Po usunięciu sztucznego flooru GMRES świeży coarse run został zaakceptowany:
+
+```text
+artifact=/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-nf-coarse-run22/
+transport/fullmag_m2_nf_reference.json
+scaled_charge_residual=6.423463949700895e-15
+scaled_spin_residual=3.691253818811614e-15
+charge_balance=3.5205103056502695e-11
+spin_balance=2.371483382809825e-12
+interface_observation_count=8
+```
+
+Adapter średnią fluxów liczy po wszystkich ośmiu komórkach płaszczyzny N/F;
+nie wybiera jednej próbki i nie ukrywa tej redukcji w artefakcie.
+
+Porównanie z `runner-coarse-4` nie jest parity: status wynosi
+`incomparable`. Stały gauge potencjału (`-3.4482757355128163e-4 V`) i globalne
+przesunięcie początku siatki `(0,0,-2e-9) m` są zapisane jawnie. Potencjał po
+tej normalizacji ma maksymalny błąd względny `3.098487032667977e-4`, lecz
+`mu_s`, `Q_ia` i absorbowany flux różnią się istotnie; torque pozostaje
+nieporównywalny (`Tsi [A/(m s)]` kontra Gilbert source `[1/s]`).
+
+Pierwsza macierz sześciu przypadków w
+`.../reports/fullmag-boris-she-nf-matrix-run24/matrix.json` zakończyła się
+fail-closed po stronie Fullmag: cztery przypadki nie zbiegały w 500 iteracjach
+GMRES, a dwa fine przekroczyły 300 s. Średnia siatka uruchomiona diagnostycznie
+z limitem 2000 iteracji przeszła, więc limit w harnessie jest osobną otwartą
+kwestią numeryczną. Nie zmienia to statusu capability ani kwalifikacji.
 
 ## Bramy pozostające otwarte
 
-1. wyjaśnić i usunąć przyczynę odrzucenia fizycznego bilansu M2 dla cienkiej,
-   anizotropowej komórki `1e-7 × 1e-7 × 1e-9 m` albo wprowadzić jawny,
-   niezależny próg bilansu z uzasadnieniem numerycznym;
-2. dopiero po sukcesie Fullmag wykonać wspólny BORIS/Fullmag artefact na tych
-   samych trzech siatkach i dwóch tolerancjach;
+1. ustalić i udokumentować limit/strategię GMRES dla średniej i drobnej siatki,
+   a następnie powtórzyć wszystkie sześć tuplek;
+2. po przejściu Fullmag wykonać wspólny BORIS/Fullmag artefact na tych samych
+   trzech siatkach i dwóch tolerancjach;
 3. uzgodnić `Tsi` BORIS (`A/(m s)`, ścieżka `tsi_eff/gamma`) z arealnym torque
    Fullmag — obecnie obserwable torque są oznaczane jako `incomparable`;
 4. wykonać CPU↔CUDA, N/T/F i cross-backend gates.

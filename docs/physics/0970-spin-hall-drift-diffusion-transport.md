@@ -414,6 +414,16 @@ nonsymmetric. Residual and charge/spin balance are independently recomputed.
 CUDA engines keep operators and state resident; FP64 parity and transfer audit
 precede separate FP32 high-contrast/thin-layer qualification.
 
+For the FDM M2 block, GMRES stopping is defined in the block-preconditioned
+dimensionless norm. If `b_p = P b`, the relative stopping scale is
+`max(abs_tol, rel_tol ||b_p||_2)` for a nonzero right-hand side; a zero
+right-hand side uses `abs_tol` directly. There is no arbitrary `max(||b_p||,1)`
+floor. Such a floor changes a relative tolerance into an unrelated absolute
+residual for thin, highly anisotropic cells (for example, a `100 nm x 100 nm x
+1 nm` stack), and can reject a physically converged N/F solve. The independently
+recomputed integrated electrode and angular-momentum balance gates remain
+mandatory after the linear solve.
+
 ### 3.2 FEM/MFEM weak-form contract
 
 Transparent interfaces may use conforming `H1`. Finite-resistance/mixing/SML
@@ -593,7 +603,8 @@ explicit unit/sign conversion, not primary proof.
 
 ### 5.3 Regression and quantitative gates
 
-Tests cover local FV residual, electrode balance, material jumps, normal
+Tests cover local FV residual, electrode balance, anisotropic N/F balance,
+material jumps, normal
 involution, tensor component order, missing gauge/conflicting BC, positivity,
 stage refresh, nonlinear rejection/rollback, checkpoint/restart, strict-GPU
 transfer audit, and full authoring/export/data-plane inspection. Starting

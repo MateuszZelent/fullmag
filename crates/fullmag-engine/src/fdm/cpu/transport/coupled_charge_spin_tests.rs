@@ -247,6 +247,156 @@ fn m2_acceptance_includes_independent_charge_and_spin_balance_gates() {
 }
 
 #[test]
+fn m2_anisotropic_cell_scaling_preserves_declared_physical_balance_tolerance() {
+    let count = 4 * 2 * 4;
+    let mut fields = material(count);
+    for reciprocal in &mut fields.reciprocal {
+        *reciprocal = ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 5.8e7,
+            sigma_spin_s_per_m: 5.8e7,
+            sigma_parallel_s_per_m: 5.8e7,
+            sigma_perpendicular_s_per_m: 5.8e7,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: 0.0,
+            spin_hall_angle: 0.0,
+        };
+    }
+    for reaction in &mut fields.reactions {
+        *reaction = SpinReactionLengths::default();
+    }
+    let problem = CoupledChargeSpinProblem::new(
+        GridShape {
+            nx: 4,
+            ny: 2,
+            nz: 4,
+        },
+        CellSize {
+            dx: 1.0e-7,
+            dy: 1.0e-7,
+            dz: 1.0e-9,
+        },
+        fields,
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
+                x_max: ChargeBoundaryCondition::Voltage(6.89655172413793e-4),
+                ..Default::default()
+            },
+            spin: SpinBoundaryConditions::default(),
+        },
+    )
+    .unwrap();
+
+    let solution = problem
+        .solve(CoupledChargeSpinSolverConfig::default(), None)
+        .expect("anisotropic cells must meet the declared balance tolerance");
+    assert!(solution.telemetry.charge_balance_relative <= 1.0e-10);
+    assert!(solution.telemetry.spin_balance_relative <= 1.0e-9);
+}
+
+#[test]
+fn m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance() {
+    let grid = GridShape {
+        nx: 4,
+        ny: 2,
+        nz: 4,
+    };
+    let count = grid.cell_count();
+    let mut reciprocal = Vec::with_capacity(count);
+    let mut reactions = Vec::with_capacity(count);
+    let mut magnetization = Vec::with_capacity(count);
+    let mut region_ids = Vec::with_capacity(count);
+    let mut torque_targets = vec![false; count];
+    for cell in 0..count {
+        let z = cell / (grid.nx * grid.ny);
+        let ferromagnet = z >= 2;
+        reciprocal.push(ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 5.8e7,
+            sigma_spin_s_per_m: 5.8e7,
+            sigma_parallel_s_per_m: 5.8e7,
+            sigma_perpendicular_s_per_m: 5.8e7,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: if ferromagnet { 0.4 } else { 0.0 },
+            spin_hall_angle: 0.1,
+        });
+        reactions.push(SpinReactionLengths {
+            spin_flip_m: Some(5.0e-9),
+            exchange_m: None,
+            dephasing_m: None,
+        });
+        magnetization.push([1.0, 0.0, 0.0]);
+        region_ids.push(if ferromagnet { 1 } else { 0 });
+        torque_targets[cell] = ferromagnet;
+    }
+    let interfaces = (0..grid.nx)
+        .flat_map(|x| {
+            (0..grid.ny).map(move |y| OrientedSpinInterface {
+                face: StructuredSpinFace {
+                    axis: 2,
+                    negative_cell: grid.index(x, y, 1),
+                    positive_cell: grid.index(x, y, 2),
+                },
+                from_cell: grid.index(x, y, 1),
+                to_cell: grid.index(x, y, 2),
+                law: SpinInterfaceLaw::MixingConductance {
+                    g_up_s_per_m2: 1.0e15,
+                    g_down_s_per_m2: 0.5e15,
+                    g_r_s_per_m2: 1.5e15,
+                    g_i_s_per_m2: 5.0e14,
+                    g_sml_s_per_m2: 0.0,
+                    sml_reservoir: None,
+                    magnetization: [1.0, 0.0, 0.0],
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    let problem = CoupledChargeSpinProblem::new(
+        grid,
+        CellSize {
+            dx: 1.0e-7,
+            dy: 1.0e-7,
+            dz: 1.0e-9,
+        },
+        CoupledChargeSpinMaterialFields {
+            reciprocal,
+            magnetization,
+            reactions,
+        },
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
+                x_max: ChargeBoundaryCondition::Voltage(6.89655172413793e-4),
+                ..Default::default()
+            },
+            spin: SpinBoundaryConditions::default(),
+        },
+    )
+    .unwrap()
+    .with_revisions(1, 1)
+    .with_interfaces(region_ids, interfaces)
+    .unwrap()
+    .with_torque_targets(SpinTorqueTargets {
+        target_cells: torque_targets,
+        saturation_magnetization_a_per_m: vec![8.0e5; count],
+        gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+    })
+    .unwrap();
+
+    let config = CoupledChargeSpinSolverConfig {
+        relative_tolerance: 1.0e-9,
+        absolute_tolerance: 0.0,
+        ..CoupledChargeSpinSolverConfig::default()
+    };
+    let solution = problem
+        .solve(config, None)
+        .expect("anisotropic N/F interface must meet the declared balance tolerance");
+    assert!(solution.telemetry.charge_balance_relative <= config.relative_tolerance);
+    assert!(solution.telemetry.spin_balance_relative <= 10.0 * config.relative_tolerance);
+}
+
+#[test]
 fn m2_phe_and_ahe_manufactured_current_has_full_3d_components() {
     let mut fields = material(1);
     let s = 0.5_f64.sqrt();
