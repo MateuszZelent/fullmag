@@ -20,6 +20,16 @@ describe("control-room Next dev proxy config", () => {
     );
   });
 
+  it("derives an allowed dev origin from the WSL public host", () => {
+    const configSource = readFileSync(
+      new URL("./next.config.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(configSource).toContain("FULLMAG_WEB_PUBLIC_HOST");
+    expect(configSource).toContain("configuredPublicDevHost");
+  });
+
   it("proxies v2 API requests through the configured backend target", async () => {
     const previousTarget = process.env.FULLMAG_API_PROXY_TARGET;
     process.env.FULLMAG_API_PROXY_TARGET = "http://localhost:8081/";

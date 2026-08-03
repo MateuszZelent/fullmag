@@ -2,27 +2,18 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOOPBACK_HOST="$(python3 - <<'PY'
-import socket
-print(socket.gethostbyname("localhost"))
-PY
-)"
+CONTROL_ROOM_DIR="${REPO_ROOT}/apps/control-room"
 
 pkill -f "${REPO_ROOT}/.fullmag/target/.*/fullmag-api" >/dev/null 2>&1 || true
 pkill -f "${REPO_ROOT}/.fullmag/local/bin/fullmag-api" >/dev/null 2>&1 || true
 pkill -f "${REPO_ROOT}/target/.*/fullmag-api" >/dev/null 2>&1 || true
 pkill -f "cargo +nightly run -p fullmag-api" >/dev/null 2>&1 || true
-pkill -f "${REPO_ROOT}/apps/control-room.*next dev" >/dev/null 2>&1 || true
-pkill -f "${REPO_ROOT}/apps/control-room.*dev-server.mjs" >/dev/null 2>&1 || true
-pkill -f "next dev --hostname 0.0.0.0 --port 300" >/dev/null 2>&1 || true
-pkill -f "next dev --hostname localhost --port 300" >/dev/null 2>&1 || true
-pkill -f "next dev --hostname ${LOOPBACK_HOST} --port 300" >/dev/null 2>&1 || true
-pkill -f "next dev --hostname 0.0.0.0 --port 310" >/dev/null 2>&1 || true
-pkill -f "next dev --hostname localhost --port 310" >/dev/null 2>&1 || true
-pkill -f "next dev --hostname ${LOOPBACK_HOST} --port 310" >/dev/null 2>&1 || true
-pkill -f "node dev-server.mjs --hostname 0.0.0.0 --port 300" >/dev/null 2>&1 || true
-pkill -f "node dev-server.mjs --hostname localhost --port 300" >/dev/null 2>&1 || true
-pkill -f "node dev-server.mjs --hostname ${LOOPBACK_HOST} --port 300" >/dev/null 2>&1 || true
+while read -r pid; do
+  [[ -z "$pid" || "$pid" == "$$" ]] && continue
+  cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+  [[ "$cwd" == "$CONTROL_ROOM_DIR" ]] || continue
+  kill "$pid" >/dev/null 2>&1 || true
+done < <(pgrep -f 'next|dev-server\.mjs' 2>/dev/null || true)
 
 rm -f "${REPO_ROOT}/.fullmag/control-room-url.txt"
 rm -f "${REPO_ROOT}/.fullmag/control-room-v2-url.txt"

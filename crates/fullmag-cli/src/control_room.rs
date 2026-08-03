@@ -39,6 +39,41 @@ pub(crate) fn openapi_json_url() -> String {
     format!("{}/v1/openapi.json", api_base_url())
 }
 
+fn web_public_host() -> String {
+    if let Some(configured) = std::env::var("FULLMAG_WEB_HOST")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return configured;
+    }
+
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some() {
+        if let Ok(output) = ProcessCommand::new("hostname").arg("-I").output() {
+            if output.status.success() {
+                if let Some(host) = String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .find(|candidate| !candidate.contains(':'))
+                {
+                    return host.to_string();
+                }
+            }
+        }
+    }
+
+    LOCALHOST_HTTP_HOST.to_string()
+}
+
+fn web_public_url(port: u16) -> String {
+    let host = web_public_host();
+    let formatted_host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    format!("http://{formatted_host}:{port}")
+}
+
 pub(crate) fn internal_live_api_url(path: &str) -> String {
     format!(
         "{}/v1/internal/live/current/{}",
@@ -570,6 +605,7 @@ pub(crate) fn bootstrap_control_plane(
                 ])
                 .current_dir(&web_dir)
                 .env("FULLMAG_API_PROXY_TARGET", api_base_url())
+                .env("FULLMAG_WEB_PUBLIC_HOST", web_public_host())
                 .stdin(Stdio::null());
             if stream_web_logs_to_terminal {
                 terminal_logger().emit(
@@ -610,7 +646,7 @@ pub(crate) fn bootstrap_control_plane(
             }
             frontend_child = Some(child);
 
-            let _ = fs::write(&url_file, format!("http://localhost:{}", web_port));
+            let _ = fs::write(&url_file, web_public_url(web_port));
             let _ = fs::write(&mode_file, &desired_signature);
 
             for _ in 0..300 {
@@ -631,7 +667,7 @@ pub(crate) fn bootstrap_control_plane(
 
         return Ok(ControlPlaneReady {
             api_port: api_port(),
-            web_url: format!("http://localhost:{web_port}/"),
+            web_url: format!("{}/", web_public_url(web_port)),
             web_port,
             api_child: api_child.map(|child| child.release().0),
             frontend_child: frontend_child.map(|child| child.release().0),
@@ -648,7 +684,7 @@ pub(crate) fn bootstrap_control_plane(
 
         return Ok(ControlPlaneReady {
             api_port: api_port(),
-            web_url: format!("http://{LOCALHOST_HTTP_HOST}:{}/", api_port()),
+            web_url: format!("{}/", web_public_url(api_port())),
             web_port,
             api_child: api_child.map(|child| child.release().0),
             frontend_child: None,
@@ -774,7 +810,12 @@ fn resolve_web_port(requested: Option<u16>, url_file: &Path) -> Result<u16> {
     const CANDIDATE_PORTS: &[u16] = &[3000, 3001, 3002, 3003, 3004, 3005, 3010];
 
     if let Some(port) = requested {
-        return Ok(port);
+        if port_is_listening(port) || port_is_bindable(port) {
+            return Ok(port);
+        }
+        bail!(
+            "requested --web-port={port} is not available for the 0.0.0.0 frontend listener; choose another port or stop the process using it"
+        );
     }
 
     if let Ok(stored) = fs::read_to_string(url_file) {
@@ -815,7 +856,43 @@ pub(crate) fn port_is_listening(port: u16) -> bool {
 }
 
 pub(crate) fn port_is_bindable(port: u16) -> bool {
-    std::net::TcpListener::bind((std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS), port)).is_ok()
+    std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok()
+}
+
+#[cfg(test)]
+mod web_port_tests {
+    use super::{port_is_bindable, resolve_web_port};
+    use std::net::TcpListener;
+
+    #[test]
+    fn wildcard_occupied_port_is_not_reported_as_bindable() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+            .expect("wildcard test listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("wildcard test listener should have an address")
+            .port();
+
+        assert!(!port_is_bindable(port));
+    }
+
+    #[test]
+    fn explicit_occupied_web_port_is_rejected_before_frontend_spawn() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+            .expect("wildcard test listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("wildcard test listener should have an address")
+            .port();
+        let url_file = std::env::temp_dir().join(format!(
+            "fullmag-control-room-port-test-{}",
+            std::process::id()
+        ));
+
+        let error = resolve_web_port(Some(port), &url_file)
+            .expect_err("an occupied explicit web port must fail before spawning Next");
+        assert!(error.to_string().contains("--web-port"));
+    }
 }
 
 fn allocate_ephemeral_api_port() -> Result<u16> {
@@ -882,7 +959,12 @@ fn stop_control_room_frontend_processes(port: u16) {
     for host in hosts {
         for pattern in [
             format!("next dev --hostname {host} --port {port}"),
+            format!("next dev .*--hostname {host}.*--port {port}"),
+            format!("next dev .*--hostname {host}.*-p {port}"),
+            format!("next dev .*--port {port}"),
+            format!("next dev .*-p {port}"),
             format!("node dev-server.mjs --hostname {host} --port {port}"),
+            format!("node dev-server.mjs .*--hostname {host}.*--port {port}"),
         ] {
             let _ = ProcessCommand::new("pkill")
                 .args(["-f", &pattern])

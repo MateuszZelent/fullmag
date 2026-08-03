@@ -3856,7 +3856,12 @@ run-arch-waveguide-interactive-v2 fem_execution="script":
     bash -euo pipefail -c '\
       mode="{{fem_execution}}"; \
       api_url="http://localhost:8081"; \
-      web_url="http://localhost:3100"; \
+      web_port="$(python3 scripts/control_room_port.py pick 0.0.0.0 3100 3101 3102 3103 3006 3007 3008 3009 3010)"; \
+      web_public_host="${FULLMAG_WEB_HOST:-}"; \
+      if [ -z "$web_public_host" ] && { [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; }; then web_public_host="$(hostname -I 2>/dev/null | awk "{ for (i = 1; i <= NF; i++) if (\$i !~ /:/) { print \$i; exit } }")"; fi; \
+      if [ -z "$web_public_host" ]; then web_public_host="localhost"; fi; \
+      browser_api_url="http://${web_public_host}:8081"; \
+      web_url="http://${web_public_host}:${web_port}"; \
       case "$mode" in \
         script|SCRIPT|auto|AUTO) mode="script" ;; \
         0|cpu|CPU) mode="cpu" ;; \
@@ -3867,33 +3872,34 @@ run-arch-waveguide-interactive-v2 fem_execution="script":
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
       else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
-      echo "Freeing ports 3100 and 8081 ..." >&2; \
-      fuser -k 3100/tcp 2>/dev/null || true; \
+      echo "Freeing ports ${web_port} and 8081 ..." >&2; \
+      fuser -k "${web_port}/tcp" 2>/dev/null || true; \
       fuser -k 8081/tcp 2>/dev/null || true; \
       pkill -9 -f "fullmag-fem-gpu-bi[n]" >/dev/null 2>&1 || true; \
       pkill -9 -f "fullmag-ap[i]" >/dev/null 2>&1 || true; \
       pkill -9 -f "helper.p[y]" >/dev/null 2>&1 || true; \
       rm -rf apps/control-room/.next/dev; \
       mkdir -p .fullmag/logs; \
-      echo "Starting v2 control room on :3100 ..." >&2; \
-      NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL="$api_url" \
-      NEXT_PUBLIC_RUNTIME_HTTP_BASE="$api_url" \
-      NEXT_PUBLIC_API_URL="$api_url" \
-      NEXT_PUBLIC_FULLMAG_API_URL="$api_url" \
+      echo "Starting v2 control room on :${web_port} ..." >&2; \
+      NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL="$browser_api_url" \
+      NEXT_PUBLIC_RUNTIME_HTTP_BASE="$browser_api_url" \
+      NEXT_PUBLIC_API_URL="$browser_api_url" \
+      NEXT_PUBLIC_FULLMAG_API_URL="$browser_api_url" \
       FULLMAG_API_URL="$api_url" \
       FULLMAG_API_PROXY_TARGET="$api_url" \
-      $PNPM_CMD --dir apps/control-room dev --hostname 0.0.0.0 --port 3100 \
+      FULLMAG_WEB_PUBLIC_HOST="$web_public_host" \
+      $PNPM_CMD --dir apps/control-room dev --hostname 0.0.0.0 --port "$web_port" \
         >.fullmag/logs/control-room-v2.log 2>&1 & \
       printf "%s\n" "$web_url" > .fullmag/control-room-url.txt; \
       printf "%s\n" "$web_url" > .fullmag/control-room-v2-url.txt; \
       printf "dev\n" > .fullmag/control-room-mode.txt; \
-      echo "Waiting for v2 frontend (/workspace) on :3100 (up to 120s) ..." >&2; \
+      echo "Waiting for v2 frontend (/workspace) on :${web_port} (up to 120s) ..." >&2; \
       for i in $(seq 1 600); do \
-        curl -fsS http://localhost:3100/workspace >/dev/null 2>&1 && break; \
+        curl -fsS "http://localhost:${web_port}/workspace" >/dev/null 2>&1 && break; \
         sleep 0.2; \
       done; \
-      if ! curl -fsS http://localhost:3100/workspace >/dev/null 2>&1; then \
-        echo "v2 frontend did not become ready on :3100" >&2; \
+      if ! curl -fsS "http://localhost:${web_port}/workspace" >/dev/null 2>&1; then \
+        echo "v2 frontend did not become ready on :${web_port}" >&2; \
         echo "Log: $(pwd)/.fullmag/logs/control-room-v2.log" >&2; \
         exit 1; \
       fi; \
@@ -3903,7 +3909,7 @@ run-arch-waveguide-interactive-v2 fem_execution="script":
       if [ -z "$cpu_threads" ] || [ "$cpu_threads" = "0" ]; then cpu_threads="auto"; fi; \
       if [ "$cpu_threads" != "auto" ] && [ "$cpu_threads" -gt 8 ]; then cpu_threads=8; fi; \
       echo "cpu_threads=$cpu_threads (capped at 8 for WSL memory stability)" >&2; \
-      FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" "$cpu_threads" 3100'
+      FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" "$cpu_threads" "$web_port"'
 
 
 

@@ -14,9 +14,10 @@
 
 - `fullmag my_problem.py` should feel like opening one scientific application, not bootstrapping a batch run plus a dashboard.
 - The default public URL should be `http://localhost:<port>/`.
+- On WSL installations where Windows localhost forwarding is unavailable, the launcher publishes the current WSL IPv4 address instead; set `FULLMAG_WEB_HOST=localhost` to opt back into localhost after enabling forwarding.
 - The launcher must start the browser-facing experience before long compute starts.
 - The browser must attach to live in-memory state through HTTP bootstrap plus WebSocket updates, not through file polling.
-- The local server must bind on `0.0.0.0` so Windows browsers can reach a WSL-hosted run, while printed/opened URLs should prefer `localhost`.
+- The local server must bind on `0.0.0.0` so Windows browsers can reach a WSL-hosted run; printed/opened URLs prefer `localhost` when forwarding works and otherwise use the current WSL IPv4 address.
 
 ## Runtime Refactor
 
@@ -132,7 +133,7 @@
 - Multiple browser tabs can attach simultaneously.
 - `pause`, `resume`, `break`, `run`, `relax`, and `setB` operate within the same live process.
 - Explicit `fm.save(...)` outputs still land on disk as artifacts.
-- WSL-hosted runs remain accessible from Windows browsers because browser-facing servers bind on `0.0.0.0` and publish `localhost` URLs.
+- WSL-hosted runs remain accessible from Windows browsers because browser-facing servers bind on `0.0.0.0` and publish a forwarding-safe URL (`localhost` when available, otherwise the current WSL IPv4 address).
 
 ## Assumptions
 
