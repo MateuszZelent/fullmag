@@ -523,12 +523,12 @@ resolve_pkg_primary_library_stem() {
       -l*)
         stem="lib${linker_flag#-l}"
         if [ -e "$libdir/${stem}.so" ]; then
-          printf '%s\n' "$stem"
+          printf "%s\n" "$stem"
           return 0
         fi
         ;;
     esac
-  done < <(pkg-config --libs-only-l "$pkg" | tr ' ' '\n')
+  done < <(pkg-config --libs-only-l "$pkg" | tr " " "\n")
   echo "[export_fem_gpu_runtime] failed to resolve the primary shared library stem for $pkg" >&2
   return 1
 }

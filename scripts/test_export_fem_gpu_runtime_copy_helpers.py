@@ -462,6 +462,12 @@ def test_export_script_resolves_petsc_and_slepc_library_names_from_pkg_config() 
     assert 'copy_shared_library_dependency_closure ${runtime_root}/lib/${slepc_library_stem}.so' in script
     assert '"petsc_library_stem": os.environ["PETSC_LIBRARY_STEM"]' in script
     assert '"slepc_library_stem": os.environ["SLEPC_LIBRARY_STEM"]' in script
+    resolver = script[
+        script.index("resolve_pkg_primary_library_stem()") : script.index(
+            "copy_pkg_library_group()"
+        )
+    ]
+    assert "'" not in resolver
 
 
 def test_export_script_refreshes_identity_before_configured_release_clean() -> None:
