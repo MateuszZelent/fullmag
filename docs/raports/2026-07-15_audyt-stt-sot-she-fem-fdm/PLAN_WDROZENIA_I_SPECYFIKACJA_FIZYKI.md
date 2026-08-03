@@ -5028,3 +5028,147 @@ BORIS, FEM/GPU, pełnego round-trip Python/UI, skin-effect/MQS, FEM Oersted
 RT0/KKT, fizycznego M3 `C_s` oraz zielonego full-suite. Ocena pozostaje
 **86% implementacji / 60% gotowości produkcyjnej**; ten wynik nie zmienia
 capability matrix ani statusu `validated_workloads`.
+
+## 32.34. Korekta prefaktora MuMax3 Zhang–Li w CPU/CUDA (2026-08-03)
+
+### 32.34.1. Zidentyfikowany błąd fizyczno-numeryczny
+
+Porównanie z rzeczywistym źródłem `external_solvers/3/cuda/zhangli2.cu`
+wykazało, że wcześniejsza realizacja MuMax3 stosowała czynnik `1/2` dwa razy.
+Źródłowy kernel definiuje
+
+```text
+PREFACTOR = MUB/(2*QE*GAMMA0)
+deltax(m) = m[hclampx(i+1)] - m[lclampx(i-1)]
+```
+
+czyli różnica sąsiadów jest dzielona tylko przez `cell_size`; współczynnik
+`1/2` należy już do `PREFACTOR`. Fullmag używał `0.5/cell_size` przy tym samym
+prefaktorze `P*mu_B/(2*e*M_s*(1+beta^2))`, przez co źródło Zhang–Li było
+dwukrotnie za małe. W historycznym przebiegu SP5 objawiało się to składowymi
+`x/y` nowego operatora bliskimi połowie referencji MuMax3. Test CPU↔CUDA nie
+wykrywał błędu, ponieważ obie ścieżki współdzieliły tę samą błędną skalę.
+
+### 32.34.2. Implementacja i test-first evidence
+
+Korekta została wykonana w:
+
+- `crates/fullmag-engine/src/fdm/cpu/fields.rs`,
+- `backends/fdm/gpu/cuda/integrators/llg_fp64.cu`,
+- `backends/fdm/gpu/cuda/integrators/llg_fp32.cu`.
+
+Wariant `zhang_li.legacy_fullmag.v0` pozostał bez zmian. Równanie w
+`docs/physics/0990-mumax-standard-problem-5-fdm-validation.md` i opis baseline'u
+w `SP5_FULLMAG_MUMAX_COMPARISON.md` zostały ujednolicone ze źródłem MuMax3.
+
+Najpierw uruchomiono czerwony test po zmianie oczekiwanego prefaktora:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/zhangli-factor-red \
+CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib \
+  mumax3_zhang_li -- --nocapture
+0 passed; 1 failed
+```
+
+Po zmianie operatora ten sam test przeszedł:
+
+```text
+running 1 test
+test fdm::cpu::fields::stt_tests::mumax3_zhang_li_uses_central_clamped_stencil_and_source_prefactor ... ok
+test result: ok. 1 passed; 0 failed; 300 filtered out
+```
+
+To jest dowód korekty wzoru i CPU oracle, nie jeszcze dowód pełnej trajektorii.
+
+### 32.34.3. Bramy wymagane przed wykonaniem (stan wejściowy)
+
+Plan tej iteracji obejmował ponowne wykonanie zarządzanej recepty
+`just verify-fdm-zhang-li-native-contract`, ponieważ wcześniejsza brama
+CPU↔CUDA była zielona dla błędnego, wspólnego prefaktora. Wymagał także
+przebudowy zarządzanego runtime, świeżego stałokrokowego SP5 GPU oraz pełnego
+artefaktu `metadata.json`, `m_final.json`, `scalars.csv`, trace solvera i
+różnicy względem referencji MuMax3
+`(-0.23488366603851318, -0.09453280270099640, 0.022961989045143127)`.
+Dopiero po sprawdzeniu zbieżności relaksacji, demagnetyzacji, kolejności
+aktualizacji i sweepu `dt`/siatki można rozważyć awans z `reference_executable`;
+ta korekta sama nie zmienia `capability-matrix-v0.json` ani statusu
+`validated_workloads`.
+
+### 32.34.4. Świeża brama CUDA i przebieg SP5 po korekcie
+
+Po aktualizacji kontraktu źródłowego wykonano ponownie zarządzaną receptę:
+
+```text
+just verify-fdm-zhang-li-native-contract
+FDM Zhang-Li periodic-stencil contract: PASS
+native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available
+test result: 1 passed; 0 failed; 0 ignored; 0 measured; 769 filtered out
+```
+
+Następnie `just ensure-managed-fem-runtime` wyeksportowało i zweryfikowało
+schema-3 runtime z `execution_engine=cuda_fdm`, FP64/cuFFT i compute capability
+8.9. Stałokrokowy przebieg SP5 (`dt=1e-13 s`, `tolT=1e-6 T`, 10000 accepted
+steps) jest zapisany w:
+
+```text
+/zfn2/mateuszz/git/fullmag/runs/
+mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed
+```
+
+Końcowa średnia pola z `m_final.json` wynosi
+`(-0.23465571179208225, -0.09450957174904828, 0.02294296086440478)`. Względem
+referencji MuMax3
+`(-0.23488366603851318, -0.09453280270099640, 0.022961989045143127)` daje to
+różnice `(2.2795424643e-4, 2.3230951948e-5, -1.9028180738e-5)`,
+`max|Δ|=2.2795424643e-4` i RMS `1.3274648427e-4`. Składowe `x/y` nie są już
+dwukrotnie za małe; pozostaje rozbieżność większa niż docelowa tolerancja
+`1e-4`, dlatego `qualification.json` zachowuje `status=not_evaluated`.
+Artefakt potwierdza `lossy_fallback_used=false`, `device_name=NVIDIA GeForce
+RTX 4080 SUPER`, `precision=double`, `integrator=heun` i stałą politykę czasu.
+Identyczny przebieg CPU zakończył się osobno; wynik parytetu zapisano poniżej i
+nie włącza on automatycznie statusu kwalifikacji.
+
+### 32.34.5. Magazyn build/runtime
+
+Pierwszy eksport po kompilacji zakończył się przed publikacją przez
+`No space left on device` przy kopiowaniu `libcublas` na
+`/mnt/fullmag-zfn2-native`. Audyt wykazał 28 nieużywanych snapshotów źródeł
+(`source-cache.*`, około 5,3 GB) pozostawionych przez wcześniejsze eksporty w
+tym samym task-specific runtime. Usunięto wyłącznie te stare snapshoty,
+pozostawiając aktualny `source-cache.6900d651…`, Cargo target, raporty oraz
+warianty runtime. Wolne miejsce wzrosło z 1,2 GB do 7,6 GB, a powtórzony
+`ensure-managed-fem-runtime` zakończył się poprawną walidacją schema-3. Ten
+przypadek potwierdza, że ciężkie buildy pozostają na szybkim dysku
+`/zfn2/mateuszz/git/fullmag`/jego ext4 mount view; zwykły workspace nie jest
+magazynem artefaktów.
+
+### 32.34.6. Zamknięcie stałokrokowej bramy CPU↔CUDA
+
+CPU wykonano z tym samym planem, `dt=1e-13 s`, progiem relaksacji `tolT=1e-6 T`
+i horyzontem `1 ns` etapu `flat_run`. Artefakt:
+
+```text
+/zfn2/mateuszz/git/fullmag/runs/
+mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu
+```
+
+Metadane mają `execution_engine=cpu_reference`, `precision=double`,
+`fft_backend=rustfft`, `demag_operator_kind=tensor_fft_newell` oraz
+`lossy_fallback_used=false`. Łącznie wykonano `12458` accepted steps (relaksacja
+plus `10000` kroków dynamicznych); `solver/accepted_steps.v1.json` zawiera
+`10000` rekordów etapu dynamicznego. CPU i CUDA mają identyczne `step`, `time`
+i `dt` w każdym rekordzie. Końcowe pola 4096-komórkowe różnią się maksymalnie
+`6.9388939039e-16`, RMS `1.1431120734e-16`; średnie są identyczne do
+zaokrąglenia maszynowego. W fizycznych obserwablach trace maksymalna różnica
+wynosi `1.2874603271e-3` dla `max_dm_dt` przy skali około `1e10 s^-1`, a
+różnice energii są poniżej `1.6e-33`.
+
+Ta brama zamyka fixed-step CPU↔CUDA trajectory parity dla operatora
+`zhang_li.mumax3.v1` i tego samego operatora demagnetyzacji. Nie zamyka
+zgodności z MuMax3: oba backendy mają wspólny wynik
+`(-0.2346557117920822,-0.0945095717490483,0.0229429608644048)`, lecz względem
+referencji MuMax3 pozostaje `max|Δ|=2.2795424643e-4`, więc oba artefakty mają
+`qualification.json.status=not_evaluated`. Pozostają nadal: zbieżność kroku i
+siatki, niezależna relaksacja, adaptive CPU/GPU, BORIS/SHE, FEM/GPU, pełny
+round-trip Python/UI, skin-effect/MQS, FEM Oersted RT0/KKT, fizyczne M3
+`C_s` oraz `validated_workloads`.

@@ -1,4 +1,4 @@
-/* Source-level contract for periodic Zhang-Li upwind stencils. */
+/* Source-level contract for periodic Zhang-Li stencils. */
 
 #include <cstdio>
 #include <cstdlib>
@@ -55,10 +55,10 @@ int main() {
           "FP64 kernel contains the versioned MuMax3 central realization");
     check(fp32.find("FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1") != std::string::npos,
           "FP32 kernel contains the versioned MuMax3 central realization");
-    check(fp64.find("0.5 / stt.dx") != std::string::npos,
-          "FP64 MuMax3 realization uses the centered derivative denominator");
-    check(fp32.find("0.5f / static_cast<float>(stt.dx)") != std::string::npos,
-          "FP32 MuMax3 realization uses the centered derivative denominator");
+    check(fp64.find("const double inv_dx = 1.0 / stt.dx") != std::string::npos,
+          "FP64 MuMax3 realization uses the unhalved source-kernel difference");
+    check(fp32.find("const float inv_dx = 1.0f / static_cast<float>(stt.dx)") != std::string::npos,
+          "FP32 MuMax3 realization uses the unhalved source-kernel difference");
 
     std::printf("FDM Zhang-Li periodic-stencil contract: PASS\n");
     return 0;
