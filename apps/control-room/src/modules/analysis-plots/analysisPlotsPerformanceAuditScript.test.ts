@@ -85,6 +85,8 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("--porcelain=v1");
     expect(auditScript).toContain('"--show-toplevel"');
     expect(auditScript).toContain("same-runtime remount");
+    expect(auditScript).toContain("alternateDatasetRef");
+    expect(auditScript).toContain("selectExplicitAnalysisDataset(page, 1)");
     expect(auditScript).not.toContain("page.reload");
     expect(auditScript).toContain('?? "unknown"');
     expect(auditScript).toContain("CONTROL_ROOM_AUDIT_COMMIT");

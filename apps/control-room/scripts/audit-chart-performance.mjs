@@ -634,11 +634,11 @@ async function openAnalysisPlots(page) {
   await waitForActiveViewportModule(page, "analysis-plots");
 }
 
-async function selectExplicitAnalysisDataset(page) {
+async function selectExplicitAnalysisDataset(page, optionIndex = 0) {
   const trigger = page.getByRole("combobox", { name: "Analysis dataset" });
   await trigger.waitFor({ state: "visible", timeout: timeoutMs });
   await trigger.click({ timeout: timeoutMs });
-  const option = page.getByRole("option").first();
+  const option = page.getByRole("option").nth(optionIndex);
   await option.waitFor({ state: "visible", timeout: timeoutMs });
   const datasetRef = (await option.innerText()).trim();
   if (!datasetRef) {
@@ -1285,6 +1285,8 @@ function createFixtureRouteState() {
 
 async function installChartPerformanceFixtureRoutes(page, totalRows, state) {
   const datasetRef = "analysis-performance-fixture";
+  const alternateDatasetRef = `${datasetRef}-alternate`;
+  const datasetRefs = [datasetRef, alternateDatasetRef];
   const columns = [
     { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
     { column_id: "t", component: null, dimension: "time", label: "time", quantity_id: "t", reduction: null, unit: "s", value_type: "float" },
@@ -1294,14 +1296,14 @@ async function installChartPerformanceFixtureRoutes(page, totalRows, state) {
     { column_id: "e_total", component: null, dimension: "energy", label: "total energy", quantity_id: "e_total", reduction: "sum", unit: "J", value_type: "float" },
     { column_id: "max_torque_Apm", component: null, dimension: "magnetization", label: "maximum torque", quantity_id: "max_torque_Apm", reduction: "max", unit: "A/m", value_type: "float" },
   ];
-  const tableFixture = () => ({
-    binary_rows_href: `/v2/sessions/current/data/tables/${datasetRef}/rows.bin`,
+  const tableFixture = (tableId = datasetRef) => ({
+    binary_rows_href: `/v2/sessions/current/data/tables/${tableId}/rows.bin`,
     columns: [],
-    columns_href: `/v2/sessions/current/data/tables/${datasetRef}/columns`,
+    columns_href: `/v2/sessions/current/data/tables/${tableId}/columns`,
     revision: state.revision,
-    rows_href: `/v2/sessions/current/data/tables/${datasetRef}/rows`,
+    rows_href: `/v2/sessions/current/data/tables/${tableId}/rows`,
     schema_revision: 1,
-    table_id: datasetRef,
+    table_id: tableId,
     total_rows: totalRows,
   });
   const cors = {
@@ -1362,23 +1364,32 @@ async function installChartPerformanceFixtureRoutes(page, totalRows, state) {
     }
     if (requestUrl.pathname === "/v2/sessions/current/data/tables") {
       await route.fulfill({
-        body: JSON.stringify({ revision: state.revision, tables: [tableFixture()] }),
+        body: JSON.stringify({
+          revision: state.revision,
+          tables: datasetRefs.map((tableId) => tableFixture(tableId)),
+        }),
         contentType: "application/json",
         headers: cors,
         status: 200,
       });
       return;
     }
-    if (requestUrl.pathname === `/v2/sessions/current/data/tables/${datasetRef}`) {
+    const tableDetailMatch = requestUrl.pathname.match(
+      /^\/v2\/sessions\/current\/data\/tables\/([^/]+)$/,
+    );
+    if (tableDetailMatch && datasetRefs.includes(tableDetailMatch[1])) {
       await route.fulfill({
-        body: JSON.stringify(tableFixture()),
+        body: JSON.stringify(tableFixture(tableDetailMatch[1])),
         contentType: "application/json",
         headers: cors,
         status: 200,
       });
       return;
     }
-    if (requestUrl.pathname === `/v2/sessions/current/data/tables/${datasetRef}/columns`) {
+    const tableColumnsMatch = requestUrl.pathname.match(
+      /^\/v2\/sessions\/current\/data\/tables\/([^/]+)\/columns$/,
+    );
+    if (tableColumnsMatch && datasetRefs.includes(tableColumnsMatch[1])) {
       await route.fulfill({
         body: JSON.stringify(columns),
         contentType: "application/json",
@@ -1387,7 +1398,10 @@ async function installChartPerformanceFixtureRoutes(page, totalRows, state) {
       });
       return;
     }
-    if (requestUrl.pathname === `/v2/sessions/current/data/tables/${datasetRef}/rows.bin`) {
+    const tableRowsMatch = requestUrl.pathname.match(
+      /^\/v2\/sessions\/current\/data\/tables\/([^/]+)\/rows\.bin$/,
+    );
+    if (tableRowsMatch && datasetRefs.includes(tableRowsMatch[1])) {
       const requestedColumns = (requestUrl.searchParams.get("columns") ?? "")
         .split(",")
         .filter(Boolean);
@@ -1854,17 +1868,6 @@ async function verifyPendingRequestAbort(page, state) {
   if (fixtureTotalRows <= 0) {
     throw new Error("Abort proof requires a deterministic rows fixture.");
   }
-  // Normalize the current range first so the delayed request below always
-  // changes the rows resource identity, even after a short lifecycle run.
-  state.delayNext = false;
-  await page.evaluate(() => {
-    const dispatch = window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchDataZoom;
-    if (typeof dispatch !== "function") {
-      throw new Error("Chart range dispatcher is unavailable.");
-    }
-    dispatch(0, 100);
-  });
-  await page.waitForTimeout(1_750);
   state.abortObserved = false;
   state.delayNext = true;
   state.delayedRequest = null;
@@ -1877,13 +1880,7 @@ async function verifyPendingRequestAbort(page, state) {
     throw new Error("Abort proof could not capture the source revision legend values.");
   }
   const startedAt = performance.now();
-  await page.evaluate(() => {
-    const dispatch = window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchDataZoom;
-    if (typeof dispatch !== "function") {
-      throw new Error("Chart range dispatcher is unavailable.");
-    }
-    dispatch(20, 40);
-  });
+  await selectExplicitAnalysisDataset(page, 1);
   await Promise.race([
     state.delayedStarted,
     page.waitForTimeout(5_000).then(() => {
@@ -1897,7 +1894,7 @@ async function verifyPendingRequestAbort(page, state) {
   await waitForActiveViewportModule(page, "viewport-3d");
   await page.waitForTimeout(1_750);
   await openAnalysisPlots(page);
-  await selectExplicitAnalysisDataset(page);
+  await selectExplicitAnalysisDataset(page, 1);
   await waitForAnalysisChart(page);
   await waitForStableChartDiagnostics(page);
   const remountProvenance = await page
