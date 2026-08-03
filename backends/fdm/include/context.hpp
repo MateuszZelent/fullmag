@@ -199,7 +199,12 @@ struct Context {
     double stt_p_z = 0.0;
     double stt_lambda = 0.0;
     double stt_epsilon_prime = 0.0;
-    double stt_cpp_pf = 0.0;   // Precomputed coefficient: gamma_mu0 * |j| * hbar / (2 * e * mu_0 * M_s * d)
+    double stt_cpp_pf = 0.0;   // Precomputed Slonczewski Omega coefficient [1/s]
+    fullmag_fdm_slonczewski_formula slonczewski_formula =
+        FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0;
+    double stt_stack_normal[3] = {0.0, 0.0, 1.0};
+    uint8_t *slonczewski_active_mask = nullptr;
+    bool has_slonczewski_active_mask = false;
 
     // Spin-Orbit Torque (SOT) — Manchon-Zhang DL + FL model
     bool   has_sot        = false;
@@ -434,6 +439,12 @@ struct SttParams {
     double  stt_lambda          = 1.0;
     double  stt_epsilon_prime   = 0.0;
     double  stt_cpp_pf          = 0.0;
+    int     slonczewski_formula = FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0;
+    double  stt_stack_normal_x = 0.0;
+    double  stt_stack_normal_y = 0.0;
+    double  stt_stack_normal_z = 1.0;
+    const uint8_t *slonczewski_active_mask = nullptr;
+    int     has_slonczewski_active_mask = 0;
 };
 
 inline double oersted_field_scale(const Context &ctx, double evaluation_time) {
@@ -492,6 +503,12 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
     p.stt_lambda          = ctx.stt_lambda;
     p.stt_epsilon_prime   = ctx.stt_epsilon_prime;
     p.stt_cpp_pf          = ctx.stt_cpp_pf;
+    p.slonczewski_formula = static_cast<int>(ctx.slonczewski_formula);
+    p.stt_stack_normal_x = ctx.stt_stack_normal[0];
+    p.stt_stack_normal_y = ctx.stt_stack_normal[1];
+    p.stt_stack_normal_z = ctx.stt_stack_normal[2];
+    p.slonczewski_active_mask = ctx.slonczewski_active_mask;
+    p.has_slonczewski_active_mask = ctx.has_slonczewski_active_mask ? 1 : 0;
     return p;
 }
 
@@ -682,6 +699,9 @@ bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len)
 
 /// Upload prescribed-SOT target mask (host u8 -> device u8).
 bool context_upload_sot_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
+
+/// Upload canonical Slonczewski target mask (host u8 -> device u8).
+bool context_upload_slonczewski_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
 
 /// Upload region ids (host u32 -> device u32).
 bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len);

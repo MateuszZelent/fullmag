@@ -284,10 +284,9 @@ def test_runner_harness_build_is_managed_cli_only_and_candidate_immutable() -> N
     ensure_recipe = justfile.split("ensure-managed-fem-runtime:", 1)[1].split(
         "inspect-managed-fem-frequency-domain-deps:", 1
     )[0]
-    assert "-newer '{{gpu_runtime_manifest}}'" in ensure_recipe
+    assert "capture_source_snapshot_identity.py" in ensure_recipe
+    assert '--require-source-snapshot-sha256 "$source_snapshot"' in ensure_recipe
+    assert "runtime_source_change_policy.py" in ensure_recipe
+    assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime" in ensure_recipe
+    assert "-newer" not in ensure_recipe
     assert "if [ ! -L .fullmag/runtimes/fem-gpu-host ]" not in ensure_recipe
-    for bundle_input in (
-        "scripts/build_managed_fem_runtime_manifest.py",
-        "scripts/inspect_cuda_architectures.py",
-    ):
-        assert bundle_input in ensure_recipe

@@ -8,11 +8,15 @@ import type {
 import {
   buildCpuTelemetryPanelModel,
   buildSolverProfilePanelModel,
+  buildSolverTracePanelModel,
   buildTimestepQualificationPanelModel,
   serializeSolverProfileRows,
 } from "./FooterDiagnostics";
 
 const PROFILE_SAMPLE_TIME_MS = new Date(2026, 0, 2, 3, 4, 5, 123).getTime();
+type SolverTraceResource = NonNullable<
+  SolverProfileResource["latest_samples"][number]["trace"]
+>;
 
 const profile: SolverProfileResource = {
   rates: {
@@ -225,7 +229,139 @@ const profile: SolverProfileResource = {
   threading: null,
 };
 
+const completeTrace: SolverTraceResource = {
+  api_revision: 11,
+  completeness: "complete",
+  format: "fullmag.solver_trace.v1",
+  segments: {
+    api_revision_visibility_ns: {
+      clock_domain: "server_monotonic",
+      duration_ns: 3_000_000,
+      kind: "api_revision_visibility",
+    },
+    browser_decode_to_commit_ns: {
+      clock_domain: "browser_performance",
+      duration_ns: 5_000_000,
+      kind: "browser_decode_to_commit",
+    },
+    browser_fetch_ns: {
+      clock_domain: "browser_performance",
+      duration_ns: 4_000_000,
+      kind: "browser_fetch",
+    },
+    commit_to_animation_frame_ns: {
+      clock_domain: "browser_performance",
+      duration_ns: 6_000_000,
+      kind: "commit_to_animation_frame",
+    },
+    native_to_runner_callback_ns: {
+      clock_domain: "server_monotonic",
+      duration_ns: 1_000_000,
+      kind: "native_to_runner_callback",
+    },
+    publisher_apply_ns: {
+      clock_domain: "server_monotonic",
+      duration_ns: 1_000_000,
+      kind: "publisher_apply",
+    },
+    publisher_queue_ns: {
+      clock_domain: "server_monotonic",
+      duration_ns: 2_000_000,
+      kind: "publisher_queue",
+    },
+    runner_callback_to_publisher_enqueue_ns: {
+      clock_domain: "server_monotonic",
+      duration_ns: 1_000_000,
+      kind: "runner_callback_to_publisher_enqueue",
+    },
+  },
+  trace_id: {
+    accepted_step: 12,
+    run_generation: "run",
+    sample_sequence: 1,
+    stage_sequence: 0,
+    value: "run:0:12:1",
+  },
+  unaccounted_browser_ns: 8_000,
+  unaccounted_server_ns: 7_000,
+};
+
 describe("FooterDiagnostics", () => {
+  it("builds a bounded solver-to-render waterfall for the latest sampled trace", () => {
+    const model = buildSolverTracePanelModel({
+      ...profile,
+      latest_samples: [
+        {
+          ...profile.latest_samples[0]!,
+          trace: completeTrace,
+        },
+      ],
+    });
+
+    expect(model).toMatchObject({
+      completeness: "complete",
+      completenessLabel: "Complete (server + browser)",
+      step: 12,
+      traceId: "run:0:12:1",
+      totalNs: 23_000_000,
+      unaccountedBrowser: "8.0 us",
+      unaccountedServer: "7.0 us",
+    });
+    expect(model.segments.map((segment) => segment.id)).toEqual([
+      "native_to_runner_callback_ns",
+      "runner_callback_to_publisher_enqueue_ns",
+      "publisher_queue_ns",
+      "publisher_apply_ns",
+      "api_revision_visibility_ns",
+      "browser_fetch_ns",
+      "browser_decode_to_commit_ns",
+      "commit_to_animation_frame_ns",
+    ]);
+    expect(model.segments[0]).toMatchObject({
+      clockDomain: "server",
+      duration: "1.0 ms",
+      percent: expect.closeTo((1 / 23) * 100, 5),
+    });
+    expect(model.segments[5]).toMatchObject({
+      clockDomain: "browser",
+      duration: "4.0 ms",
+      percent: expect.closeTo((4 / 23) * 100, 5),
+    });
+  });
+
+  it("marks server-only traces and missing traces without inventing browser timings", () => {
+    const serverOnly = buildSolverTracePanelModel({
+      ...profile,
+      latest_samples: [
+        {
+          ...profile.latest_samples[0]!,
+          trace: {
+            ...completeTrace,
+            api_revision: null,
+            completeness: "server_only",
+            segments: {},
+          },
+        },
+      ],
+    });
+    const missing = buildSolverTracePanelModel(profile);
+
+    expect(serverOnly).toMatchObject({
+      completeness: "server_only",
+      completenessLabel: "Server-only (browser not observed)",
+      segments: [],
+      traceId: "run:0:12:1",
+      totalNs: 0,
+    });
+    expect(missing).toMatchObject({
+      completeness: "not_sampled",
+      completenessLabel: "Not sampled",
+      segments: [],
+      traceId: null,
+      totalNs: 0,
+    });
+  });
+
   it("warns when the exact LLG timestep lane is unvalidated", () => {
     const model = buildTimestepQualificationPanelModel({
       ...profile,
@@ -427,6 +563,63 @@ describe("FooterDiagnostics", () => {
       spanWall: "100.0 ms",
       step: "12",
       total: "5.0 ms",
+    });
+  });
+
+  it("separates sampled RK and HYPRE timings and marks missing samples", () => {
+    const sampled = structuredClone(profile);
+    sampled.latest_samples[0] = {
+      ...sampled.latest_samples[0]!,
+      demag_hypre_device_elapsed_time_ns: 50_000,
+      demag_hypre_host_api_wall_time_ns: 40_000,
+      demag_hypre_timed_solve_count: 4,
+      rk_transaction_capture_bytes: 1_024,
+      rk_transaction_capture_device_elapsed_time_ns: 20_000,
+      rk_transaction_capture_host_wall_time_ns: 10_000,
+      rk_transaction_commit_count: 4,
+      rk_transaction_restore_device_elapsed_time_ns: 30_000,
+      rk_transaction_restore_host_wall_time_ns: 20_000,
+      rk_transaction_rollback_count: 2,
+      timing_semantics: [
+        {
+          id: "rk_transaction_capture_host_wall_time_ns",
+          kind: "exclusive",
+        },
+        {
+          id: "rk_transaction_capture_device_elapsed_time_ns",
+          kind: "device_elapsed",
+        },
+        {
+          id: "rk_transaction_restore_host_wall_time_ns",
+          kind: "exclusive",
+        },
+        {
+          id: "demag_hypre_host_api_wall_time_ns",
+          kind: "inclusive",
+        },
+        {
+          id: "demag_hypre_device_elapsed_time_ns",
+          kind: "device_elapsed",
+        },
+      ],
+    };
+
+    const sampledModel = buildSolverProfilePanelModel(sampled);
+    expect(sampledModel.timingSummary).toEqual({
+      hypreGpuElapsed: "50.0 us",
+      hypreHostApi: "40.0 us",
+      rkCheckpoint: "capture 10.0 us / restore 20.0 us / bytes 1.0 KiB",
+      rollback: "rollback 2 / commit 4",
+    });
+    expect(sampledModel.timingSemanticsTooltip).toContain("exclusive");
+    expect(sampledModel.timingSemanticsTooltip).toContain("device_elapsed");
+
+    const missingModel = buildSolverProfilePanelModel(profile);
+    expect(missingModel.timingSummary).toEqual({
+      hypreGpuElapsed: "Not sampled",
+      hypreHostApi: "Not sampled",
+      rkCheckpoint: "Not sampled",
+      rollback: "Not sampled",
     });
   });
 

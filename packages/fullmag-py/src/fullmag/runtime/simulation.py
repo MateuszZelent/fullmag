@@ -38,6 +38,12 @@ class StepStats:
     demag_solver_setup_wall_time_ns: int = 0
     demag_solver_apply_wall_time_ns: int = 0
     demag_solver_setup_reused: bool = False
+    demag_hypre_wait_in_enqueue_wall_time_ns: int = 0
+    demag_hypre_host_api_wall_time_ns: int = 0
+    demag_hypre_device_elapsed_time_ns: int = 0
+    demag_hypre_wait_out_enqueue_wall_time_ns: int = 0
+    demag_hypre_event_wait_count: int = 0
+    demag_hypre_timed_solve_count: int = 0
     demag_recover_wall_time_ns: int = 0
     demag_energy_wall_time_ns: int = 0
     rhs_wall_time_ns: int = 0
@@ -238,6 +244,24 @@ def result_from_run_payload(
                 demag_solver_setup_wall_time_ns=s.get("demag_solver_setup_wall_time_ns", 0),
                 demag_solver_apply_wall_time_ns=s.get("demag_solver_apply_wall_time_ns", 0),
                 demag_solver_setup_reused=s.get("demag_solver_setup_reused", False),
+                demag_hypre_wait_in_enqueue_wall_time_ns=s.get(
+                    "demag_hypre_wait_in_enqueue_wall_time_ns", 0
+                ),
+                demag_hypre_host_api_wall_time_ns=s.get(
+                    "demag_hypre_host_api_wall_time_ns", 0
+                ),
+                demag_hypre_device_elapsed_time_ns=s.get(
+                    "demag_hypre_device_elapsed_time_ns", 0
+                ),
+                demag_hypre_wait_out_enqueue_wall_time_ns=s.get(
+                    "demag_hypre_wait_out_enqueue_wall_time_ns", 0
+                ),
+                demag_hypre_event_wait_count=s.get(
+                    "demag_hypre_event_wait_count", 0
+                ),
+                demag_hypre_timed_solve_count=s.get(
+                    "demag_hypre_timed_solve_count", 0
+                ),
                 demag_recover_wall_time_ns=s.get("demag_recover_wall_time_ns", 0),
                 demag_energy_wall_time_ns=s.get("demag_energy_wall_time_ns", 0),
                 rhs_wall_time_ns=s.get("rhs_wall_time_ns", 0),

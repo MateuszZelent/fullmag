@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 REGISTRY_SCHEMA = "fullmag.llg_timestep_qualification_registry.v1"
 VALIDATOR_SCHEMA = "fullmag.llg_timestep_qualification.validator.v1"
+QUALIFICATION_ARTIFACT_SCHEMA = "fem_llg_time_domain_qualification.v1"
 STATES = {
     "unvalidated",
     "algebra_validated",
@@ -106,6 +107,41 @@ def validate_promoted_entry(entry: Mapping[str, Any], repo_root: Path) -> None:
     require(
         actual_artifact_hash == expected_artifact_hash,
         "artifact_sha256 does not match the qualification artifact",
+    )
+    try:
+        artifact_document = json.loads(artifact.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RegistryError(f"qualification artifact is not valid JSON: {error}") from error
+    require(isinstance(artifact_document, dict), "qualification artifact root must be an object")
+    require(
+        artifact_document.get("schema_version") == QUALIFICATION_ARTIFACT_SCHEMA,
+        "qualification artifact schema is unsupported",
+    )
+    require(
+        artifact_document.get("status") == "pass",
+        "qualification artifact must have status=pass",
+    )
+    for field in ("backend", "device", "integrator"):
+        require(
+            artifact_document.get(field) == key[field],
+            f"qualification artifact {field} does not match its registry lane",
+        )
+    expected_precision = {"double": "fp64", "single": "fp32"}[key["precision"]]
+    require(
+        artifact_document.get("precision") == expected_precision,
+        "qualification artifact precision does not match its registry lane",
+    )
+    timestep_policies = artifact_document.get("timestep_policies")
+    require(
+        isinstance(timestep_policies, list)
+        and timestep_policies
+        and all(isinstance(policy, str) and policy for policy in timestep_policies)
+        and len(set(timestep_policies)) == len(timestep_policies),
+        "qualification artifact timestep_policies must be a non-empty unique array",
+    )
+    require(
+        key["timestep_policy"] in timestep_policies,
+        "qualification artifact timestep policy does not match its registry lane",
     )
     require(
         is_sha256(entry.get("runtime_source_inputs_sha256")),

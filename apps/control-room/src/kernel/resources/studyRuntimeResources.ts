@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -131,6 +131,10 @@ import type {
 import { normalizeQuantityIdOrDefault } from "../api/quantityIds";
 import type { DecodedTableRows } from "../api/codecs";
 import { useKernel } from "../KernelContext";
+import {
+  createSolverTraceObserver,
+  solverTraceNow,
+} from "../diagnostics/solverTrace";
 import { tableRowsMinRefetchIntervalMs } from "../realtime/communicationPolicy";
 
 import {
@@ -147,6 +151,9 @@ import {
 } from "./useSessionStatus";
 import { emitResourceLoadFailed } from "./resourceLoadFailure";
 import { useResource } from "./useResource";
+
+/** Browser trace state is bounded and mutates only on sampled profile events. */
+export const solverTraceObserver = createSolverTraceObserver();
 
 function ignoreMissingResource<T>(error: unknown): T | null {
   if (error instanceof ControlRoomApiError && error.status === 404) {
@@ -2187,19 +2194,38 @@ export function useSolverProfileResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.diagnostics
+    async ({ signal }: { signal: AbortSignal }) => {
+      const startedAtMs = solverTraceNow();
+      const profile = await api.diagnostics
         .solverProfile({ signal })
-        .catch(ignoreMissingResource<SolverProfileResource>),
+        .catch(ignoreMissingResource<SolverProfileResource>);
+      solverTraceObserver.observeProfileLoad(
+        profile,
+        startedAtMs,
+        solverTraceNow(),
+      );
+      return profile;
+    },
     [api],
   );
 
-  return useResource<SolverProfileResource | null>({
+  const resource = useResource<SolverProfileResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: DIAGNOSTICS_SOLVER_PROFILE_PATH,
   });
+
+  useEffect(() => {
+    if (!enabled || !resource.data) return;
+    solverTraceObserver.observeProfileCommit(resource.data);
+  }, [enabled, resource.data]);
+
+  const mergedProfile = useMemo(
+    () => solverTraceObserver.mergeProfile(resource.data),
+    [resource.data],
+  );
+  return { ...resource, data: mergedProfile };
 }
 
 export function useStudyRuntimeCommandResourceData({

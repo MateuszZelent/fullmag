@@ -337,6 +337,22 @@ def test_fixture_command_keeps_canonical_fixture_on_headless_run_json_path(
     assert "--ui-surface" not in command
 
 
+def test_capture_uses_typed_v2_fixture_and_matching_environment() -> None:
+    capture = load_capture_module()
+
+    assert capture.FIXTURE_MANIFEST.name == "box500_airbox_exchange_demag_v2.fixture.json"
+    assert capture.FIXTURE_ENVIRONMENT.name == "nsight-v2-environment.json"
+    command = capture._fixture_command(Path("/tmp/compute"))
+    fixture_index = command.index("--fixture-manifest")
+    environment_index = command.index("--fixture-environment")
+    assert command[fixture_index + 1].endswith(
+        "examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json"
+    )
+    assert command[environment_index + 1].endswith(
+        "benchmarks/fem-gpu/accepted/rtx4080-sm89/nsight-v2-environment.json"
+    )
+
+
 def test_capture_environment_reproduces_canonical_fixture_mesh_inputs() -> None:
     capture = load_capture_module()
 
@@ -344,6 +360,7 @@ def test_capture_environment_reproduces_canonical_fixture_mesh_inputs() -> None:
 
     assert environment["FULLMAG_BENCH_DOMAIN_HMAX"] == "50e-9"
     assert environment["FULLMAG_BENCH_AIRBOX_HMAX"] == "100e-9"
+    assert environment["FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE"] == "1e-6"
 
 
 def test_run_group_has_distinct_headless_compute_and_interactive_host_passes(
@@ -361,7 +378,7 @@ def test_run_group_has_distinct_headless_compute_and_interactive_host_passes(
     assert host[host.index("--ui-surface") + 1] == "interactive"
     assert host_environment["FULLMAG_BENCH_DOMAIN_MESH"] == str(
         capture.FIXTURE_MANIFEST.parent
-        / "box500_airbox_exchange_demag_v1.mesh.json"
+        / "box500_airbox_exchange_demag_v2.mesh.json"
     )
     assert capture.COMPUTE_NVTX_RANGES == (
         "fem.relax.ncg.step",
@@ -1007,3 +1024,6 @@ def test_commands_use_exact_nsys_reports_and_same_managed_fixture_image() -> Non
     second_preflight = recipe.index("--preflight-only", first_preflight + 1)
     capture_run = recipe.rindex("capture_fem_gpu_nsight.py")
     assert image_build < first_preflight < rebuild < second_preflight < capture_run
+    assert 'runtime_root="$(readlink -f "$active")"' in recipe
+    assert '-v "$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
+    assert "--runtime-root /workspace/.fullmag/runtime" in recipe

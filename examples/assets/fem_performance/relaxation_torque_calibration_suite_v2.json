@@ -1,0 +1,92 @@
+{
+  "algorithms": [
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "llg_overdamped"
+  ],
+  "backends": [
+    "fem_cpu",
+    "fem_gpu"
+  ],
+  "demag_policy": {
+    "amg_aggressive_coarsening": 1,
+    "amg_coarsening": 8,
+    "amg_interpolation": 6,
+    "amg_relax_type": 6,
+    "preconditioner": "AMG",
+    "rtol": 1e-12,
+    "solver": "CG"
+  },
+  "llg_timestep_policies": [
+    "fixed",
+    "adaptive"
+  ],
+  "meshes": [
+    {
+      "airbox_hmax_m": 5e-7,
+      "domain_hmax_m": 2.5e-7,
+      "id": "coarse",
+      "solver_mesh_sha256": "6db5b18ffb49a3dc486920e94a1356828c549e09ce0c6c7ee5638cd6c20b993b",
+      "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
+      "solver_mesh_path": "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json"
+    },
+    {
+      "airbox_hmax_m": 2.5e-7,
+      "domain_hmax_m": 1e-7,
+      "id": "medium",
+      "solver_mesh_sha256": "e8b22e7942ab5d9ccbe77912359f83214486a6142ff1ef95d70095d84c7fb8ef",
+      "solver_mesh_signature": "4d11de54405620b611a4a1221bd86bd4622d56d3c09142eac68bde6884e56fca",
+      "solver_mesh_path": "box500_airbox_exchange_demag_amg_medium_v2.mesh.json"
+    },
+    {
+      "airbox_hmax_m": 1e-7,
+      "domain_hmax_m": 5e-8,
+      "id": "fine",
+      "solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
+      "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+      "solver_mesh_path": "box500_airbox_exchange_demag_v2.mesh.json"
+    }
+  ],
+  "problem_ir_reference": {
+    "algorithm": "projected_gradient_bb",
+    "dt_s": 1e-14,
+    "integrator": "none",
+    "mesh_id": "coarse",
+    "scenario": "box500_airbox_exchange_demag",
+    "step_budget": 128,
+    "timestep_policy": "budget"
+  },
+  "problem_ir_sha256": "0becac4fdbd070080595e4b63d274e020f4332713953ea75e82ee09812038fb7",
+  "repeats": 3,
+  "scenarios": [
+    {
+      "id": "box500_airbox_exchange_only",
+      "initial_state_identity": "explicit_helical_v1",
+      "physics": ["exchange"]
+    },
+    {
+      "id": "box500_airbox_exchange_demag",
+      "initial_state_identity": "explicit_helical_v1",
+      "physics": ["exchange", "demag"]
+    },
+    {
+      "id": "box500_airbox_exchange_demag_anis_uniaxial",
+      "initial_state_identity": "explicit_helical_v1",
+      "physics": ["exchange", "demag", "uniaxial_anisotropy"]
+    },
+    {
+      "id": "box500_airbox_exchange_demag_multidomain",
+      "initial_state_identity": "explicit_multidomain_v1",
+      "physics": ["exchange", "demag"],
+      "initial_state_descriptor": "deterministic_helical_two_period_v1"
+    }
+  ],
+  "schema": "fullmag.relaxation_torque_calibration_suite.v2",
+  "runtime_manifest_sha256": "2075e11a2a6d1a9c94c22904fa4dd394c9a74c9c194ac4c85810c36dd3417140",
+  "source_snapshot_sha256": "0d33977618faa0227991b3e1ec3684fc8e40cbd4096db18af02755dc7f08f599",
+  "step_budgets": [
+    128,
+    256,
+    512
+  ]
+}

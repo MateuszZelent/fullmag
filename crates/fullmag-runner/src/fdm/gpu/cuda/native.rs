@@ -221,10 +221,29 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
 fn ensure_cuda_slonczewski_supported(plan: &fullmag_ir::FdmPlanIR) -> Result<(), RunError> {
     match plan.slonczewski_formula_version.as_deref() {
         None | Some("slonczewski.legacy_fullmag.v0") => Ok(()),
-        Some("slonczewski.fullmag.v2") => Err(RunError {
-            message: "slonczewski.fullmag.v2 is not executable on FDM CUDA until the native descriptor carries formula version, signed stack-normal current, and the separate target mask; use FDM CPU reference"
-                .to_string(),
-        }),
+        Some("slonczewski.fullmag.v2") => {
+            let normal = plan.slonczewski_stack_normal.ok_or_else(|| RunError {
+                message: "slonczewski.fullmag.v2 on FDM CUDA requires a stack normal".to_string(),
+            })?;
+            let normal_norm = (normal[0] * normal[0]
+                + normal[1] * normal[1]
+                + normal[2] * normal[2])
+                .sqrt();
+            if !normal_norm.is_finite() || normal_norm <= 0.0 {
+                return Err(RunError {
+                    message: "slonczewski.fullmag.v2 on FDM CUDA requires a finite nonzero stack normal".to_string(),
+                });
+            }
+            let target_mask = plan.slonczewski_active_mask.as_ref().ok_or_else(|| RunError {
+                message: "slonczewski.fullmag.v2 on FDM CUDA requires a separate target mask".to_string(),
+            })?;
+            if target_mask.len() != plan.initial_magnetization.len() {
+                return Err(RunError {
+                    message: "slonczewski.fullmag.v2 on FDM CUDA target mask length must equal cell count".to_string(),
+                });
+            }
+            Ok(())
+        }
         Some(other) => Err(RunError {
             message: format!("unsupported FDM CUDA Slonczewski formula_version '{other}'"),
         }),
@@ -726,6 +745,12 @@ impl NativeFdmBackend {
                 .map(|is_target| if *is_target { 1u8 } else { 0u8 })
                 .collect()
         });
+        let slonczewski_active_mask_flat: Option<Vec<u8>> =
+            plan.slonczewski_active_mask.as_ref().map(|mask| {
+                mask.iter()
+                    .map(|is_target| if *is_target { 1u8 } else { 0u8 })
+                    .collect()
+            });
         let region_mask_flat = if plan.region_mask.is_empty() {
             None
         } else {
@@ -851,6 +876,19 @@ impl NativeFdmBackend {
             stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
             stt_free_layer_thickness: plan.stt_thickness.unwrap_or(0.0),
             stt_current_sign: current_sign,
+            slonczewski_formula: match plan.slonczewski_formula_version.as_deref() {
+                Some("slonczewski.fullmag.v2") => {
+                    ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2
+                }
+                _ => ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0,
+            },
+            stt_stack_normal: plan.slonczewski_stack_normal.unwrap_or([0.0, 0.0, 1.0]),
+            slonczewski_active_mask: slonczewski_active_mask_flat
+                .as_ref()
+                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+            slonczewski_active_mask_len: slonczewski_active_mask_flat
+                .as_ref()
+                .map_or(0, |mask| mask.len() as u64),
 
             has_sot: if plan.sot_current_density.is_some()
                 && plan.sot_sigma.is_some()
@@ -3118,6 +3156,48 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_canonical_slonczewski_matches_cpu_reference_with_target_mask_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM canonical Slonczewski parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.current_density = Some([1.4e11, 0.0, 0.0]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.8);
+        plan.stt_epsilon_prime = Some(0.03);
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+        plan.slonczewski_stack_normal = Some([2.0, 0.0, 0.0]);
+        plan.slonczewski_active_mask = Some(vec![
+            true, false, true, false, true, false, true, false, true,
+        ]);
+
+        let expected =
+            crate::fdm::cpu::reference::execute_reference_fdm(&plan, 2.5e-13, &[], None, None)
+                .expect("cpu reference canonical Slonczewski run");
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm canonical Slonczewski step");
+        let actual_m = backend
+            .copy_m(plan.initial_magnetization.len())
+            .expect("copy m");
+
+        assert_vector_field_close(
+            "canonical Slonczewski m",
+            &actual_m,
+            &expected.result.final_magnetization,
+            1e-6,
+            1e-10,
+        );
+    }
+
+    #[test]
     fn native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available()
     {
         if !is_cuda_available() {
@@ -3810,19 +3890,36 @@ mod exact_metric_contract_tests {
     use super::{ensure_cuda_slonczewski_supported, validate_native_step_metrics};
 
     #[test]
-    fn canonical_slonczewski_fails_before_native_cuda_construction() {
+    fn canonical_slonczewski_requires_stack_normal_and_target_mask_before_native_cuda_construction() {
         let mut plan = fullmag_ir::FdmPlanIR::default();
         plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
         plan.current_density = Some([0.0, 0.0, 7.0e11]);
         plan.stt_degree = Some(0.6);
         plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
         plan.stt_lambda = Some(1.7);
+        plan.slonczewski_stack_normal = Some([0.0, 0.0, 1.0]);
 
         let error = ensure_cuda_slonczewski_supported(&plan)
-            .expect_err("canonical Slonczewski must not reach the legacy CUDA descriptor");
+            .expect_err("canonical Slonczewski must fail closed without its target contract");
         assert!(error.message.contains("slonczewski.fullmag.v2"));
         assert!(error.message.contains("CUDA"));
         assert!(error.message.contains("target mask"));
+    }
+
+    #[test]
+    fn canonical_slonczewski_with_complete_target_contract_reaches_native_descriptor() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+        plan.current_density = Some([0.0, 0.0, 7.0e11]);
+        plan.stt_degree = Some(0.6);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.7);
+        plan.slonczewski_stack_normal = Some([0.0, 0.0, 1.0]);
+        plan.slonczewski_active_mask = Some(vec![true]);
+
+        ensure_cuda_slonczewski_supported(&plan)
+            .expect("complete canonical Slonczewski target contract should be accepted");
     }
 
     #[test]

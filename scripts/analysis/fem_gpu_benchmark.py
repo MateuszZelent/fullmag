@@ -90,6 +90,8 @@ RELAXATION_SCENARIO_ALIASES = {
 }
 BOX500_AIRBOX_SCENARIO_ALIASES = {
     BOX500_AIRBOX_SCENARIO: "exchange_only",
+    "box500_airbox_exchange_only": "exchange_only",
+    "box500_airbox_exchange_demag_multidomain": "exchange_demag",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
     "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
@@ -325,6 +327,9 @@ NATIVE_FEM_LIBRARY_NAMES = (
 )
 PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v2"
 PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v2"
+RELAXATION_TORQUE_CALIBRATION_SUITE_SCHEMA = (
+    "fullmag.relaxation_torque_calibration_suite.v2"
+)
 EQUILIBRIUM_PARITY_SCHEMA = "fullmag.fem.relaxation_equilibrium_parity.v1"
 EQUILIBRIUM_QUALIFICATION_SUITE_SCHEMA = (
     "fullmag.fem.relaxation_equilibrium_qualification_suite.v1"
@@ -340,6 +345,45 @@ TASK11_QUALIFICATION_FIXTURE_SUITE_SHA256 = (
 TASK11_QUALIFICATION_ENVIRONMENT_SHA256 = (
     "8346f0ddd3d85df294a672d132d9508c01eb3256c0a5c6fc6ab1e2a3d2cd17ef"
 )
+
+
+def relaxation_direction_policy_for_backend(
+    backend_label: str,
+    relaxation_algorithm: str | None,
+    *,
+    shared_tangent_gradient: bool = False,
+) -> str | None:
+    """Return the native direct-minimizer direction realization for a lane.
+
+    The GPU preconditioner strategy is an experiment scoped to the CUDA
+    direct-minimizer kernels.  By default it must not be interpreted as a
+    shared CPU/GPU direction policy: production FEM CPU uses the
+    exchange-plus-mass tangent gradient, while the current CUDA kernels use
+    the raw device tangent gradient.  The explicit shared flag is reserved
+    for the same-tolerance parity gate, which deliberately compares the two
+    backends under the same raw tangent-gradient direction.
+    """
+    if relaxation_algorithm not in {"projected_gradient_bb", "nonlinear_cg"}:
+        return None
+    if shared_tangent_gradient and backend_label in {"fem_cpu", "fem_gpu"}:
+        return "device_tangent_gradient"
+    return {
+        "fem_cpu": "exchange_plus_mass_tangent_gradient",
+        "fem_gpu": "device_tangent_gradient",
+    }.get(backend_label)
+
+
+def sanitize_relaxation_backend_env(
+    backend_label: str,
+    env: Mapping[str, str],
+) -> dict[str, str]:
+    """Prevent a GPU-only experiment variable from leaking into CPU rows."""
+    sanitized = dict(env)
+    if backend_label == "fem_cpu":
+        sanitized.pop("FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY", None)
+    return sanitized
+
+
 PERFORMANCE_FIXTURE_SCENARIO = "box500_airbox_exchange_demag"
 PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM = "nonlinear_cg"
 PERFORMANCE_FIXTURE_STEPS = 64
@@ -2997,6 +3041,104 @@ def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
     return resolved
 
 
+def load_relaxation_torque_calibration_meshes(
+    path: Path,
+) -> dict[str, dict[str, object]]:
+    """Load the immutable typed-v2 solver meshes used by torque calibration."""
+
+    suite_path = path.resolve()
+    try:
+        payload = json.loads(suite_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"cannot read relaxation torque calibration suite: {suite_path}"
+        ) from exc
+    if not isinstance(payload, Mapping) or payload.get("schema") != RELAXATION_TORQUE_CALIBRATION_SUITE_SCHEMA:
+        raise ValueError(
+            "relaxation torque calibration suite must use schema v2"
+        )
+    entries = payload.get("meshes")
+    if not isinstance(entries, list):
+        raise ValueError("relaxation torque calibration suite is missing meshes")
+    resolved: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise ValueError("relaxation torque calibration mesh entry must be an object")
+        resolution = str(entry.get("id") or "").strip().lower()
+        if resolution in resolved:
+            raise ValueError(
+                f"relaxation torque calibration suite has duplicate mesh id: {resolution}"
+            )
+        if resolution not in {"coarse", "medium", "fine"}:
+            raise ValueError(
+                f"relaxation torque calibration suite has unsupported mesh id: {resolution}"
+            )
+        mesh_reference = str(entry.get("solver_mesh_path") or "").strip()
+        if not mesh_reference:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} is missing solver_mesh_path"
+            )
+        mesh_path = (suite_path.parent / mesh_reference).resolve()
+        if not mesh_path.is_file():
+            raise ValueError(
+                f"relaxation torque calibration mesh is missing: {mesh_path}"
+            )
+        try:
+            mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"relaxation torque calibration mesh is invalid: {mesh_path}"
+            ) from exc
+        if not isinstance(mesh_payload, Mapping):
+            raise ValueError(
+                f"relaxation torque calibration mesh must be an object: {mesh_path}"
+            )
+        typed_mesh_topology_counts(mesh_payload)
+        declared_signature = str(entry.get("solver_mesh_signature") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", declared_signature):
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} has invalid solver_mesh_signature"
+            )
+        actual_signature = solver_mesh_signature(mesh_payload)
+        if actual_signature != declared_signature:
+            raise ValueError(
+                f"relaxation torque calibration mesh signature mismatch: {mesh_path}"
+            )
+        declared_sha256 = str(entry.get("solver_mesh_sha256") or "")
+        actual_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
+        if declared_sha256 != actual_sha256:
+            raise ValueError(
+                f"relaxation torque calibration mesh sha256 mismatch: {mesh_path}"
+            )
+        try:
+            domain_hmax_m = float(entry["domain_hmax_m"])
+            airbox_hmax_m = float(entry["airbox_hmax_m"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} is missing hmax values"
+            ) from exc
+        if not math.isfinite(domain_hmax_m) or domain_hmax_m <= 0.0:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} has invalid domain_hmax_m"
+            )
+        if not math.isfinite(airbox_hmax_m) or airbox_hmax_m <= 0.0:
+            raise ValueError(
+                f"relaxation torque calibration mesh {resolution} has invalid airbox_hmax_m"
+            )
+        resolved[resolution] = {
+            "path": mesh_path,
+            "solver_mesh_signature": declared_signature,
+            "solver_mesh_sha256": declared_sha256,
+            "domain_hmax_m": domain_hmax_m,
+            "airbox_hmax_m": airbox_hmax_m,
+        }
+    if set(resolved) != {"coarse", "medium", "fine"}:
+        raise ValueError(
+            "relaxation torque calibration suite requires coarse, medium, and fine meshes"
+        )
+    return resolved
+
+
 def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
     """Validate the immutable same-tolerance CPU/GPU qualification contract."""
 
@@ -3024,7 +3166,7 @@ def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
     scenarios = payload.get("scenarios")
     if algorithms != ["projected_gradient_bb", "nonlinear_cg"]:
         raise ValueError("FEM equilibrium qualification algorithms differ from v1")
-    if scenarios != ["exchange_only", "exchange_demag"]:
+    if scenarios != ["box500_airbox_exchange_only", "box500_airbox_exchange_demag"]:
         raise ValueError("FEM equilibrium qualification scenarios differ from v1")
     fixtures = payload.get("fixtures")
     if not isinstance(fixtures, list) or [item.get("resolution") for item in fixtures] != ["coarse", "medium", "fine"]:
@@ -3047,6 +3189,30 @@ def load_equilibrium_qualification_suite(path: Path) -> dict[str, object]:
         "scenarios": tuple(scenarios),
         "fixtures": resolved,
     }
+
+
+def equilibrium_scope_expectations(
+    meshes: Sequence[Path], fixtures: Mapping[str, Mapping[str, object]]
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Return only the immutable fixture identities selected by this run."""
+
+    resolutions: list[str] = []
+    signatures: dict[str, str] = {}
+    for mesh_path in meshes:
+        resolution = qualification_mesh_size(mesh_path)
+        if resolution is None:
+            raise ValueError(
+                "equilibrium parity scope requires a named coarse, medium, or fine mesh"
+            )
+        fixture = fixtures.get(resolution)
+        if not isinstance(fixture, Mapping):
+            raise ValueError(f"equilibrium suite has no fixture for {resolution}")
+        signature = fixture.get("solver_mesh_signature")
+        if not isinstance(signature, str) or not signature:
+            raise ValueError(f"equilibrium suite fixture {resolution} has no signature")
+        resolutions.append(resolution)
+        signatures[resolution] = signature
+    return tuple(resolutions), signatures
 
 
 def print_amg_qualification_fixture_suite(path: Path) -> None:
@@ -4339,6 +4505,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Generate the three-resolution FEM GPU AMG qualification fixture suite and exit",
     )
     parser.add_argument(
+        "--relaxation-torque-calibration-suite",
+        type=Path,
+        default=None,
+        help=(
+            "Use the signed typed-v2 solver meshes and hmax values from the "
+            "relaxation torque calibration suite"
+        ),
+    )
+    parser.add_argument(
         "--scenarios",
         type=str,
         default=",".join(DEFAULT_SCENARIOS),
@@ -4999,6 +5174,22 @@ def canonical_consistency_scenario(scenario: str) -> str:
     )
 
 
+def calibration_initial_state_identity(scenario: str) -> str:
+    """Return the explicit initial-state descriptor used by the benchmark.
+
+    The managed launcher currently reports a compact JSON result and does not
+    forward the script's ``BENCHMARK_RESULT`` line.  Keep the descriptor
+    recoverable from the canonical scenario name while preserving the strict
+    suite check; this is not a numerical default or a solver fallback.
+    """
+
+    if "multidomain" in scenario:
+        return "explicit_multidomain_v1"
+    if benchmark_scenario_uses_relaxation(scenario):
+        return "explicit_helical_v1"
+    return "uniform_x"
+
+
 def benchmark_scenario_uses_relaxation(scenario: str) -> bool:
     return (
         scenario in BOX500_AIRBOX_SCENARIO_ALIASES
@@ -5544,10 +5735,10 @@ def resolve_integrators(integrators_arg: str) -> list[str]:
     integrators = [part.strip().lower() for part in integrators_arg.split(",") if part.strip()]
     if not integrators:
         raise ValueError("at least one benchmark integrator is required")
-    supported = set(DEFAULT_INTEGRATORS)
+    supported = set(DEFAULT_INTEGRATORS) | {"none"}
     unsupported = sorted(set(integrators) - supported)
     if unsupported:
-        supported_text = ", ".join(DEFAULT_INTEGRATORS)
+        supported_text = ", ".join((*DEFAULT_INTEGRATORS, "none"))
         raise ValueError(
             f"unsupported benchmark integrator(s): {', '.join(unsupported)}; "
             f"supported: {supported_text}"
@@ -5598,12 +5789,12 @@ def resolve_timestep_policies(policies_arg: str) -> list[str]:
     policies = [part.strip().lower() for part in policies_arg.split(",") if part.strip()]
     if not policies:
         raise ValueError("at least one benchmark timestep policy is required")
-    supported = {"fixed", "adaptive"}
+    supported = {"fixed", "adaptive", "budget"}
     unsupported = sorted(set(policies) - supported)
     if unsupported:
         raise ValueError(
             f"unsupported benchmark timestep policy/policies: {', '.join(unsupported)}; "
-            "supported: fixed, adaptive"
+            "supported: fixed, adaptive, budget"
         )
     return policies
 
@@ -6045,6 +6236,7 @@ def build_task8_qualification_case_identities(
     cache: dict[tuple[str, ...], Path] = {}
     identities: list[dict[str, object]] = []
     for scenario in scenarios:
+        scenario_algorithms = relaxation_algorithms_for_scenario(scenario, algorithms)
         domain_env = generated_domain_mesh_env(
             cache=cache,
             cache_dir=cache_dir,
@@ -6057,6 +6249,7 @@ def build_task8_qualification_case_identities(
             thread_spec=thread_specs[0],
             extra_env=mesh_env,
             timeout_s=args.case_timeout_s,
+            relaxation_algorithm=(scenario_algorithms[0] if scenario_algorithms else None),
         )
         solver_mesh_path = Path(domain_env.get("FULLMAG_BENCH_DOMAIN_MESH", mesh_path))
         for algorithm in relaxation_algorithms_for_scenario(scenario, algorithms):
@@ -6191,7 +6384,10 @@ def execution_plan_mesh_stats(
         file_signature = solver_mesh_signature(file_payload)
         if file_topology != solver_topology or file_signature != solver_signature:
             raise ValueError(
-                "solver mesh topology mismatch between execution plan payload and mesh file"
+                "solver mesh topology mismatch between execution plan payload and mesh file: "
+                f"solver_signature={solver_signature}, file_signature={file_signature}, "
+                f"solver_topology={solver_topology}, file_topology={file_topology}, "
+                f"solver_mesh_path={solver_mesh_path}"
             )
 
     stats: dict[str, object] = {}
@@ -6226,6 +6422,7 @@ def execution_plan_mesh_stats(
             "solver_mesh_exterior_facet_count": solver_topology.exterior_facet_count,
             "solver_mesh_interface_facet_count": solver_topology.interface_facet_count,
             "solver_mesh_schema_kind": solver_topology.schema_kind,
+            "solver_mesh_signature_schema": "fullmag.fem.solver_mesh_signature.v2",
             "solver_mesh_signature": solver_signature,
         }
     )
@@ -6424,6 +6621,88 @@ def merge_missing_payload_fields(
     return merged
 
 
+def _accepted_solver_step_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    """Filter accepted native steps from terminal confirmation observations."""
+
+    accepted: list[Mapping[str, object]] = []
+    previous_step: int | None = None
+    for row in rows:
+        raw_accepted = row.get("accepted")
+        if raw_accepted not in (None, ""):
+            is_accepted = as_bool(raw_accepted)
+        else:
+            step = as_int(row.get("step"))
+            is_accepted = step is not None and (
+                previous_step is None or step > previous_step
+            )
+        step = as_int(row.get("step"))
+        if step is not None:
+            previous_step = step
+        if is_accepted:
+            accepted.append(row)
+    return accepted
+
+
+def solver_time_to_tolerance_from_diagnostics(
+    rows: Sequence[Mapping[str, object]], torque_tolerance_apm: float
+) -> tuple[float | None, int, int]:
+    """Derive solver-owned time-to-tolerance from accepted-step diagnostics."""
+
+    elapsed_ns = 0
+    demag_solves = 0
+    accepted_steps = 0
+    previous_step: int | None = None
+    for row in rows:
+        raw_accepted = row.get("accepted")
+        if raw_accepted not in (None, ""):
+            is_accepted = as_bool(raw_accepted)
+        else:
+            step = as_int(row.get("step"))
+            is_accepted = step is not None and (
+                previous_step is None or step > previous_step
+            )
+        step = as_int(row.get("step"))
+        if step is not None:
+            previous_step = step
+        torque = as_float(row.get("max_torque_apm"))
+        if is_accepted:
+            wall_time_ns = as_int(row.get("wall_time_ns"))
+            demag_solves_value = as_int(row.get("demag_solves"))
+            if wall_time_ns is None or wall_time_ns < 0:
+                return None, accepted_steps, demag_solves
+            elapsed_ns += wall_time_ns
+            accepted_steps += 1
+            if demag_solves_value is not None and demag_solves_value >= 0:
+                demag_solves += demag_solves_value
+            if torque is not None and math.isfinite(torque) and torque <= torque_tolerance_apm:
+                return elapsed_ns / 1_000_000_000.0, accepted_steps, demag_solves
+        elif (
+            accepted_steps > 0
+            and torque is not None
+            and math.isfinite(torque)
+            and torque <= torque_tolerance_apm
+        ):
+            confirmation_wall_time_ns = as_int(row.get("wall_time_ns"))
+            if confirmation_wall_time_ns is None or confirmation_wall_time_ns < 0:
+                return None, accepted_steps, demag_solves
+            return (
+                (elapsed_ns + confirmation_wall_time_ns) / 1_000_000_000.0,
+                accepted_steps,
+                demag_solves,
+            )
+
+    # A direct minimizer can certify an already-equilibrated initial state
+    # without accepting a move.  The terminal observation is explicit, while
+    # the solver-owned elapsed time and accepted-step count are both zero.
+    if accepted_steps == 0 and rows:
+        terminal_torque = as_float(rows[-1].get("max_torque_apm"))
+        if terminal_torque is not None and terminal_torque <= torque_tolerance_apm:
+            return 0.0, 0, demag_solves
+    return None, accepted_steps, demag_solves
+
+
 def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, object] | None:
     artifact_dir = Path(run_dir)
     metadata = load_run_metadata(str(artifact_dir))
@@ -6442,11 +6721,28 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
     if as_int(executed_steps) is None:
         return None
 
+    demag_runtime = metadata.get("demag_runtime")
+    if not isinstance(demag_runtime, Mapping):
+        demag_runtime = {}
+    demag_timings = demag_runtime.get("timings_ns")
+    if not isinstance(demag_timings, Mapping):
+        demag_timings = {}
+
     payload: dict[str, object] = {
         "status": "completed",
         "executed_steps": executed_steps,
         "artifact_dir": str(artifact_dir),
     }
+    for source, target in (
+        ("hypre_wait_in_enqueue", "demag_hypre_wait_in_enqueue_wall_time_ns"),
+        ("hypre_host_api", "demag_hypre_host_api_wall_time_ns"),
+        ("hypre_device_elapsed", "demag_hypre_device_elapsed_time_ns"),
+        ("hypre_wait_out_enqueue", "demag_hypre_wait_out_enqueue_wall_time_ns"),
+        ("hypre_event_wait_count", "demag_hypre_event_wait_count"),
+        ("hypre_timed_solve_count", "demag_hypre_timed_solve_count"),
+    ):
+        if demag_timings.get(source) is not None:
+            payload[target] = demag_timings[source]
     provenance = metadata.get("execution_provenance")
     if not isinstance(provenance, Mapping):
         provenance = {}
@@ -6482,19 +6778,35 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
         with step_files[-1].open(newline="", encoding="utf-8") as handle:
             step_rows = list(csv.DictReader(handle))
         if step_rows:
-            payload["accepted_steps"] = len(step_rows)
-            payload["rhs_evals"] = as_int(step_rows[-1].get("rhs_evals"))
+            accepted_rows = _accepted_solver_step_rows(step_rows)
+            payload["accepted_steps"] = len(accepted_rows)
+            last_accepted_row = accepted_rows[-1] if accepted_rows else step_rows[-1]
+            payload["rhs_evals"] = as_int(last_accepted_row.get("rhs_evals"))
             for source, target in (
                 ("rhs_evals", "total_rhs_evals"),
                 ("demag_solves", "cumulative_demag_solves"),
                 ("rejected_attempts", "rejected_attempts"),
             ):
-                values = [as_int(row.get(source)) for row in step_rows]
+                values = [as_int(row.get(source)) for row in accepted_rows]
                 if all(value is not None for value in values):
                     payload[target] = sum(value for value in values if value is not None)
             if "cumulative_demag_solves" in payload:
                 payload["demag_solves"] = payload["cumulative_demag_solves"]
-            accepted_row = step_rows[-1]
+            accepted_row = last_accepted_row
+            tolerance = as_float(qualification.get("stop_threshold"))
+            if tolerance is not None:
+                (
+                    time_to_tolerance,
+                    accepted_steps_to_tolerance,
+                    demag_solve_count_total,
+                ) = solver_time_to_tolerance_from_diagnostics(step_rows, tolerance)
+                if time_to_tolerance is not None:
+                    payload["time_to_tolerance_seconds"] = time_to_tolerance
+                    payload["time_to_tolerance_source"] = (
+                        "accepted_step_diagnostics_wall_time_ns"
+                    )
+                payload["accepted_steps_to_tolerance"] = accepted_steps_to_tolerance
+                payload["demag_solve_count_total"] = demag_solve_count_total
             proof_available_raw = accepted_row.get(
                 "accepted_energy_proof_available"
             )
@@ -6519,7 +6831,7 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
             if "accepted_energy_proof_available" in accepted_row:
                 proof_count = 0
                 invalid_details: list[str] = []
-                for row_index, row in enumerate(step_rows, start=1):
+                for row_index, row in enumerate(accepted_rows, start=1):
                     step = as_int(row.get("step"))
                     step_label = step if step is not None else row_index
                     available = str(
@@ -6772,12 +7084,15 @@ def export_generated_domain_mesh(
     extra_env: dict[str, str],
     output_path: Path,
     timeout_s: float | None,
+    relaxation_algorithm: str | None = None,
 ) -> Path:
     env = os.environ.copy()
     env.update(extra_env)
     apply_bundled_openmpi_runtime_env(env)
     env["FULLMAG_BENCH_MESH"] = str(mesh_path)
     env["FULLMAG_BENCH_SCENARIO"] = scenario
+    if relaxation_algorithm is not None:
+        env["FULLMAG_BENCH_RELAX_ALGORITHM"] = relaxation_algorithm
     env["FULLMAG_BENCH_INTEGRATOR"] = integrator
     env["FULLMAG_BENCH_TIMESTEP_POLICY"] = timestep_policy
     env["FULLMAG_BENCH_STEPS"] = str(steps)
@@ -6828,6 +7143,7 @@ def generated_domain_mesh_env(
     thread_spec: ThreadCountSpec,
     extra_env: dict[str, str],
     timeout_s: float | None,
+    relaxation_algorithm: str | None = None,
 ) -> dict[str, str]:
     explicit_domain_mesh = extra_env.get("FULLMAG_BENCH_DOMAIN_MESH")
     if explicit_domain_mesh:
@@ -6859,6 +7175,7 @@ def generated_domain_mesh_env(
             cached = export_generated_domain_mesh(
                 mesh_path=mesh_path,
                 scenario=scenario,
+                relaxation_algorithm=relaxation_algorithm,
                 integrator=integrator,
                 steps=steps,
                 dt=dt,
@@ -7193,6 +7510,7 @@ def write_performance_fixture_files(
                 extra_env=fixture_env,
                 output_path=generated_mesh_path,
                 timeout_s=args.case_timeout_s,
+                relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
             )
             realization_row = run_backend(
                 backend_label="fem_cpu",
@@ -7336,6 +7654,18 @@ def run_backend(
     ui_surface: str = "headless",
     canonical_mesh_output_path: Path | None = None,
 ) -> dict[str, object]:
+    runtime_identity = runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT)
+    runtime_manifest_payload = json.loads(
+        (MANAGED_FEM_RUNTIME_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    runtime_build_identity = runtime_manifest_payload.get("build_identity")
+    runtime_source_snapshot = (
+        runtime_build_identity.get("source_snapshot_sha256")
+        if isinstance(runtime_build_identity, Mapping)
+        else None
+    )
+    if not isinstance(runtime_source_snapshot, str) or not runtime_source_snapshot:
+        runtime_source_snapshot = None
     row = {
         "backend": backend_label,
         "scenario": scenario,
@@ -7348,7 +7678,12 @@ def run_backend(
         "requested_cpu_thread_spec": thread_spec.label,
         "case_timeout_s": timeout_s,
         "ui_surface": ui_surface,
-        **runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT),
+        **runtime_identity,
+        **(
+            {"runtime_source_snapshot_sha256": runtime_source_snapshot}
+            if runtime_source_snapshot is not None
+            else {}
+        ),
         # The benchmark input presets are historical v1 mesh assets. Their
         # legacy read is explicit; the final solver mesh is always validated as
         # typed by execution_plan_mesh_stats below.
@@ -7356,6 +7691,29 @@ def run_backend(
     }
     if backend_label == "fem_gpu" and observed_gpu_identity is not None:
         attach_observed_gpu_identity(row, observed_gpu_identity)
+    shared_tangent_gradient = (
+        extra_env.get("FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY")
+        == "raw_tangent_gradient"
+        or os.environ.get("FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY")
+        == "raw_tangent_gradient"
+    )
+    direction_policy = relaxation_direction_policy_for_backend(
+        backend_label,
+        relaxation_algorithm,
+        shared_tangent_gradient=shared_tangent_gradient,
+    )
+    if direction_policy is not None:
+        row["resolved_relaxation_direction_policy"] = direction_policy
+        row["relaxation_direction_policy_source"] = "native_backend_contract"
+        row["relaxation_preconditioner_strategy_scope"] = (
+            "shared_raw_tangent_gradient"
+            if shared_tangent_gradient
+            else (
+                "gpu_direct_minimizer_only"
+                if backend_label == "fem_gpu"
+                else "cpu_production_default"
+            )
+        )
     if qualification_case_manifest is not None:
         if problem_ir is None:
             raise ValueError("Task 8 qualification requires canonical ProblemIR")
@@ -7371,6 +7729,7 @@ def run_backend(
         )
     env = os.environ.copy()
     env.update(extra_env)
+    env = sanitize_relaxation_backend_env(backend_label, env)
     row["step_profiler_enabled"] = env_flag_enabled(
         env_text(env, "FULLMAG_FEM_STEP_PROFILE")
     )
@@ -7508,6 +7867,9 @@ def run_backend(
     env["FULLMAG_BENCH_STEPS"] = str(steps)
     env["FULLMAG_BENCH_DT"] = repr(dt)
     solver_mesh_path = env.get("FULLMAG_BENCH_DOMAIN_MESH")
+    solver_mesh_identity_path = (
+        Path(solver_mesh_path) if solver_mesh_path is not None else None
+    )
     if solver_mesh_path:
         try:
             row["solver_mesh_sha256"] = hashlib.sha256(
@@ -7579,9 +7941,7 @@ def run_backend(
                 execution_plan_mesh_stats(
                     load_run_metadata(execution_dir),
                     input_mesh_path=mesh_path,
-                    solver_mesh_path=Path(solver_mesh_path)
-                    if solver_mesh_path
-                    else None,
+                    solver_mesh_path=solver_mesh_identity_path,
                 )
             )
             row.update(
@@ -7611,6 +7971,10 @@ def run_backend(
                 json.dumps(canonical_mesh, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            solver_mesh_identity_path = canonical_mesh_output_path
+            row["solver_mesh_sha256"] = hashlib.sha256(
+                canonical_mesh_output_path.read_bytes()
+            ).hexdigest()
         final_scalar_row = load_final_scalar_row(execution_dir)
         artifact_payload = load_authoritative_benchmark_payload(execution_dir)
         energy_monotonicity_evidence = load_energy_monotonicity_evidence(execution_dir)
@@ -7688,7 +8052,7 @@ def run_backend(
         execution_plan_mesh_stats(
             metadata,
             input_mesh_path=mesh_path,
-            solver_mesh_path=Path(solver_mesh_path) if solver_mesh_path else None,
+            solver_mesh_path=solver_mesh_identity_path,
         )
     )
     row.update(energy_monotonicity_evidence)
@@ -7724,6 +8088,10 @@ def run_backend(
                     payload.get("scenario")
                     if require_reported_execution_identity
                     else first_present(payload.get("scenario"), scenario)
+                ),
+                "initial_state_identity": first_present(
+                    payload.get("initial_state_identity"),
+                    calibration_initial_state_identity(scenario),
                 ),
                 "reported_integrator": (
                     payload.get("integrator")
@@ -7837,6 +8205,38 @@ def run_backend(
                     )
                 ),
                 "demag_solver_apply_wall_time_scope": "last_step",
+                "demag_hypre_wait_in_enqueue_wall_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_wait_in_enqueue_wall_time_ns"),
+                        demag_timings.get("hypre_wait_in_enqueue"),
+                    )
+                ),
+                "demag_hypre_host_api_wall_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_host_api_wall_time_ns"),
+                        demag_timings.get("hypre_host_api"),
+                    )
+                ),
+                "demag_hypre_device_elapsed_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_device_elapsed_time_ns"),
+                        demag_timings.get("hypre_device_elapsed"),
+                    )
+                ),
+                "demag_hypre_wait_out_enqueue_wall_time_ms": ns_to_ms(
+                    first_present(
+                        payload.get("demag_hypre_wait_out_enqueue_wall_time_ns"),
+                        demag_timings.get("hypre_wait_out_enqueue"),
+                    )
+                ),
+                "demag_hypre_event_wait_count": first_present(
+                    payload.get("demag_hypre_event_wait_count"),
+                    demag_timings.get("hypre_event_wait_count"),
+                ),
+                "demag_hypre_timed_solve_count": first_present(
+                    payload.get("demag_hypre_timed_solve_count"),
+                    demag_timings.get("hypre_timed_solve_count"),
+                ),
                 "demag_solver_setup_reused": first_present(
                     payload.get("demag_solver_setup_reused"),
                     demag_runtime.get("solver_setup_reused"),
@@ -11400,6 +11800,18 @@ def main() -> None:
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
+    relaxation_torque_calibration_meshes: dict[str, dict[str, object]] | None = None
+    if args.relaxation_torque_calibration_suite is not None:
+        try:
+            relaxation_torque_calibration_meshes = (
+                load_relaxation_torque_calibration_meshes(
+                    args.relaxation_torque_calibration_suite
+                )
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(
+                f"invalid relaxation torque calibration suite: {exc}"
+            ) from exc
     equilibrium_suite: dict[str, object] | None = None
     if args.equilibrium_suite is not None:
         try:
@@ -11674,6 +12086,7 @@ def main() -> None:
                         **relax_env,
                     },
                     timeout_s=args.case_timeout_s,
+                    relaxation_algorithm=warmup_relaxation_algorithm,
                 )
                 if fixture is not None:
                     warmup_domain_mesh_env = {
@@ -11732,6 +12145,25 @@ def main() -> None:
         # managed runtime; do not let this opt-in affect solver-mesh identity.
         mesh_stats = load_mesh_stats(mesh_path, allow_legacy=True)
         case_mesh_env = task11_mesh_env(mesh_path)
+        if relaxation_torque_calibration_meshes is not None:
+            mesh_size = qualification_mesh_size(mesh_path)
+            if mesh_size is None:
+                raise SystemExit(
+                    "--relaxation-torque-calibration-suite requires coarse, medium, "
+                    f"or fine mesh presets; got {mesh_path}"
+                )
+            calibration_mesh = relaxation_torque_calibration_meshes[mesh_size]
+            case_mesh_env.update(
+                {
+                    "FULLMAG_BENCH_DOMAIN_MESH": str(calibration_mesh["path"]),
+                    "FULLMAG_BENCH_DOMAIN_HMAX": repr(
+                        float(calibration_mesh["domain_hmax_m"])
+                    ),
+                    "FULLMAG_BENCH_AIRBOX_HMAX": repr(
+                        float(calibration_mesh["airbox_hmax_m"])
+                    ),
+                }
+            )
         print(f"  {input_mesh_summary(mesh_stats)}")
         for scenario in scenarios:
             scenario_relaxation_algorithms: list[str | None] = (
@@ -11740,14 +12172,23 @@ def main() -> None:
                 else [None]
             )
             for relaxation_algorithm in scenario_relaxation_algorithms:
-                for integrator in integrators:
-                    for timestep_policy in timestep_policies:
+                physical_time_algorithm = relaxation_algorithm in {
+                    None,
+                    "llg_overdamped",
+                }
+                case_integrators = integrators if physical_time_algorithm else ["none"]
+                case_timestep_policies = (
+                    timestep_policies if physical_time_algorithm else ["budget"]
+                )
+                for integrator in case_integrators:
+                    for timestep_policy in case_timestep_policies:
                         for thread_spec in thread_specs:
                             domain_mesh_env = generated_domain_mesh_env(
                                 cache=domain_mesh_cache,
                                 cache_dir=domain_mesh_cache_dir,
                                 mesh_path=mesh_path,
                                 scenario=scenario,
+                                relaxation_algorithm=relaxation_algorithm,
                                 integrator=integrator,
                                 steps=args.steps,
                                 dt=args.dt,
@@ -12008,16 +12449,17 @@ def main() -> None:
             )
         fixtures = equilibrium_suite["fixtures"]
         assert isinstance(fixtures, Mapping)
-        expected_signatures = {
-            str(resolution): str(fixture["solver_mesh_signature"])
-            for resolution, fixture in fixtures.items()
-            if isinstance(fixture, Mapping)
-        }
+        try:
+            expected_resolutions, expected_signatures = equilibrium_scope_expectations(
+                meshes, fixtures
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         equilibrium_summary = equilibrium_parity_summary(
             results,
             require_parity=args.require_equilibrium_parity,
             output_path=args.equilibrium_parity_output,
-            expected_resolutions=tuple(str(mesh_size) for mesh_size in fixtures),
+            expected_resolutions=expected_resolutions,
             expected_scenarios=tuple(
                 str(value) for value in equilibrium_suite["scenarios"]
             ),

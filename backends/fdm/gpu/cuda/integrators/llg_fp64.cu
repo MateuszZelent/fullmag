@@ -199,7 +199,9 @@ __global__ void llg_rhs_fp64_kernel(
     }
     
     // --- Slonczewski STT (CPP/SOT) ---
-    if (stt.has_slonczewski_stt) {
+    if (stt.has_slonczewski_stt &&
+        (!stt.active_mask || stt.active_mask[idx] != 0) &&
+        (!stt.has_slonczewski_active_mask || stt.slonczewski_active_mask[idx] != 0)) {
         double px = stt.stt_p_x;
         double py = stt.stt_p_y;
         double pz = stt.stt_p_z;
@@ -211,10 +213,19 @@ __global__ void llg_rhs_fp64_kernel(
         double g = (P_val * L2) / ((L2 + 1.0) + (L2 - 1.0) * m_dot_p);
         double beta_STT = stt.stt_cpp_pf * g;
         double inv_gilbert_stt = 1.0 / (1.0 + alpha * alpha);
-        double damping_like_scale =
-            beta_STT * (1.0 + alpha * stt.stt_epsilon_prime) * inv_gilbert_stt;
-        double field_like_scale =
-            beta_STT * (stt.stt_epsilon_prime - alpha) * inv_gilbert_stt;
+        double damping_like_scale;
+        double field_like_scale;
+        if (stt.slonczewski_formula == FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2) {
+            damping_like_scale =
+                stt.stt_cpp_pf * (g + alpha * stt.stt_epsilon_prime) * inv_gilbert_stt;
+            field_like_scale =
+                stt.stt_cpp_pf * (stt.stt_epsilon_prime - alpha * g) * inv_gilbert_stt;
+        } else {
+            damping_like_scale =
+                beta_STT * (1.0 + alpha * stt.stt_epsilon_prime) * inv_gilbert_stt;
+            field_like_scale =
+                beta_STT * (stt.stt_epsilon_prime - alpha) * inv_gilbert_stt;
+        }
         
         // m x p
         double m_cross_px = m1 * pz - m2 * py;

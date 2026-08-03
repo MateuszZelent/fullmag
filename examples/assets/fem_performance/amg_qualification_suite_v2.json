@@ -1,0 +1,49 @@
+{
+  "airbox_factor": 2.0,
+  "fixtures": [
+    {
+      "airbox_hmax_m": 5e-07,
+      "domain_hmax_m": 2.5e-07,
+      "problem_ir_sha256": "17c673a497595c735bfaf1d159336ab294697dd49b7054539904c38b47670be0",
+      "resolution": "coarse",
+      "solver_mesh_cell_count": 149,
+      "solver_mesh_exterior_facet_count": 84,
+      "solver_mesh_facet_count": 96,
+      "solver_mesh_interface_facet_count": 12,
+      "solver_mesh_node_count": 52,
+      "solver_mesh_path": "box500_airbox_exchange_demag_amg_coarse_v2.mesh.json",
+      "solver_mesh_sha256": "6db5b18ffb49a3dc486920e94a1356828c549e09ce0c6c7ee5638cd6c20b993b",
+      "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6"
+    },
+    {
+      "airbox_hmax_m": 2.5e-07,
+      "domain_hmax_m": 1e-07,
+      "problem_ir_sha256": "d261d7c13df8d35a2c45906f58f0efd33f295eab9cc877532071df8e67df92e8",
+      "resolution": "medium",
+      "solver_mesh_cell_count": 473,
+      "solver_mesh_exterior_facet_count": 260,
+      "solver_mesh_facet_count": 280,
+      "solver_mesh_interface_facet_count": 20,
+      "solver_mesh_node_count": 153,
+      "solver_mesh_path": "box500_airbox_exchange_demag_amg_medium_v2.mesh.json",
+      "solver_mesh_sha256": "e8b22e7942ab5d9ccbe77912359f83214486a6142ff1ef95d70095d84c7fb8ef",
+      "solver_mesh_signature": "4d11de54405620b611a4a1221bd86bd4622d56d3c09142eac68bde6884e56fca"
+    },
+    {
+      "airbox_hmax_m": 1e-07,
+      "domain_hmax_m": 5e-08,
+      "problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c",
+      "resolution": "fine",
+      "solver_mesh_cell_count": 5138,
+      "solver_mesh_exterior_facet_count": 1440,
+      "solver_mesh_facet_count": 1504,
+      "solver_mesh_interface_facet_count": 64,
+      "solver_mesh_node_count": 1200,
+      "solver_mesh_path": "box500_airbox_exchange_demag_v2.mesh.json",
+      "solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
+      "solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd"
+    }
+  ],
+  "scenario": "box500_airbox_exchange_demag",
+  "schema": "fullmag.fem_gpu.performance_fixture_suite.v2"
+}

@@ -1,0 +1,124 @@
+{
+  "schema": "fullmag.fem.relaxation_equilibrium_parity_qualification.v1",
+  "date": "2026-08-03",
+  "decision": "promote",
+  "scope": {
+    "fixture_scope": "coarse",
+    "repeat_count": 1,
+    "qualification_gate": "same-tolerance equilibrium parity",
+    "requested_torque_tolerance_apm": 8000.0,
+    "demag_solver": "CG",
+    "demag_preconditioner": "AMG",
+    "demag_relative_tolerance": 1e-12,
+    "precision": "double",
+    "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
+    "mesh_identity_contract": "same serialized typed solver mesh for CPU and GPU"
+  },
+  "runtime": {
+    "source_commit": "59a030ca047cc3aa8f2b70609c10aad5484aba50",
+    "source_tree": "69d05ab61b9445b83ddb7ecfdccd0de0f1e48498",
+    "source_snapshot_sha256": "8aa6217a1094b01575f498d9c0d78123c7d0a4582342c5dbc2982d9982d47737",
+    "source_inputs_sha256": "aa7e56257da859a5b11462ad0c49dc9316d5e4384be1bc7f1a12f5a0a741b995",
+    "runtime_manifest_sha256": "aea0050b51ff820f3394ca517e8a551a9496ae2c7eeeb4214eb6404270ed32a0",
+    "worktree": "clean",
+    "compute_capability": "8.9",
+    "mfem": "4.9",
+    "hypre": "3.1.0"
+  },
+  "rows": [
+    {
+      "scenario": "box500_airbox_exchange_demag",
+      "algorithm": "nonlinear_cg",
+      "problem_ir_sha256": "b5158829b3552743d65102b934125c74048270683eccf71cda3044d3392124c2",
+      "cpu": {
+        "converged": true,
+        "stop_reason": "torque",
+        "accepted_steps": 34,
+        "accepted_steps_to_tolerance": 32,
+        "time_to_tolerance_seconds": 0.774053247,
+        "demag_solve_count_total": 64,
+        "demag_solver_apply_wall_time_ms": 19.477536,
+        "final_torque_apm": 7280.282481929854,
+        "final_e_demag_j": 4.61141964533326e-18,
+        "final_magnetization_sha256": "caead89f648bc196627fe98c1cbe73daa6c1ef3b27fa86f95f9b001c54ffac82"
+      },
+      "gpu": {
+        "converged": true,
+        "stop_reason": "torque",
+        "accepted_steps": 34,
+        "accepted_steps_to_tolerance": 32,
+        "time_to_tolerance_seconds": 0.434504495,
+        "demag_solve_count_total": 33,
+        "demag_solver_apply_wall_time_ms": 9.942593,
+        "final_torque_apm": 7280.2824819299085,
+        "final_e_demag_j": 4.611419645333258e-18,
+        "final_magnetization_sha256": "50a149d3e43e5326d433947bb1c69a567d3ead39485c19819739a30f5c349c33"
+      },
+      "comparison": {
+        "passed": true,
+        "executed_step_delta": 0,
+        "max_component_difference": 4.440892098500626e-16,
+        "rms_component_difference": 5.444901382243243e-17,
+        "p99_vector_difference": 4.44130712525147e-16,
+        "final_e_demag_difference_j": 2.311115933264683e-33
+      }
+    },
+    {
+      "scenario": "box500_airbox_exchange_demag",
+      "algorithm": "projected_gradient_bb",
+      "problem_ir_sha256": "27eac3760d9b7caf649b4ed8f384d9d902eb9fdfe87c404f24ad91a85866a24f",
+      "cpu": {
+        "converged": true,
+        "stop_reason": "torque",
+        "accepted_steps": 5,
+        "accepted_steps_to_tolerance": 5,
+        "time_to_tolerance_seconds": 0.151166038,
+        "demag_solve_count_total": 13,
+        "demag_solver_apply_wall_time_ms": 11.843764,
+        "final_torque_apm": 6411.004594821518,
+        "final_e_demag_j": 5.173820753813695e-18,
+        "final_magnetization_sha256": "8e2835058a512ef7954049aee180193c8ddf25c32b29f371eaec3f66be059ccc"
+      },
+      "gpu": {
+        "converged": true,
+        "stop_reason": "torque",
+        "accepted_steps": 5,
+        "accepted_steps_to_tolerance": 5,
+        "time_to_tolerance_seconds": 0.160302301,
+        "demag_solve_count_total": 13,
+        "demag_solver_apply_wall_time_ms": 11.284208,
+        "final_torque_apm": 6411.004594821448,
+        "final_e_demag_j": 5.173820753813706e-18,
+        "final_magnetization_sha256": "45f9a3b8477616ba6dc1efdbc3ed96866ded1dd0c1707d621e3805a032014bcc"
+      },
+      "comparison": {
+        "passed": true,
+        "executed_step_delta": 0,
+        "max_component_difference": 9.992007221626409e-16,
+        "rms_component_difference": 1.7318653852256794e-16,
+        "p99_vector_difference": 1.144268431592484e-15,
+        "final_e_demag_difference_j": 1.0785207688568521e-32
+      }
+    }
+  ],
+  "implementation_change": {
+    "commit": "59a030ca047cc3aa8f2b70609c10aad5484aba50",
+    "description": "GPU final native step statistics already update stage-completion confirmation; duplicate per-algorithm updates were removed from nonlinear CG and projected-gradient BB.",
+    "regression_contract": "backends/fem/tests/relaxation_source_contract.cpp"
+  },
+  "qualification_boundary": {
+    "equilibrium_parity_status": "checked",
+    "validator_status": "pass",
+    "pair_count": 4,
+    "failures": [],
+    "overall_direct_minimizer_consistency_status": "coverage_only",
+    "exchange_only_ncg_note": "CPU and GPU both converged and passed the existing comparator, but executed-step counts differ by one (3 versus 2); this is outside the demag equilibrium rows promoted here.",
+    "not_claimed": [
+      "full multi-repeat performance promotion",
+      "analytic FEM-versus-FDM demag accuracy",
+      "P2 higher-order potential qualification",
+      "Nsight kernel occupancy or bandwidth qualification"
+    ],
+    "source_report": ".fullmag/reports/fem-relaxation-equilibrium-parity/summary-revalidated.json"
+  }
+}

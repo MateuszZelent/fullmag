@@ -312,10 +312,17 @@
     },
     {
       "id": "spin_torque.slonczewski.fullmag.v2", "capability_id": "spin_torque.slonczewski", "formula_version": "slonczewski.fullmag.v2",
-      "realization_versions":["slonczewski_thin_layer_homogenized.v1","slonczewski_interface_flux.v1"],
-      "lanes": {"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"},
+      "realization_versions":["slonczewski_thin_layer_homogenized.v1"],
+      "lanes": {"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"production_executable","fem_cpu_public":"reference_executable","fem_gpu_public":"unsupported"},
       "precision_scope":["double","single only after qualification"], "execution_mode_scope":["strict","extended"], "workload_scope":"Canonical oriented-current macrospin and current-scaling workloads.", "validated_workloads":[],
-      "notes":"Existing legacy executable slices are not formula-v1 evidence."
+      "notes":"The thin-layer homogenized realization is executable on the FDM CPU reference, native FDM CUDA production lane, and FEM CPU reference lane. The managed native FDM CUDA one-step CPU↔device parity gate passes with signed J·n_stack and a separate target mask. Full trajectory/current-scaling qualification, FP32 envelope, and FEM cross-backend validation remain open; FEM GPU fails closed before provenance. Interface-flux remains a separate semantic-only realization."
+    },
+    {
+      "id":"spin_torque.slonczewski.interface_flux.v1", "capability_id":"spin_torque.slonczewski", "formula_version":"slonczewski.fullmag.v2",
+      "realization_versions":["slonczewski_interface_flux.v1"],
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"},
+      "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Oriented interface spin-flux functional.", "validated_workloads":[],
+      "notes":"Planning preserves the surface-functional intent, but no FDM/FEM implementation may replace it with a homogenized 1/t_F volume source. A dedicated oriented interface functional and its balance/parity gates are still required."
     },
     {
       "id":"transport.charge.ohmic.fullmag.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_face_flux.v1","fem_charge_spin_broken_h1_mortar.v1"],

@@ -720,6 +720,22 @@ bool exchange_mass_preconditioned_gradient(
 {
 #if FULLMAG_HAS_MFEM_STACK
     ScopedPhaseTimer preconditioner_timer(preconditioner_wall_time_ns);
+    const char *direction_policy = std::getenv(
+        "FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY");
+    if (direction_policy != nullptr &&
+        (std::strcmp(direction_policy, "raw_tangent_gradient") == 0 ||
+         std::strcmp(direction_policy, "device_tangent_gradient") == 0 ||
+         std::strcmp(direction_policy, "none") == 0)) {
+        preconditioned_gradient_xyz = project_tangent(ctx, m_xyz, gradient_xyz);
+        if (!std::all_of(
+                preconditioned_gradient_xyz.begin(),
+                preconditioned_gradient_xyz.end(),
+                [](double value) { return std::isfinite(value); })) {
+            error = "direct FEM relaxation raw tangent-gradient policy produced non-finite values";
+            return false;
+        }
+        return true;
+    }
     auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);
     auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
     if (mass_form == nullptr || exchange_form == nullptr) {

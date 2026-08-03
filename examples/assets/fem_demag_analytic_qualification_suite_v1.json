@@ -1,0 +1,44 @@
+{
+  "schema_version": "fullmag.fem_demag_analytic_qualification_suite.v1",
+  "purpose": "fail-closed analytic qualification contract for the Poisson Robin airbox demag model",
+  "mesh_refinements": ["coarse", "medium", "fine"],
+  "robin_airbox_scales": [1.5, 2.0, 2.5, 3.0],
+  "backends": ["fem_cpu", "fem_gpu"],
+  "timing_repeats": 3,
+  "physics_row_policy": {
+    "initial_state_kind": "prescribed_uniform",
+    "demag_evaluation_count": 1,
+    "relaxation_algorithm": "none",
+    "demag_solver": "CG",
+    "demag_preconditioner": "AMG",
+    "demag_rtol": 1e-12,
+    "fresh_zero_solve": true,
+    "precision": "double",
+    "demag_realization": "poisson_robin",
+    "magnetic_weighted_volume_relative_error_max": 0.05
+  },
+  "acceptance": {
+    "finest_factor_relative_error_max": 0.05,
+    "finest_energy_relative_error_max": 0.05,
+    "ellipsoid_factor_sum_absolute_error_max": 0.05,
+    "cpu_gpu_field_energy_relative_error_max": 1e-6,
+    "demag_residual_max": 1e-12,
+    "transverse_field_relative_error_max": 0.05
+  },
+  "cases": [
+    {
+      "case_id": "sphere_uniform",
+      "kind": "sphere",
+      "semi_axes_m": [5e-08, 5e-08, 5e-08],
+      "axes": ["x", "y", "z"],
+      "oracle": "volume_weighted_h_demag_equals_minus_ms_over_three"
+    },
+    {
+      "case_id": "ellipsoid_prolate",
+      "kind": "ellipsoid",
+      "semi_axes_m": [2.5e-08, 2.5e-08, 5e-08],
+      "axes": ["x", "y", "z"],
+      "oracle": "osborn_factors_sum_to_one"
+    }
+  ]
+}
