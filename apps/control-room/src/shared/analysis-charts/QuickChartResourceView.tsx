@@ -7,35 +7,25 @@ import {
   useTableColumnsResource,
   useTableRowsBinaryResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import { useQuickChartWorkspaceSelector } from "@/kernel/workspace/useQuickChartWorkspace";
 import {
   analysisColumnDescriptorsForQuery,
   buildSharedAnalysisTableQuery,
   chartTableWindowFromBinary,
 } from "@/shared/domain/analysis/chartDataPlan";
-import { useAnalysisWorkspaceSelector } from "@/kernel/workspace/useAnalysisWorkspace";
-import {
-  isTableChartSeriesId,
-  tableColumnIdFromSeriesId,
-} from "./chartSeriesSelection";
 
 import { QuickChartView } from "./QuickChartView";
 import {
   buildQuickChartRenderModel,
   quickChartColumnIdsForQuery,
-  quickChartDescriptorFromSelection,
 } from "./quickChart";
 
-export function QuickChartResourceView({ selection }: { selection: Selection }) {
+export function QuickChartResourceView() {
   const kernel = useKernel();
-  const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId) ?? "x";
-  const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
-  const yAxisIds = selectedSeriesIds
-    .filter(isTableChartSeriesId)
-    .map(tableColumnIdFromSeriesId);
+  const pinned = useQuickChartWorkspaceSelector((state) => state.pinned);
   const descriptor = useMemo(
-    () => quickChartDescriptorFromSelection({ selection, xAxisId, yAxisIds }),
-    [selection, xAxisId, yAxisIds],
+    () => pinned ? { ...pinned, resourceKey: `data.table:${pinned.tableId}` } : null,
+    [pinned],
   );
   const tableId = descriptor?.tableId ?? "default";
   const tableColumns = useTableColumnsResource(tableId, {
@@ -63,36 +53,61 @@ export function QuickChartResourceView({ selection }: { selection: Selection }) 
     if (columns.length !== decoded.data.columnCount) return null;
     return chartTableWindowFromBinary({ columns, decoded: decoded.data, tableId });
   }, [descriptor, queryColumns, rows.data, tableColumns.data, tableId]);
-  const resourceStatus = tableColumns.status === "error"
+  const resourceStatus = !descriptor
+    ? "ready"
+    : descriptor.selectedSeriesIds.length === 0
+      ? "ready"
+    : tableColumns.status === "error"
     ? "error"
-    : tableColumns.status === "ready" && queryColumns.length === 0
+    : tableColumns.status === "ready" &&
+        descriptor.selectedSeriesIds.length > 0 && queryColumns.length === 0
       ? "unsupported"
       : tableColumns.status === "ready"
         ? rows.status
         : tableColumns.status;
   const model = buildQuickChartRenderModel({
-    descriptor: descriptor ?? { chartId: "none", resourceKey: "data.table:none", tableId, xAxisId, yAxisIds },
+    descriptor: descriptor ?? {
+      chartId: "none",
+      displayUnits: {},
+      range: null,
+      resourceKey: "data.table:none",
+      selectedSeriesIds: [],
+      tableId,
+      xAxisId: "x",
+    },
     status: resourceStatus,
     window,
   });
 
+  if (!descriptor) {
+    return (
+      <section className="fm-quick-chart" aria-label="Quick Chart">
+        <p className="fm-quick-chart__empty" role="status">
+          Pin a chart from Analysis
+        </p>
+      </section>
+    );
+  }
+
   return (
     <QuickChartView
+      initialRange={descriptor.range}
       model={model}
       onPointSelect={(point) => {
         if (!descriptor) return;
         const rowIndex = (window?.cursorStart ?? 1) + point.rowIndex - 1;
-        const nodeId = `analysis:charts:${descriptor.tableId}:point:${point.seriesId}:${rowIndex}`;
+        const quantity = point.seriesId.slice(point.seriesId.lastIndexOf(":") + 1);
+        const nodeId = `results:quick-charts:${descriptor.chartId}:point:${point.seriesId}:${rowIndex}`;
         kernel.selection.set({
           kind: "analysis.chart-point",
-          label: `${point.seriesId} ${formatQuickChartNumber(point.y)}`,
+          label: `${quantity} ${formatQuickChartNumber(point.y)}`,
           nodeId,
           objectId: null,
           ref: {
             chartId: descriptor.chartId,
             kind: "analysis.chart-point",
             nodeId,
-            quantity: point.seriesId,
+            quantity,
             rowIndex,
             seriesId: point.seriesId,
             tableId: descriptor.tableId,
@@ -100,7 +115,7 @@ export function QuickChartResourceView({ selection }: { selection: Selection }) 
             x: point.x,
             y: point.y,
           },
-        }, "analysis-plots");
+        }, "transport-footer");
       }}
     />
   );

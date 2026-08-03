@@ -42,6 +42,20 @@ describe("LayoutController", () => {
     expect(focusListener).toHaveBeenCalledTimes(1);
   });
 
+  it("opens Quick Chart without changing the active spatial viewport", () => {
+    const { controller } = setup();
+    controller.setActiveViewportMainModule("field-map");
+
+    controller.openBottomPanel("quick-chart");
+
+    expect(controller.get()).toMatchObject({
+      activeBottomPanelTab: "quick-chart",
+      activeViewportMainModuleId: "field-map",
+      focusedSlot: "panel-bottom",
+      panelVisible: { bottom: true },
+    });
+  });
+
   it("setActiveTab() changes tab and emits layout-changed", () => {
     const { bus, controller } = setup();
     const listener = vi.fn();

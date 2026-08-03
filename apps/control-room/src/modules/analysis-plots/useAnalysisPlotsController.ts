@@ -16,6 +16,8 @@ import { useAnalysisFrequencyData } from "./hooks/useAnalysisFrequencyData";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartValueRange } from "./chartTableModel";
 
+const EMPTY_DISPLAY_UNITS: Record<string, string> = {};
+
 export function useAnalysisPlotsController(kernel: KernelApi) {
   const activeSurface = useAnalysisWorkspaceSelector((state) => state.activeSurface);
   const selectedDatasetRef = useAnalysisWorkspaceSelector((state) => state.selectedDatasetRef);
@@ -38,6 +40,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const dataset = useAnalysisDatasetData({ datasetRef: selectedDatasetRef, enabled: activeSurface === "dynamics" || activeSurface === "comparison" });
   const comparisonDataset = useAnalysisDatasetData({ datasetRef: comparisonDatasetRef, enabled: activeSurface === "comparison" && comparisonDatasetRef !== null });
   useEffect(() => { analysisWorkspaceStore.setVisibleDatasetRevision(dataset.visibleRevision); }, [dataset.visibleRevision]);
+  const comparisonXAxisId = comparisonDataset.visibleTable?.columns[0]?.column_id ?? null;
+  useEffect(() => {
+    analysisWorkspaceStore.setComparisonXAxisId(comparisonXAxisId);
+  }, [comparisonXAxisId]);
   const frequency = useAnalysisFrequencyData(activeSurface === "frequency-response" || activeSurface === "eigenmodes" ? activeSurface : "idle");
   const frequencyChartId = (activeSurface === "frequency-response" || activeSurface === "eigenmodes") && frequency.frequencyDomainSeries[0]
     ? `${activeSurface}:${frequency.frequencyDomainSeries[0].source.resourceKey}`
@@ -95,10 +101,19 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       ? comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds
       : descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds;
   const activeDescriptorId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+  const activeDescriptorDisplayUnits = effectiveDescriptor?.displayUnits ?? EMPTY_DISPLAY_UNITS;
+  const activeDescriptorRange = activeSurface === "comparison" && !comparisonAxesCompatible
+    ? null
+    : effectiveDescriptor?.range ?? null;
   useEffect(() => {
     analysisWorkspaceStore.setActiveDescriptorId(activeDescriptorId);
-    analysisWorkspaceStore.setActiveDescriptorSelection(activeDescriptorId, effectiveDescriptorSelection);
-  }, [activeDescriptorId, effectiveDescriptorSelection]);
+    analysisWorkspaceStore.setActiveDescriptorView({
+      descriptorId: activeDescriptorId,
+      displayUnits: activeDescriptorDisplayUnits,
+      range: activeDescriptorRange,
+      selectedSeriesIds: effectiveDescriptorSelection,
+    });
+  }, [activeDescriptorDisplayUnits, activeDescriptorId, activeDescriptorRange, effectiveDescriptorSelection]);
   useEffect(() => {
     if (!selectedDatasetRef || !dataset.visibleTable || hasChartState) return;
     const xAxisId = dataset.visibleTable.columns[0]?.column_id ?? "x";

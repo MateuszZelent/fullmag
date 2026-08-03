@@ -7,19 +7,29 @@ describe("pinned Quick Chart explorer entry", () => {
     const tree = buildExplorerTree("results", {
       pinnedQuickChart: {
         chartId: "default",
+        displayUnits: { mx: "1" },
+        range: { fromSI: 0, toSI: 4 },
+        selectedSeriesIds: [
+          "data.table:default:step:mx",
+          "data.table:default:step:my",
+        ],
         tableId: "default",
         xAxisId: "step",
-        yAxisIds: ["mx", "my"],
       },
     });
 
     expect(tree[0]?.children).toContainEqual(expect.objectContaining({
       chartId: "default",
+      displayUnits: { mx: "1" },
       id: "results:quick-charts:default",
       kind: "results.quick_chart",
+      range: { fromSI: 0, toSI: 4 },
+      selectedSeriesIds: [
+        "data.table:default:step:mx",
+        "data.table:default:step:my",
+      ],
       tableId: "default",
       xAxisId: "step",
-      yAxisIds: ["mx", "my"],
     }));
   });
 });

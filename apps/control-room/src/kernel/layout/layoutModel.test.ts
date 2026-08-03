@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import {
   DEFAULT_WORKSPACE_LAYOUT,
@@ -9,6 +10,15 @@ import {
 } from "./layoutModel";
 
 describe("workspace layout model", () => {
+  it("declares Quick Chart as a canonical bottom-panel tab", () => {
+    const layoutTypes = readFileSync(new URL("./layoutTypes.ts", import.meta.url), "utf8");
+    const eventTypes = readFileSync(new URL("../events/eventTypes.ts", import.meta.url), "utf8");
+    const persistence = readFileSync(new URL("../persistence/controlRoomUiState.ts", import.meta.url), "utf8");
+
+    expect(layoutTypes).toContain('| "quick-chart"');
+    expect(eventTypes).toContain('| "quick-chart"');
+    expect(persistence).toContain('"quick-chart"');
+  });
   it("moves columns by id while preserving every column exactly once", () => {
     const layout = moveWorkspaceColumn(
       DEFAULT_WORKSPACE_LAYOUT,

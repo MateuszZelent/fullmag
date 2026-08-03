@@ -3,9 +3,12 @@ import type { AnalysisSurface } from "./analysisViewPreferences";
 export interface AnalysisWorkspaceState {
   activeSurface: AnalysisSurface;
   activeDescriptorId: string | null;
+  activeDescriptorDisplayUnits: Record<string, string>;
+  activeDescriptorRange: { fromSI: number; toSI: number } | null;
   activeDescriptorSelectedSeriesIds: string[];
   comparisonDatasetRef: string | null;
   comparisonSelectedSeriesKeys: string[];
+  comparisonXAxisId: string | null;
   focusedChartId: string | null;
   hasComparisonSelection: boolean;
   hasChartState: boolean;
@@ -17,7 +20,7 @@ export interface AnalysisWorkspaceState {
   visibleDatasetRevision: string | number | null;
 }
 
-const INITIAL_STATE: AnalysisWorkspaceState = { activeSurface: "dynamics", activeDescriptorId: null, activeDescriptorSelectedSeriesIds: [], comparisonDatasetRef: null, comparisonSelectedSeriesKeys: [], focusedChartId: null, hasChartState: false, hasComparisonSelection: false, selectedDatasetRef: null, selectedSeriesIds: [], sourceChartId: null, sourceTableId: null, visibleDatasetRevision: null, xAxisId: null };
+const INITIAL_STATE: AnalysisWorkspaceState = { activeSurface: "dynamics", activeDescriptorDisplayUnits: {}, activeDescriptorId: null, activeDescriptorRange: null, activeDescriptorSelectedSeriesIds: [], comparisonDatasetRef: null, comparisonSelectedSeriesKeys: [], comparisonXAxisId: null, focusedChartId: null, hasChartState: false, hasComparisonSelection: false, selectedDatasetRef: null, selectedSeriesIds: [], sourceChartId: null, sourceTableId: null, visibleDatasetRevision: null, xAxisId: null };
 const MAX_DATASET_REF_LENGTH = 160;
 
 class AnalysisWorkspaceStore {
@@ -35,7 +38,9 @@ class AnalysisWorkspaceStore {
     this.update({
       ...this.state,
       activeSurface,
+      activeDescriptorDisplayUnits: activeSurface === this.state.activeSurface ? this.state.activeDescriptorDisplayUnits : {},
       activeDescriptorId: activeSurface === this.state.activeSurface ? this.state.activeDescriptorId : null,
+      activeDescriptorRange: activeSurface === this.state.activeSurface ? this.state.activeDescriptorRange : null,
       activeDescriptorSelectedSeriesIds: activeSurface === this.state.activeSurface ? this.state.activeDescriptorSelectedSeriesIds : [],
       focusedChartId: sourceChartId,
       sourceChartId,
@@ -47,7 +52,7 @@ class AnalysisWorkspaceStore {
       : null;
     const changed = valid !== this.state.selectedDatasetRef;
     const sourceChartId = valid ? `${this.state.activeSurface}:${valid}` : null;
-    this.update({ ...this.state, activeDescriptorId: changed ? null : this.state.activeDescriptorId, activeDescriptorSelectedSeriesIds: changed ? [] : this.state.activeDescriptorSelectedSeriesIds, comparisonDatasetRef: changed ? null : this.state.comparisonDatasetRef, comparisonSelectedSeriesKeys: changed ? [] : this.state.comparisonSelectedSeriesKeys, focusedChartId: changed ? sourceChartId : this.state.focusedChartId, hasChartState: changed ? false : this.state.hasChartState, hasComparisonSelection: changed ? false : this.state.hasComparisonSelection, selectedDatasetRef: valid, selectedSeriesIds: changed ? [] : this.state.selectedSeriesIds, sourceChartId, sourceTableId: valid, visibleDatasetRevision: changed ? null : this.state.visibleDatasetRevision, xAxisId: changed ? null : this.state.xAxisId });
+    this.update({ ...this.state, activeDescriptorDisplayUnits: changed ? {} : this.state.activeDescriptorDisplayUnits, activeDescriptorId: changed ? null : this.state.activeDescriptorId, activeDescriptorRange: changed ? null : this.state.activeDescriptorRange, activeDescriptorSelectedSeriesIds: changed ? [] : this.state.activeDescriptorSelectedSeriesIds, comparisonDatasetRef: changed ? null : this.state.comparisonDatasetRef, comparisonSelectedSeriesKeys: changed ? [] : this.state.comparisonSelectedSeriesKeys, comparisonXAxisId: changed ? null : this.state.comparisonXAxisId, focusedChartId: changed ? sourceChartId : this.state.focusedChartId, hasChartState: changed ? false : this.state.hasChartState, hasComparisonSelection: changed ? false : this.state.hasComparisonSelection, selectedDatasetRef: valid, selectedSeriesIds: changed ? [] : this.state.selectedSeriesIds, sourceChartId, sourceTableId: valid, visibleDatasetRevision: changed ? null : this.state.visibleDatasetRevision, xAxisId: changed ? null : this.state.xAxisId });
   }
   setComparisonDatasetRef(comparisonDatasetRef: string | null): void {
     const valid = typeof comparisonDatasetRef === "string" && comparisonDatasetRef.length > 0 && comparisonDatasetRef.length <= MAX_DATASET_REF_LENGTH
@@ -55,7 +60,7 @@ class AnalysisWorkspaceStore {
       : null;
     const next = valid === this.state.selectedDatasetRef ? null : valid;
     const changed = next !== this.state.comparisonDatasetRef;
-    this.update({ ...this.state, activeDescriptorId: changed ? null : this.state.activeDescriptorId, activeDescriptorSelectedSeriesIds: changed ? [] : this.state.activeDescriptorSelectedSeriesIds, comparisonDatasetRef: next, comparisonSelectedSeriesKeys: changed ? [] : this.state.comparisonSelectedSeriesKeys, focusedChartId: changed ? this.state.sourceChartId : this.state.focusedChartId, hasComparisonSelection: changed ? false : this.state.hasComparisonSelection });
+    this.update({ ...this.state, activeDescriptorDisplayUnits: changed ? {} : this.state.activeDescriptorDisplayUnits, activeDescriptorId: changed ? null : this.state.activeDescriptorId, activeDescriptorRange: changed ? null : this.state.activeDescriptorRange, activeDescriptorSelectedSeriesIds: changed ? [] : this.state.activeDescriptorSelectedSeriesIds, comparisonDatasetRef: next, comparisonSelectedSeriesKeys: changed ? [] : this.state.comparisonSelectedSeriesKeys, comparisonXAxisId: changed ? null : this.state.comparisonXAxisId, focusedChartId: changed ? this.state.sourceChartId : this.state.focusedChartId, hasComparisonSelection: changed ? false : this.state.hasComparisonSelection });
   }
   setVisibleDatasetRevision(visibleDatasetRevision: string | number | null): void {
     const valid = typeof visibleDatasetRevision === "string" || typeof visibleDatasetRevision === "number" ? visibleDatasetRevision : null;
@@ -65,11 +70,34 @@ class AnalysisWorkspaceStore {
     const valid = typeof activeDescriptorId === "string" && activeDescriptorId.length > 0 && activeDescriptorId.length <= 512
       ? activeDescriptorId
       : null;
-    this.update({ ...this.state, activeDescriptorId: valid, activeDescriptorSelectedSeriesIds: valid === this.state.activeDescriptorId ? this.state.activeDescriptorSelectedSeriesIds : [] });
+    this.update({ ...this.state, activeDescriptorDisplayUnits: valid === this.state.activeDescriptorId ? this.state.activeDescriptorDisplayUnits : {}, activeDescriptorId: valid, activeDescriptorRange: valid === this.state.activeDescriptorId ? this.state.activeDescriptorRange : null, activeDescriptorSelectedSeriesIds: valid === this.state.activeDescriptorId ? this.state.activeDescriptorSelectedSeriesIds : [] });
   }
   setActiveDescriptorSelection(activeDescriptorId: string, selectedSeriesIds: string[]): void {
     if (activeDescriptorId !== this.state.activeDescriptorId) return;
     this.update({ ...this.state, activeDescriptorSelectedSeriesIds: [...new Set(selectedSeriesIds)].slice(0, 100) });
+  }
+  setActiveDescriptorView(view: {
+    descriptorId: string;
+    displayUnits: Record<string, string>;
+    range: { fromSI: number; toSI: number } | null;
+    selectedSeriesIds: string[];
+  }): void {
+    if (view.descriptorId !== this.state.activeDescriptorId) return;
+    const displayUnits = Object.fromEntries(
+      Object.entries(view.displayUnits)
+        .filter(([key, unit]) => key.length > 0 && key.length <= 512 && unit.length <= 24)
+        .slice(0, 40),
+    );
+    const range = view.range && Number.isFinite(view.range.fromSI) &&
+        Number.isFinite(view.range.toSI) && view.range.fromSI < view.range.toSI
+      ? { fromSI: view.range.fromSI, toSI: view.range.toSI }
+      : null;
+    this.update({
+      ...this.state,
+      activeDescriptorDisplayUnits: displayUnits,
+      activeDescriptorRange: range,
+      activeDescriptorSelectedSeriesIds: [...new Set(view.selectedSeriesIds)].slice(0, 100),
+    });
   }
   setChartState(xAxisId: string, selectedSeriesIds: string[]): void { this.update({ ...this.state, hasChartState: true, selectedSeriesIds: selectedSeriesIds.slice(0, 100), xAxisId: xAxisId.slice(0, 160) }); }
   setFocusedChartId(focusedChartId: string | null): void {
@@ -81,16 +109,26 @@ class AnalysisWorkspaceStore {
   setComparisonSelection(comparisonSelectedSeriesKeys: string[]): void {
     this.update({ ...this.state, comparisonSelectedSeriesKeys: [...new Set(comparisonSelectedSeriesKeys)].slice(0, 100), hasComparisonSelection: true });
   }
+  setComparisonXAxisId(xAxisId: string | null): void {
+    const valid = typeof xAxisId === "string" && xAxisId.length > 0 && xAxisId.length <= 160
+      ? xAxisId
+      : null;
+    this.update({ ...this.state, comparisonXAxisId: valid });
+  }
   clearComparisonSelection(): void { this.setComparisonSelection([]); }
   reset(): void { this.update(INITIAL_STATE); }
   private update(next: AnalysisWorkspaceState): void {
     const previous = this.state;
     if (
       next.activeSurface === previous.activeSurface &&
+      recordEquals(next.activeDescriptorDisplayUnits, previous.activeDescriptorDisplayUnits) &&
       next.activeDescriptorId === previous.activeDescriptorId &&
+      next.activeDescriptorRange?.fromSI === previous.activeDescriptorRange?.fromSI &&
+      next.activeDescriptorRange?.toSI === previous.activeDescriptorRange?.toSI &&
       next.activeDescriptorSelectedSeriesIds.length === previous.activeDescriptorSelectedSeriesIds.length &&
       next.activeDescriptorSelectedSeriesIds.every((id, index) => id === previous.activeDescriptorSelectedSeriesIds[index]) &&
       next.comparisonDatasetRef === previous.comparisonDatasetRef &&
+      next.comparisonXAxisId === previous.comparisonXAxisId &&
       next.focusedChartId === previous.focusedChartId &&
       next.hasComparisonSelection === previous.hasComparisonSelection &&
       next.hasChartState === previous.hasChartState &&
@@ -111,3 +149,9 @@ class AnalysisWorkspaceStore {
 
 export const analysisWorkspaceStore = new AnalysisWorkspaceStore();
 export function resetAnalysisWorkspaceForTests(): void { analysisWorkspaceStore.reset(); }
+
+function recordEquals(left: Record<string, string>, right: Record<string, string>): boolean {
+  const entries = Object.entries(left);
+  return entries.length === Object.keys(right).length &&
+    entries.every(([key, value]) => right[key] === value);
+}

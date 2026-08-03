@@ -383,12 +383,14 @@ export type SelectionRef =
     }
   | {
       chartId: string;
+      displayUnits: Record<string, string>;
       kind: "results.quick_chart";
       nodeId: string;
+      range: { fromSI: number; toSI: number } | null;
+      selectedSeriesIds: readonly string[];
       tableId: string;
       type: "quick-chart";
       xAxisId: string;
-      yAxisIds: readonly string[];
     }
   | {
       kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
@@ -530,6 +532,15 @@ function centroidEquals(
   if (left === right) return true;
   if (!left || !right) return false;
   return left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
+}
+
+function recordEquals(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const entries = Object.entries(left);
+  return entries.length === Object.keys(right).length &&
+    entries.every(([key, value]) => right[key] === value);
 }
 
 export function selectionRefEquals(
@@ -746,8 +757,11 @@ export function selectionRefEquals(
         left.chartId === right.chartId &&
         left.tableId === right.tableId &&
         left.xAxisId === right.xAxisId &&
-        left.yAxisIds.length === right.yAxisIds.length &&
-        left.yAxisIds.every((id, index) => id === right.yAxisIds[index])
+        left.selectedSeriesIds.length === right.selectedSeriesIds.length &&
+        left.selectedSeriesIds.every((id, index) => id === right.selectedSeriesIds[index]) &&
+        left.range?.fromSI === right.range?.fromSI &&
+        left.range?.toSI === right.range?.toSI &&
+        recordEquals(left.displayUnits, right.displayUnits)
       );
     case "study":
       return (

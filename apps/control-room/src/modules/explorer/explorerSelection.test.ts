@@ -76,6 +76,59 @@ function makeKernel(): KernelApi {
 }
 
 describe("selectExplorerNode", () => {
+  it("writes only selectedSeriesIds for a pinned Quick Chart selection", () => {
+    const kernel = makeKernel();
+    const node = {
+      chartId: "default",
+      displayUnits: { mx: "1" },
+      id: "results:quick-charts:default",
+      kind: "results.quick_chart" as const,
+      label: "Quick Chart",
+      parentId: "results:root",
+      range: { fromSI: 0, toSI: 4 },
+      selectedSeriesIds: ["data.table:default:step:mx"],
+      tableId: "default",
+      xAxisId: "step",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      chartId: "default",
+      displayUnits: { mx: "1" },
+      kind: "results.quick_chart",
+      nodeId: "results:quick-charts:default",
+      range: { fromSI: 0, toSI: 4 },
+      selectedSeriesIds: ["data.table:default:step:mx"],
+      tableId: "default",
+      type: "quick-chart",
+      xAxisId: "step",
+    });
+    expect(kernel.selection.get().ref).not.toHaveProperty("yAxisIds");
+  });
+
+  it("bounds and migrates a legacy Quick Chart Explorer descriptor once", () => {
+    const kernel = makeKernel();
+    const legacyNode = {
+      chartId: "legacy",
+      id: "results:quick-charts:legacy",
+      kind: "results.quick_chart" as const,
+      label: "Quick Chart",
+      parentId: "results:root",
+      tableId: "default",
+      xAxisId: "step",
+      yAxisIds: ["mx", "mx", "step"],
+    };
+
+    selectExplorerNode(kernel, legacyNode, "explorer");
+
+    expect(kernel.selection.get().ref).toMatchObject({
+      selectedSeriesIds: ["data.table:default:step:mx"],
+      type: "quick-chart",
+    });
+    expect(kernel.selection.get().ref).not.toHaveProperty("yAxisIds");
+  });
+
   it("selects an orphan mesh fallback using its Explorer address and carrier metadata", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

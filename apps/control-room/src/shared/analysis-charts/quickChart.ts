@@ -1,4 +1,3 @@
-import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   chartTableWindowValue,
   type ChartTableWindow,
@@ -7,10 +6,12 @@ import type { ChartRenderModel } from "./chartRenderer";
 
 export interface QuickChartDescriptor {
   chartId: string;
+  displayUnits: Record<string, string>;
+  range: { fromSI: number; toSI: number } | null;
   resourceKey: string;
+  selectedSeriesIds: readonly string[];
   tableId: string;
   xAxisId: string;
-  yAxisIds: readonly string[];
 }
 
 /**
@@ -24,43 +25,14 @@ export function quickChartColumnIdsForQuery(
   if (!columns || !descriptor) return [];
   const publishedIds = new Set(columns.map((column) => column.column_id));
   if (!publishedIds.has(descriptor.xAxisId)) return [];
-  const yAxisIds = [...new Set(descriptor.yAxisIds)].filter((columnId) =>
-    columnId !== descriptor.xAxisId && publishedIds.has(columnId),
-  );
-  return yAxisIds.length > 0
-    ? [descriptor.xAxisId, ...yAxisIds]
+  const selectedColumnIds = [...new Set(descriptor.selectedSeriesIds)]
+    .map((seriesId) => quickChartColumnId(descriptor, seriesId))
+    .filter((columnId): columnId is string =>
+      columnId !== null && columnId !== descriptor.xAxisId && publishedIds.has(columnId),
+    );
+  return selectedColumnIds.length > 0
+    ? [descriptor.xAxisId, ...selectedColumnIds]
     : [];
-}
-
-export function quickChartDescriptorFromSelection({
-  selection,
-  xAxisId,
-  yAxisIds,
-}: {
-  selection: Selection;
-  xAxisId: string;
-  yAxisIds: readonly string[];
-}): QuickChartDescriptor | null {
-  const ref = selection.ref;
-  if (ref?.type === "quick-chart") {
-    return {
-      chartId: ref.chartId,
-      resourceKey: `data.table:${ref.tableId}`,
-      tableId: ref.tableId,
-      xAxisId: ref.xAxisId,
-      yAxisIds: [...ref.yAxisIds],
-    };
-  }
-  if (ref?.type !== "analysis-chart" && ref?.type !== "analysis-chart-point") {
-    return null;
-  }
-  return {
-    chartId: ref.chartId,
-    resourceKey: `data.table:${ref.tableId}`,
-    tableId: ref.tableId,
-    xAxisId,
-    yAxisIds: [...yAxisIds],
-  };
 }
 
 export function buildQuickChartRenderModel({
@@ -73,8 +45,9 @@ export function buildQuickChartRenderModel({
   window: ChartTableWindow | null;
 }): ChartRenderModel {
   const xIndex = window?.columns.findIndex((column) => column.column_id === descriptor.xAxisId) ?? -1;
-  const selected = [...new Set(descriptor.yAxisIds)].flatMap((id) => {
-    const index = window?.columns.findIndex((column) => column.column_id === id) ?? -1;
+  const selected = [...new Set(descriptor.selectedSeriesIds)].flatMap((id) => {
+    const columnId = quickChartColumnId(descriptor, id);
+    const index = window?.columns.findIndex((column) => column.column_id === columnId) ?? -1;
     return index >= 0 ? [{ id, index, column: window!.columns[index]! }] : [];
   });
   const units = [...new Set(selected.map((entry) => entry.column.unit))].slice(0, 2);
@@ -83,15 +56,21 @@ export function buildQuickChartRenderModel({
     status === "unsupported" ? "unsupported" :
     status === "loading" || status === "idle" ? "loading" :
     status === "stale" ? "stale" :
+    descriptor.selectedSeriesIds.length === 0 ? "empty" :
     !window || window.rowCount === 0 || xIndex < 0 || selected.length === 0 ? "empty" :
     "ready";
   return {
     ariaLabel: `Quick Chart ${descriptor.chartId}`,
-    key: `${descriptor.resourceKey}@${window?.revision ?? "pending"}:${descriptor.xAxisId}:${descriptor.yAxisIds.join(",")}`,
+    key: `${descriptor.resourceKey}@${window?.revision ?? "pending"}:${descriptor.xAxisId}:${descriptor.selectedSeriesIds.join(",")}`,
     provenance: {
       dataRevision: window?.revision ?? null,
       decimation: "minmax_lttb",
-      query: JSON.stringify({ xAxisId: descriptor.xAxisId, yAxisIds: descriptor.yAxisIds }),
+      displayUnits: Object.fromEntries(selected.flatMap((entry) => {
+        const displayUnit = descriptor.displayUnits[entry.column.column_id] ??
+          descriptor.displayUnits[entry.id];
+        return displayUnit ? [[`y:${entry.id}`, displayUnit]] : [];
+      })),
+      query: JSON.stringify({ range: descriptor.range, selectedSeriesIds: descriptor.selectedSeriesIds, xAxisId: descriptor.xAxisId }),
       resourceKey: descriptor.resourceKey,
     },
     series: selected.map((entry) => ({
@@ -111,6 +90,7 @@ export function buildQuickChartRenderModel({
       renderStatus === "loading" ? "Loading Quick Chart" :
       renderStatus === "error" ? "Quick Chart data unavailable" :
       renderStatus === "unsupported" ? "Selected quantities are not available in this table" :
+      renderStatus === "empty" && descriptor.selectedSeriesIds.length === 0 ? "Select at least one signal" :
       renderStatus === "empty" ? "No chartable samples for this selection" :
       renderStatus === "stale" ? "Quick Chart data is stale" :
       undefined,
@@ -120,6 +100,22 @@ export function buildQuickChartRenderModel({
         : descriptor.xAxisId,
       unit: window && xIndex >= 0 ? window.columns[xIndex]!.unit : "",
     },
-    yAxes: (units.length ? units : [""]).map((unit) => ({ label: unit ? `[${unit}]` : "", unit })),
+    yAxes: (units.length ? units : [""]).map((unit) => ({
+      label: [...new Set(selected
+        .filter((entry) => entry.column.unit === unit)
+        .map((entry) => entry.column.label))]
+        .join(", "),
+      unit,
+    })),
   };
+}
+
+function quickChartColumnId(
+  descriptor: QuickChartDescriptor,
+  seriesId: string,
+): string | null {
+  const prefix = `data.table:${descriptor.tableId}:${descriptor.xAxisId}:`;
+  return seriesId.startsWith(prefix) && seriesId.length > prefix.length
+    ? seriesId.slice(prefix.length)
+    : null;
 }

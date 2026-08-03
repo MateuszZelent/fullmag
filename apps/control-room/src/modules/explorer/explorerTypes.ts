@@ -305,8 +305,12 @@ export interface ExplorerNode {
   oerstedFieldIndex?: number;
   regionId?: string;
   resourceRef?: string;
+  displayUnits?: Record<string, string>;
+  range?: { fromSI: number; toSI: number } | null;
+  selectedSeriesIds?: readonly string[];
   tableId?: string;
   xAxisId?: string;
+  /** One-version read compatibility; new Explorer nodes write selectedSeriesIds. */
   yAxisIds?: readonly string[];
   sampleIndex?: number;
   stageId?: string;

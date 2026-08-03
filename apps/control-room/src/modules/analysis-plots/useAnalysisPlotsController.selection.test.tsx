@@ -86,6 +86,30 @@ describe("Analysis controller frequency selection", () => {
       await act(async () => root.unmount()); dom.restore();
     }
   });
+  it("projects range and display units into the active descriptor command state", async () => {
+    activeSurface = "dynamics";
+    selectedDatasetRef = "table-a";
+    descriptorPreferences = {
+      "dynamics:v-table-a": {
+        displayUnits: { mx: "1" },
+        range: { fromSI: 2, toSI: 8 } as never,
+        selectedSeriesIds: ["data.table:table-a:step:mx"],
+      },
+    };
+    resetAnalysisWorkspaceForTests();
+    const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
+    try {
+      await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
+      expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+        activeDescriptorDisplayUnits: { mx: "1" },
+        activeDescriptorRange: { fromSI: 2, toSI: 8 },
+        activeDescriptorSelectedSeriesIds: ["data.table:table-a:step:mx"],
+      });
+    } finally {
+      activeSurface = "eigenmodes"; selectedDatasetRef = null; descriptorPreferences = {}; capturedController = null;
+      await act(async () => root.unmount()); dom.restore();
+    }
+  });
   it("owns frequency selection under its artifact descriptor without a selected table", async () => {
     activeSurface = "frequency-response";
     selectedDatasetRef = null;

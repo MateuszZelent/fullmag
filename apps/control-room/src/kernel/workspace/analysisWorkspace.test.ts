@@ -43,6 +43,18 @@ describe("analysis workspace", () => {
     });
   });
 
+  it("tracks the secondary table X axis independently from the primary table", () => {
+    resetAnalysisWorkspaceForTests();
+    const setComparisonXAxisId = (
+      analysisWorkspaceStore as unknown as {
+        setComparisonXAxisId?: (xAxisId: string | null) => void;
+      }
+    ).setComparisonXAxisId;
+    expect(setComparisonXAxisId).toBeTypeOf("function");
+    setComparisonXAxisId?.call(analysisWorkspaceStore, "time");
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({ comparisonXAxisId: "time" });
+  });
+
   it("keeps a bounded focused chart identity separate from the primary source chart", () => {
     resetAnalysisWorkspaceForTests();
     analysisWorkspaceStore.setSelectedDatasetRef("table-a");
@@ -67,6 +79,35 @@ describe("analysis workspace", () => {
       activeDescriptorId: "artifact:frequency-response:v-response",
       activeDescriptorSelectedSeriesIds: ["frequency:artifact://response"],
       selectedSeriesIds: ["data.table:table-a:step:mx"],
+    });
+  });
+
+  it("projects the complete active descriptor needed by module-neutral Quick Pin", () => {
+    resetAnalysisWorkspaceForTests();
+    const setActiveDescriptorView = (
+      analysisWorkspaceStore as unknown as {
+        setActiveDescriptorView?: (view: {
+          descriptorId: string;
+          displayUnits: Record<string, string>;
+          range: { fromSI: number; toSI: number } | null;
+          selectedSeriesIds: string[];
+        }) => void;
+      }
+    ).setActiveDescriptorView;
+    expect(setActiveDescriptorView).toBeTypeOf("function");
+    analysisWorkspaceStore.setActiveDescriptorId("dataset:dynamics:table-a");
+    analysisWorkspaceStore.setActiveDescriptorView({
+      descriptorId: "dataset:dynamics:table-a",
+      displayUnits: { mx: "1" },
+      range: { fromSI: 2, toSI: 8 },
+      selectedSeriesIds: ["data.table:table-a:step:mx"],
+    });
+
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+      activeDescriptorDisplayUnits: { mx: "1" },
+      activeDescriptorId: "dataset:dynamics:table-a",
+      activeDescriptorRange: { fromSI: 2, toSI: 8 },
+      activeDescriptorSelectedSeriesIds: ["data.table:table-a:step:mx"],
     });
   });
 

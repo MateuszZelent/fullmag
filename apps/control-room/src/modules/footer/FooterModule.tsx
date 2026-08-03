@@ -24,6 +24,7 @@ import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnostic
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import type { ModuleProps } from "@/kernel/types";
+import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResourceView";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
@@ -101,6 +102,10 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             <Hammer size={14} aria-hidden="true" />
             Mesh Jobs
           </TabsTrigger>
+          <TabsTrigger value="quick-chart" className="fm-footer__tab">
+            <Activity size={14} aria-hidden="true" />
+            Quick Chart
+          </TabsTrigger>
         </TabsList>
         <div className="fm-footer__summary" aria-label="Footer log summary">
           <span className="fm-footer__summary-item">HTTP + WS + Perf</span>
@@ -154,6 +159,14 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             className={`${FOOTER_PANEL_CLASS_NAME} [&>.fm-footer-mesh-jobs]:overflow-auto`}
           >
             <MeshJobsPanel />
+          </div>
+        ) : null}
+      </TabsContent>
+
+      <TabsContent value="quick-chart" className={FOOTER_CONTENT_CLASS_NAME}>
+        {activeTab === "quick-chart" ? (
+          <div className={FOOTER_PANEL_CLASS_NAME}>
+            <QuickChartResourceView />
           </div>
         ) : null}
       </TabsContent>

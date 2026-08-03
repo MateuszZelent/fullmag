@@ -13,6 +13,7 @@ import type { ChartRenderModel } from "./chartRenderer";
 
 const echarts = vi.hoisted(() => ({
   init: vi.fn(() => ({
+    dispatchAction: vi.fn(),
     dispose: vi.fn(),
     getDataURL: vi.fn(() => "data:image/png;base64,"),
     resize: vi.fn(),
@@ -139,6 +140,74 @@ describe("EChartsCanvasSurface", () => {
     expect(echarts.init).toHaveBeenCalledTimes(1);
 
     await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it("disposes its ECharts owner and ResizeObserver when the active footer content unmounts", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const disconnect = vi.fn();
+    globalThis.ResizeObserver = class {
+      disconnect = disconnect;
+      observe() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    globalThis.getComputedStyle = (() => ({
+      direction: "ltr",
+      getPropertyValue: () => "",
+    })) as unknown as typeof getComputedStyle;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(<EChartsCanvasSurface model={dummyModel} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const instance = echarts.init.mock.results.at(-1)?.value;
+    expect(instance).toBeDefined();
+
+    await act(async () => root.unmount());
+
+    expect(instance?.dispose).toHaveBeenCalledTimes(1);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    dom.restore();
+  });
+
+  it("applies a pinned SI range after mount, update, and remount without fetching data", async () => {
+    const dom = installSimulationPreparationTestDom();
+    globalThis.getComputedStyle = (() => ({
+      direction: "ltr",
+      getPropertyValue: () => "",
+    })) as unknown as typeof getComputedStyle;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const firstRoot = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      firstRoot.render(<EChartsCanvasSurface initialRange={{ fromValue: 2, toValue: 8 }} model={dummyModel} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const first = echarts.init.mock.results.at(-1)?.value;
+    expect(first?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 2, endValue: 8 });
+
+    await act(async () => {
+      firstRoot.render(<EChartsCanvasSurface initialRange={{ fromValue: 3, toValue: 7 }} model={dummyModel} />);
+    });
+    expect(first?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 3, endValue: 7 });
+    await act(async () => firstRoot.unmount());
+
+    const secondRoot = createRoot(container as unknown as Element);
+    await act(async () => {
+      secondRoot.render(<EChartsCanvasSurface initialRange={{ fromValue: 4, toValue: 6 }} model={dummyModel} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const second = echarts.init.mock.results.at(-1)?.value;
+    expect(second).not.toBe(first);
+    expect(second?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 4, endValue: 6 });
+    await act(async () => secondRoot.unmount());
     dom.restore();
   });
 });
