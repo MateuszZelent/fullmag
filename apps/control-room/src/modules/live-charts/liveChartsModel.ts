@@ -1,5 +1,11 @@
 import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferences";
 import type { LiveChartDescriptorPreferences } from "@/kernel/workspace/liveChartPreferences";
+import {
+  liveChartPreset,
+  type LiveChartPresetId,
+} from "@/shared/analysis-charts/liveChartPresets";
+
+export { liveChartPreset, type LiveChartPreset, type LiveChartPresetId } from "@/shared/analysis-charts/liveChartPresets";
 
 export interface LiveTableRowsQuery {
   columns: readonly string[];
@@ -12,26 +18,6 @@ export interface LiveTableRowsQuery {
   targetPoints: number;
   toRow?: number;
   toT?: number;
-}
-
-export type LiveChartPresetId = "magnetization" | "energy" | "convergence" | "custom";
-
-export interface LiveChartPreset {
-  id: LiveChartPresetId;
-  title: string;
-  defaultSeriesIds: readonly string[];
-  xAxisId: string;
-}
-
-const PRESETS: Record<LiveChartPresetId, LiveChartPreset> = {
-  magnetization: { id: "magnetization", title: "Magnetization", defaultSeriesIds: ["mx", "my", "mz"], xAxisId: "step" },
-  energy: { id: "energy", title: "Energy", defaultSeriesIds: ["simulation.solver.energies:exchange", "simulation.solver.energies:demag", "simulation.solver.energies:zeeman", "simulation.solver.energies:anisotropy", "simulation.solver.energies:dmi", "simulation.solver.energies:total"], xAxisId: "t" },
-  convergence: { id: "convergence", title: "Convergence", defaultSeriesIds: ["max_torque_Apm"], xAxisId: "step" },
-  custom: { id: "custom", title: "Custom", defaultSeriesIds: [], xAxisId: "step" },
-};
-
-export function liveChartPreset(id: LiveChartPresetId): LiveChartPreset {
-  return PRESETS[id];
 }
 
 export function liveChartDescriptorDefaults(id: LiveChartPresetId): LiveChartDescriptorPreferences {

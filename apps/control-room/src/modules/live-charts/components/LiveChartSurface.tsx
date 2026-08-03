@@ -10,6 +10,17 @@ import type { LiveChartsViewProps } from "../liveChartsViewTypes";
 export function LiveChartSurface({ fitRequest, onChartSelected, onExport, onPointSelected, onRangeSelected, onRequestedExportHandled, onSeriesChange, presentation, requestedExportFormat, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportFormat" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
   const selected = new Set(selectedSeriesIds);
   const panes = compatibleLiveChartPanes(series);
+  if (panes.length === 0) {
+    return (
+      <div className="fm-live-charts__panes">
+        <ChartSection title={title} status={{ presentation, primary: "Live" }}>
+          <div className="fm-live-charts__empty" role="status">
+            {emptySeriesMessage(presentation)}
+          </div>
+        </ChartSection>
+      </div>
+    );
+  }
   return <div className="fm-live-charts__panes">{panes.map((pane) => {
     const paneSeries = series.filter((item) => pane.seriesIds.includes(item.id));
     const visible = paneSeries.filter((item) => selected.has(item.id));
@@ -24,6 +35,16 @@ export function LiveChartSurface({ fitRequest, onChartSelected, onExport, onPoin
       />}
     </ChartSection>;
   })}</div>;
+}
+
+function emptySeriesMessage(presentation: LiveChartsViewProps["presentation"]): string {
+  switch (presentation.kind) {
+    case "initial-loading": return "Loading live samples";
+    case "error": return "Live samples unavailable";
+    case "unsupported": return presentation.reason;
+    case "empty": return "No live samples";
+    default: return "Waiting for live samples";
+  }
 }
 
 function presentationRevision(presentation: LiveChartsViewProps["presentation"]): string | number | null {

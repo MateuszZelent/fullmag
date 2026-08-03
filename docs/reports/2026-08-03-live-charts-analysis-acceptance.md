@@ -85,3 +85,34 @@ To jest kwalifikacja kontraktu UI, zasobów v2, cyklu życia wykresów i zachowa
 przeglądarki na fixture'ach. Nie jest to kwalifikacja dokładności solvera ani
 walidacja naukowa danych produkcyjnego przebiegu. Zmiana nie modyfikuje równań,
 DSL Python ani `ProblemIR`. Branch nie został wypchnięty do zdalnego repozytorium.
+
+## Uzupełnienie: Inspector i pusty wykres
+
+W kolejnym przebiegu naprawiono dwa regresyjne zachowania zgłoszone dla `Live Charts`:
+
+- wejście do modułu ustawia selekcję `live.chart`, otwiera prawy dock i skupia
+  `panel-right`, więc Inspector pojawia się bez wcześniejszego kliknięcia legendy;
+- Inspector pokazuje preset, tryb podążania, okno danych oraz checkboxy sygnałów;
+  zmiany przechodzą przez zarejestrowane komendy kernela;
+- zapisane aliasy i nieaktualne identyfikatory serii są mapowane na bieżące
+  identyfikatory zasobu. Niepusta, całkowicie nieaktualna selekcja wraca do
+  domyślnych serii presetu, natomiast jawne `[]` pozostaje stanem „Select at
+  least one signal”;
+- brak serii podczas pierwszego ładowania ma jawny komunikat (`Loading live
+  samples`/`No live samples`), a nie pustą powierzchnię.
+
+Dowody tej poprawki:
+
+| Dowód | Wynik |
+| --- | --- |
+| focused Vitest: Live Charts, resolver, Inspector, registry | PASS — 23/23 testy |
+| resource integration + smoke contract | PASS — 12/12 testów |
+| `pnpm --dir apps/control-room typecheck` | PASS |
+| `pnpm --dir apps/control-room lint` | PASS |
+| bezpośredni headless Playwright na lokalnym workspace | PASS — po wejściu w `Live Charts` Inspector zawiera `Live Chart`, `Display`, `Signals`, `mx`, `my`, `mz`; brak danych pokazuje `No live samples` |
+| pełny `smoke:live-charts` z fixture na buildzie webpack | PASS — produkcyjny build, Inspector przed interakcjami, `mx=0.97982`, `my=0.10317`, `mz=4.4470e-6`, canvas `591×326`, 8 kombinacji widoczności, 0 błędnych odpowiedzi |
+
+Artefakty tego przebiegu zapisano w:
+`apps/control-room/.fullmag/reports/live-charts-analysis-acceptance/live-charts-2026-08-03T16-37-26-254Z/`.
+Wcześniejsze timeouty na współdzielonym dev serverze były wyłącznie blokadą
+środowiskową; nie występują na zweryfikowanym buildzie produkcyjnym.

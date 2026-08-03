@@ -50,6 +50,15 @@ describe("Live Charts browser smoke contract", () => {
     expect(source).toContain("resume did not issue exactly one latest payload request");
   });
 
+  it("requires the Live Charts Inspector to open with signal controls", () => {
+    const source = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(source).toContain("verifyLiveChartsInspector");
+    expect(source).toContain("[data-slot-id='panel-right']");
+    expect(source).toContain('getByRole("checkbox", { name: "Show mx" })');
+    expect(source).toContain("Live Charts Inspector must expose mx, my, and mz signal controls.");
+  });
+
   it("scopes local-action budgets to Live Charts data resources", () => {
     const source = readFileSync(smokeScriptUrl, "utf8");
     const assertionStart = source.indexOf("function assertNoRequestsSince");

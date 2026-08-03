@@ -1,7 +1,12 @@
+import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferences";
+
 export type LiveChartsCommandAction =
   | { kind: "fit" }
   | { format: "csv" | "tsv" | "png"; kind: "export" }
-  | { kind: "set-live-mode"; liveMode: "following" | "paused" };
+  | { descriptorId?: string; kind: "set-live-mode"; liveMode: "following" | "paused" }
+  | { descriptorId: string; kind: "set-preset" }
+  | { descriptorId: string; kind: "set-selected-series"; selectedSeriesIds: string[] }
+  | { descriptorId: string; kind: "set-range"; range: ChartRangePreference };
 
 interface PendingRequest {
   action: LiveChartsCommandAction;

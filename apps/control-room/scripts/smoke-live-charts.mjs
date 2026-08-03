@@ -58,6 +58,7 @@ async function main() {
     await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
     await openLiveCharts(page);
     await waitForReadyLiveChart(page);
+    await verifyLiveChartsInspector(page);
     await verifyNoVisibleErrorNotifications(page);
 
     const initialRequests = resourceRequestSnapshot(evidence);
@@ -703,6 +704,22 @@ async function waitForReadyLiveChart(page) {
     return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 && readings.length === 3;
   }, undefined, { timeout: timeoutMs });
   await waitForQuietFrames(page);
+}
+
+async function verifyLiveChartsInspector(page) {
+  const rightPanel = page.locator("[data-slot-id='panel-right']");
+  await rightPanel.waitFor({ state: "visible", timeout: timeoutMs });
+  const inspector = rightPanel.locator(".fm-inspector");
+  await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+  const text = await inspector.innerText();
+  for (const marker of ["Live Chart", "Display", "Signals", "mx", "my", "mz"]) {
+    if (!text.includes(marker)) throw new Error(`Live Charts Inspector is missing ${marker}.`);
+  }
+  const signalControls = inspector.getByRole("checkbox");
+  if (await signalControls.count() !== 3) throw new Error("Live Charts Inspector must expose mx, my, and mz signal controls.");
+  if (!(await inspector.getByRole("checkbox", { name: "Show mx" }).isVisible())) {
+    throw new Error("Live Charts Inspector does not expose the mx visibility control.");
+  }
 }
 
 async function verifyOneVisibleCanvas(page) {

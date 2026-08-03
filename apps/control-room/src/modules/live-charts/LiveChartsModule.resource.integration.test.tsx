@@ -1,5 +1,6 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { KernelContext, useKernel } from "@/kernel/KernelContext";
@@ -256,5 +257,40 @@ describe("LiveChartsModule resource flow", () => {
       vi.useRealTimers();
       dom?.restore();
     }
+  });
+
+  it("renders an explicit empty-series state without replacing it with a blank chart", async () => {
+    const series = [
+      {
+        id: "data.table:default:step:mx",
+        label: "mx",
+        points: [{ rowIndex: 0, x: 0, y: 0.97982 }],
+        quantity: "mx",
+        source: { kind: "data.table.rows" as const, resourceKey: "resource", tableId: "default" },
+        status: "ready" as const,
+        unit: "1",
+        xUnit: "1",
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <LiveChartSurface
+        fitRequest={0}
+        onChartSelected={() => undefined}
+        onExport={() => undefined}
+        onPointSelected={() => undefined}
+        onRangeSelected={() => undefined}
+        onRequestedExportHandled={() => undefined}
+        onSeriesChange={() => undefined}
+        presentation={{ kind: "ready", revision: 1 }}
+        requestedExportFormat={null}
+        selectedSeriesIds={[]}
+        series={series}
+        title="Magnetization"
+        xAxisLabel="step"
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
+    expect(html).not.toContain("fm-analysis-chart-surface");
   });
 });

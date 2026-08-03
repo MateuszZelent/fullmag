@@ -34,6 +34,9 @@ describe("LiveChartInspectorPanel", () => {
     expect(html).toContain("magnetization");
     expect(html).toContain("mx");
     expect(html).toContain("7");
+    expect(html).toContain("Display");
+    expect(html).toContain("Signals");
+    expect(html).toContain("Show mx");
     expect(html).not.toContain("Chart controls");
   });
 });
