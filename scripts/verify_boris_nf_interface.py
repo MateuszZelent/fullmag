@@ -350,11 +350,14 @@ def compute_interface_slice(
 
     BORIS stores each spin-polarization current as a vector-valued field.  The
     ``+z`` interface therefore uses component ``z`` from ``Jsx``, ``Jsy`` and
-    ``Jsz``.  BORIS reports ``Tsi`` in A/(m s) through its effective-field
-    normalization.  We retain a documented cell-thickness conversion as a
-    diagnostic torque observable, but do not assert that it is already the
-    same areal spin-flux convention as ``Js``.  The result is intentionally a
-    raw balance and is not a qualification decision.
+    ``Jsz``.  Those display fields contain BORIS' explicit ``MUB_E`` factor;
+    the comparison adapter maps them to Fullmag's charge-equivalent
+    ``Q_ia`` by dividing by ``MUB_E``.  BORIS reports ``Tsi`` in A/(m s)
+    through its effective-field normalization.  We retain a documented
+    cell-thickness conversion as a diagnostic torque observable, but do not
+    assert that it is already the same areal spin-flux convention as ``Js``.
+    The result is intentionally a raw balance and is not a qualification
+    decision.
     """
 
     if normal_axis != "z":

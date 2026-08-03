@@ -424,6 +424,28 @@ residual for thin, highly anisotropic cells (for example, a `100 nm x 100 nm x
 recomputed integrated electrode and angular-momentum balance gates remain
 mandatory after the linear solve.
 
+`gmres_restart` is the initial Krylov basis length, not a hard promise that a
+short basis will remain stable on every mesh. If a completed restart cycle still
+has a residual above `100 * max(abs_tol, rel_tol ||b_p||_2)`, the FDM reference
+solver doubles the basis up to the remaining iteration budget. This bounded
+adaptive restart preserves the low-memory policy for easy cases while avoiding
+false non-convergence of long-wavelength modes on refined, thin N/F stacks.
+Boundary flux evaluation reuses the cell gradients assembled for the operator;
+it must not recompute a full-grid gradient field once per boundary face.
+
+The FDM CPU reference lane uses a multiplicative block-line preconditioner on
+grids with at least two nontrivial axes. Each line factors a four-variable
+block-tridiagonal approximation (charge plus three spin-potential components)
+with diffusion, reaction, interface, and boundary diagonal terms. Consecutive
+line sweeps apply a residual correction; they do not replace the physical
+operator and deliberately omit tangential SHE skew terms and `G_i` from the
+approximation. One-dimensional grids retain the block-Jacobi fallback. A
+neutral paired-voltage cold start is used only when the mesh has at least two
+nontrivial axes; otherwise the zero state remains the safe fallback. The source
+map is `coupled_charge_spin.rs::initial_state_guess`,
+`coupled_charge_spin.rs::line_preconditioners`, and
+`coupled_block_linear.rs::BlockLinePreconditioner`.
+
 ### 3.2 FEM/MFEM weak-form contract
 
 Transparent interfaces may use conforming `H1`. Finite-resistance/mixing/SML
@@ -600,6 +622,14 @@ FDM/FEM convergence, GPU-double vector/tensor parity, M3 temporal order, and
 stiff-limit convergence to steady M1/M2 are not established by the current M1
 reference slice. BORIS and published models remain planned comparisons after
 explicit unit/sign conversion, not primary proof.
+
+The current FDM CPU-double M2 reference slice has an executable six-case
+matrix (three N/F resolutions and two tolerances) with independent charge and
+spin residuals; its artifact and binary identity are recorded in the audit
+plan. The corresponding BORIS matrix is intentionally diagnostic only: after
+the explicit `Q_ia=Js_ia/MUB_E` normalization, potential profiles improve with
+refinement but `mu_s`, interface fluxes, and torque do not meet the comparison
+contract. This does not promote either solver to cross-backend validation.
 
 ### 5.3 Regression and quantitative gates
 

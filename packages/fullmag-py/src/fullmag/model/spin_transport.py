@@ -344,7 +344,14 @@ class PeriodicSpin:
 
 @dataclass(frozen=True, slots=True)
 class ReciprocalNonlinearSolverPolicy:
-    """Scaled Picard/GMRES policy for the steady reciprocal M2 block."""
+    """Scaled Picard/GMRES policy for the steady reciprocal M2 block.
+
+    ``gmres_restart`` is the initial Krylov basis length.  The FDM reference
+    lane may grow it after a residual plateau while preserving the requested
+    maximum-iteration budget.  Its CPU reference realization may also use
+    multiplicative block-line sweeps and a neutral voltage cold start; these
+    are numerical policies and do not alter the reciprocal M2 equations.
+    """
 
     gmres_restart: int = 40
     max_picard_iterations: int = 4

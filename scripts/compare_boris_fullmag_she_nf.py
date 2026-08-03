@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from verify_boris_nf_interface import (
+    MUB_E_V_PER_T,
     map_boris_spin_to_fullmag_mu_s,
     read_text_ovf,
     validate_boris_artifact,
@@ -354,8 +355,28 @@ def _concat_qia(normal: Mapping[str, Any], ferromagnet: Mapping[str, Any]) -> tu
     return tuple(result)
 
 
+def _scale_tensor_field(values: Sequence[Tensor9], factor: float) -> tuple[Tensor9, ...]:
+    return tuple(
+        tuple(component * factor for component in tensor)  # type: ignore[misc]
+        for tensor in values
+    )
+
+
+def _scale_vector(value: object, factor: float, *, label: str) -> list[float]:
+    vector = _vector(value, label=label)
+    return [component * factor for component in vector]
+
+
 def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
-    """Map BORIS N/F OVFs to one contiguous shared-domain representation."""
+    """Map BORIS N/F OVFs to one contiguous shared-domain representation.
+
+    BORIS' display spin-current expression carries the factor
+    ``MUB_E = mu_B / e``.  Fullmag's ``Q_ia`` is the charge-equivalent spin
+    current in ``A/m^2``, so this adapter divides BORIS ``Js`` and interface
+    fluxes by that explicit constant.  The conversion is a unit/convention
+    normalization only; it does not assert equivalence of the two interface
+    laws or of their torque observables.
+    """
 
     root = path if path.is_dir() else path.parent
     payload = validate_boris_artifact(root)
@@ -393,6 +414,18 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
         tuple(row) for row in ferromagnet["Tsi"].values
     )
     balance = dict(payload["interface_balances"])
+    spin_current_scale = 1.0 / MUB_E_V_PER_T
+    for key in (
+        "normal_spin_flux",
+        "ferromagnet_spin_flux",
+        "spin_flux_jump",
+        "absorbed_spin_flux",
+    ):
+        if key in balance:
+            balance[key] = _scale_vector(
+                balance[key], spin_current_scale, label=f"interface_balances.{key}"
+            )
+    balance["spin_current_mapping"] = "Q_ia=Js_ia/MUB_E"
     balance["torque_unit"] = "boris_tsi_A_per_m_s"
     balance["torque_comparison_status"] = "not_comparable_without_tsi_eff_gamma_mapping"
     conventions = {
@@ -402,6 +435,7 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
         "potential_unit": "V",
         "charge_current_unit": "A_per_m2",
         "spin_current_unit": "A_per_m2",
+        "spin_current_mapping": "Q_ia=Js_ia/MUB_E",
         "torque_unit": "boris_tsi_A_per_m_s",
         "source_spin_quantity": "BORIS_native_S",
     }
@@ -418,7 +452,9 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
         potential_v=_concat_scalar(normal["V"], ferromagnet["V"]),
         mu_s_v=tuple(mapped_spin),
         charge_current_apm2=_concat_vectors(normal["Jc"], ferromagnet["Jc"]),
-        spin_current_qia_apm2=_concat_qia(normal, ferromagnet),
+        spin_current_qia_apm2=_scale_tensor_field(
+            _concat_qia(normal, ferromagnet), spin_current_scale
+        ),
         torque_per_s=torque,
         residuals={
             "charge": _finite(payload["residuals"]["charge_scaled_l2"], label="BORIS charge residual"),

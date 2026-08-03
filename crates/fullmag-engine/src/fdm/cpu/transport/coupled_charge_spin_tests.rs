@@ -79,6 +79,58 @@ fn m2_manufactured_amr_bar_converges_to_anisotropic_linear_solution() {
 }
 
 #[test]
+fn m2_includes_all_three_spatial_axes_in_the_conservative_operator() {
+    let mut fields = material(4);
+    for reciprocal in &mut fields.reciprocal {
+        reciprocal.sigma_s_per_m = 2.0;
+        reciprocal.sigma_spin_s_per_m = 2.0;
+        reciprocal.sigma_parallel_s_per_m = 2.0;
+        reciprocal.sigma_perpendicular_s_per_m = 2.0;
+        reciprocal.sigma_ahe_s_per_m = 0.0;
+        reciprocal.polarization = 0.0;
+        reciprocal.spin_hall_angle = 0.0;
+    }
+    let problem = CoupledChargeSpinProblem::new(
+        GridShape {
+            nx: 1,
+            ny: 1,
+            nz: 4,
+        },
+        CellSize {
+            dx: 1.0,
+            dy: 1.0,
+            dz: 1.0,
+        },
+        fields,
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                z_min: ChargeBoundaryCondition::Voltage(1.0),
+                z_max: ChargeBoundaryCondition::Voltage(0.0),
+                ..Default::default()
+            },
+            spin: SpinBoundaryConditions {
+                z_min: SpinBoundaryCondition::SpinSink,
+                z_max: SpinBoundaryCondition::SpinSink,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let solution = problem
+        .solve(CoupledChargeSpinSolverConfig::default(), None)
+        .expect("the third-axis voltage bar must be solved by the full operator");
+    for (cell, value) in solution.potential_volts.iter().enumerate() {
+        let expected = 1.0 - (cell as f64 + 0.5) / 4.0;
+        assert!(
+            (value - expected).abs() < 2.0e-8,
+            "cell {cell}: {value} != {expected}"
+        );
+    }
+    assert!(solution.telemetry.charge_balance_relative <= 1.0e-9);
+}
+
+#[test]
 fn m2_uses_block_preconditioning_and_requires_a_converged_picard_update() {
     let solution = bar(8)
         .solve(CoupledChargeSpinSolverConfig::default(), None)
@@ -394,6 +446,116 @@ fn m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance() {
         .expect("anisotropic N/F interface must meet the declared balance tolerance");
     assert!(solution.telemetry.charge_balance_relative <= config.relative_tolerance);
     assert!(solution.telemetry.spin_balance_relative <= 10.0 * config.relative_tolerance);
+}
+
+#[test]
+fn m2_refined_anisotropic_bar_converges_with_declared_linear_budget() {
+    let grid = GridShape {
+        nx: 20,
+        ny: 8,
+        nz: 8,
+    };
+    let count = grid.cell_count();
+    let mut reciprocal = Vec::with_capacity(count);
+    let mut reactions = Vec::with_capacity(count);
+    let mut magnetization = Vec::with_capacity(count);
+    let mut region_ids = Vec::with_capacity(count);
+    let mut torque_targets = vec![false; count];
+    for cell in 0..count {
+        let z = cell / (grid.nx * grid.ny);
+        let ferromagnet = z >= 4;
+        reciprocal.push(ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 5.8e7,
+            sigma_spin_s_per_m: 5.8e7,
+            sigma_parallel_s_per_m: 5.8e7,
+            sigma_perpendicular_s_per_m: 5.8e7,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: if ferromagnet { 0.4 } else { 0.0 },
+            spin_hall_angle: 0.1,
+        });
+        reactions.push(SpinReactionLengths {
+            spin_flip_m: Some(5.0e-9),
+            exchange_m: None,
+            dephasing_m: None,
+        });
+        magnetization.push([1.0, 0.0, 0.0]);
+        region_ids.push(if ferromagnet { 1 } else { 0 });
+        torque_targets[cell] = ferromagnet;
+    }
+    let interfaces = (0..grid.nx)
+        .flat_map(|x| {
+            (0..grid.ny).map(move |y| OrientedSpinInterface {
+                face: StructuredSpinFace {
+                    axis: 2,
+                    negative_cell: grid.index(x, y, 3),
+                    positive_cell: grid.index(x, y, 4),
+                },
+                from_cell: grid.index(x, y, 3),
+                to_cell: grid.index(x, y, 4),
+                law: SpinInterfaceLaw::MixingConductance {
+                    g_up_s_per_m2: 1.0e15,
+                    g_down_s_per_m2: 0.5e15,
+                    g_r_s_per_m2: 1.5e15,
+                    g_i_s_per_m2: 5.0e14,
+                    g_sml_s_per_m2: 0.0,
+                    sml_reservoir: None,
+                    magnetization: [1.0, 0.0, 0.0],
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    let problem = CoupledChargeSpinProblem::new(
+        grid,
+        CellSize {
+            dx: 1.0e-7,
+            dy: 1.0e-7,
+            dz: 1.0e-9,
+        },
+        CoupledChargeSpinMaterialFields {
+            reciprocal,
+            magnetization,
+            reactions,
+        },
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
+                x_max: ChargeBoundaryCondition::Voltage(6.89655172413793e-4),
+                ..Default::default()
+            },
+            spin: SpinBoundaryConditions::default(),
+        },
+    )
+    .unwrap()
+    .with_revisions(1, 1)
+    .with_interfaces(region_ids, interfaces)
+    .unwrap()
+    .with_torque_targets(SpinTorqueTargets {
+        target_cells: torque_targets,
+        saturation_magnetization_a_per_m: vec![8.0e5; count],
+        gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+    })
+    .unwrap();
+    problem
+        .line_preconditioner_for_test()
+        .expect("refined anisotropic M2 line preconditioner must factor");
+
+    let solution = problem
+        .solve(
+            CoupledChargeSpinSolverConfig {
+                relative_tolerance: 1.0e-8,
+                absolute_tolerance: 0.0,
+                max_linear_iterations: 200,
+                gmres_restart: 8,
+                max_picard_iterations: 20,
+                relative_update_tolerance: 1.0e-8,
+            },
+            None,
+        )
+        .expect("refined anisotropic M2 bar must converge within the reference budget");
+    assert!(solution.telemetry.linear_iterations <= 200);
+    assert!(solution.telemetry.scaled_charge_residual <= 1.0e-10);
+    assert!(solution.telemetry.scaled_spin_residual <= 1.0e-10);
 }
 
 #[test]

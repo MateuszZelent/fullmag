@@ -301,6 +301,12 @@ def _scenario_output_path(build_root: Path, output_dir: Path, runtime_container:
     return Path("/boris-root") / relative_output
 
 
+def _is_known_post_stage_stdout_flush_failure(combined_output: str) -> bool:
+    """Recognize BORIS' embedded-Python flush error after all fields were saved."""
+
+    return "AttributeError: 'StdoutCatcher' object has no attribute 'flush'" in combined_output
+
+
 def _mesh_fields(root: Path, prefix: str) -> MeshFields:
     fields = {name: read_text_ovf(root / f"{prefix}_{name}.ovf") for name in REQUIRED_NORMAL_FIELDS}
     return MeshFields(
@@ -423,7 +429,9 @@ def run_boris_case(
         raise RuntimeError(
             f"BORIS N/F stage marker is missing (exit={completed.returncode}); see runner logs"
         )
-    if completed.returncode not in {0, 143}:
+    if completed.returncode not in {0, 143} and not (
+        completed.returncode == 1 and _is_known_post_stage_stdout_flush_failure(combined)
+    ):
         raise RuntimeError(
             f"BORIS N/F process failed with exit code {completed.returncode}; see runner logs"
         )

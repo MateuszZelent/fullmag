@@ -600,6 +600,99 @@ Zwiększenie limitu z 500 do 2000 nie jest więc wystarczającą naprawą; trzeb
 zweryfikować strategię preconditionera/restartu albo jawnie ograniczyć
 kwalifikowany zakres rozdzielczości.
 
+## 7.5. Korekta kosztu operatora i adaptacyjnego restartu GMRES (2026-08-03)
+
+*Adnotacja:* poniższy zapis jest historycznym snapshotem sprzed korekty osi
+`z`; aktualny, zweryfikowany status znajduje się w sekcji 7.6.
+
+Ponowna diagnoza wykazała dwa odrębne problemy po stronie Fullmag, których nie
+wolno mieszać z różnicą fizyczną względem BORIS. `boundary_flux` przeliczał
+pełne pole gradientów dla każdej granicznej ściany; na siatce N/F koszt jednej
+aplikacji operatora rósł więc jak liczba ścian razy objętość. Operator otrzymuje
+teraz gradienty obliczone raz na aplikację. Dodatkowo `gmres_restart` jest
+traktowany jako początkowa długość bazy: gdy residuum po cyklu pozostaje powyżej
+`100 * tol`, baza jest podwajana do pozostałego budżetu. Zmieniono też komunikat
+awarii tak, aby publikował końcowe residuum i tolerancję.
+
+Dowody regresji kodu:
+
+```text
+cargo test -p fullmag-engine --lib fdm::cpu::transport
+70 passed
+
+pytest scripts/test_run_fullmag_m2_nf_reference.py \
+       scripts/test_compare_boris_fullmag_she_nf.py
+14 passed
+```
+
+Po korekcie referencyjny limit liniowy M2 wynosi `2000` iteracji. Bieżący
+Fullmag-only sweep (`fullmag.m2.fdm.reference_matrix.v1`) jest zapisany w
+`/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-fullmag-matrix-20260803/fullmag_only_matrix.json`:
+coarse i medium przechodzą dla `1e-8` oraz `1e-10`; fine
+(`40x16x8+8`, 40960 niewiadomych) nadal kończy się fail-closed z residuum
+GMRES około `5.02e-8` przy tolerancji rzędu `2.13e-12`–`2.13e-14`.
+Zwiększenie budżetu do `4000` oraz ręczne `gmres_restart=800` nie daje w tym
+środowisku akceptowalnego czasu zakończenia. Oznacza to, że brakuje jeszcze
+preconditionera wielopoziomowego/line-relaxation dla drobnej siatki; nie wolno
+promować fine do `validated` ani nazywać tego parity z BORIS.
+
+Wynik jest jednak istotną korektą wcześniejszego run24: coarse/medium nie są
+już blokowane przez sztuczne przeliczenie gradientów ani przez zbyt krótki
+restart, lecz nadal nie ma wspólnej macierzy BORIS–Fullmag, ponieważ poprzedni
+BORIS artefakt pozostaje snapshotem bez wersjonowanego binarium release. `SHE-
+BORIS-001`, inverse parity, torque normalization, CPU↔CUDA, FEM/GPU i
+`validated_workloads` pozostają otwarte.
+
+## 7.6. Pełny operator 3D, line-relaxation i sześciopunktowa macierz (2026-08-03)
+
+Kontrola regresyjna po dodaniu preconditionera wykazała, że pominięcie osi `z`
+w `residual_flat` mogłoby dać pozornie zbieżny, lecz fizycznie niepełny solver.
+Finalny operator utrzymuje wszystkie trzy osie, a blokowe line sweeps obejmują
+każdą niebanalną oś, także linię przez kontakt N/F. Są to wyłącznie przybliżone
+bloki tridiagonalne dla GMRES: operator fizyczny nadal zawiera SHE/iSHE,
+reakcje, interfejs i warunki brzegowe; tangencjalne SHE i `G_i` są pomijane
+tylko w preconditionerze.
+
+Aktualny CPU/double Fullmag ma binarium SHA-256
+`38a2db19d3bf49535f1555c17f06ea6e9641aa3aeeebf8adfc61b580bb42ead0`. Test
+`cargo test -p fullmag-engine --lib fdm::cpu::transport` przechodzi w całości:
+`73 passed; 0 failed`, w tym refined anisotropic N/F bar z pełnym wkładem osi
+`z` i budżetem 200 iteracji. Niezależny sweep Fullmag-only (3 siatki × 2
+tolerancje) przechodzi w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+fullmag-m2-current-zfix-fullmatrix-20260803/fullmag_only_matrix.json
+```
+
+Najdrobniejsza siatka `40×16×8+8` ma residuale charge/spin
+`6.337917271934871e-13`/`1.3243111363198238e-12` dla `1e-8` oraz
+`1.054259089651925e-14`/`2.652500450302329e-14` dla `1e-10`.
+
+Wspólna macierz BORIS–Fullmag również wykonała wszystkie sześć przypadków w
+`boris-nf-runtime`:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+fullmag-boris-she-nf-matrix-zfix-20260803/matrix.json
+```
+
+Każdy wpis ma `status=incomparable`, nie `not_run`: walidator odrzuca parity,
+bo `Tsi` BORIS jest w `A/(m s)`, a Fullmag torque w `[1/s]`. Adapter skaluje
+BORIS `Js` i interfejsowe fluxy przez jawne `Q_ia=Js_ia/MUB_E`, zgodnie z
+`Transport_Spin_Display.cpp` i `MUB_E` w `Funcs_Math_base.h`. Jest to korekta
+jednostek, nie dowód zgodności prawa interfejsu. Po normalizacji błąd potencjału
+spada od `1.431e-4` na coarse do `2.110e-5` na fine, ale `mu_s`, `Q_ia`,
+absorbowany flux i prąd ładunkowy pozostają różne o rząd jedności. Wymagane są
+jeszcze formalne mapowanie `G_i/Gmix`, torque oraz wspólna dyskretyzacja; nie
+wolno nazywać tej macierzy `diagnostic_match` ani `validated`.
+
+Provenance: BORIS binary `5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997`,
+source snapshot `8daa0a9b2ef414b95090f838ab72414fb6808909ea9bde50c4aabd2a11a717a2`,
+managed image `nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`.
+Jednorazowy kontener bez `libnvidia-ml.so.1` dawał `exit=127`; macierz końcową
+wykonano w trwałym zarządzanym runtime, a błąd środowiskowy zachowano w logach.
+
 ## 8. Źródła i mapowanie symboli
 
 | Twierdzenie | Źródło |

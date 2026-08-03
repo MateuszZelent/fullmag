@@ -6,6 +6,7 @@ import pytest
 
 from run_boris_nf_interface import (
     _managed_command,
+    _is_known_post_stage_stdout_flush_failure,
     capture_runtime_identity,
     run_boris_case,
     validate_runtime_identity,
@@ -84,3 +85,10 @@ def test_managed_cpu_command_disables_gpu_and_mounts_report(tmp_path: Path) -> N
     assert "-g -1" in rendered
     assert f"{(tmp_path / 'report').resolve()}:/report" in rendered
     assert "BorisLin" in rendered
+
+
+def test_known_boris_flush_failure_is_only_the_post_stage_signature() -> None:
+    assert _is_known_post_stage_stdout_flush_failure(
+        "AttributeError: 'StdoutCatcher' object has no attribute 'flush'"
+    )
+    assert not _is_known_post_stage_stdout_flush_failure("solver exited before stage completion")

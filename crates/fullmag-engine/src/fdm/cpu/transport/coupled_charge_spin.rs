@@ -1,7 +1,8 @@
 use super::coupled_block_linear::{
     add_scaled_matrix, cross_right_matrix, identity3, inverse3, norm, relative_spin_state_update,
-    relative_vector_update, restarted_gmres, scale_matrix, transverse_projector,
-    BlockDiagonalPreconditioner, LocalInverseBlock,
+    relative_vector_update, restarted_gmres, scale_matrix, transverse_projector, Block4,
+    BlockDiagonalPreconditioner, BlockLinePreconditioner, BlockLineSystem, LocalInverseBlock,
+    Matrix3,
 };
 use super::{
     ChargeBoundaryCondition, ChargeBoundaryConditions, OrientedSpinInterface, ReactionChannels,
@@ -141,6 +142,42 @@ pub struct CoupledChargeSpinProblem {
     torque_targets: Option<SpinTorqueTargets>,
     state_revision: u64,
     operator_revision: u64,
+}
+
+enum CoupledChargeSpinPreconditioner {
+    BlockJacobi(BlockDiagonalPreconditioner),
+    LongitudinalLines(Vec<BlockLinePreconditioner>),
+}
+
+impl CoupledChargeSpinPreconditioner {
+    fn apply_multiplicative<F>(&self, values: &[f64], operator: F) -> Result<Vec<f64>>
+    where
+        F: Fn(&[f64]) -> Result<Vec<f64>>,
+    {
+        match self {
+            Self::BlockJacobi(preconditioner) => Ok(preconditioner.apply(values)),
+            Self::LongitudinalLines(preconditioners) => {
+                let mut correction = vec![0.0; values.len()];
+                let mut remaining = values.to_vec();
+                for preconditioner in preconditioners {
+                    let delta = preconditioner.apply(&remaining);
+                    let applied = operator(&delta)?;
+                    for index in 0..values.len() {
+                        correction[index] += delta[index];
+                        remaining[index] -= applied[index];
+                    }
+                }
+                Ok(correction)
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::BlockJacobi(_) => "charge_scalar_spin_3x3_block_jacobi_v1",
+            Self::LongitudinalLines(_) => "charge_scalar_spin_line_block_sweeps_v1",
+        }
+    }
 }
 
 impl CoupledChargeSpinProblem {
@@ -338,15 +375,23 @@ impl CoupledChargeSpinProblem {
                 &warm_start.unwrap().spin_potential_volts,
             )
         } else {
-            vec![0.0; 4 * count]
+            self.initial_state_guess()
         };
         zero_inactive(&mut state, &self.active_cells);
         let affine = self.residual_flat(&vec![0.0; 4 * count])?;
         let rhs: Vec<f64> = affine.iter().map(|value| -value).collect();
         let scales = self.block_scales();
-        let preconditioner = self.block_preconditioner()?;
+        let block_jacobi = self.block_preconditioner()?;
+        let preconditioner = match self.line_preconditioners() {
+            Ok(lines) => CoupledChargeSpinPreconditioner::LongitudinalLines(lines),
+            Err(_) => CoupledChargeSpinPreconditioner::BlockJacobi(block_jacobi),
+        };
         let preconditioner_applications = Cell::new(0usize);
-        let preconditioned_rhs = preconditioner.apply(&rhs);
+        let apply_preconditioner = |values: &[f64]| {
+            preconditioner
+                .apply_multiplicative(values, |direction| self.apply_linear(direction, &affine))
+        };
+        let preconditioned_rhs = apply_preconditioner(&rhs)?;
         preconditioner_applications.set(preconditioner_applications.get() + 1);
         // The preconditioner makes this norm dimensionless.  Do not impose a
         // unit floor: for nanometre-scale cells the physical RHS can be much
@@ -372,7 +417,7 @@ impl CoupledChargeSpinProblem {
             let linear_iterations_before = total_linear_iterations;
             let applied = self.apply_linear(&state, &affine)?;
             let residual: Vec<f64> = rhs.iter().zip(applied).map(|(b, ax)| b - ax).collect();
-            let preconditioned_residual = preconditioner.apply(&residual);
+            let preconditioned_residual = apply_preconditioner(&residual)?;
             preconditioner_applications.set(preconditioner_applications.get() + 1);
             let previous = state.clone();
             if norm(&preconditioned_residual) > linear_tolerance {
@@ -384,9 +429,16 @@ impl CoupledChargeSpinProblem {
                     |direction| {
                         let applied = self.apply_linear(&direction, &affine)?;
                         preconditioner_applications.set(preconditioner_applications.get() + 1);
-                        Ok(preconditioner.apply(&applied))
+                        apply_preconditioner(&applied)
                     },
-                )?;
+                )
+                .map_err(|error| {
+                    EngineError::new(format!(
+                        "{}; preconditioner={}",
+                        error,
+                        preconditioner.name()
+                    ))
+                })?;
                 for (value, delta) in state.iter_mut().zip(correction) {
                     *value += delta;
                 }
@@ -492,7 +544,7 @@ impl CoupledChargeSpinProblem {
                     "converged_true_block_residual_picard_update_and_physical_balance",
                 operator_version: "fdm_charge_spin_block_gmres_v1",
                 linear_solver: "restarted_gmres",
-                preconditioner: "charge_scalar_spin_3x3_block_jacobi_v1",
+                preconditioner: preconditioner.name(),
                 preconditioner_applications: preconditioner_applications.get(),
                 nonlinear_solver: "picard_v1",
                 linear_iterations: total_linear_iterations,
@@ -668,12 +720,12 @@ impl CoupledChargeSpinProblem {
             }
             (None, Some(cell)) if self.active_cells[cell] => {
                 let (charge_flux, spin_flux) =
-                    self.boundary_flux(axis, false, cell, potential, spin)?;
+                    self.boundary_flux(axis, false, cell, potential, spin, gradients)?;
                 add_boundary_residual(residual, cell, charge_flux, spin_flux, spacing, -1.0);
             }
             (Some(cell), None) if self.active_cells[cell] => {
                 let (charge_flux, spin_flux) =
-                    self.boundary_flux(axis, true, cell, potential, spin)?;
+                    self.boundary_flux(axis, true, cell, potential, spin, gradients)?;
                 add_boundary_residual(residual, cell, charge_flux, spin_flux, spacing, 1.0);
             }
             _ => {}
@@ -688,8 +740,8 @@ impl CoupledChargeSpinProblem {
         cell: usize,
         potential: &[f64],
         spin: &[Vector3],
+        gradients: &[(Vector3, [[f64; 3]; 3])],
     ) -> Result<(f64, Vector3)> {
-        let gradients = self.cell_gradients(potential, spin);
         let mut electric_field = gradients[cell].0;
         let charge_condition = charge_boundary(self.boundary.charge, axis, positive);
         let charge_is_dirichlet = if let ChargeBoundaryCondition::Voltage(value) = charge_condition
@@ -766,7 +818,8 @@ impl CoupledChargeSpinProblem {
         potential: &[f64],
         spin: &[Vector3],
     ) -> (f64, Vector3) {
-        self.boundary_flux(axis, positive, cell, potential, spin)
+        let gradients = self.cell_gradients(potential, spin);
+        self.boundary_flux(axis, positive, cell, potential, spin, &gradients)
             .expect("validated test boundary flux")
     }
 
@@ -1059,6 +1112,40 @@ impl CoupledChargeSpinProblem {
         }
     }
 
+    fn initial_state_guess(&self) -> Vec<f64> {
+        let count = self.grid.cell_count();
+        let mut state = vec![0.0; 4 * count];
+        let extents = [self.grid.nx, self.grid.ny, self.grid.nz];
+        if extents.iter().filter(|extent| **extent >= 2).count() < 2 {
+            return state;
+        }
+        let mut voltage_axis = None;
+        for axis in 0..3 {
+            let lower = charge_boundary(self.boundary.charge, axis, false);
+            let upper = charge_boundary(self.boundary.charge, axis, true);
+            if let (
+                ChargeBoundaryCondition::Voltage(lower),
+                ChargeBoundaryCondition::Voltage(upper),
+            ) = (lower, upper)
+            {
+                voltage_axis = Some((axis, lower, upper));
+                break;
+            }
+        }
+        let Some((axis, lower, upper)) = voltage_axis else {
+            return state;
+        };
+        let extent = [self.grid.nx, self.grid.ny, self.grid.nz][axis] as f64;
+        for cell in 0..count {
+            if !self.active_cells[cell] {
+                continue;
+            }
+            let coordinate = coordinates(self.grid, cell)[axis] as f64;
+            state[4 * cell] = lower + (upper - lower) * (coordinate + 0.5) / extent;
+        }
+        state
+    }
+
     fn block_scales(&self) -> Vec<[f64; 4]> {
         let mut scales = Vec::with_capacity(self.grid.cell_count());
         let h2 = self
@@ -1134,6 +1221,253 @@ impl CoupledChargeSpinProblem {
         Ok(BlockDiagonalPreconditioner { blocks })
     }
 
+    fn line_preconditioners(&self) -> Result<Vec<BlockLinePreconditioner>> {
+        let extents = [self.grid.nx, self.grid.ny, self.grid.nz];
+        if extents.iter().filter(|extent| **extent >= 2).count() < 2 {
+            return Err(EngineError::new(
+                "M2 line preconditioner requires at least two nontrivial axes",
+            ));
+        }
+        let mut axes = Vec::new();
+        for axis in 0..3 {
+            if extents[axis] >= 2 {
+                axes.push(axis);
+            }
+        }
+        if axes.is_empty() {
+            return Err(EngineError::new(
+                "M2 line preconditioner requires a nontrivial line axis",
+            ));
+        }
+        axes.into_iter()
+            .map(|axis| self.line_preconditioner_for_axis(axis))
+            .collect()
+    }
+
+    fn line_preconditioner_for_axis(&self, line_axis: usize) -> Result<BlockLinePreconditioner> {
+        let extents = [self.grid.nx, self.grid.ny, self.grid.nz];
+        if extents[line_axis] < 2 {
+            return Err(EngineError::new(
+                "M2 line preconditioner requires a nontrivial line axis",
+            ));
+        }
+        let other_a = (line_axis + 1) % 3;
+        let other_b = (line_axis + 2) % 3;
+        let mut systems = Vec::new();
+        for b in 0..extents[other_b] {
+            for a in 0..extents[other_a] {
+                let cells = (0..extents[line_axis])
+                    .map(|coordinate| {
+                        let mut point = [0usize; 3];
+                        point[line_axis] = coordinate;
+                        point[other_a] = a;
+                        point[other_b] = b;
+                        self.grid.index(point[0], point[1], point[2])
+                    })
+                    .collect::<Vec<_>>();
+                let length = cells.len();
+                let mut diagonal = vec![zero_block4(); length];
+                let mut lower = vec![zero_block4(); length - 1];
+                let mut upper = vec![zero_block4(); length - 1];
+                for (position, &cell) in cells.iter().enumerate() {
+                    if !self.active_cells[cell] {
+                        diagonal[position] = identity_block4();
+                        continue;
+                    }
+                    add_reaction_block(
+                        &mut diagonal[position],
+                        self.materials.reciprocal[cell].sigma_spin_s_per_m,
+                        self.materials.magnetization[cell],
+                        self.materials.reactions[cell],
+                    );
+                    for axis in 0..3 {
+                        if axis != line_axis {
+                            self.add_transverse_diagonal(cell, axis, &mut diagonal[position])?;
+                        }
+                    }
+                }
+                for position in 0..length - 1 {
+                    let left = cells[position];
+                    let right = cells[position + 1];
+                    if !self.active_cells[left] || !self.active_cells[right] {
+                        continue;
+                    }
+                    if self.region_ids[left] == self.region_ids[right] {
+                        let face = line_face_block(
+                            self.materials.reciprocal[left],
+                            self.materials.magnetization[left],
+                            self.materials.reciprocal[right],
+                            self.materials.magnetization[right],
+                            self.spacing(line_axis),
+                            line_axis,
+                        );
+                        add_block4(&mut diagonal[position], face);
+                        add_block4(&mut diagonal[position + 1], face);
+                        let coupling = negate_block4(face);
+                        lower[position] = coupling;
+                        upper[position] = coupling;
+                    } else {
+                        let face = StructuredSpinFace {
+                            axis: line_axis,
+                            negative_cell: left,
+                            positive_cell: right,
+                        };
+                        let interface = self
+                            .interfaces
+                            .iter()
+                            .find(|item| item.face == face)
+                            .ok_or_else(|| {
+                                EngineError::new(
+                                    "M2 line preconditioner found an unregistered cross-region face",
+                                )
+                            })?;
+                        add_interface_diagonal(
+                            &mut diagonal[position],
+                            interface.law,
+                            self.spacing(line_axis),
+                        );
+                        add_interface_diagonal(
+                            &mut diagonal[position + 1],
+                            interface.law,
+                            self.spacing(line_axis),
+                        );
+                    }
+                }
+                self.add_line_boundary(line_axis, false, cells[0], &mut diagonal[0]);
+                self.add_line_boundary(
+                    line_axis,
+                    true,
+                    cells[length - 1],
+                    &mut diagonal[length - 1],
+                );
+                systems.push(BlockLineSystem {
+                    indices: cells,
+                    diagonal,
+                    lower,
+                    upper,
+                });
+            }
+        }
+        BlockLinePreconditioner::new(systems)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn line_preconditioner_for_test(&self) -> Result<()> {
+        self.line_preconditioners().map(|_| ())
+    }
+
+    fn add_transverse_diagonal(
+        &self,
+        cell: usize,
+        axis: usize,
+        diagonal: &mut Block4,
+    ) -> Result<()> {
+        let coordinate = coordinates(self.grid, cell);
+        let extent = [self.grid.nx, self.grid.ny, self.grid.nz][axis];
+        for positive in [false, true] {
+            let neighbor_coordinate = if positive {
+                if coordinate[axis] + 1 >= extent {
+                    None
+                } else {
+                    let mut next = coordinate;
+                    next[axis] += 1;
+                    Some(next)
+                }
+            } else if coordinate[axis] == 0 {
+                None
+            } else {
+                let mut next = coordinate;
+                next[axis] -= 1;
+                Some(next)
+            };
+            let Some(neighbor_coordinate) = neighbor_coordinate else {
+                self.add_boundary_diagonal(axis, positive, cell, diagonal);
+                continue;
+            };
+            let neighbor = self.grid.index(
+                neighbor_coordinate[0],
+                neighbor_coordinate[1],
+                neighbor_coordinate[2],
+            );
+            if !self.active_cells[neighbor] {
+                continue;
+            }
+            if self.region_ids[cell] == self.region_ids[neighbor] {
+                let material = self.materials.reciprocal[cell];
+                let charge = directional_charge_conductivity(
+                    material,
+                    self.materials.magnetization[cell],
+                    axis,
+                ) / self.spacing(axis).powi(2);
+                let spin = 0.5 * material.sigma_spin_s_per_m / self.spacing(axis).powi(2);
+                diagonal[0][0] += charge;
+                for component in 0..3 {
+                    diagonal[1 + component][1 + component] += spin;
+                }
+            } else {
+                let face = if positive {
+                    StructuredSpinFace {
+                        axis,
+                        negative_cell: cell,
+                        positive_cell: neighbor,
+                    }
+                } else {
+                    StructuredSpinFace {
+                        axis,
+                        negative_cell: neighbor,
+                        positive_cell: cell,
+                    }
+                };
+                let interface = self
+                    .interfaces
+                    .iter()
+                    .find(|item| item.face == face)
+                    .ok_or_else(|| {
+                        EngineError::new(
+                            "M2 line preconditioner found an unregistered transverse interface",
+                        )
+                    })?;
+                add_interface_diagonal(diagonal, interface.law, self.spacing(axis));
+            }
+        }
+        Ok(())
+    }
+
+    fn add_boundary_diagonal(
+        &self,
+        axis: usize,
+        positive: bool,
+        cell: usize,
+        diagonal: &mut Block4,
+    ) {
+        let material = self.materials.reciprocal[cell];
+        let spacing_squared = self.spacing(axis).powi(2);
+        if matches!(
+            charge_boundary(self.boundary.charge, axis, positive),
+            ChargeBoundaryCondition::Voltage(_)
+        ) {
+            diagonal[0][0] +=
+                2.0 * directional_charge_conductivity(
+                    material,
+                    self.materials.magnetization[cell],
+                    axis,
+                ) / spacing_squared;
+        }
+        if matches!(
+            spin_boundary(self.boundary.spin, axis, positive),
+            SpinBoundaryCondition::SpinSink | SpinBoundaryCondition::SpecifiedPotential(_)
+        ) {
+            let spin = material.sigma_spin_s_per_m / spacing_squared;
+            for component in 0..3 {
+                diagonal[1 + component][1 + component] += spin;
+            }
+        }
+    }
+
+    fn add_line_boundary(&self, axis: usize, positive: bool, cell: usize, diagonal: &mut Block4) {
+        self.add_boundary_diagonal(axis, positive, cell, diagonal);
+    }
+
     fn separate_scaled_residuals(&self, residual: &[f64], scales: &[[f64; 4]]) -> (f64, f64) {
         let mut charge = 0.0;
         let mut spin = 0.0;
@@ -1156,6 +1490,7 @@ impl CoupledChargeSpinProblem {
         reactions: &ReactionChannels,
         interfaces: &[SpinInterfaceFluxObservation],
     ) -> Result<(f64, f64)> {
+        let gradients = self.cell_gradients(potential, spin);
         let mut charge_closure_a: f64 = 0.0;
         let mut charge_scale_a: f64 = 0.0;
         let mut spin_closure_a = [0.0; 3];
@@ -1175,7 +1510,7 @@ impl CoupledChargeSpinProblem {
                         continue;
                     }
                     let (charge, spin_flux) =
-                        self.boundary_flux(axis, positive, cell, potential, spin)?;
+                        self.boundary_flux(axis, positive, cell, potential, spin, &gradients)?;
                     let outward_sign = if positive { 1.0 } else { -1.0 };
                     let area = self.face_area(axis);
                     let outward_charge = outward_sign * charge * area;
@@ -1617,6 +1952,140 @@ fn add_boundary_residual(
         residual[4 * cell + 1 + a] += outward_sign * spin[a] / spacing;
     }
 }
+
+fn zero_block4() -> Block4 {
+    [[0.0; 4]; 4]
+}
+
+fn identity_block4() -> Block4 {
+    let mut block = zero_block4();
+    for index in 0..4 {
+        block[index][index] = 1.0;
+    }
+    block
+}
+
+fn add_block4(target: &mut Block4, source: Block4) {
+    for row in 0..4 {
+        for column in 0..4 {
+            target[row][column] += source[row][column];
+        }
+    }
+}
+
+fn negate_block4(mut block: Block4) -> Block4 {
+    for row in &mut block {
+        for value in row {
+            *value = -*value;
+        }
+    }
+    block
+}
+
+fn directional_charge_conductivity(
+    material: ReciprocalConstitutiveMaterial,
+    magnetization: Vector3,
+    axis: usize,
+) -> f64 {
+    material.sigma_perpendicular_s_per_m
+        + (material.sigma_parallel_s_per_m - material.sigma_perpendicular_s_per_m)
+            * magnetization[axis]
+            * magnetization[axis]
+}
+
+fn add_reaction_block(
+    diagonal: &mut Block4,
+    sigma_spin: f64,
+    magnetization: Vector3,
+    lengths: SpinReactionLengths,
+) {
+    if let Some(lambda) = lengths.spin_flip_m {
+        for component in 0..3 {
+            diagonal[1 + component][1 + component] += sigma_spin / (2.0 * lambda * lambda);
+        }
+    }
+    if let Some(lambda) = lengths.exchange_m {
+        add_scaled_to_spin_block(
+            diagonal,
+            cross_right_matrix(magnetization),
+            sigma_spin / (2.0 * lambda * lambda),
+        );
+    }
+    if let Some(lambda) = lengths.dephasing_m {
+        add_scaled_to_spin_block(
+            diagonal,
+            transverse_projector(magnetization),
+            sigma_spin / (2.0 * lambda * lambda),
+        );
+    }
+}
+
+fn add_scaled_to_spin_block(diagonal: &mut Block4, source: Matrix3, factor: f64) {
+    for row in 0..3 {
+        for column in 0..3 {
+            diagonal[1 + row][1 + column] += factor * source[row][column];
+        }
+    }
+}
+
+fn line_face_block(
+    left: ReciprocalConstitutiveMaterial,
+    left_magnetization: Vector3,
+    right: ReciprocalConstitutiveMaterial,
+    right_magnetization: Vector3,
+    spacing: f64,
+    axis: usize,
+) -> Block4 {
+    let h2 = spacing * spacing;
+    let charge = 0.5
+        * (directional_charge_conductivity(left, left_magnetization, axis)
+            + directional_charge_conductivity(right, right_magnetization, axis))
+        / h2;
+    let spin = 0.25 * (left.sigma_spin_s_per_m + right.sigma_spin_s_per_m) / h2;
+    let mut polarization = [0.0; 3];
+    for component in 0..3 {
+        polarization[component] = 0.5
+            * (left.polarization * left.sigma_s_per_m * left_magnetization[component]
+                + right.polarization * right.sigma_s_per_m * right_magnetization[component])
+            / h2;
+    }
+    let mut block = zero_block4();
+    block[0][0] = charge;
+    for component in 0..3 {
+        block[0][1 + component] = 0.5 * polarization[component];
+        block[1 + component][0] = polarization[component];
+        block[1 + component][1 + component] = spin;
+    }
+    block
+}
+
+fn add_interface_diagonal(diagonal: &mut Block4, law: SpinInterfaceLaw, spacing: f64) {
+    let SpinInterfaceLaw::MixingConductance {
+        g_up_s_per_m2,
+        g_down_s_per_m2,
+        g_r_s_per_m2,
+        g_sml_s_per_m2,
+        sml_reservoir,
+        ..
+    } = law
+    else {
+        return;
+    };
+    let charge = (g_up_s_per_m2 + g_down_s_per_m2) / spacing;
+    diagonal[0][0] += charge.max(0.0);
+    let reservoir_conductance = sml_reservoir.map_or(0.0, |reservoir| {
+        reservoir.g_n_s_per_m2.min(reservoir.g_f_s_per_m2).max(0.0)
+    });
+    let spin = (0.5 * (g_up_s_per_m2 + g_down_s_per_m2)
+        + g_r_s_per_m2
+        + g_sml_s_per_m2
+        + reservoir_conductance)
+        / spacing;
+    for component in 0..3 {
+        diagonal[1 + component][1 + component] += spin.max(0.0);
+    }
+}
+
 fn derivative<F: Fn(usize) -> f64>(
     grid: GridShape,
     spacing: f64,
