@@ -4481,3 +4481,145 @@ wykonywalnym, ilościowo zwalidowanym solverem. Uczciwa ocena celu pozostaje
 **84% implementacji / 58% gotowości produkcyjnej**: wzrosła kompletność
 kontraktu authoringowego, ale nie zamknięto żadnej z dominujących bram fizyki,
 numeryki ani runtime'u.
+
+## 32.26. Zarządzany harness BORIS N/F i korekta specyfikacji (2026-08-03)
+
+Wykonano pierwszą rzeczywistą ścieżkę N/F na patched build copy BORIS. Jest to
+postęp harnessu i audytu, nie awans Fullmag do `validated`.
+
+### 32.26.1. Korekta modelu wymuszenia i siatki
+
+Pierwszy wariant scenariusza używał `setcurrentdensity` w N. Zgodnie z kodem
+BORIS (`Commands.cpp::CMD_SETCURRENTDENSITY`) ta komenda ustawia stałe `J_c` i
+ustawia globalne `disabled_transport_solver=true`. Wynik z zerowym `J_c`, `S`
+i torque w F nie był testem N/F i został odrzucony.
+
+Normatywny renderer `scripts/boris_nf_interface_smoke.py` używa teraz:
+
+- elektrod x i `setcurrent(I)`, gdzie
+  `I=J_target W_y(t_N+t_T+t_F)`;
+- jawnego `ferromagnet.ecellsize(cell)`, aby transportowe siatki N/F miały
+  ten sam layout i kroki OVF;
+- `SHA=iSHA` tylko na N; F ma `SHA`, `Gi` i `Gmix`, ponieważ BORIS nie
+  udostępnia F parametru `iSHA`;
+- próbek z najbliższej komórki tekstowego OVF, a nie z `getvalue` na
+  magnetycznej siatce F.
+
+Wniosek fizyczny: obecność direct-SHE w N po `setcurrentdensity` nie dowodzi
+sprzężenia kontaktowego, absorpcji spinowej ani interfacial torque.
+
+### 32.26.2. Wykonany artefakt i dowód runtime
+
+```text
+artifact=/zfn2/mateuszz/git/fullmag/boris-build/reports/runner-coarse-3
+schema=fullmag.boris_she_nf.v1
+source_manifest_file_sha256=ed1ca167fae571b8106b79ed86347de4a6509647db87716c8f6f1559c890cde6
+binary_sha256=5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997
+image=nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f
+python=3.10.12, device=cpu, launch=BorisLin -g -1
+workload=N/F, grid=4x2x2 per mesh, SHA=iSHA=0.10 on N
+exit=143 accepted only after BORIS_NF_STAGE_COMPLETE and field-completeness checks
+qualification=diagnostic
+```
+
+Artefakt zawiera `V`, `S`, `Jc`, `Jsx`, `Jsy`, `Jsz` w N i F oraz `Ts`/`Tsi`
+w F. Zarejestrowane wartości interfejsu `+z` N→F to:
+
+```text
+Jc_N,z=22.184125 A/m2, Jc_F,z=92.93605125 A/m2
+J_s,N,z=(-5.96e-4,-2.88983e5,-2.50e-3) A/m2
+J_s,F,z=(4.14985e1,1.00e-3,6.3953e-2) A/m2
+Tsi_plane*dz=(-2.54e-4,1.75365e4,-2.50e-3) A/m2 (diagnostic conversion)
+```
+
+`charge_closure=-70.75` i `spin_torque_closure=3.065e5` pozostają surowymi
+obserwablami. BORIS `Tsi` jest torque z efektywnego pola o jednostce `A/(m s)`;
+`Tsi*dz` nie jest jeszcze uzgodnionym z Fullmag arealnym fluxem bez jawnego
+mapowania `tsi_eff`/`gamma`. Nie wolno interpretować tego closure jako
+automatycznej porażki fizyki ani dopasowywać prefaktora po wyniku.
+
+`interior_cell_count=0` w coarse artefakcie (dwie komórki transportowe w osi z),
+więc zapisane `charge_scaled_l2=0` i `spin_scaled_l2=0` nie jest dowodem
+zbieżności PDE. Następna iteracja musi dodać grubszy profil w osi normalnej
+albo niezależny test residualu objętościowego.
+
+### 32.26.3. Status bram
+
+Zrealizowane są: renderer, parser OVF, adapter
+`mu_s=2 De S/(elC MUB_E)`, immutable runtime identity, artefakt v1 i managed
+N/F smoke. Otwarte pozostają: adapter Fullmag FDM M2 i porównanie ilościowe,
+trzy siatki/sweep tolerancji, CUDA parity, N/T/F, torque normalization,
+FEM reciprocal assembly oraz `SHE-BORIS-001`. Capability matrix i
+`validated_workloads` pozostają bez zmian. Ocena celu nie rośnie od samego
+smoke: **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.27. Adapter Fullmag FDM M2 i blokada physical-balance (2026-08-03)
+
+Ta iteracja implementuje brakujący element planu porównawczego BORIS–Fullmag:
+canonical builder Python → ProblemIR, runner FDM CPU `double/strict`, jawny
+artefakt `fullmag.fdm.spin_transport.accepted.v1` oraz porównanie per observable
+z kontrolą `Q_ia`, jednostek i orientacji. Nie jest to promocja capability.
+
+### 32.27.1. Kontrakt wejścia i korekta fizyki
+
+Builder `scripts/run_fullmag_m2_nf_reference.py` ma wspólny z BORIS:
+
+- N pod F w osi `+z`, `4×2×2 + 2` komórek, `cell=(1e-7,1e-7,1e-9) m`;
+- `sigma=5.8e7 S/m`, `De=0.01 m²/s`, `lambda_sf=5 nm`, `J_c=1e11 A/m²`;
+- reciprocal `SHA=iSHA=0.10`, `Gi=5e14 S/m²`, `Gmix=(1.5e15,0) S/m²`;
+- po korekcie zgodności z rendererem BORIS: `P_F=0.4`, `SHA_F=0.10`, bez
+  nieudokumentowanych bulk `lambda_J/lambda_phi`;
+- operator `fdm_coupled_charge_spin_fv_block_gmres.v1`, residual i solver
+  telemetry zapisane w request/provenance.
+
+Adapter `scripts/compare_boris_fullmag_she_nf.py` normalizuje BORIS
+`S→V_s→mu_s`, zachowuje kolejność `row_major_Q_ia` i liczy osobno `V`, `mu_s`,
+`J_c`, wszystkie dziewięć `Q_ia`, absorbowany flux oraz residuale. Torque nie
+jest porównywany przy różnicy jednostek: BORIS `Tsi` (`A/(m s)`) i Fullmag
+Gilbert source (`1/s`) są oznaczane jako `incomparable` do czasu jawnej
+reconciliacji `tsi_eff/gamma`.
+
+### 32.27.2. Wykonanie i dowód blokady
+
+Launcher `.fullmag/local/bin/fullmag` został zbudowany przez repozytoryjne
+`just` w trybie `cuda-fem-gpu`; kompilacja i dane pozostały pod
+`/zfn2/mateuszz/git/fullmag`. Runner przeprowadził rzeczywisty start i zapisał
+pełne logi w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-nf-coarse-run19
+```
+
+Wynik jest `not_run`, bez częściowego artefaktu:
+
+```text
+Step 0: coupled charge-spin solve: M2 physical balance gate rejected
+without committing state: charge=7.139977e-6, spin=5.450726e-8
+```
+
+To jest prawidłowe zachowanie fail-closed. Błąd występuje po wejściu do
+wykonywalnego M2 i przed commit, więc nie wolno traktować go jako zerowych pól
+ani jako parity failure. Jednocześnie ujawnia lukę numeryczną: obecny solver
+wiąże physical-balance gate z tolerancją liniową, a cienka komórka ma silnie
+anizotropowe skale. Należy albo uzasadnić niezależny próg bilansu, albo poprawić
+skalowanie/assembly; nie wolno po prostu zwiększać tolerancji i publikować
+wyniku.
+
+### 32.27.3. Status planu
+
+Zamknięte: Task 4 (normalizacja/metryki), Task 5.1–5.5 (builder, fail-closed
+runner i testy) oraz Task 6.1–6.5 (macierz trzech siatek, dwóch tolerancji,
+walidacja monotoniczności i receptura `just verify-boris-fullmag-she-nf`).
+Task 5/6 nie mają jeszcze pozytywnego runtime evidence; pozostaje
+brama otwarta do czasu przejścia physical balance. Testy focused harnessu:
+
+```text
+31 passed (N/F, adapter, Fullmag reference and matrix contracts)
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile ...  # pass
+git diff --check                                             # pass
+```
+
+Nie zmieniono capability matrix ani `validated_workloads`. Ocena celu pozostaje
+konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**: adapter i
+provenance są zaimplementowane, ale brak wykonania Fullmag na wspólnym N/F
+mesh, trzech siatek, sweepu tolerancji, torque normalization i CPU↔CUDA.

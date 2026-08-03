@@ -41,6 +41,8 @@ class NfCaseConfig:
     saturation_magnetization_apm: float = 8.0e5
     exchange_jpm: float = 1.3e-11
     magnetization: Vector3 = (1.0, 0.0, 0.0)
+    transport_tolerance: float = 1.0e-5
+    transport_max_iterations: int = 200
 
     def __post_init__(self) -> None:
         integer_fields = {
@@ -50,7 +52,7 @@ class NfCaseConfig:
             "nz_f": self.nz_f,
         }
         for name, value in integer_fields.items():
-            if isinstance(value, bool) or value < 1:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
         positive_fields = {
             "cell_x_m": self.cell_x_m,
@@ -63,6 +65,7 @@ class NfCaseConfig:
             "gmix_real_spm2": self.gmix_real_spm2,
             "saturation_magnetization_apm": self.saturation_magnetization_apm,
             "exchange_jpm": self.exchange_jpm,
+            "transport_tolerance": self.transport_tolerance,
         }
         for name, value in positive_fields.items():
             if not isinstance(value, (int, float)) or value <= 0.0:
@@ -74,6 +77,12 @@ class NfCaseConfig:
         }.items():
             if not isinstance(value, (int, float)):
                 raise ValueError(f"{name} must be numeric")
+        if (
+            isinstance(self.transport_max_iterations, bool)
+            or not isinstance(self.transport_max_iterations, int)
+            or self.transport_max_iterations < 1
+        ):
+            raise ValueError("transport_max_iterations must be a positive integer")
         if len(self.magnetization) != 3:
             raise ValueError("magnetization must have three components")
         if sum(component * component for component in self.magnetization) == 0.0:
@@ -137,6 +146,8 @@ def scenario_manifest(config: NfCaseConfig) -> dict[str, object]:
             "Ms_apm": config.saturation_magnetization_apm,
             "A_Jpm": config.exchange_jpm,
             "magnetization": list(config.magnetization),
+            "transport_tolerance": config.transport_tolerance,
+            "transport_max_iterations": config.transport_max_iterations,
         },
         "conventions": {
             "spin_quantity": "BORIS native S",
@@ -158,6 +169,56 @@ def _field_exports() -> str:
         for mesh, prefix in (("conductor", "n"), ("ferromagnet", "f"))
         for quantity in ("V", "S", "Jc", "Jsx", "Jsy", "Jsz")
     ) + "\nferromagnet.quant.Ts.saveovf2(\"text\", str(output / \"f_Ts.ovf\"))\nferromagnet.quant.Tsi.saveovf2(\"text\", str(output / \"f_Tsi.ovf\"))"
+
+
+def _ovf_sample_function() -> str:
+    return '''\
+def _ovf_sample(path, position):
+    header = {}
+    rows = []
+    in_data = False
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered == "# begin: data text":
+            in_data = True
+            continue
+        if lowered == "# end: data text":
+            in_data = False
+            continue
+        if in_data:
+            if stripped and not stripped.startswith("#"):
+                rows.append(tuple(float(value) for value in stripped.split()))
+            continue
+        if stripped.startswith("#") and ":" in stripped:
+            key, value = stripped[1:].split(":", 1)
+            normalized_key = key.strip().lower()
+            if normalized_key in {
+                "xmin", "ymin", "zmin", "xstepsize", "ystepsize", "zstepsize",
+                "xnodes", "ynodes", "znodes",
+            }:
+                header[normalized_key] = float(value.strip())
+    shape = tuple(int(header[key]) for key in ("xnodes", "ynodes", "znodes"))
+    origin = tuple(header[key] for key in ("xmin", "ymin", "zmin"))
+    step = tuple(header[key] for key in ("xstepsize", "ystepsize", "zstepsize"))
+    indices = tuple(
+        max(0, min(shape[axis] - 1, int(round((position[axis] - origin[axis]) / step[axis]))))
+        for axis in range(3)
+    )
+    row = rows[indices[0] + shape[0] * (indices[1] + shape[1] * indices[2])]
+    return row[0] if len(row) == 1 else list(row)
+
+
+def _ovf_samples(prefix, position):
+    return {
+        "V": _ovf_sample(output / (prefix + "_V.ovf"), position),
+        "S": _ovf_sample(output / (prefix + "_S.ovf"), position),
+        "Jc": _ovf_sample(output / (prefix + "_Jc.ovf"), position),
+        "Jsx": _ovf_sample(output / (prefix + "_Jsx.ovf"), position),
+        "Jsy": _ovf_sample(output / (prefix + "_Jsy.ovf"), position),
+        "Jsz": _ovf_sample(output / (prefix + "_Jsz.ovf"), position),
+    }
+'''
 
 
 def render_boris_script(config: NfCaseConfig) -> str:
@@ -201,6 +262,7 @@ ferromagnet = ns.Ferromagnet(
 )
 conductor.modules("transport")
 ferromagnet.modules("transport")
+ferromagnet.ecellsize([{config.cell_x_m!r}, {config.cell_y_m!r}, {config.cell_z_m!r}])
 {barrier_lines}
 
 conductor.param.elC = {config.conductivity_spm!r}
@@ -225,29 +287,24 @@ ferromagnet.param.Gmix = [{config.gmix_real_spm2!r}, {config.gmix_imag_spm2!r}]
 ferromagnet.setangle(90.0, 0.0)
 
 ns.setode("LLGStatic-SA", "Euler")
-ns.tsolverconfig(1.0e-8, 2000)
-ns.ssolverconfig(1.0e-8, 2000)
-ns.setcurrentdensity(conductor, {config.current_density_apm2!r}, 0.0, 0.0)
+ns.tsolverconfig({config.transport_tolerance!r}, {config.transport_max_iterations!r})
+ns.ssolverconfig({config.transport_tolerance!r}, {config.transport_max_iterations!r})
+ns.setdefaultelectrodes("x")
+ns.setcurrent({config.current_density_apm2 * config.ny * config.cell_y_m * (config.normal_thickness_m + config.barrier_m + config.ferromagnet_thickness_m)!r})
 ns.statictransportsolver(1)
 ns.setstages(["Relax", "iter", 1])
 ns.Run()
 
 {_field_exports()}
+{_ovf_sample_function()}
 
-def _sample(mesh, z):
-    position = [{probe_x!r}, {probe_y!r}, z]
-    return {{
-        "V": mesh.quant.V.getvalue(position),
-        "S": mesh.quant.S.getvalue(position),
-        "Jc": mesh.quant.Jc.getvalue(position),
-        "Jsx": mesh.quant.Jsx.getvalue(position),
-        "Jsy": mesh.quant.Jsy.getvalue(position),
-        "Jsz": mesh.quant.Jsz.getvalue(position),
-    }}
+normal_position = [{probe_x!r}, {probe_y!r}, {probe_z_n!r}]
+ferromagnet_position = [{probe_x!r}, {probe_y!r}, {probe_z_f!r}]
 
 samples = {{
-    "normal": _sample(conductor, {probe_z_n!r}),
-    "ferromagnet": _sample(ferromagnet, {probe_z_f!r}),
+    "normal": _ovf_samples("n", normal_position),
+    "ferromagnet": _ovf_samples("f", ferromagnet_position),
+    "sample_source": "nearest cell from text OVF export",
 }}
 native = {{
     "schema_version": "fullmag.boris_she_nf.native.v1",

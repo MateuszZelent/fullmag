@@ -11,11 +11,14 @@
 ## Global Constraints
 
 - Keep `SHA=iSHA` for reciprocal evidence; unequal values are diagnostic-only and cannot pass the Onsager gate.
+- BORIS exposes `iSHA` on the normal-metal transport parameter set but not on the ferromagnetic set; record `SHA=iSHA` on N and never emit an unsupported F `iSHA` assignment.
 - Use the explicit adapter `V_s = De*S/(elC*MUB_E)` and declare `mu_s = 2*V_s` in every normalized artifact.
 - The N region is below F in `+z`; the F mesh owns non-zero `Gi=[G_i,0]` and `Gmix=[G_r,G_i]` values.
 - Store geometry, material values, tensor component order, signs, units, tolerances, and normal orientation in the artifact.
 - Fail closed on missing fields, non-finite values, mismatched grids, missing runtime identity, or stale output files.
 - Do not modify `external_solvers/BORIS`; use only the managed patched build copy under `/zfn2/mateuszz/git/fullmag/boris-build`.
+- Do not use `setcurrentdensity` for the N/F benchmark: BORIS documents that it disables transport-solver iteration. Use `setdefaultelectrodes("x")` plus `setcurrent(I)` with `I=J_target * W_y * (t_N+t_T+t_F)`.
+- Set `ferromagnet.ecellsize(cell)` explicitly. Without it BORIS can select a finer F electric grid than the N grid, invalidating field and interface comparisons.
 - Keep heavy build/run data below `/zfn2/mateuszz/git/fullmag`; commit only source, small fixtures, summaries, and documentation.
 - Do not change `docs/specs/capability-matrix-v0.json` to `validated` or add a production lane in this plan.
 - Preserve the unrelated dirty paths listed by `git status --short` and stage only files named by each task.
@@ -33,7 +36,7 @@
 - `render_boris_script(config: NfCaseConfig) -> str` returns a self-contained script accepted by BORIS `-s` and containing no host-only imports.
 - `scenario_manifest(config: NfCaseConfig) -> dict[str, object]` returns normalized JSON with sorted keys and the exact field names consumed by the verifier.
 
-- [ ] **Step 1: Write the failing renderer tests**
+- [x] **Step 1: Write the failing renderer tests**
 
 ```python
 def test_nf_manifest_declares_reciprocal_interface() -> None:
@@ -54,13 +57,13 @@ def test_rendered_script_exports_both_meshes_and_all_fields() -> None:
         assert filename in script
 ```
 
-- [ ] **Step 2: Run the focused tests and verify the expected import failure**
+- [x] **Step 2: Run the focused tests and verify the expected import failure**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_boris_nf_interface_smoke.py`
 
 Expected: FAIL because `NfCaseConfig`, `scenario_manifest`, and `render_boris_script` do not exist.
 
-- [ ] **Step 3: Implement the minimal scenario model and template**
+- [x] **Step 3: Implement the minimal scenario model and template**
 
 Implement `NfCaseConfig` with defaults matching the stable first workload:
 `nx=10`, `ny=4`, `nz_n=2`, `nz_f=2`, `cell=(1e-7,1e-7,1e-9) m`,
@@ -83,7 +86,9 @@ n.param.iSHA = 0.10
 f.param.Gi = [5e14, 0.0]
 f.param.Gmix = [1.5e15, 0.0]
 f.setangle(90.0, 0.0)
-ns.setcurrentdensity(n, 1e11, 0.0, 0.0)
+f.ecellsize([1e-7, 1e-7, 1e-9])
+ns.setdefaultelectrodes("x")
+ns.setcurrent(1.6e-4)
 ns.statictransportsolver(1)
 ns.setstages(["Relax", "iter", 1])
 ns.Run()
@@ -96,7 +101,7 @@ for F with `saveovf2("text", <absolute-output-path>)`, then write
 N/T/F renderer must be present but disabled by default and must add a named
 insulator thickness/conductance rather than silently changing N/F.
 
-- [ ] **Step 4: Run the focused tests and inspect the generated script**
+- [x] **Step 4: Run the focused tests and inspect the generated script**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_boris_nf_interface_smoke.py && PYTHONPATH=scripts python3 -c 'from pathlib import Path; from boris_nf_interface_smoke import *; print(render_boris_script(NfCaseConfig(output_dir=Path("/tmp/boris-nf"))))' | rg 'Conductor|Ferromagnet|iSHA|Gmix|f_Ts.ovf'`
 
@@ -104,7 +109,7 @@ Expected: all renderer tests pass and the generated script contains both
 meshes, reciprocal coefficients, non-zero interface conductances, and every
 required field export.
 
-- [ ] **Step 5: Commit the scenario unit**
+- [x] **Step 5: Commit the scenario unit**
 
 ```bash
 git add scripts/boris_nf_interface_smoke.py scripts/test_boris_nf_interface_smoke.py
@@ -125,7 +130,7 @@ git commit -m "test: add deterministic BORIS N/F SHE scenario"
 - `compute_interface_balance(normal: InterfaceSlice) -> InterfaceBalance` returns charge closure, spin-flux closure, absorbed transverse flux, and torque closure with signed normals.
 - `validate_boris_artifact(root: Path) -> dict[str, object]` returns the schema-v1 diagnostic report or raises `ValueError` on any invalid contract.
 
-- [ ] **Step 1: Write failing parser and physics tests**
+- [x] **Step 1: Write failing parser and physics tests**
 
 ```python
 def test_text_ovf_reader_preserves_grid_and_vector_order(tmp_path: Path) -> None:
@@ -171,13 +176,13 @@ def test_interface_balance_rejects_wrong_normal_sign() -> None:
         )
 ```
 
-- [ ] **Step 2: Run tests and verify they fail before implementation**
+- [x] **Step 2: Run tests and verify they fail before implementation**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_verify_boris_nf_interface.py`
 
 Expected: FAIL because the parser, adapter, and balance functions are absent.
 
-- [ ] **Step 3: Implement parser and mapping with explicit metadata**
+- [x] **Step 3: Implement parser and mapping with explicit metadata**
 
 `OvfField` must store `path`, `shape`, `origin_m`, `step_m`, `valuedim`,
 `values`, and a SHA-256 of the source file. Parse only `# Begin: Data Text`
@@ -192,21 +197,26 @@ Use the exact physical constant from the existing reduced oracle:
 `mapping="V_s=De*S/(elC*MUB_E); mu_s=2*V_s"`, and the source conductivity and
 `De` used for the conversion.
 
-- [ ] **Step 4: Implement residuals and interface balances**
+- [x] **Step 4: Implement residuals and interface balances**
 
 For each mesh, calculate centered finite-volume divergence of `Jc` and each
 spin-current component `J_{i,a}` on interior cells. Scale charge by
 `max(|Jc|, 1 A/m²)` and spin by `max(|J_s|, 1 A/m²)`. At the N/F plane use the
 N `+z` slice and F `-z` slice with a declared outward-normal sign. Require
 finite values, compare `Jc_z` closure, and report each component of
-`Jsy/Jsz` flux difference and F `Ts`/`Tsi` torque. Never infer a missing torque
-from a residual.
+`Jsy/Jsz` flux difference and F `Ts`/`Tsi` torque. BORIS labels `Tsi` in
+`A/(m s)` and computes it through the interfacial effective-field path; it is
+not automatically an areal spin flux. Store the raw `Tsi` plane average and
+any explicitly documented cell-thickness conversion, but do not interpret a
+non-zero torque-closure number as a conservation failure until the BORIS
+`tsi_eff`/`gamma` normalization is reconciled with the Fullmag convention.
+Never infer a missing torque from a residual.
 
 The verifier must retain all tolerances in the report:
 `charge_residual_tolerance`, `spin_residual_tolerance`,
 `charge_interface_tolerance`, and `spin_torque_balance_tolerance`.
 
-- [ ] **Step 5: Implement schema-v1 validation and fixture reports**
+- [x] **Step 5: Implement schema-v1 validation and fixture reports**
 
 `validate_boris_artifact` must require:
 
@@ -224,7 +234,7 @@ fields.ferromagnet contains Ts and Tsi
 It writes `qualification.status="diagnostic"` even when all local checks pass;
 the comparison and production qualification statuses are separate values.
 
-- [ ] **Step 6: Run parser, mapping, residual, and mutation tests**
+- [x] **Step 6: Run parser, mapping, residual, and mutation tests**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_verify_boris_nf_interface.py`
 
@@ -232,7 +242,7 @@ Expected: all tests pass, including mutations for missing runtime identity,
 `SHA != iSHA`, NaN fields, wrong dimensions, wrong `mu_s` factor, and flipped
 interface normals.
 
-- [ ] **Step 7: Commit the independent verifier**
+- [x] **Step 7: Commit the independent verifier**
 
 ```bash
 git add scripts/verify_boris_nf_interface.py scripts/test_verify_boris_nf_interface.py
@@ -248,12 +258,12 @@ git commit -m "test: add independent BORIS SHE field verifier"
 - Modify: `justfile` (add `verify-boris-nf-interface` after the external-solver smoke recipes)
 
 **Interfaces:**
-- `capture_runtime_identity(build_root: Path, image_digest: str, device: str) -> dict[str, object]` records source manifest, binary hash, image digest, Python version, requested/detected device, and precision.
+- `capture_runtime_identity(build_root: Path, image_digest: str, device: str) -> dict[str, object]` records the pinned `source_manifest.json`, binary hash, image digest, managed Python version, requested/detected device, and precision.
 - `validate_runtime_identity(identity: dict[str, object]) -> None` rejects incomplete CPU/CUDA identity records, including missing device-residency evidence for CUDA.
 - `run_boris_case(config: NfCaseConfig, build_root: Path, output_dir: Path, device: str) -> Path` renders the scenario, invokes BORIS, validates exit/stage completion, and returns the artifact directory.
 - CLI: `python3 scripts/run_boris_nf_interface.py --build-root /zfn2/mateuszz/git/fullmag/boris-build/source --output-dir /tmp/boris-nf-run --device cpu --resolution 0`.
 
-- [ ] **Step 1: Write failing identity and command-construction tests**
+- [x] **Step 1: Write failing identity and command-construction tests**
 
 ```python
 def test_identity_rejects_missing_binary(tmp_path: Path) -> None:
@@ -267,13 +277,13 @@ def test_runner_refuses_nonempty_output(tmp_path: Path) -> None:
         run_boris_case(NfCaseConfig(output_dir=tmp_path), Path("/build"), tmp_path, "cpu")
 ```
 
-- [ ] **Step 2: Run the tests and verify the expected missing-symbol failures**
+- [x] **Step 2: Run the tests and verify the expected missing-symbol failures**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_run_boris_nf_interface.py`
 
 Expected: FAIL because the runner functions are absent.
 
-- [ ] **Step 3: Implement identity capture without touching the ignored snapshot**
+- [x] **Step 3: Implement identity capture without touching the ignored snapshot**
 
 Require `build_root / "BorisLin"` and a source manifest file. Hash the executable
 and manifest with SHA-256. Run `[str(build_root / "BorisLin"), "-version"]` in the managed
@@ -282,17 +292,18 @@ runtime and store stdout/stderr hashes. Store the exact CUDA image digest and
 device is CUDA. Missing values raise `RuntimeError`; they are never replaced
 with `"unknown"`.
 
-- [ ] **Step 4: Implement execution and artifact assembly**
+- [x] **Step 4: Implement execution and artifact assembly**
 
 Create a unique output directory below the caller-provided durable root,
 write `scenario.py`, `scenario.json`, and `runtime.json`, then invoke the
 existing BORIS embedded-script command from the managed CUDA image. The
 runner must preserve stdout/stderr, require the `BORIS_NF_STAGE_COMPLETE`
 marker, load the native samples, call `validate_boris_artifact`, and write
-`summary.json`. A process timeout or listener exit is `not_run` unless the
-stage marker and all fields are present.
+`summary.json`. BORIS normally leaves its listener alive after the embedded
+script; exit code `143` is accepted only when the marker, native samples, and
+all fields are present. A timeout or any other exit is `not_run`.
 
-- [ ] **Step 5: Add the `just` recipe**
+- [x] **Step 5: Add the `just` recipe**
 
 The recipe must use only repository-owned Python/managed runtime paths and
 write reports below `/zfn2/mateuszz/git/fullmag/boris-build/reports` (or the
@@ -300,7 +311,7 @@ explicit `FULLMAG_BORIS_SHE_REPORT_ROOT`). It must execute three resolutions
 (`10x4x2+2`, `20x8x4+4`, `40x16x8+8`) and pass each summary to the verifier.
 It must not run automatically as part of `just test`.
 
-- [ ] **Step 6: Run unit tests and a bounded managed case**
+- [x] **Step 6: Run unit tests and a bounded managed case**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_run_boris_nf_interface.py`
 
@@ -308,9 +319,11 @@ Then run: `FULLMAG_BORIS_SHE_RESOLUTIONS=coarse just verify-boris-nf-interface`
 
 Expected: unit tests pass. The managed run either writes a complete
 `fullmag.boris_she_nf.v1` diagnostic summary or fails with the exact missing
-runtime/field/residual reason; no silent skip is accepted.
+runtime/field/residual reason; no silent skip is accepted. The managed build
+root must contain a pinned `source_manifest.json`; the report root and all
+heavy artifacts remain below `/zfn2/mateuszz/git/fullmag`.
 
-- [ ] **Step 7: Commit the execution lane**
+- [x] **Step 7: Commit the execution lane**
 
 ```bash
 git add scripts/run_boris_nf_interface.py scripts/test_run_boris_nf_interface.py justfile
@@ -331,7 +344,7 @@ git commit -m "test: add managed BORIS N/F SHE execution lane"
 - `compare_transport_artifacts(boris: NormalizedTransportArtifact, fullmag: NormalizedTransportArtifact) -> dict[str, object]` reports per-observable max absolute error, normalized L2 error, endpoint error, and convention metadata.
 - CLI: `python3 scripts/compare_boris_fullmag_she_nf.py --boris <summary.json> --fullmag <transport.json> --output <comparison.json>`.
 
-- [ ] **Step 1: Write failing normalization and mismatch tests**
+- [x] **Step 1: Write failing normalization and mismatch tests**
 
 ```python
 def test_comparison_reports_zero_for_identical_normalized_fields(tmp_path: Path) -> None:
@@ -347,13 +360,13 @@ def test_comparison_rejects_mesh_and_convention_mismatch() -> None:
         compare_transport_artifacts(fixture_boris_artifact(nx=10), fixture_fullmag_artifact(nx=20))
 ```
 
-- [ ] **Step 2: Run tests and verify missing comparison symbols**
+- [x] **Step 2: Run tests and verify missing comparison symbols**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_compare_boris_fullmag_she_nf.py`
 
 Expected: FAIL because the normalization and comparison functions are absent.
 
-- [ ] **Step 3: Implement normalized artifact loading**
+- [x] **Step 3: Implement normalized artifact loading**
 
 Represent each normalized artifact with `shape`, `step_m`, `potential_v`,
 `mu_s_v`, `charge_current_apm2`, `spin_current_qia_apm2`, `torque_per_s`,
@@ -362,7 +375,7 @@ Represent each normalized artifact with `shape`, `step_m`, `potential_v`,
 to be explicit; reject an artifact that only supplies a flattened 3-vector in
 place of the nine-component `Q_ia` tensor.
 
-- [ ] **Step 4: Implement the comparison metrics**
+- [x] **Step 4: Implement the comparison metrics**
 
 Compare `V`, mapped `mu_s`, each `Q_ia` component, `Jc`, interface absorbed
 spin flux, torque, charge residual, and spin residual separately. Use
@@ -371,14 +384,14 @@ weights. Preserve numerical differences as data; do not emit `validated` from
 this module. Set `status` to `diagnostic_match`, `diagnostic_mismatch`, or
 `incomparable`.
 
-- [ ] **Step 5: Run comparison unit tests**
+- [x] **Step 5: Run comparison unit tests**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_compare_boris_fullmag_she_nf.py`
 
 Expected: all tests pass, including wrong factor-of-two, flipped normal,
 flattened-vector, wrong formula version, and non-finite field mutations.
 
-- [ ] **Step 6: Commit the comparison adapter**
+- [x] **Step 6: Commit the comparison adapter**
 
 ```bash
 git add scripts/compare_boris_fullmag_she_nf.py scripts/test_compare_boris_fullmag_she_nf.py scripts/verify_boris_nf_interface.py
@@ -397,7 +410,7 @@ git commit -m "test: compare normalized BORIS and Fullmag SHE artifacts"
 - `build_fullmag_nf_problem(resolution: Resolution) -> dict[str, object]` returns a canonical Python/ProblemIR input with two transport regions, identical N/F geometry, explicit `Gi/Gmix` interface data, and FDM CPU-double strict execution.
 - `run_fullmag_nf_reference(fullmag_binary: Path, resolution: Resolution, output_dir: Path) -> Path` executes only the supported FDM CPU-double M2 reference path and returns its JSON artifact.
 
-- [ ] **Step 1: Write failing canonical-input tests**
+- [x] **Step 1: Write failing canonical-input tests**
 
 ```python
 def test_reference_problem_is_strict_fdm_cpu_double() -> None:
@@ -409,27 +422,27 @@ def test_reference_problem_is_strict_fdm_cpu_double() -> None:
     assert problem["transport"]["interface"]["Gi_Spm2"] > 0.0
 ```
 
-- [ ] **Step 2: Run focused tests and verify missing canonical builder**
+- [x] **Step 2: Run focused tests and verify missing canonical builder**
 
 Run: `PYTHONPATH=packages/fullmag-py/src:scripts python3 -m pytest -q scripts/test_run_fullmag_m2_nf_reference.py`
 
 Expected: FAIL because the canonical builder is absent.
 
-- [ ] **Step 3: Implement the canonical FDM CPU-double input**
+- [x] **Step 3: Implement the canonical FDM CPU-double input**
 
 Use the public Python DSL and existing M2 coupling-owned lowering. The input
 must carry the same `sigma`, `theta_SH`, `lambda_sf`, `SHA=iSHA`, `Gi/Gmix`,
 mesh dimensions, charge gauge, and spin boundary declarations as the BORIS
 manifest. It must reject FEM/GPU/single requests before execution.
 
-- [ ] **Step 4: Implement subprocess execution and artifact checks**
+- [x] **Step 4: Implement subprocess execution and artifact checks**
 
 Invoke the existing Fullmag JSON runner with an explicit output directory,
 require the M2 artifact schema and `resolved_execution={fdm,cpu,double}`,
 require finite `mu_s`, `Q_ia`, charge/spin residuals, interface observations,
 and preserve the exact generated ProblemIR/source hashes.
 
-- [ ] **Step 5: Run the focused reference tests**
+- [x] **Step 5: Run the focused reference tests**
 
 Run: `PYTHONPATH=packages/fullmag-py/src:scripts python3 -m pytest -q scripts/test_run_fullmag_m2_nf_reference.py`
 
@@ -437,7 +450,7 @@ Expected: authoring and fail-closed execution tests pass. If the managed
 Fullmag binary is unavailable, the test must report `not_run` rather than
 fabricate an artifact.
 
-- [ ] **Step 6: Commit the Fullmag reference adapter**
+- [x] **Step 6: Commit the Fullmag reference adapter**
 
 ```bash
 git add scripts/run_fullmag_m2_nf_reference.py scripts/test_run_fullmag_m2_nf_reference.py scripts/compare_boris_fullmag_she_nf.py
@@ -458,7 +471,7 @@ git commit -m "test: materialize Fullmag M2 N/F reference artifact"
 - `run_resolution_matrix(resolutions: Sequence[Resolution], tolerances: Sequence[float], boris_build_root: Path, fullmag_binary: Path, report_root: Path) -> dict[str, object]` writes one immutable run directory per tuple and an aggregate summary.
 - `validate_matrix_summary(summary: dict[str, object]) -> None` requires all declared tuples, finite metrics, and monotone residual/error trends before writing a report.
 
-- [ ] **Step 1: Write failing matrix tests**
+- [x] **Step 1: Write failing matrix tests**
 
 ```python
 def test_matrix_requires_three_resolutions_and_two_tolerances() -> None:
@@ -471,27 +484,27 @@ def test_matrix_rejects_duplicate_run_identity() -> None:
         validate_matrix_summary(fixture_matrix_with_duplicate_identity())
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_boris_fullmag_she_nf_matrix.py`
 
 Expected: FAIL because matrix validation is absent.
 
-- [ ] **Step 3: Implement matrix orchestration**
+- [x] **Step 3: Implement matrix orchestration**
 
 Use resolutions `(10,4,2,2)`, `(20,8,4,4)`, `(40,16,8,8)` and tolerances
 `1e-8`, `1e-10`. Every run stores `scenario_sha256`, `runtime_sha256`,
 `binary_sha256`, `resolution`, `tolerance`, and normalized comparison output.
 No run may reuse a non-empty directory or overwrite a previous identity.
 
-- [ ] **Step 4: Add an aggregate `just verify-boris-fullmag-she-nf` recipe**
+- [x] **Step 4: Add an aggregate `just verify-boris-fullmag-she-nf` recipe**
 
 The recipe runs the BORIS managed lane, the Fullmag FDM CPU-double lane, the
 comparison, and `validate_matrix_summary` in that order. It writes only small
 JSON/CSV summaries to the durable report root and leaves large OVF fields in
 the durable run store. It does not alter capability JSON.
 
-- [ ] **Step 5: Run matrix unit tests**
+- [x] **Step 5: Run matrix unit tests**
 
 Run: `PYTHONPATH=scripts python3 -m pytest -q scripts/test_boris_fullmag_she_nf_matrix.py`
 

@@ -326,11 +326,104 @@ def compute_interface_balance(interface: InterfaceSlice) -> dict[str, object]:
         "normal_axis": interface.normal_axis,
         "normal_sign": interface.normal_sign,
         "charge_closure": charge_closure,
+        "normal_charge_flux": float(interface.charge_flux),
+        "ferromagnet_charge_flux": float(interface.ferromagnet_charge_flux),
+        "normal_spin_flux": list(normal_flux),
+        "ferromagnet_spin_flux": list(ferromagnet_flux),
         "spin_flux_jump": list(absorbed),
         "absorbed_spin_flux": list(absorbed),
+        "torque": list(torque),
         "spin_torque_closure_vector": list(torque_closure_vector),
         "spin_torque_closure": math.sqrt(sum(value * value for value in torque_closure_vector)),
     }
+
+
+def compute_interface_slice(
+    normal: MeshFields,
+    ferromagnet: MeshFields,
+    interfacial_torque: OvfField,
+    *,
+    normal_axis: str = "z",
+    normal_sign: int = 1,
+) -> InterfaceSlice:
+    """Extract a signed N/F interface slice from exported BORIS fields.
+
+    BORIS stores each spin-polarization current as a vector-valued field.  The
+    ``+z`` interface therefore uses component ``z`` from ``Jsx``, ``Jsy`` and
+    ``Jsz``.  BORIS reports ``Tsi`` in A/(m s) through its effective-field
+    normalization.  We retain a documented cell-thickness conversion as a
+    diagnostic torque observable, but do not assert that it is already the
+    same areal spin-flux convention as ``Js``.  The result is intentionally a
+    raw balance and is not a qualification decision.
+    """
+
+    if normal_axis != "z":
+        raise ValueError("BORIS N/F interface extraction currently requires z normal")
+    if normal_sign not in {-1, 1}:
+        raise ValueError("normal sign must be +1 or -1")
+    normal_fields = (
+        normal.charge_current,
+        normal.spin_current_x,
+        normal.spin_current_y,
+        normal.spin_current_z,
+    )
+    ferromagnet_fields = (
+        ferromagnet.charge_current,
+        ferromagnet.spin_current_x,
+        ferromagnet.spin_current_y,
+        ferromagnet.spin_current_z,
+    )
+    if any(field.valuedim != 3 for field in (*normal_fields, *ferromagnet_fields)):
+        raise ValueError("interface fields must be vector-valued")
+    for left, right in zip(normal_fields, ferromagnet_fields):
+        if left.shape[:2] != right.shape[:2]:
+            raise ValueError("N/F interface fields have incompatible in-plane grids")
+    if interfacial_torque.valuedim != 3:
+        raise ValueError("interfacial torque must be vector-valued")
+    if interfacial_torque.shape[:2] != ferromagnet.charge_current.shape[:2]:
+        raise ValueError("interfacial torque and ferromagnet grid are incompatible")
+
+    nx, ny = normal.charge_current.shape[:2]
+    n_k = normal.charge_current.shape[2] - 1
+    f_k = 0
+
+    def plane_average(field: OvfField, k: int, component: int) -> float:
+        values = [
+            _component(field, i, j, k, component)
+            for j in range(ny)
+            for i in range(nx)
+        ]
+        return sum(values) / len(values)
+
+    normal_flux = (
+        plane_average(normal.spin_current_x, n_k, 2),
+        plane_average(normal.spin_current_y, n_k, 2),
+        plane_average(normal.spin_current_z, n_k, 2),
+    )
+    ferromagnet_flux = (
+        plane_average(ferromagnet.spin_current_x, f_k, 2),
+        plane_average(ferromagnet.spin_current_y, f_k, 2),
+        plane_average(ferromagnet.spin_current_z, f_k, 2),
+    )
+    torque = tuple(
+        sum(
+            _component(interfacial_torque, i, j, min(f_k, interfacial_torque.shape[2] - 1), component)
+            for j in range(ny)
+            for i in range(nx)
+        )
+        / (nx * ny)
+        * interfacial_torque.step_m[2]
+        for component in range(3)
+    )
+    return InterfaceSlice(
+        normal_axis=normal_axis,
+        normal_sign=normal_sign,
+        normal_flux=normal_flux,
+        ferromagnet_flux=ferromagnet_flux,
+        torque=(torque[0], torque[1], torque[2]),
+        charge_flux=plane_average(normal.charge_current, n_k, 2),
+        ferromagnet_charge_flux=plane_average(ferromagnet.charge_current, f_k, 2),
+    )
 
 
 def _field_path(root: Path, entry: object) -> Path:

@@ -257,6 +257,41 @@ verify-fdm-oersted-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-oersted-build && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target oersted_cuda_runtime && LD_LIBRARY_PATH="$build_dir/backends/fdm:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fdm/oersted_cuda_runtime"'
 
+verify-boris-nf-interface:
+    bash -euo pipefail -c '\
+      build_root="${FULLMAG_BORIS_BUILD_ROOT:-/zfn2/mateuszz/git/fullmag/boris-build/source}"; \
+      report_root="${FULLMAG_BORIS_SHE_REPORT_ROOT:-/zfn2/mateuszz/git/fullmag/boris-build/reports/boris-nf-interface}"; \
+      resolutions="${FULLMAG_BORIS_SHE_RESOLUTIONS:-coarse medium fine}"; \
+      image="${FULLMAG_BORIS_IMAGE:-nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f}"; \
+      runtime_container="${FULLMAG_BORIS_RUNTIME_CONTAINER:-}"; \
+      case "$build_root" in /zfn2/mateuszz/git/fullmag/*) ;; *) echo "BORIS build root must be below /zfn2/mateuszz/git/fullmag" >&2; exit 2 ;; esac; \
+      case "$report_root" in /zfn2/mateuszz/git/fullmag/*) ;; *) echo "BORIS report root must be below /zfn2/mateuszz/git/fullmag" >&2; exit 2 ;; esac; \
+      test -x "$build_root/BorisLin"; \
+      test -f "$build_root/source_manifest.json" || test -f "$build_root/source-manifest.json"; \
+      mkdir -p "$report_root"; \
+      for resolution in $resolutions; do \
+        run_dir="$report_root/$resolution"; \
+        if [ -e "$run_dir" ] && [ -n "$(find "$run_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]; then echo "BORIS report directory is non-empty: $run_dir" >&2; exit 3; fi; \
+        args=(scripts/run_boris_nf_interface.py --build-root "$build_root" --output-dir "$run_dir" --device "${FULLMAG_BORIS_DEVICE:-cpu}" --resolution "$resolution" --image-digest "$image" --timeout-s "${FULLMAG_BORIS_TIMEOUT_S:-180}"); \
+        if [ -n "$runtime_container" ]; then args+=(--runtime-container "$runtime_container"); fi; \
+        PYTHONPATH=scripts python3 "${args[@]}"; \
+        PYTHONPATH=scripts python3 scripts/verify_boris_nf_interface.py "$run_dir" --output "$run_dir/validation-rerun.json"; \
+      done'
+
+verify-boris-fullmag-she-nf:
+    bash -euo pipefail -c '\
+      boris_root="${FULLMAG_BORIS_BUILD_ROOT:-/zfn2/mateuszz/git/fullmag/boris-build/source}"; \
+      fullmag_bin="${FULLMAG_FULLMAG_BINARY:-{{repo_root}}/.fullmag/local/bin/fullmag}"; \
+      report_root="${FULLMAG_BORIS_FULLMAG_SHE_REPORT_ROOT:-/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-boris-she-nf-v1}"; \
+      case "$boris_root" in /zfn2/mateuszz/git/fullmag/*) ;; *) echo "BORIS build root must be below /zfn2/mateuszz/git/fullmag" >&2; exit 2 ;; esac; \
+      case "$report_root" in /zfn2/mateuszz/git/fullmag/*) ;; *) echo "matrix report root must be below /zfn2/mateuszz/git/fullmag" >&2; exit 2 ;; esac; \
+      test -x "$boris_root/BorisLin"; \
+      test -f "$boris_root/source_manifest.json" || test -f "$boris_root/source-manifest.json"; \
+      test -x "$fullmag_bin"; \
+      if [ -e "$report_root/matrix.json" ]; then echo "matrix report already exists: $report_root/matrix.json" >&2; exit 3; fi; \
+      mkdir -p "$report_root"; \
+      PYTHONPATH=scripts python3 scripts/run_boris_fullmag_she_nf_matrix.py --boris-build-root "$boris_root" --fullmag "$fullmag_bin" --report-root "$report_root"'
+
 verify-fdm-zhang-li-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-zhangli-build && cargo_target=/tmp/fullmag-fdm-zhangli-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm stt_pbc_contract && "$build_dir/backends/fdm/stt_pbc_contract" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" CARGO_TARGET_DIR="$cargo_target" cargo +nightly check -p fullmag-runner --features cuda'

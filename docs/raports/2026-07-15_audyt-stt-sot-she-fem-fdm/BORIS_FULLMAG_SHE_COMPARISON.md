@@ -420,6 +420,130 @@ rozdzielczości i sweepu tolerancji; heterogenicznego N/F/T z `Gi/Gmix`; oraz
 ilościowego porównania `V`, `S -> V_s`, `mu_s`, `Q_ia`, fluxów i bilansów z
 FDM/FEM. Capability Fullmag i `validated_workloads` pozostają bez zmian.
 
+## 7.2. Wykonywalny, zarządzany przypadek N/F (2026-08-03)
+
+Zamknięto pierwszy stabilny krok harnessu N/F, ale wyłącznie jako artefakt
+diagnostyczny. Implementacja znajduje się w
+`scripts/boris_nf_interface_smoke.py`, `scripts/verify_boris_nf_interface.py`
+i `scripts/run_boris_nf_interface.py`; receptura to
+`just verify-boris-nf-interface`. Ciężkie dane pozostają na szybkim dysku
+`/zfn2/mateuszz/git/fullmag`.
+
+### 7.2.1. Korekty konieczne dla poprawnej fizyki przypadku
+
+Pierwszy renderer używał `setcurrentdensity(n, ...)`. BORIS dokumentuje, że ta
+komenda ustawia stałe `J_c` i **wyłącza iterację solvera transportu**. Taki
+przebieg generował direct-SHE w N, ale zerowe pola F i nie był testem sprzężenia
+N/F. Renderer został zmieniony na:
+
+- `setdefaultelectrodes("x")` i `setcurrent(I)` z
+  `I=J_target W_y(t_N+t_F)`;
+- jawne `ferromagnet.ecellsize(cell)`, bo domyślna siatka elektryczna F jest
+  inna niż siatka N;
+- `SHA=iSHA=0.10` na N, natomiast F ustawia tylko `SHA` (BORIS F nie ma
+  parametru `iSHA`);
+- `Gi=[5e14,0]` i `Gmix=[1.5e15,0]` na F;
+- próbki pobierane z zapisanych tekstowych OVF, a nie z `getvalue` na
+  magnetycznej siatce F.
+
+To rozróżnienie jest fizycznie istotne: obecność kodu `setcurrentdensity` nie
+oznacza rozwiązania warunków kontaktowych ani transferu momentu przez `Gi/Gmix`.
+
+### 7.2.2. Tożsamość i wynik
+
+```text
+artifact=/zfn2/mateuszz/git/fullmag/boris-build/reports/runner-coarse-3
+schema=fullmag.boris_she_nf.v1
+source_manifest_file_sha256=ed1ca167fae571b8106b79ed86347de4a6509647db87716c8f6f1559c890cde6
+binary_sha256=5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997
+image=nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f
+python=3.10.12
+device=cpu, BorisLin -g -1
+resolution=4 x 2 x 2 cells in N and F
+exit=143, accepted only with BORIS_NF_STAGE_COMPLETE and all OVFs
+qualification=diagnostic
+```
+
+Artefakt zawiera `V`, `S`, `Jc`, `Jsx`, `Jsy`, `Jsz` dla obu meshów oraz `Ts` i
+`Tsi` dla F. Przykładowy bilans płaszczyzny `+z` N→F (A/m² po stronie fluxu)
+wynosi:
+
+```text
+Jc_N,z =  2.2184125e1       Jc_F,z =  9.2936051e1
+J_s,N,z = (-5.96e-4, -2.88983e5, -2.50e-3)
+J_s,F,z = ( 4.14985e1,  1.00e-3,  6.3953e-2)
+J_s,N,z - J_s,F,z = (-4.14991e1, -2.88983e5, -6.6453e-2)
+Tsi_plane * dz_F = (-2.54e-4, 1.75365e4, -2.50e-3)
+```
+
+Wartości `charge_closure=-70.75` i `spin_torque_closure=3.065e5` są zapisane
+jako obserwable, nie jako pass/fail. `Tsi` BORIS ma jednostkę `A/(m s)` i jest
+liczone przez ścieżkę interfacial effective-field (`tsi_eff`, `gamma`); proste
+pomnożenie przez `dz` nie jest jeszcze uzgodnioną konwencją arealnego fluxu
+Fullmag. Nie wolno zatem na tym etapie oznaczyć braku zamknięcia jako błędu
+fizyki ani dopasować prefaktora po wykresie.
+
+Reszty w artefakcie mają `interior_cell_count=0` dla siatki `4 x 2 x 2`
+(BORIS eksportuje dwie komórki transportowe w osi z). Zapis `0.0` nie jest
+dowodem zbieżności PDE; jest jawnie oznaczony jako ograniczenie diagnostyczne.
+
+### 7.2.3. Granica bramy
+
+Ten krok zamyka: deterministyczny renderer, parser OVF, mapowanie
+`mu_s=2 De S/(elC MUB_E)`, kontrolę tożsamości managed runtime, artefakt
+`fullmag.boris_she_nf.v1` oraz odtwarzalny N/F smoke z niezerowym polem w F.
+Nie zamyka: porównania z wykonywalnym Fullmag FDM M2, trzech siatek i sweepu
+tolerancji, CPU↔CUDA, N/T/F, zgodności `Tsi` z torque Fullmag ani
+`SHE-BORIS-001`. Capability matrix i `validated_workloads` pozostają bez
+zmian.
+
+## 7.3. Adapter porównawczy Fullmag FDM M2 — wykonanie zablokowane przez bilans (2026-08-03)
+
+Dodano niezależny adapter `scripts/compare_boris_fullmag_she_nf.py` oraz
+runner `scripts/run_fullmag_m2_nf_reference.py`. Builder przechodzi przez
+publiczny Python DSL i ProblemIR, jawnie deklaruje dwie strefy N/F, ten sam
+mesh `4×2×2 + 2`, `Gi/Gmix`, `SHA=iSHA`, `row_major_Q_ia` i wykonanie
+`FDM/CPU/double/strict`. Korekta zgodności z rendererem BORIS obejmuje także
+`P_F=0.4`, `SHA_F=0.10` i brak nieudokumentowanych reakcji bulk `lambda_J`/
+`lambda_phi` po stronie F.
+
+Porównywarka liczy osobno `V`, mapowane `mu_s`, `J_c`, dziewięć składowych
+`Q_ia`, absorbowany spin flux i oba residuale. Nie porównuje torque, gdy
+konwencje są różne: BORIS `Tsi` ma `A/(m s)` i pochodzi ze ścieżki
+`tsi_eff/gamma`, Fullmag publikuje Gilbert source `1/s`; te observables są
+oznaczane `incomparable`, a pozostałe metryki pozostają diagnostyczne.
+
+Świeży launcher Fullmag zbudowano repozytoryjną recepturą `just` w trybie
+`cuda-fem-gpu`; binarium `.fullmag/local/bin/fullmag` uruchomiono z explicit
+output directory na `/zfn2/mateuszz/git/fullmag`. Próba
+`fullmag-m2-nf-coarse-run19` nie opublikowała artefaktu, ponieważ runtime
+odrzucił stan przed commit:
+
+```text
+Step 0: coupled charge-spin solve: M2 physical balance gate rejected
+without committing state: charge=7.139977e-6, spin=5.450726e-8
+```
+
+Runner zachował `problem_ir.json`, `request.json` oraz pełne stdout/stderr i
+zwrócił `not_run`; nie utworzono sztucznego pola Fullmag. To jest konkretna
+blokada numeryczna referencji M2 dla cienkiej komórki `1e-7×1e-7×1e-9 m`, a
+nie porównanie wyników ani dowód niezgodności fizyki z BORIS. Pełne dane i
+status bram znajdują się w
+`boris-nf-she-v1/README.md`.
+
+Dodano także fail-closed orchestration `scripts/run_boris_fullmag_she_nf_matrix.py`
+i recepturę `just verify-boris-fullmag-she-nf`. Kontrakt wymaga trzech siatek,
+dwóch tolerancji, unikalnych identyfikatorów, skończonych metryk i monotonicznej
+redukcji błędu; przy `not_run` macierz zapisuje dokładny `failure.json`, ale
+walidator odmawia statusu `diagnostic_match`. Test kontraktu macierzy daje
+`4 passed`; sama macierz nie została uruchomiona, ponieważ pojedynczy
+Fullmag M2 coarse run zatrzymuje się na physical-balance gate.
+
+Do zamknięcia pozostają: niezależny próg/skalowanie physical balance z
+uzasadnieniem, wspólne trzy siatki i sweep tolerancji, zgodność `Tsi` z torque,
+CPU↔CUDA oraz N/T/F. `SHE-BORIS-001`, capability matrix i
+`validated_workloads` pozostają bez zmian.
+
 ## 8. Źródła i mapowanie symboli
 
 | Twierdzenie | Źródło |

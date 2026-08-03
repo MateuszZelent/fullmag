@@ -12,6 +12,7 @@ from verify_boris_nf_interface import (
     ScenarioParameters,
     compute_field_residuals,
     compute_interface_balance,
+    compute_interface_slice,
     map_boris_spin_to_fullmag_mu_s,
     read_text_ovf,
     validate_boris_artifact,
@@ -124,6 +125,43 @@ def test_interface_balance_rejects_wrong_normal_sign() -> None:
                 torque=(0.0, 0.0, 0.0),
             )
         )
+
+
+def test_interface_slice_uses_normal_flux_and_tsi_thickness() -> None:
+    shape = (2, 1, 2)
+    grid = (0.0, 0.0, 0.0)
+    step = (1.0, 1.0, 0.5)
+
+    def vector(path: str, values: tuple[tuple[float, float, float], ...]) -> OvfField:
+        return OvfField(Path(path), shape, grid, step, 3, values, path)
+
+    zeros = tuple((0.0, 0.0, 0.0) for _ in range(4))
+    normal = MeshFields(
+        vector("n_jc", ((0.0, 0.0, 10.0),) * 4),
+        vector("n_jsx", ((0.0, 0.0, 1.0),) * 4),
+        vector("n_jsy", ((0.0, 0.0, 2.0),) * 4),
+        vector("n_jsz", ((0.0, 0.0, 3.0),) * 4),
+        vector("n_s", zeros),
+    )
+    ferromagnet = MeshFields(
+        vector("f_jc", ((0.0, 0.0, 8.0),) * 4),
+        vector("f_jsx", ((0.0, 0.0, 0.5),) * 4),
+        vector("f_jsy", ((0.0, 0.0, 1.0),) * 4),
+        vector("f_jsz", ((0.0, 0.0, 1.5),) * 4),
+        vector("f_s", zeros),
+    )
+    torque = vector(
+        "f_tsi",
+        ((4.0, 5.0, 6.0), (4.0, 5.0, 6.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+    )
+
+    interface = compute_interface_slice(normal, ferromagnet, torque)
+
+    assert interface.normal_flux == (1.0, 2.0, 3.0)
+    assert interface.ferromagnet_flux == (0.5, 1.0, 1.5)
+    assert interface.torque == (2.0, 2.5, 3.0)
+    assert interface.charge_flux == 10.0
+    assert interface.ferromagnet_charge_flux == 8.0
 
 
 def test_artifact_validation_is_fail_closed(tmp_path: Path) -> None:
