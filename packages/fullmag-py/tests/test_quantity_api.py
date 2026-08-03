@@ -132,6 +132,12 @@ class QuantityApiTests(unittest.TestCase):
                         "demag_solver_setup_wall_time_ns": 7,
                         "demag_solver_apply_wall_time_ns": 15,
                         "demag_solver_setup_reused": True,
+                        "demag_hypre_wait_in_enqueue_wall_time_ns": 2,
+                        "demag_hypre_host_api_wall_time_ns": 3,
+                        "demag_hypre_device_elapsed_time_ns": 4,
+                        "demag_hypre_wait_out_enqueue_wall_time_ns": 5,
+                        "demag_hypre_event_wait_count": 6,
+                        "demag_hypre_timed_solve_count": 1,
                         "demag_recover_wall_time_ns": 33,
                         "demag_energy_wall_time_ns": 4,
                         "demag_solves": 1,
@@ -154,6 +160,12 @@ class QuantityApiTests(unittest.TestCase):
         self.assertEqual(step.demag_solver_setup_wall_time_ns, 7)
         self.assertEqual(step.demag_solver_apply_wall_time_ns, 15)
         self.assertTrue(step.demag_solver_setup_reused)
+        self.assertEqual(step.demag_hypre_wait_in_enqueue_wall_time_ns, 2)
+        self.assertEqual(step.demag_hypre_host_api_wall_time_ns, 3)
+        self.assertEqual(step.demag_hypre_device_elapsed_time_ns, 4)
+        self.assertEqual(step.demag_hypre_wait_out_enqueue_wall_time_ns, 5)
+        self.assertEqual(step.demag_hypre_event_wait_count, 6)
+        self.assertEqual(step.demag_hypre_timed_solve_count, 1)
         self.assertEqual(step.demag_recover_wall_time_ns, 33)
         self.assertEqual(step.demag_energy_wall_time_ns, 4)
         self.assertEqual(step.demag_solves, 1)

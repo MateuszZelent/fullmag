@@ -166,6 +166,11 @@ class FemDemagMeshAirboxConvergenceTests(unittest.TestCase):
 
         self.assertEqual(summary["status"], "pass")
         self.assertEqual(summary["qualification_status"], "no_go")
+        self.assertEqual(summary["validation_state"], "box_trend_regression")
+        self.assertEqual(
+            summary["promotion_policy"],
+            "supplemental_only_never_analytic_qualification",
+        )
         self.assertEqual(
             summary["mesh_observable_convergence"]["status"],
             "trend_only_nonqualifying",

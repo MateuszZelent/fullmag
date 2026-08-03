@@ -20898,6 +20898,36 @@
               "null"
             ]
           },
+          "demag_hypre_device_elapsed_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_hypre_event_wait_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_hypre_host_api_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_hypre_timed_solve_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_hypre_wait_in_enqueue_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_hypre_wait_out_enqueue_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "demag_preconditioner": {
             "type": [
               "string",
@@ -21079,6 +21109,46 @@
             "minimum": 0,
             "type": "integer"
           },
+          "rk_transaction_capture_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_capture_device_elapsed_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_capture_host_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_commit_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_restore_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_restore_device_elapsed_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_restore_host_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rk_transaction_rollback_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "sample_kinds": {
             "items": {
               "$ref": "#/components/schemas/SolverProfileSampleKindResource"
@@ -21127,10 +21197,26 @@
             "format": "double",
             "type": "number"
           },
+          "timing_semantics": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfileTimingSemanticResource"
+            },
+            "type": "array"
+          },
           "total_ns": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolverTraceResource"
+              }
+            ]
           },
           "unprofiled_gap_per_step_ns": {
             "format": "int64",
@@ -21209,6 +21295,31 @@
           "requested_omp_threads",
           "effective_omp_threads",
           "thread_mode"
+        ],
+        "type": "object"
+      },
+      "SolverProfileTimingSemanticKindResource": {
+        "enum": [
+          "exclusive",
+          "inclusive",
+          "overlapped",
+          "enqueue_only",
+          "device_elapsed"
+        ],
+        "type": "string"
+      },
+      "SolverProfileTimingSemanticResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SolverProfileTimingSemanticKindResource"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
         ],
         "type": "object"
       },
@@ -21569,6 +21680,54 @@
         ],
         "type": "object"
       },
+      "SolverTraceClockDomainResource": {
+        "enum": [
+          "server_monotonic",
+          "browser_performance"
+        ],
+        "type": "string"
+      },
+      "SolverTraceCompletenessResource": {
+        "enum": [
+          "server_only",
+          "complete",
+          "partial"
+        ],
+        "type": "string"
+      },
+      "SolverTraceIdResource": {
+        "properties": {
+          "accepted_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_generation": {
+            "type": "string"
+          },
+          "sample_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "run_generation",
+          "stage_sequence",
+          "accepted_step",
+          "sample_sequence"
+        ],
+        "type": "object"
+      },
       "SpinTorqueCommitResource": {
         "properties": {
           "committed_scene": {
@@ -21682,6 +21841,89 @@
         "required": [
           "base_revision",
           "resource"
+        ],
+        "type": "object"
+      },
+      "SolverTraceResource": {
+        "properties": {
+          "api_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "completeness": {
+            "$ref": "#/components/schemas/SolverTraceCompletenessResource"
+          },
+          "format": {
+            "type": "string"
+          },
+          "segments": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SolverTraceSegmentResource"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/SolverTraceIdResource"
+          },
+          "unaccounted_browser_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unaccounted_server_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "format",
+          "trace_id",
+          "segments",
+          "completeness",
+          "unaccounted_server_ns",
+          "unaccounted_browser_ns"
+        ],
+        "type": "object"
+      },
+      "SolverTraceSegmentKindResource": {
+        "enum": [
+          "native_to_runner_callback",
+          "runner_callback_to_publisher_enqueue",
+          "publisher_queue",
+          "publisher_apply",
+          "api_revision_visibility",
+          "browser_fetch",
+          "browser_decode_to_commit",
+          "commit_to_animation_frame"
+        ],
+        "type": "string"
+      },
+      "SolverTraceSegmentResource": {
+        "properties": {
+          "clock_domain": {
+            "$ref": "#/components/schemas/SolverTraceClockDomainResource"
+          },
+          "duration_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SolverTraceSegmentKindResource"
+          }
+        },
+        "required": [
+          "kind",
+          "duration_ns",
+          "clock_domain"
         ],
         "type": "object"
       },

@@ -1,0 +1,57 @@
+{
+  "schema_version": "fullmag.fem_llg_t9_managed_gate.v1",
+  "status": "blocked_by_measurement",
+  "source": {
+    "git_commit": "bbbf2c627d5b6cbe27372ceb3f8b7cbf06ace794",
+    "source_snapshot_sha256": "b90fc21010995e796f41497c98b7a7bce0777112c1dbfd654d704dc1998d000b",
+    "worktree_state": "clean"
+  },
+  "recipe": "just verify-fem-llg-time-domain-qualification-production",
+  "runtime": {
+    "container_execution": true,
+    "managed_runtime_manifest_sha256": "20744e2dfe7198b42fd0593fcaec1d755368ca2a46f4c74f34aed3df38b5f339",
+    "exact_managed_runtime_provenance": false,
+    "manifest_schema": 3,
+    "runtime_source_inputs_sha256": "daf75f9ed2e6d126b52bf5e6a0cff2bb6cd37baeedd547982380dd1d430b3984",
+    "runtime_git_commit": "bbbf2c627d5b6cbe27372ceb3f8b7cbf06ace794",
+    "runtime_source_snapshot_sha256": "b90fc21010995e796f41497c98b7a7bce0777112c1dbfd654d704dc1998d000b",
+    "runtime_worktree_state": "clean",
+    "reason": "The managed schema-v3 runtime is now exported and exact, and the CMake qualification rerun passes on the same source snapshot. The qualification JSON itself does not yet embed source/runtime identity and the harness does not execute the exported managed binary, so registry promotion remains fail-closed."
+  },
+  "artifacts": {
+    "cpu": {
+      "path": ".fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json",
+      "sha256": "0193f081c8922b5f0ee251c0cf6a8542e79a72871971616145114bbc97ca19e3",
+      "status": "pass",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "fp64",
+      "integrator": "rk45",
+      "timestep_policies": ["adaptive", "fixed"]
+    },
+    "gpu": {
+      "path": ".fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json",
+      "sha256": "fc31a59970e7afcccf231d1ee889e62deab38efd6f3638369f7eb0746fef45c6",
+      "status": "pass",
+      "backend": "fem",
+      "device": "gpu",
+      "precision": "fp64",
+      "integrator": "rk45",
+      "timestep_policies": ["adaptive", "fixed"]
+    },
+    "parity": {
+      "path": ".fullmag/reports/fem-llg-time-domain-qualification/parity-fp64.json",
+      "sha256": "362e395e8796c433c2bee810db56bafda908cef364170bfe134f76018ce881ac",
+      "status": "pass",
+      "precision": "fp64",
+      "validator": "fem_llg_time_domain_cpu_gpu_parity.v1"
+    }
+  },
+  "promotion": {
+    "registry_status": "unvalidated",
+    "blocked_reasons": [
+      "current managed runtime manifest is missing",
+      "artifact hashes are not yet registered against an exact managed runtime source binding"
+    ]
+  }
+}

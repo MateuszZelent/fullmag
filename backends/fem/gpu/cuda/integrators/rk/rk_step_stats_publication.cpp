@@ -13,8 +13,20 @@
 #include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include <cstddef>
+#include <limits>
 
 namespace fullmag::fem {
+
+namespace {
+
+uint64_t saturating_add(uint64_t lhs, uint64_t rhs)
+{
+    return lhs > std::numeric_limits<uint64_t>::max() - rhs
+        ? std::numeric_limits<uint64_t>::max()
+        : lhs + rhs;
+}
+
+} // namespace
 
 void gpu_rk_publish_final_step_stats(
     Context &ctx,
@@ -107,6 +119,18 @@ void gpu_rk_publish_final_step_stats(
         stats.demag_linear_residual = 0.0;
     }
     fill_step_profiler_timing_stats(ctx, stats);
+    const auto &host_transaction = ctx.stepper.transaction_telemetry;
+    const auto &device_transaction = ctx.gpu_state.rk_transaction_telemetry;
+    stats.rk_transaction_capture_device_elapsed_time_ns =
+        device_transaction.capture_device_elapsed_ns;
+    stats.rk_transaction_capture_bytes = saturating_add(
+        host_transaction.step_transaction_host_snapshot_payload_bytes,
+        device_transaction.capture_bytes);
+    stats.rk_transaction_restore_device_elapsed_time_ns =
+        device_transaction.restore_device_elapsed_ns;
+    stats.rk_transaction_restore_bytes = saturating_add(
+        host_transaction.step_transaction_host_restore_payload_bytes,
+        device_transaction.restore_bytes);
     stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
     stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
     stats.cpu_thread_cap_reason = ctx.cpu_threads.cap_reason;

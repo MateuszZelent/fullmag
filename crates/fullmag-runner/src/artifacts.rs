@@ -1479,11 +1479,16 @@ fn write_solver_diagnostics_artifacts(
     }
 
     let mut accepted = fs::File::create(output_dir.join("solver_steps.csv"))?;
-    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j")?;
+    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j,wall_time_ns,accepted")?;
+    let mut previous_step = None;
     for step in steps {
+        let accepted_step = previous_step
+            .map(|previous| step.step > previous)
+            .unwrap_or(step.step > 0);
+        previous_step = Some(step.step);
         writeln!(
             accepted,
-            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{}",
+            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{},{},{}",
             step.step,
             step.time,
             step.dt,
@@ -1509,6 +1514,8 @@ fn write_solver_diagnostics_artifacts(
             step.accepted_energy_roundoff_bound_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
             step.accepted_energy_delta_upper_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
             step.armijo_increment_rhs_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.wall_time_ns,
+            accepted_step,
         )?;
     }
 
@@ -3481,6 +3488,9 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
     let base_observable = observable
         .split_once('.')
         .map_or(observable, |(base, _)| base);
+    if observable == "m" {
+        return "1";
+    }
     if let Some(spec) = fullmag_quantities::quantity_spec(base_observable) {
         return spec.unit;
     }
@@ -3726,6 +3736,17 @@ mod tests {
         assert!(payload["provenance"].get("transport_modules").is_none());
 
         fs::remove_dir_all(root).expect("remove vector artifact fixture");
+    }
+
+    #[test]
+    fn final_magnetization_artifact_uses_canonical_unit_one() {
+        assert_eq!(field_unit("m"), "1");
+    }
+
+    #[test]
+    fn regional_drive_field_artifact_uses_magnetic_field_units() {
+        assert_eq!(field_unit("H_drive"), "A/m");
+        assert_eq!(field_unit("H_drive.y"), "A/m");
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {

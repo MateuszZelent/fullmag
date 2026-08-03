@@ -45,6 +45,7 @@ pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
 mod solver_profile;
+pub mod solver_trace;
 mod solver_runtime;
 pub mod spin_wave_response;
 pub mod spin_wave_sampling;
@@ -434,6 +435,11 @@ pub use solver_profile::{
     SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
     SolverProfileThreading, SolverProfileTimingSemantic, SolverProfileTimingSemanticKind,
     SolverRateDiagnostics,
+};
+pub use solver_trace::{
+    SolverTrace, SolverTraceClockDomain, SolverTraceCompleteness, SolverTraceId,
+    SolverTraceSegment, SolverTraceSegmentKind, SolverTraceValidationError,
+    SOLVER_TRACE_FORMAT_VERSION,
 };
 pub use timestep_qualification::{
     validation_state_for, TimestepExecutionIdentityKey, TimestepPolicyKind,

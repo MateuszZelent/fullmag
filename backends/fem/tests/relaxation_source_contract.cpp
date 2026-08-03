@@ -1931,11 +1931,9 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
         pgbb_source.find("gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)") !=
                 std::string::npos &&
-            pgbb_source.find("update_stage_completion_from_stats(ctx, out_stats)") !=
-                std::string::npos &&
-            pgbb_source.rfind("gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)") <
-                pgbb_source.find("update_stage_completion_from_stats(ctx, out_stats)"),
-        "native FEM GPU projected-gradient BB accepted steps must update runtime stage completion from finalized native stats");
+            pgbb_source.find("update_stage_completion_from_stats(ctx, out_stats)") ==
+                std::string::npos,
+        "native FEM GPU projected-gradient BB must leave stage-completion updates to the finalized native stats publisher");
     const std::size_t pgbb_accepted_finalize =
         pgbb_source.find("if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason))");
     const std::size_t pgbb_accepted_finalize_restore =
@@ -1961,9 +1959,10 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 pgbb_source.find("ctx.relaxation.accepted_steps += 1") &&
             pgbb_accepted_finalize != std::string::npos &&
             pgbb_accepted_finalize_restore != std::string::npos &&
-            pgbb_stage_completion_update != std::string::npos &&
+            pgbb_stage_completion_update == std::string::npos &&
             pgbb_accepted_finalize < pgbb_accepted_finalize_restore &&
-            pgbb_accepted_finalize_restore < pgbb_stage_completion_update,
+            pgbb_source.find("context_update_stage_completion_from_stats(ctx, stats)") ==
+                std::string::npos,
         "native FEM GPU projected-gradient BB must roll back device state and step metadata if accepted-step stats finalization fails");
     check(
         kernels_source.find("GPU CUDA projected-gradient BB relaxation kernels source contract") !=
@@ -2418,11 +2417,9 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
     check(
         ncg_source.find("gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)") !=
                 std::string::npos &&
-            ncg_source.find("update_stage_completion_from_stats(ctx, out_stats)") !=
-                std::string::npos &&
-            ncg_source.rfind("gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)") <
-                ncg_source.find("update_stage_completion_from_stats(ctx, out_stats)"),
-        "native FEM GPU nonlinear-CG accepted steps must update runtime stage completion from finalized native stats");
+            ncg_source.find("update_stage_completion_from_stats(ctx, out_stats)") ==
+                std::string::npos,
+        "native FEM GPU nonlinear-CG must leave stage-completion updates to the finalized native stats publisher");
     check(
         ncg_source.find("#include \"cpu/mfem/runtime/stage_completion.hpp\"") !=
                 std::string::npos &&

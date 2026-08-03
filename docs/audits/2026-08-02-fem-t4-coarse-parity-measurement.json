@@ -1,0 +1,166 @@
+{
+  "schema": "fullmag.fem.relaxation_equilibrium_parity_measurement.v1",
+  "measurement": {
+    "date": "2026-08-02",
+    "scope": "coarse",
+    "repeat_count": 1,
+    "torque_tolerance_apm": 8000.0,
+    "demag_solver": "CG",
+    "demag_preconditioner": "AMG",
+    "demag_rtol": 1e-12,
+    "demag_amg_profile": {
+      "relax_type": 6,
+      "coarsening": 8,
+      "interpolation": 6,
+      "aggressive_coarsening": 1
+    },
+    "solver_mesh_signature_schema": "fullmag.fem.solver_mesh_signature.v2",
+    "solver_mesh_signature": "4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6",
+    "runtime_manifest_sha256": "2c628f7147dbc6ec5ecbe66325b00bb72c79b85523b4c158ce5cf536c75fd8b9",
+    "runtime_source_snapshot_sha256": "47d219860d5fafb6651463997eb13348ab10420f6568d15a69a71f4c53544021",
+    "runtime_git_commit": "67268171221e2ed3bc4cf96b4dd1977bdb1b6c5e",
+    "runtime_git_tree": "d166d692bd15cd5e386efa66cf57030debe3ed5e",
+    "runtime_source_inputs_sha256": "daf75f9ed2e6d126b52bf5e6a0cff2bb6cd37baeedd547982380dd1d430b3984",
+    "runtime_worktree_state": "clean",
+    "runtime_compute_capability": "8.9",
+    "runtime_hypre_version": "3.1.0"
+  },
+  "rows": [
+    {
+      "backend": "fem_cpu",
+      "scenario": "box500_airbox_exchange_only",
+      "relaxation_algorithm": "projected_gradient_bb",
+      "executed_steps": 0,
+      "accepted_steps_to_tolerance": 0,
+      "time_to_tolerance_seconds": 0.0,
+      "final_torque_apm": 0.00020690142601946656,
+      "resolved_relaxation_direction_policy": "exchange_plus_mass_tangent_gradient"
+    },
+    {
+      "backend": "fem_gpu",
+      "scenario": "box500_airbox_exchange_only",
+      "relaxation_algorithm": "projected_gradient_bb",
+      "executed_steps": 0,
+      "accepted_steps_to_tolerance": 0,
+      "time_to_tolerance_seconds": 0.0,
+      "final_torque_apm": 0.00020690142601945537,
+      "resolved_relaxation_direction_policy": "device_tangent_gradient"
+    },
+    {
+      "backend": "fem_cpu",
+      "scenario": "box500_airbox_exchange_only",
+      "relaxation_algorithm": "nonlinear_cg",
+      "executed_steps": 3,
+      "accepted_steps_to_tolerance": 1,
+      "time_to_tolerance_seconds": 0.000521431,
+      "final_torque_apm": 0.00017666580612978424,
+      "resolved_relaxation_direction_policy": "exchange_plus_mass_tangent_gradient"
+    },
+    {
+      "backend": "fem_gpu",
+      "scenario": "box500_airbox_exchange_only",
+      "relaxation_algorithm": "nonlinear_cg",
+      "executed_steps": 1,
+      "accepted_steps_to_tolerance": 1,
+      "time_to_tolerance_seconds": 0.010100262,
+      "final_torque_apm": 0.00015656141992002,
+      "resolved_relaxation_direction_policy": "device_tangent_gradient"
+    },
+    {
+      "backend": "fem_cpu",
+      "scenario": "box500_airbox_exchange_demag",
+      "relaxation_algorithm": "projected_gradient_bb",
+      "executed_steps": 4,
+      "accepted_steps_to_tolerance": 4,
+      "time_to_tolerance_seconds": 0.110422293,
+      "demag_solve_count_total": 10,
+      "final_torque_apm": 6795.734135816167,
+      "final_e_total_j": -5.34746747447627e-18,
+      "final_e_ex_j": 5.206174163095451e-21,
+      "final_e_demag_j": 5.6260872343884305e-18,
+      "final_e_ext_j": -1.0978760883027795e-17,
+      "resolved_relaxation_direction_policy": "exchange_plus_mass_tangent_gradient"
+    },
+    {
+      "backend": "fem_gpu",
+      "scenario": "box500_airbox_exchange_demag",
+      "relaxation_algorithm": "projected_gradient_bb",
+      "executed_steps": 5,
+      "accepted_steps_to_tolerance": 5,
+      "time_to_tolerance_seconds": 0.154105299,
+      "demag_solve_count_total": 13,
+      "final_torque_apm": 6411.004594821448,
+      "final_e_total_j": -5.3076906014009156e-18,
+      "final_e_ex_j": 1.976102180415395e-21,
+      "final_e_demag_j": 5.173820753813706e-18,
+      "final_e_ext_j": -1.0483487457395037e-17,
+      "resolved_relaxation_direction_policy": "device_tangent_gradient"
+    },
+    {
+      "backend": "fem_cpu",
+      "scenario": "box500_airbox_exchange_demag",
+      "relaxation_algorithm": "nonlinear_cg",
+      "executed_steps": 34,
+      "accepted_steps_to_tolerance": 32,
+      "time_to_tolerance_seconds": 0.748799074,
+      "demag_solve_count_total": 64,
+      "final_torque_apm": 7299.228415416269,
+      "final_e_total_j": -5.2759538834578726e-18,
+      "final_e_ex_j": 4.447906077578568e-21,
+      "final_e_demag_j": 4.611544044109818e-18,
+      "final_e_ext_j": -9.891945833645269e-18,
+      "resolved_relaxation_direction_policy": "exchange_plus_mass_tangent_gradient"
+    },
+    {
+      "backend": "fem_gpu",
+      "scenario": "box500_airbox_exchange_demag",
+      "relaxation_algorithm": "nonlinear_cg",
+      "executed_steps": 33,
+      "accepted_steps_to_tolerance": 32,
+      "time_to_tolerance_seconds": 0.415420328,
+      "demag_solve_count_total": 33,
+      "final_torque_apm": 7536.288757156934,
+      "final_e_total_j": -5.265851669254717e-18,
+      "final_e_ex_j": 4.340883417607122e-21,
+      "final_e_demag_j": 4.549111063969946e-18,
+      "final_e_ext_j": -9.81930361664227e-18,
+      "resolved_relaxation_direction_policy": "device_tangent_gradient"
+    }
+  ],
+  "comparisons": [
+    {
+      "scenario": "box500_airbox_exchange_only",
+      "relaxation_algorithm": "projected_gradient_bb",
+      "passed": true,
+      "max_m_component_difference": 1.1102230246251565e-16
+    },
+    {
+      "scenario": "box500_airbox_exchange_only",
+      "relaxation_algorithm": "nonlinear_cg",
+      "passed": true,
+      "max_m_component_difference": 0.0
+    },
+    {
+      "scenario": "box500_airbox_exchange_demag",
+      "relaxation_algorithm": "projected_gradient_bb",
+      "passed": false,
+      "max_m_component_difference": 0.06503967931218391,
+      "energy_total_difference_j": 3.97769e-20,
+      "energy_exchange_difference_j": 3.23007e-21,
+      "energy_demag_difference_j": 4.52266e-19,
+      "energy_external_difference_j": 4.95273e-19
+    },
+    {
+      "scenario": "box500_airbox_exchange_demag",
+      "relaxation_algorithm": "nonlinear_cg",
+      "passed": false,
+      "max_m_component_difference": 0.005650088291763944,
+      "energy_total_difference_j": 1.01022e-20,
+      "energy_exchange_difference_j": 1.07023e-22,
+      "energy_demag_difference_j": 6.2433e-20,
+      "energy_external_difference_j": 7.26422e-20
+    }
+  ],
+  "decision": "blocked_by_measurement",
+  "failure_boundary": "CPU/GPU direct-minimizer direction realizations differ before demag residual parity: CPU exchange-plus-mass tangent gradient versus GPU raw device tangent gradient. The 1e-9 equilibrium gate remains unmet; no tolerance or comparator weakening is allowed."
+}

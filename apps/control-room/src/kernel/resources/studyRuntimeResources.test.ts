@@ -229,6 +229,19 @@ function statusWith({
 }
 
 describe("study runtime command resource bundles", () => {
+  it("measures the sampled solver trace at load and commit without polling", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const profileHook = source.slice(
+      source.indexOf("export function useSolverProfileResource"),
+      source.indexOf("export function useStudyRuntimeCommandResourceData"),
+    );
+
+    expect(profileHook).toContain("solverTraceObserver.observeProfileLoad");
+    expect(profileHook).toContain("solverTraceObserver.observeProfileCommit");
+    expect(profileHook).toContain("solverTraceObserver.mergeProfile");
+    expect(profileHook).not.toContain("setInterval");
+  });
+
   it("selects only command-control session status fields for always-mounted controls", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const controlHook = source.slice(

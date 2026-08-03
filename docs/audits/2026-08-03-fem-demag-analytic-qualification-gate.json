@@ -1,0 +1,6 @@
+{
+  "schema_version": "fullmag.fem_demag_analytic_qualification.v1",
+  "qualified": false,
+  "decision": "no_go",
+  "reason": "missing complete managed artifact: .fullmag/reports/fem-demag-analytic-qualification/analytic-qualification.v1.json"
+}

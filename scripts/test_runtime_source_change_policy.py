@@ -34,6 +34,9 @@ def test_non_runtime_path_policy_covers_docs_ci_and_packaging_helpers() -> None:
     assert is_non_runtime_path("scripts/capture_source_snapshot_identity.py")
     assert is_non_runtime_path("justfile")
     assert is_non_runtime_path("scripts/public_docs_information_architecture.py")
+    assert is_non_runtime_path(
+        "examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json"
+    )
     assert not is_non_runtime_path("backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu")
 
 

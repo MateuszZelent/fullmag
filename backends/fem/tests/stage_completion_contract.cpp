@@ -448,13 +448,11 @@ void torque_confirmation_pending_is_torque_only_and_bounded() {
     check(
         fullmag::fem::relaxation_torque_confirmation_pending(ctx, 2.0),
         "third low-torque confirmation remains pending at tolerance");
-
     ctx.stage_completion.relax_torque_confirmation_count =
         fullmag::fem::RELAX_TORQUE_CONFIRMATION_STEPS;
     check(
         !fullmag::fem::relaxation_torque_confirmation_pending(ctx, 1.5),
         "completed torque confirmations are not pending");
-
     fullmag::fem::Context sequence;
     sequence.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
     sequence.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
@@ -475,7 +473,6 @@ void torque_confirmation_pending_is_torque_only_and_bounded() {
     check(
         sequence.stage_completion.snapshot.has_reason != 0,
         "the final zero-dt torque confirmation completes the stage");
-
     ctx.stage_completion.relax_torque_confirmation_count = 1;
     check(
         !fullmag::fem::relaxation_torque_confirmation_pending(ctx, 2.0 + 1.0e-12),

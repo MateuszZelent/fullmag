@@ -312,6 +312,26 @@ verify-fem-relaxation-source-contract:
 verify-fem-solver-optimization-ledger:
     python3 scripts/validate_fem_solver_optimization_ledger.py docs/audits/2026-07-29-fem-solver-optimization-remediation-ledger.md
 
+# T14 source/API trace contract.  The managed browser smoke remains a separate
+# measurement gate; this recipe proves the bounded server model, API mapping,
+# publisher propagation and browser observer units without inventing a runtime
+# or GPU performance result when browser dependencies are unavailable.
+verify-fem-solver-trace-contract:
+    PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q scripts/test_validate_fem_solver_trace.py --capture=sys
+    CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-solver-trace-contract CARGO_INCREMENTAL=0 cargo test -q -p fullmag-runner solver_trace --lib
+    CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-solver-trace-contract CARGO_INCREMENTAL=0 cargo test -q -p fullmag-cli --bin fullmag trace --
+    CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-solver-trace-contract CARGO_INCREMENTAL=0 cargo test -q -p fullmag-api --bin fullmag-api trace --
+    if [ -d apps/control-room/node_modules ]; then \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      $PNPM_CMD --dir apps/control-room exec vitest run \
+        src/kernel/diagnostics/solverTrace.test.ts \
+        src/kernel/resources/studyRuntimeResources.test.ts; \
+    else \
+      echo "browser observer tests not run: apps/control-room/node_modules is unavailable" >&2; \
+    fi
+
 verify-fem-demag-amg-policy-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_demag_amg_policy_has_one_owner_and_effective_abi_provenance -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu artifacts::tests::demag_profile_metadata_includes_timing_breakdown -- --exact --nocapture && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-fem-sys --features build-native tests::regional_field_drive_ffi_layout_matches_native_runtime -- --exact --nocapture'
@@ -327,7 +347,7 @@ verify-fem-time-domain-native-contract:
     python3 scripts/check_llg_time_domain_contract_docs.py
     docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mesh_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_rk_guard_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target cargo test -p fullmag-fem-sys --lib'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mesh_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_rk_transaction_fault_injection_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_rk_guard_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_rk_transaction_fault_injection_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target cargo test -p fullmag-fem-sys --lib'
 
 verify-fem-mesh-runner-abi-contract:
     docker compose --profile fem-gpu run --rm \
@@ -2651,21 +2671,27 @@ verify-fem-relaxation-equilibrium-parity:
     TMPDIR=/tmp/fullmag-fem-t4-test-tmp PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q scripts/test_validate_fem_relaxation_equilibrium_parity.py --capture=sys
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/fem-relaxation-equilibrium-parity
-    scope="${FULLMAG_EQUILIBRIUM_SCOPE:-coarse,medium,fine}"; \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
+      scope="${FULLMAG_EQUILIBRIUM_SCOPE:-coarse,medium,fine}"; \
       repeat="${FULLMAG_EQUILIBRIUM_REPEAT:-5}"; \
       timeout="${FULLMAG_EQUILIBRIUM_CASE_TIMEOUT_S:-3600}"; \
       case "$scope" in coarse|coarse,medium,fine) ;; *) echo "FULLMAG_EQUILIBRIUM_SCOPE must be coarse or coarse,medium,fine" >&2; exit 2 ;; esac; \
       case "$repeat" in ''|*[!0-9]*) echo "FULLMAG_EQUILIBRIUM_REPEAT must be a positive integer" >&2; exit 2 ;; esac; \
       test "$repeat" -ge 1; \
       docker compose --profile fem-gpu run --rm \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+        -e FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY=raw_tangent_gradient \
         -e FULLMAG_GMSH_THREADS=1 \
         fem-gpu bash -lc 'cd /workspace && \
           python3 scripts/analysis/fem_gpu_benchmark.py \
             --equilibrium-suite examples/assets/fem_performance/equilibrium_qualification_suite_v1.json \
             --meshes '"$scope"' \
-            --scenarios exchange_only,exchange_demag \
+            --scenarios box500_airbox_exchange_only,box500_airbox_exchange_demag \
             --relax-algorithms projected_gradient_bb,nonlinear_cg \
             --backends cpu,gpu \
             --demag-solver CG \
@@ -2893,6 +2919,87 @@ calibrate-fem-relaxation-torque-default:
           --summary "$report_dir/calibration_summary.json" \
           --plot "$report_dir/final_torque_vs_step_budget.png"'
 
+# Task 6: the v2 calibration is a full algorithm/physics/mesh/backend matrix.
+# The runtime is mounted explicitly so the CSV provenance cannot silently use
+# a host binary or a stale container copy. A partial scope is diagnostic only
+# and is never allowed to promote a default.
+calibrate-fem-relaxation-torque-default-v2:
+    just ensure-managed-fem-runtime
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    test -f "$runtime_root/manifest.json"; \
+    report_dir=.fullmag/reports/fem-relaxation-torque-calibration-v2; \
+    mkdir -p "$report_dir/mesh-cache"; \
+    docker compose --profile fem-gpu run --rm -T \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+      -e FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu \
+      -e FULLMAG_BENCH_CPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu \
+      -e FULLMAG_TORQUE_CALIBRATION_SCOPE="${FULLMAG_TORQUE_CALIBRATION_SCOPE:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_REPEAT="${FULLMAG_TORQUE_CALIBRATION_REPEAT:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_MESHES="${FULLMAG_TORQUE_CALIBRATION_MESHES:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_SCENARIOS="${FULLMAG_TORQUE_CALIBRATION_SCENARIOS:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_STEP_BUDGETS="${FULLMAG_TORQUE_CALIBRATION_STEP_BUDGETS:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_THREAD_COUNTS="${FULLMAG_TORQUE_CALIBRATION_THREAD_COUNTS:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_DT_S="${FULLMAG_TORQUE_CALIBRATION_DT_S:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_TOLERANCE_APM="${FULLMAG_TORQUE_CALIBRATION_TOLERANCE_APM:-}" \
+      -e FULLMAG_TORQUE_CALIBRATION_CASE_TIMEOUT_S="${FULLMAG_TORQUE_CALIBRATION_CASE_TIMEOUT_S:-}" \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        report_dir=.fullmag/reports/fem-relaxation-torque-calibration-v2; \
+        scope="$FULLMAG_TORQUE_CALIBRATION_SCOPE"; \
+        repeat_count="$FULLMAG_TORQUE_CALIBRATION_REPEAT"; \
+        meshes="$FULLMAG_TORQUE_CALIBRATION_MESHES"; \
+        scenarios="$FULLMAG_TORQUE_CALIBRATION_SCENARIOS"; \
+        steps_list="$FULLMAG_TORQUE_CALIBRATION_STEP_BUDGETS"; \
+        thread_counts="$FULLMAG_TORQUE_CALIBRATION_THREAD_COUNTS"; \
+        dt_s="$FULLMAG_TORQUE_CALIBRATION_DT_S"; \
+        tolerance_apm="$FULLMAG_TORQUE_CALIBRATION_TOLERANCE_APM"; \
+        timeout_s="$FULLMAG_TORQUE_CALIBRATION_CASE_TIMEOUT_S"; \
+        [ -n "$scope" ] || scope=full; \
+        [ -n "$repeat_count" ] || repeat_count=3; \
+        [ -n "$meshes" ] || meshes=coarse,medium,fine; \
+        [ -n "$scenarios" ] || scenarios=box500_airbox_exchange_only,box500_airbox_exchange_demag,box500_airbox_exchange_demag_anis_uniaxial,box500_airbox_exchange_demag_multidomain; \
+        [ -n "$steps_list" ] || steps_list="128 256 512"; \
+        [ -n "$thread_counts" ] || thread_counts=auto; \
+        [ -n "$dt_s" ] || dt_s=1e-14; \
+        [ -n "$tolerance_apm" ] || tolerance_apm=1e-12; \
+        [ -n "$timeout_s" ] || timeout_s=900; \
+        scope_args=""; \
+        if [ "$scope" != full ]; then scope_args="--allow-incomplete-matrix"; fi; \
+        calibration_inputs=""; \
+        for steps in $steps_list; do \
+          python3 scripts/analysis/fem_gpu_benchmark.py \
+            --meshes "$meshes" \
+            --scenarios "$scenarios" \
+            --integrators rk23,rk45 \
+            --relax-algorithms projected_gradient_bb,nonlinear_cg,llg_overdamped \
+            --timestep-policies fixed,adaptive \
+            --backends cpu,gpu \
+            --thread-counts "$thread_counts" \
+            --steps "$steps" \
+            --repeat "$repeat_count" \
+            --dt "$dt_s" \
+            --relax-torque-tolerance-apm "$tolerance_apm" \
+            --case-timeout-s "$timeout_s" \
+            --output "$report_dir/raw-$steps.csv" \
+            --relaxation-torque-calibration-suite examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json \
+            --generated-domain-mesh-cache-dir "$report_dir/mesh-cache" \
+            --reuse-generated-domain-mesh \
+            --require-stable-solver-mesh \
+            --capture-final-magnetization \
+            --require-demag-converged; \
+          calibration_inputs="$calibration_inputs $report_dir/raw-$steps.csv"; \
+        done; \
+        python3 scripts/analysis/calibrate_fem_relaxation_torque_default.py \
+          $calibration_inputs \
+          --suite examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json \
+          --summary "$report_dir/calibration_summary.json" \
+          --plot "$report_dir/final_torque_vs_step_budget.png" \
+          $scope_args; \
+        cp /workspace/.fullmag/runtime/manifest.json "$report_dir/runtime-manifest.json"'
+
 generate-fem-gpu-performance-fixtures:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
     COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
@@ -2914,7 +3021,12 @@ generate-fem-gpu-performance-fixtures:
 # the managed runtime can be regenerated and the strict builder gate passes.
 generate-fem-performance-fixture-v2:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
+      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_GMSH_THREADS=1 \
@@ -2934,14 +3046,18 @@ verify-fem-performance-fixture-v2:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
     test -f examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json
     test -f examples/assets/fem_performance/amg_qualification_suite_v2.json
-    target_slug="$(basename "$PWD" | sed 's/[^A-Za-z0-9._-]/-/g')"; \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu" && test -f "$runtime_root/manifest.json"; \
+      target_slug="$(basename "$PWD" | sed 's/[^A-Za-z0-9._-]/-/g')"; \
       target_digest="$(printf '%s' "$PWD" | sha256sum | cut -c1-64)"; \
       target_dir="/mnt/fullmag-zfn2-native/managed-fem-runtime/${target_slug}-${target_digest}"; \
       test -d "$target_dir" && test -w "$target_dir"; \
       COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -v "$target_dir:/workspace/target" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
         -e FULLMAG_FEM_EXECUTION=cpu \
         fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
           build_dir=/workspace/target/task1-performance-fixture-v2/native; \
@@ -2949,7 +3065,7 @@ verify-fem-performance-fixture-v2:
           cmake --build "$build_dir" --target fem_mixed_p1_contract; \
           LD_LIBRARY_PATH="$build_dir/backends/fem:${LD_LIBRARY_PATH:-}" FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu "$build_dir/backends/fem/fem_mixed_p1_contract"; \
           report_dir=.fullmag/reports/fem-performance-fixture-v2; mkdir -p "$report_dir"; \
-          while IFS=$'\t' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
+          while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
             FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax" \
               python3 scripts/analysis/fem_gpu_benchmark.py \
                 --meshes coarse --scenarios box500_airbox_exchange_demag \
@@ -3296,15 +3412,20 @@ verify-fem-gpu-demag-performance-benchmark:
 verify-fem-hypre-device-timing:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/task-12-hypre-device-timing
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
+      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+      -e FULLMAG_BENCH_GPU_BIN=/workspace/.fullmag/runtime/bin/fullmag-fem-gpu \
       -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
+      -e FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE:-8000.0}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
         report_dir=.fullmag/reports/task-12-hypre-device-timing; \
-        mesh_cache="$report_dir/mesh-cache"; \
-        mkdir -p "$mesh_cache"; \
         for profiler in off on; do \
           if [ "$profiler" = on ]; then profile=1; profile_args=(--require-gpu-phase-timings); else profile=0; profile_args=(); fi; \
           FULLMAG_FEM_STEP_PROFILE="$profile" python3 scripts/analysis/fem_gpu_benchmark.py \
@@ -3326,8 +3447,7 @@ verify-fem-hypre-device-timing:
             --repeat 1 \
             --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
             --gpu-warmup \
-            --reuse-generated-domain-mesh \
-            --generated-domain-mesh-cache-dir "$mesh_cache" \
+            --relaxation-torque-calibration-suite examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json \
             --require-demag-converged \
             --require-zero-strict-gpu-global-sync \
             --require-gpu-strict-residency \
@@ -3502,6 +3622,27 @@ verify-fem-demag-mesh-airbox-convergence:
           --airbox-input 2.0:"$report_dir/airbox-2.0.csv" \
           --repeat "$FULLMAG_BENCH_REPEAT" \
           --output "$report_dir/qualification-summary.json"'
+
+# This is deliberately fail-closed until the managed runtime can emit the
+# prescribed-uniform single-evaluation matrix declared by the suite.  The
+# legacy relaxed-box recipe above remains supplemental trend regression only.
+verify-fem-demag-analytic-qualification artifact=".fullmag/reports/fem-demag-analytic-qualification/analytic-qualification.v1.json":
+    just ensure-managed-fem-runtime
+    just verify-fem-demag-poisson-contract-focused
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 -m pytest -q -s tests/fem_demag_validation/test_acceptance.py scripts/test_validate_fem_demag_analytic_qualification.py scripts/test_validate_fem_demag_mesh_airbox_convergence.py; \
+        report_dir=.fullmag/reports/fem-demag-analytic-qualification; \
+        mkdir -p "$report_dir"; \
+        python3 scripts/capture_source_snapshot_identity.py --repo-root /workspace --output "$report_dir/current-source-identity.v1.json"; \
+        test -f .fullmag/runtimes/fem-gpu-host/manifest.json; \
+        python3 scripts/validate_fem_demag_analytic_qualification.py \
+          --suite examples/assets/fem_demag_analytic_qualification_suite_v1.json \
+          --artifact "{{artifact}}" \
+          --expected-source-identity "$report_dir/current-source-identity.v1.json" \
+          --expected-runtime-manifest .fullmag/runtimes/fem-gpu-host/manifest.json \
+          --output .fullmag/reports/fem-demag-analytic-qualification/summary.v1.json'
 
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \
@@ -4645,18 +4786,25 @@ capture-fem-gpu-nsight:
           exit 2; \
       fi; \
       FULLMAG_ENABLE_NVTX=1 just rebuild-fem-runtime; \
+      runtime_root="$(readlink -f "$active")"; \
+      test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+      test -f "$runtime_root/manifest.json"; \
       if ! docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only --runtime-root /workspace/.fullmag/runtime'; then \
           echo "status=unavailable: Nsight preflight failed in rebuilt managed fem-gpu fixture image" >&2; \
           exit 2; \
       fi; \
       docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
+        -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py'
+        -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --runtime-root /workspace/.fullmag/runtime'
 
 # Build and export one immutable, hash-addressed HYPRE memory-strategy bundle.
 # The exporter atomically selects the resulting bundle as fem-gpu-host only

@@ -5722,6 +5722,7 @@ fn execute_native_fem(
     }
 
     let latest_stats: Option<StepStats>;
+    let terminal_stats: Option<StepStats>;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let backend_completion: Option<fullmag_ir::StageCompletionIR>;
     let last_preview_revision: Option<u64> = None;
@@ -5744,6 +5745,7 @@ fn execute_native_fem(
             last_preview_revision,
         )?;
         latest_stats = outcome.latest_stats;
+        terminal_stats = outcome.terminal_stats;
         backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
@@ -5776,6 +5778,7 @@ fn execute_native_fem(
             last_preview_revision,
         )?;
         latest_stats = outcome.latest_stats;
+        terminal_stats = None;
         backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
@@ -5795,6 +5798,7 @@ fn execute_native_fem(
         steps,
         crate::fem::relax::finalize::NativeFemRelaxationFinalization {
             latest_stats,
+            terminal_stats,
             backend_completion,
             cancelled,
             paused,

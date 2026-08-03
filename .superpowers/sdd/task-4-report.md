@@ -1,3 +1,165 @@
+# T4 — same-tolerance equilibrium parity: direction-contract root cause
+
+Status: **BLOCKED**
+
+Date: 2026-08-02
+
+## Scope and decision
+
+The current coarse managed measurement is a real equilibrium-parity failure,
+not a threshold or terminal-artifact defect.  The strict `1e-9` final-
+magnetization envelope remains unchanged.  No native runtime rebuild or device
+run was started in this investigation.
+
+The smallest physical root cause is an unmatched direct-minimizer direction
+operator:
+
+- CPU PG-BB and NCG build `g = -P_m H_eff`, then apply the native MFEM
+  exchange-plus-mass preconditioner `(M + alpha K)^{-1} M g`, re-projecting the
+  result to the tangent plane before line search and (for NCG) PR+ update.
+- GPU PG-BB and NCG build only the raw device `g = -P_m H_eff`.  The CUDA NCG
+  source explicitly documents that it is unpreconditioned and lacks the CPU
+  exchange-mass solve.  The GPU PG-BB path likewise feeds its raw tangent
+  gradient directly into retraction and BB curvature.
+
+This makes CPU and GPU different algorithms before the demag field is used for
+the first search direction.  `exchange_only` passing does not disprove it: the
+coarse fixture is already below the torque target in PG-BB and reaches it in a
+near-trivial NCG path.  The exchange+demag cases activate the differing search
+directions and fail the final-state comparator.
+
+## Evidence
+
+`docs/audits/2026-08-02-fem-t4-coarse-parity-measurement.json` is a clean
+managed measurement with the same solver mesh signature
+`4831e3b71f597ef03933e82c14e959b412872c92a3b9258363b1c0e3cb467ce6`, FP64,
+CG/AMG demag at `rtol=1e-12`, and torque target `8000 A/m`.
+
+| Case | CPU direction policy | GPU direction policy | max component difference |
+|---|---|---|---:|
+| exchange-only / PG-BB | exchange-plus-mass | raw device tangent | `1.1102230246251565e-16` |
+| exchange-only / NCG | exchange-plus-mass | raw device tangent | `0.0` |
+| exchange+demag / PG-BB | exchange-plus-mass | raw device tangent | `0.06503967931218391` |
+| exchange+demag / NCG | exchange-plus-mass | raw device tangent | `0.005650088291763944` |
+
+The failed differences exceed the required `1e-9` bound by approximately
+`6.5e7` and `5.7e6` respectively.  Energy terms drift with the final state;
+this investigation found no evidence that a demag residual tolerance change is
+the first cause.
+
+## Traced implementation boundary
+
+CPU owner:
+
+- `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` defines
+  `exchange_mass_preconditioned_gradient`: it assembles/reuses `M + alpha K`,
+  applies `M g`, solves each component, and projects the result tangent.
+- `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp` uses that result
+  before forming the PG-BB descent direction.
+- `backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp` uses it for both current
+  and accepted gradients, including the PR+ direction update.
+
+GPU owner:
+
+- `backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu` constructs raw
+  `-P_m H_eff` in `tangent_gradient_norm_kernel` and sends it to the PG-BB
+  step and curvature kernels.
+- `backends/fem/gpu/cuda/relaxation/pgbb.cpp` has no GPU exchange-mass solve
+  between raw-gradient construction and the line search.
+- `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` documents its
+  unpreconditioned realization and directly uses the raw gradient for direction
+  preparation and PR+ updates.
+- `scripts/analysis/fem_gpu_benchmark.py` faithfully publishes the two
+  different policies; it is not inventing the mismatch.
+
+## RED → GREEN guard
+
+I added a narrow qualification guard, not a claimed physics fix:
+
+- `scripts/test_validate_fem_relaxation_equilibrium_parity.py` now constructs a
+  converged same-mesh pair whose only difference is the direction policy and
+  requires rejection.
+- `scripts/validate_fem_relaxation_equilibrium_parity.py` now requires direct
+  minimizer rows to declare the same direction policy; a missing or raw GPU
+  policy paired with the CPU policy produces an explicit fail-closed failure.
+  The guard does not hardcode one future shared implementation.
+
+RED evidence before the guard:
+
+```text
+1 failed, 25 passed, 376 deselected
+test_comparator_rejects_different_direction_contracts
+comparison.passed was True for CPU exchange-plus-mass and GPU raw tangent
+```
+
+GREEN evidence after the guard:
+
+```text
+28 passed, 376 deselected
+```
+
+## Verification
+
+The requested focused command initially hit an unrelated pytest capture-file
+failure before collection (`FileNotFoundError` while pytest truncates its
+capture temporary file).  Re-running the identical test selection with
+`--capture=no` avoided that external capture issue and produced the RED and
+GREEN evidence above:
+
+```text
+python3 -m pytest --capture=no -q \
+  scripts/test_validate_fem_relaxation_equilibrium_parity.py \
+  scripts/test_validate_fem_relaxation_runtime_log.py \
+  -k 'equilibrium or time_to_tolerance'
+```
+
+Before deciding whether to run runtime proof, process inspection found an
+unrelated active `just verify-fdm-oersted-native-contract` build.  No active
+T4 FEM runtime export, rebuild, benchmark, or parity recipe was found.  I did
+not start a competing managed build/run.
+
+## Required follow-up to unblock T4
+
+The physics fix is not safe as a one-file change.  CUDA needs a device-resident
+counterpart to the CPU operator, applied with the same clamped per-step
+`alpha`:
+
+```text
+p = P_m (M + alpha K)^-1 M (-P_m H_eff)
+```
+
+For NCG, the accepted preconditioned gradient must also feed the same PR+
+formula as the CPU path.  The implementation needs dedicated GPU sparse-CG
+ownership, allocation/preflight, convergence diagnostics, active-node/periodic
+semantics, and first-divergence telemetry.  It must be accompanied by a
+per-accepted-step CPU/GPU direction comparison on exchange+demag before a
+managed runtime rebuild.  Only after confirming no shared-cache user is active
+should the container-backed T4 recipe be run; neither tolerance nor comparator
+threshold may be relaxed.
+
+## Changes and commits
+
+The guard and its tests were committed as:
+
+```text
+ade84361132869d62825902b63d2b007849068d9
+```
+
+Modified files in that commit:
+
+- `scripts/test_validate_fem_relaxation_equilibrium_parity.py`
+- `scripts/validate_fem_relaxation_equilibrium_parity.py`
+
+This report is recorded separately as documentation and does not change the
+T4 runtime qualification decision.
+
+---
+
+## Preserved earlier report (unrelated body-only prism mesh slice)
+
+The content below was already present at this path before the T4 investigation.
+It is preserved verbatim for its original mesh slice; it is not T4 evidence.
+
 # Slice 4 report — body-only exact prism mesh
 
 ## Scope

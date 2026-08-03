@@ -28,10 +28,15 @@ FIXTURE_MANIFEST = (
     / "examples"
     / "assets"
     / "fem_performance"
-    / "box500_airbox_exchange_demag_v1.fixture.json"
+    / "box500_airbox_exchange_demag_v2.fixture.json"
 )
 FIXTURE_ENVIRONMENT = (
-    REPO_ROOT / "benchmarks" / "fem-gpu" / "accepted" / "rtx4080-sm89" / "environment.json"
+    REPO_ROOT
+    / "benchmarks"
+    / "fem-gpu"
+    / "accepted"
+    / "rtx4080-sm89"
+    / "nsight-v2-environment.json"
 )
 NSYS_STATS_REPORTS = ("cuda_api_sum", "cuda_gpu_kern_sum", "nvtx_sum")
 REQUIRED_NVTX_RANGES = (
@@ -952,6 +957,7 @@ def capture_environment(
             "FULLMAG_PYTHON": "/usr/bin/python3",
             "FULLMAG_BENCH_DOMAIN_HMAX": "50e-9",
             "FULLMAG_BENCH_AIRBOX_HMAX": "100e-9",
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE": "1e-6",
             "FULLMAG_FEM_EXECUTION": "gpu",
             "FULLMAG_RELAX_DEVICE": "gpu",
             "FULLMAG_FEM_MFEM_DEVICE": "cuda",
@@ -961,7 +967,7 @@ def capture_environment(
     )
     if interactive:
         environment["FULLMAG_BENCH_DOMAIN_MESH"] = str(
-            FIXTURE_MANIFEST.parent / "box500_airbox_exchange_demag_v1.mesh.json"
+            FIXTURE_MANIFEST.parent / "box500_airbox_exchange_demag_v2.mesh.json"
         )
     return environment
 
