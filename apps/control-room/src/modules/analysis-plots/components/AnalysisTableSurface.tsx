@@ -7,6 +7,7 @@ import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import { ChartDisplayUnitControls } from "@/shared/analysis-charts/ChartDisplayUnitControls";
 import { deriveChartPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import {
   createChartDisplayTransform,
@@ -36,6 +37,7 @@ export function AnalysisTableSurface({
   kernel,
   onPointSelect,
   onRangeChange,
+  onDisplayUnitsChange = () => undefined,
   onSelectedSeriesIdsChange,
   range,
   selectedSeriesIds,
@@ -53,6 +55,7 @@ export function AnalysisTableSurface({
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
+  onDisplayUnitsChange?: (patch: Record<string, string>) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
   range: ChartValueRange | null;
   selectedSeriesIds: readonly string[];
@@ -162,6 +165,7 @@ export function AnalysisTableSurface({
         trust: "unknown",
       }}
       title={xAxisId}
+      toolbar={<ChartDisplayUnitControls displayUnits={displayUnits ?? {}} onDisplayUnitsChange={onDisplayUnitsChange} series={chartSeries} />}
     >
       {chartSeries.length > 0 && visibleSeries.length === 0 ? (
         <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>

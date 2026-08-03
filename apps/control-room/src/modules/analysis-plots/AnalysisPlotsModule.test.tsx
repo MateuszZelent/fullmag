@@ -1264,10 +1264,11 @@ describe("AnalysisPlotsView", () => {
         onRangeChange={() => undefined}
         range={null}
         selectedPoint={null}
+        sourceChartId="frequency-response:artifact://response-sweep"
         tableStatus="idle"
         table={null}
         xAxisId="step"
-        selectedSeriesIds={["data.table:default:step:mx"]}
+        selectedSeriesIds={["analysis.frequency-domain:response:amplitude"]}
       />,
     );
 
@@ -1275,6 +1276,33 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("Frequency-domain series");
     expect(html).toContain("Amplitude");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
+    expect(html).toContain("frequency-response:artifact://response-sweep");
+  });
+
+  it("keeps an explicit empty artifact selection empty instead of falling back to table selection", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        activeSurface="frequency-response"
+        kernel={mockKernel}
+        frequencyDomainSeries={[{
+          id: "analysis.frequency-domain:response:amplitude",
+          label: "Amplitude",
+          points: [{ rowIndex: 0, x: 9.5, y: 2 }],
+          quantity: "amplitude",
+          source: { kind: "analysis.frequency_domain", resourceKey: "artifact://response-sweep", tableId: "frequency-domain:response-sweep" },
+          status: "ready",
+          unit: "a.u.",
+          xUnit: "GHz",
+        }]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="Frequency-domain response sweep"
+        selectedSeriesIds={[]}
+        sourceChartId="frequency-response:artifact://response-sweep"
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
+    expect(html).not.toContain('data-chart-model-key="frequency-response:artifact://response-sweep"');
   });
 
   it("renders FMR workflow context for modal spectrum charts", () => {

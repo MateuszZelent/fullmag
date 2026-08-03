@@ -5,6 +5,7 @@ import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCur
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import { ChartDisplayUnitControls } from "@/shared/analysis-charts/ChartDisplayUnitControls";
 import {
   createChartDisplayTransform,
   createChartYAxisDisplayTransforms,
@@ -27,6 +28,7 @@ export function AnalysisFrequencySurface({
   displayUnits,
   kernel,
   onPointSelect,
+  onDisplayUnitsChange = () => undefined,
   onSelectedSeriesIdsChange,
   selectedSeriesIds,
   selectedPoint,
@@ -39,6 +41,7 @@ export function AnalysisFrequencySurface({
   displayUnits?: Readonly<Record<string, string>>;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
+  onDisplayUnitsChange?: (patch: Record<string, string>) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
   selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
@@ -144,7 +147,7 @@ export function AnalysisFrequencySurface({
   ) : undefined;
 
   // Workflow summary (visible for FMR modal / FMR driven titles only)
-  const toolbar = workflow ? (
+  const workflowToolbar = workflow ? (
     <div
       aria-label="Frequency-domain workflow"
       className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workflow"
@@ -154,7 +157,11 @@ export function AnalysisFrequencySurface({
       <span className="fm-chart-section__point-count">Mode fields: {workflow.artifacts}</span>
       <span className="fm-chart-section__point-count">{workflow.inspector}</span>
     </div>
-  ) : undefined;
+  ) : null;
+  const toolbar = <>
+    {workflowToolbar}
+    <ChartDisplayUnitControls displayUnits={displayUnits ?? {}} onDisplayUnitsChange={onDisplayUnitsChange} series={series} />
+  </>;
 
   return (
     <ChartSection

@@ -8,10 +8,10 @@ import type { KernelApi } from "@/kernel/types";
 const chartStatuses: string[] = [];
 vi.mock("./components/EChartsSurface", () => ({ EChartsSurface: ({ dataStatus }: { dataStatus?: string }) => { chartStatuses.push(dataStatus ?? "idle"); return <div data-testid="chart" />; } }));
 vi.mock("@/shared/ui/Select", () => ({
-  Select: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (value: string) => void }) => <button aria-label="Comparison dataset" onClick={() => onValueChange("table-c")} type="button">{children}</button>,
+  Select: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (value: string) => void }) => <div onClick={() => onValueChange("table-c")}>{children}</div>,
   SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectTrigger: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
+  SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} type="button">{children}</button>,
   SelectValue: () => null,
 }));
 vi.mock("@/shared/ui/Button", () => ({

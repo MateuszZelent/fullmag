@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveChartUnit } from "./chartUnits";
+import { chartDisplayUnitOptions, resolveChartUnit } from "./chartUnits";
 
 describe("resolveChartUnit", () => {
   it("resolves canonical dimensionless units without an SI display prefix", () => {
@@ -14,5 +14,10 @@ describe("resolveChartUnit", () => {
       dimension: "dimensionless",
       scaleToCanonical: 1,
     });
+  });
+
+  it("offers only compatible display units to chart controls", () => {
+    expect(chartDisplayUnitOptions("s")).toEqual(expect.arrayContaining(["s", "ns"]));
+    expect(chartDisplayUnitOptions("s")).not.toContain("J");
   });
 });

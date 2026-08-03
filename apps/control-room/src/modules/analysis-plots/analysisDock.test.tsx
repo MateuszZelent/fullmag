@@ -69,6 +69,25 @@ describe("pinned Quick Chart ownership", () => {
     expect(emit).toHaveBeenCalledWith("analysis-plots:export-requested", { chartId: "dynamics:table:run-7:stage-2:table-4", format: "csv", source: "analysis-plots" });
   });
 
+  it("never exports a stale secondary comparison focus after replacing or clearing dataset B", () => {
+    analysisWorkspaceStore.setActiveSurface("comparison");
+    analysisWorkspaceStore.setSelectedDatasetRef("table-a");
+    analysisWorkspaceStore.setComparisonDatasetRef("table-b");
+    analysisWorkspaceStore.setFocusedChartId("comparison:table-b");
+    const command = analysisPlotsManifest.contributes?.commands?.find((candidate) => candidate.id === "analysis-plots.export.csv");
+    const emit = vi.fn();
+
+    analysisWorkspaceStore.setComparisonDatasetRef("table-c");
+    expect(command?.run({ bus: { emit } } as never)).toEqual({ status: "completed" });
+    expect(emit).toHaveBeenLastCalledWith("analysis-plots:export-requested", { chartId: "comparison:table-a", format: "csv", source: "analysis-plots" });
+
+    analysisWorkspaceStore.setFocusedChartId("comparison:table-c");
+    analysisWorkspaceStore.setComparisonDatasetRef(null);
+    expect(command?.run({ bus: { emit } } as never)).toEqual({ status: "completed" });
+    expect(emit).toHaveBeenLastCalledWith("analysis-plots:export-requested", { chartId: "comparison:table-a", format: "csv", source: "analysis-plots" });
+    expect(emit.mock.calls.flat()).not.toContain("comparison:table-b");
+  });
+
   it("does not expose Quick Chart as a footer tab", () => {
     const source = readFileSync(
       new URL("../footer/FooterModule.tsx", import.meta.url),

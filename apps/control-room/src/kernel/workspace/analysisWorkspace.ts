@@ -29,10 +29,12 @@ class AnalysisWorkspaceStore {
     return () => this.listeners.delete(listener);
   };
   setActiveSurface(activeSurface: AnalysisSurface): void {
+    const sourceChartId = this.state.selectedDatasetRef ? `${activeSurface}:${this.state.selectedDatasetRef}` : null;
     this.update({
       ...this.state,
       activeSurface,
-      sourceChartId: this.state.selectedDatasetRef ? `${activeSurface}:${this.state.selectedDatasetRef}` : null,
+      focusedChartId: sourceChartId,
+      sourceChartId,
     });
   }
   setSelectedDatasetRef(selectedDatasetRef: string | null): void {
@@ -40,7 +42,8 @@ class AnalysisWorkspaceStore {
       ? selectedDatasetRef
       : null;
     const changed = valid !== this.state.selectedDatasetRef;
-    this.update({ ...this.state, hasChartState: changed ? false : this.state.hasChartState, selectedDatasetRef: valid, selectedSeriesIds: changed ? [] : this.state.selectedSeriesIds, sourceChartId: valid ? `${this.state.activeSurface}:${valid}` : null, sourceTableId: valid, visibleDatasetRevision: changed ? null : this.state.visibleDatasetRevision, xAxisId: changed ? null : this.state.xAxisId });
+    const sourceChartId = valid ? `${this.state.activeSurface}:${valid}` : null;
+    this.update({ ...this.state, focusedChartId: changed ? sourceChartId : this.state.focusedChartId, hasChartState: changed ? false : this.state.hasChartState, selectedDatasetRef: valid, selectedSeriesIds: changed ? [] : this.state.selectedSeriesIds, sourceChartId, sourceTableId: valid, visibleDatasetRevision: changed ? null : this.state.visibleDatasetRevision, xAxisId: changed ? null : this.state.xAxisId });
   }
   setComparisonDatasetRef(comparisonDatasetRef: string | null): void {
     const valid = typeof comparisonDatasetRef === "string" && comparisonDatasetRef.length > 0 && comparisonDatasetRef.length <= MAX_DATASET_REF_LENGTH
@@ -48,7 +51,7 @@ class AnalysisWorkspaceStore {
       : null;
     const next = valid === this.state.selectedDatasetRef ? null : valid;
     const changed = next !== this.state.comparisonDatasetRef;
-    this.update({ ...this.state, comparisonDatasetRef: next, comparisonSelectedSeriesKeys: changed ? [] : this.state.comparisonSelectedSeriesKeys, hasComparisonSelection: changed ? false : this.state.hasComparisonSelection });
+    this.update({ ...this.state, comparisonDatasetRef: next, comparisonSelectedSeriesKeys: changed ? [] : this.state.comparisonSelectedSeriesKeys, focusedChartId: changed ? this.state.sourceChartId : this.state.focusedChartId, hasComparisonSelection: changed ? false : this.state.hasComparisonSelection });
   }
   setVisibleDatasetRevision(visibleDatasetRevision: string | number | null): void {
     const valid = typeof visibleDatasetRevision === "string" || typeof visibleDatasetRevision === "number" ? visibleDatasetRevision : null;

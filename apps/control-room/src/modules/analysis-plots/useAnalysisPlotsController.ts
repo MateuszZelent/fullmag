@@ -57,6 +57,16 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     [activeSurface, selectedDatasetRef],
   );
   const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
+  const frequencyDescriptorId = frequencyChartId ? `artifact:${frequencyChartId}` : null;
+  const frequencyDescriptor = frequencyDescriptorId
+    ? preferences.preferences.descriptorPreferences[frequencyDescriptorId]
+    : undefined;
+  const effectiveSelectedSeriesIds = frequencyChartId
+    ? frequencyDescriptor
+      ? frequencyDescriptor.selectedSeriesIds
+      : frequency.frequencyDomainSeries.map((series) => series.id)
+    : selectedSeriesIds;
+  const effectiveDescriptor = frequencyChartId ? frequencyDescriptor : descriptor;
   const comparisonDescriptorId = useMemo(
     () => `comparison:${selectedDatasetRef ?? "none"}:${comparisonDatasetRef ?? "none"}`,
     [comparisonDatasetRef, selectedDatasetRef],
@@ -111,9 +121,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       spectrum: gamma.data ? `spin-wave-gamma · revision ${gamma.data.schema_version}` : undefined,
     },
     selectedPoint,
-    selectedSeriesIds,
-    displayUnits: descriptor?.displayUnits ?? {},
-    range: descriptor?.range ? { fromValue: descriptor.range.fromSI, toValue: descriptor.range.toSI } : null,
+    selectedSeriesIds: effectiveSelectedSeriesIds,
+    displayUnits: effectiveDescriptor?.displayUnits ?? {},
+    range: effectiveDescriptor?.range ? { fromValue: effectiveDescriptor.range.fromSI, toValue: effectiveDescriptor.range.toSI } : null,
     setActiveSurface: (surface: typeof activeSurface) => {
       preferences.setActiveSurface(surface);
       analysisWorkspaceStore.setActiveSurface(surface);
@@ -165,8 +175,18 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         },
       }, "analysis-plots");
     },
-    onRangeChange: (range: ChartValueRange) => preferences.setDescriptorPreference(descriptorId, { range: { fromSI: range.fromValue, toSI: range.toValue } }),
-    onSelectedSeriesIdsChange: (nextSelectedSeriesIds: string[]) => { preferences.setDescriptorPreference(descriptorId, { selectedSeriesIds: nextSelectedSeriesIds }); analysisWorkspaceStore.setChartState(dataset.visibleTable?.columns[0]?.column_id ?? "x", nextSelectedSeriesIds); },
+    onRangeChange: (range: ChartValueRange) => preferences.setDescriptorPreference(frequencyDescriptorId ?? descriptorId, { range: { fromSI: range.fromValue, toSI: range.toValue } }),
+    onSelectedSeriesIdsChange: (nextSelectedSeriesIds: string[]) => {
+      if (frequencyDescriptorId) {
+        preferences.setDescriptorPreference(frequencyDescriptorId, { selectedSeriesIds: nextSelectedSeriesIds });
+        return;
+      }
+      preferences.setDescriptorPreference(descriptorId, { selectedSeriesIds: nextSelectedSeriesIds });
+      analysisWorkspaceStore.setChartState(dataset.visibleTable?.columns[0]?.column_id ?? "x", nextSelectedSeriesIds);
+    },
+    onDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(frequencyDescriptorId ?? descriptorId, {
+      displayUnits: { ...(effectiveDescriptor?.displayUnits ?? {}), ...patch },
+    }),
     spinWaveGamma: gamma.data ?? null,
     spinWaveGammaStatus: gamma.status,
     table: dataset.visibleTable,
