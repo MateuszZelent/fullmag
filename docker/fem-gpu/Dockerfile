@@ -9,6 +9,8 @@ ENV CMAKE_VERSION=3.30.5
 ENV MFEM_REF=v4.9
 ENV LIBCEED_REF=v0.12.0
 ENV HYPRE_REF=v3.1.0
+ENV PETSC_REF=v3.24.6
+ENV SLEPC_REF=v3.24.3
 ENV INSTALL_PREFIX=/opt/fullmag-deps
 ENV CUDA_HOME=/usr/local/cuda
 ENV CUDA_PATH=/usr/local/cuda
@@ -22,6 +24,7 @@ ENV FULLMAG_FEM_MFEM_DEVICE=ceed-cuda:/gpu/cuda/shared
 ENV FULLMAG_CUDA_ARCHITECTURES=${FULLMAG_CUDA_ARCHITECTURES}
 ENV FULLMAG_HYPRE_GPU_ARCHITECTURES=${FULLMAG_HYPRE_GPU_ARCHITECTURES}
 ENV CMAKE_PREFIX_PATH=${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}
+ENV PKG_CONFIG_PATH=${INSTALL_PREFIX}/lib/pkgconfig:${INSTALL_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -30,6 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gfortran \
     git \
+    libblas-dev \
+    liblapack-dev \
     openmpi-bin \
     libopenmpi-dev \
     ninja-build \
@@ -120,6 +125,42 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
     HYPRE_CONFIGURE_FLAGS="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${configure_flags[@]}")" \
     python3 -c 'import hashlib,json,os,re; from pathlib import Path; p=Path(os.environ["INSTALL_PREFIX"])/"include/HYPRE_config.h"; s=p.read_text(); names=("HYPRE_USING_UMPIRE","HYPRE_USING_UMPIRE_DEVICE","HYPRE_USING_DEVICE_MALLOC_ASYNC","HYPRE_USING_THRUST_ASYNC"); macros={n: bool(re.search(r"^#define\s+"+re.escape(n)+r"\s+1(?:\s|$)",s,re.M)) for n in names}; out={"hypre_gpu_architectures":os.environ["HYPRE_GPU_ARCHITECTURES"],"hypre_memory_variant":os.environ["HYPRE_MEMORY_VARIANT"],"hypre_configure_flags":json.loads(os.environ["HYPRE_CONFIGURE_FLAGS"]),"hypre_config_macros":macros,"hypre_config_header_sha256":hashlib.sha256(p.read_bytes()).hexdigest()}; q=Path(os.environ["INSTALL_PREFIX"])/"share/fullmag/hypre-build-metadata.json"; q.write_text(json.dumps(out,indent=2,sort_keys=True)+chr(10))'
 
+# Task 9 modal GPU contract: PETSc and SLEPc must use the same CUDA-enabled
+# real/double dependency stack as MFEM and hypre.  Ubuntu's distro packages
+# are CPU-only and bind a second, incompatible hypre, so build the qualified
+# pair from source into the shared managed prefix.
+COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
+RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git /tmp/build/petsc && \
+    cd /tmp/build/petsc && \
+    git apply /tmp/build/petsc-3.24.6-multiarch-nvcc.diff && \
+    python3 ./configure \
+      PETSC_ARCH=arch-linux-cuda \
+      --prefix=${INSTALL_PREFIX} \
+      --with-cc=mpicc \
+      --with-cxx=mpicxx \
+      --with-fc=mpifort \
+      COPTFLAGS=-O3 \
+      CXXOPTFLAGS=-O3 \
+      FOPTFLAGS=-O3 \
+      CUDAOPTFLAGS="-O3 -lineinfo" \
+      --with-debugging=0 \
+      --with-shared-libraries=1 \
+      --with-scalar-type=real \
+      --with-precision=double \
+      --with-cuda=1 \
+      --with-cuda-dir=${CUDA_HOME} \
+      --with-cuda-arch=80,89,90 \
+      --with-hypre=1 \
+      --with-hypre-dir=${INSTALL_PREFIX} && \
+    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda -j"$(nproc)" all && \
+    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda install
+
+RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git /tmp/build/slepc && \
+    cd /tmp/build/slepc && \
+    PETSC_DIR=${INSTALL_PREFIX} python3 ./configure --prefix=${INSTALL_PREFIX} && \
+    make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} -j"$(nproc)" all && \
+    make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} install
+
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
@@ -153,6 +194,9 @@ ENV CUDA_PATH=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:/root/.cargo/bin:${PNPM_HOME}:${INSTALL_PREFIX}/bin:${PATH}
 ENV CMAKE_PREFIX_PATH=${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH}
+ENV PKG_CONFIG_PATH=${INSTALL_PREFIX}/lib/pkgconfig:${INSTALL_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH}
+ENV PETSC_DIR=${INSTALL_PREFIX}
+ENV SLEPC_DIR=${INSTALL_PREFIX}
 ENV FULLMAG_FEM_MFEM_DEVICE=ceed-cuda:/gpu/cuda/shared
 ENV FULLMAG_CUDA_ARCHITECTURES=${FULLMAG_CUDA_ARCHITECTURES}
 # Build contract: require MFEM stack, CUDA backend, and libCEED so that
@@ -169,12 +213,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     curl \
     git \
+    libblas3 \
     libboost-dev \
     libgl1 \
     libglu1-mesa \
+    libhdf5-dev \
+    liblapack3 \
     libopenmpi-dev \
-    libpetsc-real-dev \
-    libslepc-real-dev \
     libsm6 \
     libx11-6 \
     libxcursor1 \

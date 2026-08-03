@@ -278,7 +278,7 @@ verify-fem-demag-amg-benchmark-contract:
 
 verify-fem-dependency-stack-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON && cmake --build native/build --target fem_dependency_stack_contract && native/build/backends/fem/fem_dependency_stack_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --fresh -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON && cmake --build native/build --parallel 8 --target fem_dependency_stack_contract && native/build/backends/fem/fem_dependency_stack_contract'
 
 verify-fem-time-domain-native-contract:
     python3 scripts/check_llg_time_domain_contract_docs.py
@@ -659,6 +659,11 @@ verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_poisson_airbox_modal_eigen_slepc_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_poisson_airbox_modal_eigen_slepc_contract'
+
+verify-fem-frequency-domain-gpu-petsc-slepc-runtime:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_gpu_petsc_slepc_runtime_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_gpu_petsc_slepc_runtime_contract'
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action:
     just ensure-managed-fem-runtime

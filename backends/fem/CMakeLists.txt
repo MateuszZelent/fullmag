@@ -767,6 +767,24 @@ add_fem_source_facade_contract(
     fem_poisson_airbox_schur_matshell_contract
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    add_executable(
+        fem_gpu_petsc_slepc_runtime_contract
+        tests/frequency_domain/gpu_petsc_slepc_runtime_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_petsc_slepc_runtime_contract
+        PRIVATE
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    add_test(
+        NAME fem_gpu_petsc_slepc_runtime_contract
+        COMMAND fem_gpu_petsc_slepc_runtime_contract
+    )
+endif()
 add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp

@@ -178,6 +178,17 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert "mod nvtx_range" not in sources["crates/fullmag-cli/src/live_workspace.rs"]
 
 
+def test_native_fem_cargo_build_propagates_release_and_parallelism_to_cmake() -> None:
+    sys_build = (REPO_ROOT / "crates/fullmag-fem-sys/build.rs").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'std::env::var("PROFILE")' in sys_build
+    assert '"-DCMAKE_BUILD_TYPE={}"' in sys_build
+    assert 'std::env::var("NUM_JOBS")' in sys_build
+    assert '.arg("--parallel")' in sys_build
+
+
 def test_preview_nvtx_range_is_owned_until_snapshot_materialization_finishes() -> None:
     source = (REPO_ROOT / "crates/fullmag-runner/src/fem/relax/preview.rs").read_text(
         encoding="utf-8"
