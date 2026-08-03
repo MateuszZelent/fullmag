@@ -26,4 +26,20 @@ describe("analysis workspace", () => {
       selectedSeriesIds: ["data.table:table:run-7:stage-2:table-4:step:mx"],
     });
   });
+
+  it("stores comparison selection as semantic keys and preserves an explicit empty selection", () => {
+    resetAnalysisWorkspaceForTests();
+    analysisWorkspaceStore.setSelectedDatasetRef("table-a");
+    analysisWorkspaceStore.setComparisonDatasetRef("table-b");
+    analysisWorkspaceStore.setComparisonSelection(["mx|1", "mx|1", "energy|J"]);
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+      comparisonSelectedSeriesKeys: ["mx|1", "energy|J"],
+      hasComparisonSelection: true,
+    });
+    analysisWorkspaceStore.clearComparisonSelection();
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+      comparisonSelectedSeriesKeys: [],
+      hasComparisonSelection: true,
+    });
+  });
 });

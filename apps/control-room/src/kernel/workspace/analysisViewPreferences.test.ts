@@ -38,4 +38,21 @@ describe("analysis view preferences", () => {
     expect(Object.keys(preferences.descriptorPreferences["descriptor-0"]?.displayUnits ?? {})).toHaveLength(40);
     expect(preferences.descriptorPreferences["descriptor-0"]?.range).toBeNull();
   });
+
+  it("persists only bounded semantic comparison keys", () => {
+    const preferences = parseAnalysisViewPreferences({
+      schemaVersion: 2,
+      activeSurface: "comparison",
+      selectedDatasetRef: "table-a",
+      descriptorPreferences: {
+        "comparison:table-a:table-b": {
+          comparisonSelectedSeriesKeys: ["mx|1", "mx|1", "x".repeat(300)],
+          displayUnits: {},
+          range: null,
+          selectedSeriesIds: [],
+        },
+      },
+    });
+    expect(preferences.descriptorPreferences["comparison:table-a:table-b"]?.comparisonSelectedSeriesKeys).toEqual(["mx|1"]);
+  });
 });

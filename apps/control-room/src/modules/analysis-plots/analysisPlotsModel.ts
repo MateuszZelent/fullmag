@@ -8,7 +8,7 @@ import {
   tableRowsVisibleRangeQuery,
 } from "./chartTableModel";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import type { AnalysisChartRangeMode } from "@/kernel/workspace/analysisPlotsWorkspace";
+import type { ChartRangeModeState as AnalysisChartRangeMode } from "@/shared/analysis-charts/ChartControlBar";
 import { ANALYSIS_SCALAR_COLUMNS } from "./tableRowsAdapter";
 import { type AxisColumnUnit, sanitizeYAxisIdsForUnitLimit } from "@/shared/domain/analysis/TableColumnList";
 

@@ -86,20 +86,24 @@ export function useAnalysisFrequencyData(
     : activeSurface === "eigenmodes"
       ? "modal-spectrum"
       : null;
-  const surfaceMismatch = expectedChart !== null && frequencyDomainRoute.primaryChart !== expectedChart;
+  const manifestReady = frequencyDomainManifest.status === "ready" &&
+    frequencyDomainRoute.status === "available";
+  const surfaceMismatch = manifestReady && expectedChart !== null &&
+    frequencyDomainRoute.primaryChart !== expectedChart;
+  const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
 
   // Load only the sub-resource required by the active route
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
-    enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "modal-spectrum",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "modal-spectrum",
   });
   const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
-    enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
-    enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
-    enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "response-sweep",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "response-sweep",
   });
 
   const frequencyDomainSpectrumModel = useMemo(

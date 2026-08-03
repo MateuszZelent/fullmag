@@ -1530,7 +1530,7 @@ function useHysteresisChartView({
       onKeyDown={handleKeyDown}
     >
       <div className="fm-hysteresis-provenance" role="status">
-        Hysteresis points · revision {pointsRes.revision ?? "unavailable"}
+        {hysteresisPointsProvenanceLabel(pointsRes.revision)}
       </div>
       <div className="fm-hysteresis-controls">
         <div className="fm-hysteresis-control-group">
@@ -1713,4 +1713,8 @@ function useHysteresisChartView({
       )}
     </div>
   );
+}
+
+export function hysteresisPointsProvenanceLabel(revision: string | number | null | undefined): string {
+  return `Hysteresis points · revision ${revision ?? "unavailable"}`;
 }

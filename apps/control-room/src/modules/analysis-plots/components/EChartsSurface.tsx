@@ -32,6 +32,7 @@ import { cancelRangeCommit, scheduleRangeCommit } from "./chartRangeCommit";
 interface EChartsSurfaceProps {
   allSeries?: readonly ChartSeries[];
   bus?: EventBus<KernelEventMap>;
+  chartId?: string;
   dataStatus?: string;
   fitRequest?: number;
   onPointSelect?: (point: ChartCursorPoint) => void;
@@ -44,6 +45,7 @@ interface EChartsSurfaceProps {
 export function EChartsSurface({
   allSeries,
   bus,
+  chartId,
   dataStatus,
   fitRequest,
   onPointSelect,
@@ -62,11 +64,11 @@ export function EChartsSurface({
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
   useEffect(() => {
     if (!bus) return;
-    const chartId = series[0]?.source.tableId ?? "default";
+    const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
     return bus.on("analysis-plots:export-requested", (request) => {
-      if (request.chartId === chartId) setRequestedExportFormat(request.format);
+      if (request.chartId === acceptedChartId) setRequestedExportFormat(request.format);
     });
-  }, [bus, series]);
+  }, [bus, chartId, series]);
 
   return (
     <InteractiveChartSurface

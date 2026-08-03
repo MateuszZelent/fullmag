@@ -23,6 +23,7 @@ import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
 
 export function AnalysisFrequencySurface({
+  chartId,
   kernel,
   onPointSelect,
   onSelectedSeriesIdsChange,
@@ -33,6 +34,7 @@ export function AnalysisFrequencySurface({
   title,
   unavailableReason,
 }: {
+  chartId?: string;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
@@ -179,6 +181,7 @@ export function AnalysisFrequencySurface({
           <EChartsSurface
             allSeries={series}
             bus={kernel.bus}
+            chartId={chartId}
             dataStatus={status}
             onPointSelect={onPointSelect}
             series={visibleSeries}

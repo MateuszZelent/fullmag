@@ -1,5 +1,3 @@
-import { ANALYSIS_CHART_PREFERENCES_STORAGE_KEY } from "./analysisChartPreferences";
-
 export type ChartRangePreference =
   | { mode: "follow" }
   | { mode: "tailRows"; rows: number }
@@ -24,6 +22,7 @@ export interface LiveChartPreferencesV1 {
 }
 
 export const LIVE_CHART_PREFERENCES_STORAGE_KEY = "fm:live-chart-preferences:v1";
+export const ANALYSIS_CHART_PREFERENCES_STORAGE_KEY = "fm:analysis-chart-preferences:v1";
 export const MAX_LIVE_CHART_DESCRIPTORS = 50;
 /** Matches the compact Analysis preference storage contract. */
 export const MAX_NEW_STORED_BYTES = 256 * 1024;

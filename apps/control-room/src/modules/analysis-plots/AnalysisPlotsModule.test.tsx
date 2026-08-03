@@ -48,6 +48,7 @@ import {
   HYSTERESIS_CHART_VALUE_AXIS_SCALE,
   hysteresisChartReplayActionPresentation,
   hysteresisTargetMetadataFromOrientation,
+  hysteresisPointsProvenanceLabel,
   nextHysteresisPlaybackIndex,
   resolveHysteresisKeyboardNavigationIndex,
   resolveHysteresisScrubberPointIndex,
@@ -154,6 +155,11 @@ function chartWindow(value: {
 }
 
 describe("AnalysisPlotsView", () => {
+  it("reports the actual hysteresis points revision or an honest unavailable state", () => {
+    expect(hysteresisPointsProvenanceLabel(42)).toBe("Hysteresis points · revision 42");
+    expect(hysteresisPointsProvenanceLabel(null)).toBe("Hysteresis points · revision unavailable");
+  });
+
   it("fits hysteresis chart axes to collected points during live sweeps", () => {
     expect(HYSTERESIS_CHART_VALUE_AXIS_SCALE).toBe(true);
   });

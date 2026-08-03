@@ -31,6 +31,7 @@ import { EChartsSurface } from "./EChartsSurface";
  */
 export function AnalysisTableSurface({
   chartSeries,
+  chartId,
   kernel,
   onPointSelect,
   onRangeChange,
@@ -46,6 +47,7 @@ export function AnalysisTableSurface({
   xAxisLabel,
 }: {
   chartSeries: readonly ChartSeries[];
+  chartId?: string;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
@@ -155,6 +157,7 @@ export function AnalysisTableSurface({
         <EChartsSurface
           allSeries={chartSeries}
           bus={kernel.bus}
+          chartId={chartId}
           dataStatus={status}
           onPointSelect={onPointSelect}
           onRangeChange={onRangeChange}

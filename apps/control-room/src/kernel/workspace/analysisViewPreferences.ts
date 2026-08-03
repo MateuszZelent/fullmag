@@ -8,6 +8,7 @@ export type AnalysisSurface =
   | "comparison";
 
 export interface AnalysisDescriptorPreference {
+  comparisonSelectedSeriesKeys?: string[];
   selectedSeriesIds: string[];
   displayUnits: Record<string, string>;
   range: { fromSI: number; toSI: number } | null;
@@ -69,6 +70,9 @@ function parseDescriptor(raw: unknown): AnalysisDescriptorPreference {
   const selectedSeriesIds = Array.isArray(raw.selectedSeriesIds)
     ? raw.selectedSeriesIds.filter(validIdentifier).filter((value, index, all) => all.indexOf(value) === index).slice(0, MAX_SERIES)
     : [];
+  const comparisonSelectedSeriesKeys = Array.isArray(raw.comparisonSelectedSeriesKeys)
+    ? raw.comparisonSelectedSeriesKeys.filter(validIdentifier).filter((value, index, all) => all.indexOf(value) === index).slice(0, MAX_SERIES)
+    : undefined;
   const displayUnits: Record<string, string> = {};
   if (isRecord(raw.displayUnits)) {
     for (const [quantity, unit] of Object.entries(raw.displayUnits)) {
@@ -79,7 +83,7 @@ function parseDescriptor(raw: unknown): AnalysisDescriptorPreference {
   const range = isRecord(raw.range) && typeof raw.range.fromSI === "number" && Number.isFinite(raw.range.fromSI) && typeof raw.range.toSI === "number" && Number.isFinite(raw.range.toSI) && raw.range.fromSI < raw.range.toSI
     ? { fromSI: raw.range.fromSI, toSI: raw.range.toSI }
     : null;
-  return { displayUnits, range, selectedSeriesIds };
+  return { ...(comparisonSelectedSeriesKeys ? { comparisonSelectedSeriesKeys } : {}), displayUnits, range, selectedSeriesIds };
 }
 
 function isSurface(value: unknown): value is AnalysisSurface {

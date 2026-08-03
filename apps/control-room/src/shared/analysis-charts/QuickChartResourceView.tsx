@@ -13,7 +13,7 @@ import {
   buildSharedAnalysisTableQuery,
   chartTableWindowFromBinary,
 } from "@/shared/domain/analysis/chartDataPlan";
-import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
+import { useAnalysisWorkspaceSelector } from "@/kernel/workspace/useAnalysisWorkspace";
 import {
   isTableChartSeriesId,
   tableColumnIdFromSeriesId,
@@ -28,8 +28,8 @@ import {
 
 export function QuickChartResourceView({ selection }: { selection: Selection }) {
   const kernel = useKernel();
-  const { xAxisId, selectedSeriesIds } =
-    useAnalysisPlotsWorkspaceSelector((state) => state);
+  const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId) ?? "x";
+  const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
   const yAxisIds = selectedSeriesIds
     .filter(isTableChartSeriesId)
     .map(tableColumnIdFromSeriesId);
