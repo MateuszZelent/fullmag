@@ -927,7 +927,6 @@ int gpu_relax_projected_gradient_bb_step(
     ctx.relaxation.accepted_energy_proof.delta_upper_j =
         accepted_energy_delta_upper_j;
     ctx.relaxation.accepted_energy_proof.armijo_rhs_j = armijo_increment_rhs_j;
-    update_stage_completion_from_stats(ctx, out_stats);
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;
