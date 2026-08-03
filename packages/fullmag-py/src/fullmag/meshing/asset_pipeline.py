@@ -937,6 +937,21 @@ def _conformal_occ_degenerate_retry(
     return None
 
 
+def _execution_mesh_volume_epsilon(mesh: MeshData) -> float:
+    """Return the strict volume threshold used by the Rust mesh contract.
+
+    The native validator scales its absolute tetra-volume threshold from the
+    largest domain span.  Running the same check before publishing a Python
+    generated mesh keeps OCC retry decisions consistent with execution-time
+    validation instead of accepting a locally non-degenerate sliver.
+    """
+    if mesh.nodes.size == 0:
+        return 1.0e-18
+    bbox_scale = float(np.max(np.ptp(mesh.nodes, axis=0)))
+    scale = bbox_scale if bbox_scale > 0.0 else 1.0
+    return max(np.finfo(np.float64).tiny, scale**3 * 1.0e-18)
+
+
 def _conformal_occ_algorithm_name(algorithm_3d: int) -> str:
     return {
         ALGO_3D_DELAUNAY: "Delaunay",
@@ -2746,7 +2761,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                             try:
                                 result.mesh.validate_strict(
-                                    require_positive_orientation=True
+                                    require_positive_orientation=True,
+                                    eps_volume=_execution_mesh_volume_epsilon(result.mesh),
                                 )
                                 emit_progress_event(
                                     {

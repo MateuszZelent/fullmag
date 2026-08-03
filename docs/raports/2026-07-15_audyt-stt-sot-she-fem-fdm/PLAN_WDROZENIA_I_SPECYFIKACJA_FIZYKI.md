@@ -5257,3 +5257,135 @@ CPU↔CUDA, FEM/GPU, cross-backend common-limit, torque normalization,
 i pełny Python/UI round-trip pozostają otwarte. Zapisany zakres poprawia
 wiarygodność diagnostyki BORIS, ale nie zwiększa oceny produkcyjnej: nadal
 **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.36. Ujednolicenie walidacji objętości OCC z kontraktem Rust (2026-08-03)
+
+### 32.36.1. Synchronizacja z `master`
+
+Wykonano `git fetch origin master` oraz `git pull --ff-only origin master`.
+Pull był bez zmian: lokalny `master` ma `HEAD=96b84512d` i jest 62 commity
+przed `origin/master=3082ec244`; zdalny branch nie dostarczył nowszej poprawki
+demaga. Niezależne zmiany robocze w `apps/legacy_web` i `external_solvers/3`
+pozostały nietknięte.
+
+### 32.36.2. Zidentyfikowana rozbieżność walidatorów
+
+Współdzielona siatka SP4 (`700 nm × 250 nm × 250 nm`, Delaunay, pole rozmiaru
+`3 nm` w filmie i `20 nm` w airboxie) mogła zawierać tetrahedr o objętości
+`10^-38–10^-37 m^3`. Python `MeshData.validate_strict()` oceniał komórkę
+względem jej lokalnej długości charakterystycznej, natomiast Rust
+`MeshIR::validate_strict()` używa progu wykonawczego
+`max_span^3 × 10^-18`; dla SP4 jest to `3.43×10^-37 m^3`. Taki sliver był
+lokalnie akceptowany, lecz odrzucany dopiero przy materializacji ProblemIR,
+przed wejściem do solvera. Rozluźnianie progu Rust byłoby numerycznie i
+fizycznie błędne, ponieważ dopuszczałoby źle uwarunkowane elementy FEM.
+
+### 32.36.3. Korekta i test-first evidence
+
+W `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` dodano
+`_execution_mesh_volume_epsilon()`, wiernie odtwarzające skalowanie Rust, i
+użyto go w conformal OCC przed zaakceptowaniem próby. Niespełnienie progu
+uruchamia istniejący, niedestrukcyjny retry algorytmu Delaunay → HXT → Frontal;
+nie usuwa komórek z gotowej topologii. Dodano regresję
+`packages/fullmag-py/tests/test_conformal_occ_degenerate_retry_regression.py`,
+która konstruuje tetrahedr przechodzący lokalną walidację, lecz odrzucany przez
+próg wykonawczy, i wymaga retry.
+
+Lokalne bramy:
+
+```text
+test_conformal_occ_degenerate_retry_regression.py: 2 passed
+test_meshing.py (OCC/degenerated-cell subset): 12 passed, 258 deselected
+```
+
+Dokładny generator SP4 po korekcie wykonał Delaunay → HXT → Frontal i zwrócił
+`371527` tetrahedrów; `min_volume=1.937676308381346e-33 m^3`, próg
+`3.43e-37 m^3`, `n_below=0`. Ponowna walidacja z tym samym progiem wykonawczym
+przeszła.
+
+### 32.36.4. Granica dowodu zarządzanego runtime
+
+Pierwsze uruchomienie `just verify-fem-standard-problem-4-smoke` zatrzymało się
+przed testem demaga, ponieważ współdzielony `native/build/CMakeCache.txt`
+wskazywał nieistniejące już artefakty PETSc/SLEPc 3.24 w `/opt/fullmag-deps`,
+podczas gdy bieżący obraz `fem-gpu` zawiera systemowe pakiety Debian:
+PETSc `3.15.5` w `/usr/lib/petscdir/petsc3.15` i SLEPc `3.15.2` w
+`/usr/lib/slepcdir/slepc3.15`. Przyczyną bezpośrednią był więc nieaktualny
+cache CMake, a nie fizyka demaga. Dodano `PKG_CONFIG_PATH` do obu etapów
+`docker/fem-gpu/Dockerfile` oraz do `compose.yaml`, aby ścieżki do opcjonalnych
+pakietów z `/opt/fullmag-deps` były jawne; nie oznacza to, że ten obraz
+udostępnia PETSc/SLEPc 3.24. Przeniesiono stary, ignorowany `native/build` do
+archiwum i wykonano świeżą konfigurację; CMake poprawnie znalazł PETSc 3.15.5
+i SLEPc 3.15.2. Blokada była środowiskowa i została usunięta bez rozluźniania
+progu geometrii ani kontraktu solvera.
+
+Ta korekta nie awansuje żadnego workloadu do `validated` i nie zmienia oceny
+celu: **86% implementacji / 60% gotowości produkcyjnej**. Do zamknięcia nadal
+pozostają pełny runtime SP4 po świeżym buildzie, parity CPU/GPU i demag,
+`validated_workloads`, SHE/BORIS, FEM/GPU, skin-effect/MQS, FEM Oersted RT0/KKT,
+fizyczny M3 `C_s` oraz pełny round-trip Python/UI.
+
+## 32.37. Świeży dowód demaga SP4 i granica GPU readback (2026-08-03)
+
+### 32.37.1. Bramy kompilacji i runtime
+
+Po przeniesieniu starego, ignorowanego `native/build` wykonano oficjalną ścieżkę
+`just verify-fem-standard-problem-4-smoke`. Świeży CMake zbudował
+`fullmag_fem`, kontrakty C++/CUDA oraz `fem_mesh_contract`, `fem_oersted_contract`,
+`fem_stt_contract` i pozostałe kontrakty natywne; suita ABI Rust zakończyła się
+wynikiem `35 passed; 0 failed`. Zarządzany bundle pozostaje ważny:
+
+```text
+git_commit=96b84512d4ae435f5198f73f9d56feaa96670d9e
+source_snapshot_sha256=758692f014a72720261f107284ee9be505b6168e624a88c2fb33cb24f9dec96b
+variant=hypre-baseline-a0c783ccaaf838d7eb2b0609605e5362b550f1ca65ae28801e386158f52c7a02
+compute_capability=8.9
+hypre_binding_count=1537
+```
+
+### 32.37.2. Wykonane przypadki SP4
+
+Dla `FULLMAG_SP4_QUALIFYING=0`, `coarse`, `baseline`, `llg_overdamped`,
+`duration=1e-14 s` wykonano relaksację CPU/GPU oraz dynamikę przypadków A/B.
+Relaksacja CPU i GPU zakończyła się bez fallbacku; obie ścieżki użyły tego
+samego `fem_poisson_robin`, `CG/AMG`, `rtol=1e-12`. Energia całkowita relaksacji
+wyniosła `7.09617873316957e-19 J` (różnica CPU–GPU około `2e-33 J`).
+
+Dynamiczny przypadek A zakończył się na czterech krokach po `1e-14 s`:
+`E_demag` CPU `7.096161633027042e-19 J`, GPU
+`7.096161633026972e-19 J`, a `E_total` różni się o około `2.1e-32 J`.
+CPU przypadek B również zakończył się poprawnie (cztery kroki,
+`E_demag=7.096159932911980e-19 J`). GPU przypadek B nie uzyskał jeszcze
+wyniku wykonawczego.
+
+GPU A raportował jawnie `engine=fem_native_gpu`,
+`demag_mode=device_hypre_poisson`, `hypre_gpu_policy=device`,
+`demag_residency=device`, `fallback_policy=forbidden`, urządzenie RTX 4080
+SUPER, CC 8.9. To jest dowód wykonania ścieżki GPU demaga, ale nie pełna
+kwalifikacja macierzy SP4.
+
+### 32.37.3. Otwarta brama zasobowa
+
+GPU dynamiczny przypadek B zatrzymał się przed pierwszym krokiem z dokładnym
+błędem:
+
+```text
+RunError: cudaHostAlloc FemGpuState scalar readback staging failed: out of memory
+```
+
+W chwili błędu VRAM nie był wyczerpany (około `3.4 GiB / 16 GiB`), a żądany
+scalar staging ma tylko 32 wartości `double` (256 B). Jest to więc osobna
+brama zasobowa sterownika/host-pinned memory, nie błąd równania Poissona,
+warunku Robin, HYPRE ani walidacji tetrahedrów. Obecnie nie ma wystarczającego
+dowodu, aby przypisać przyczynę konkretnie wyciekowi lub konkurencyjnemu
+procesowi; trzeba powtórzyć ten sam przypadek w izolowanym procesie CUDA i
+sprawdzić limit pamięci zablokowanej. Do czasu tego dowodu GPU SP4 pozostaje
+`production_executable`/`semantic_only` zgodnie z macierzą, a nie `validated`.
+
+### 32.37.4. Status celu
+
+Korekta OCC, świeży build z PETSc 3.15.5/SLEPc 3.15.2, CPU demag oraz GPU
+demag dla relaksacji i przypadku A są potwierdzone. Brama GPU B readback,
+pełne parity dla obu przypadków, workloady `validated`, SHE/BORIS, skin-effect,
+M3 `C_s` i pełny Python/UI round-trip pozostają otwarte. Ocena pozostaje
+**86% implementacji / 60% gotowości produkcyjnej**.

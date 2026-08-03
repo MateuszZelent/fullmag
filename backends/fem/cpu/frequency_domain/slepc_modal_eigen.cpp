@@ -8,7 +8,7 @@
 
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
-#include <slepc/slepceps.h>
+#include <slepceps.h>
 #endif
 
 namespace fullmag::fem::frequency_domain {
