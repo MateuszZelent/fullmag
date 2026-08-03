@@ -1,0 +1,68 @@
+.fm-live-charts {
+  display: grid;
+  gap: var(--fm-space-3);
+  height: 100%;
+  min-height: 0;
+  padding: var(--fm-space-3);
+}
+
+.fm-live-charts__controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}
+
+.fm-live-charts__preset { max-width: 13rem; }
+
+.fm-live-charts__surface { min-height: 0; }
+
+.fm-live-charts__panes {
+  display: grid;
+  gap: var(--fm-space-3);
+}
+
+.fm-live-charts__empty {
+  align-items: center;
+  color: var(--fm-text-secondary);
+  display: flex;
+  justify-content: center;
+  min-height: 12rem;
+}
+
+.fm-live-chart-inspector__select {
+  min-width: 9rem;
+}
+
+.fm-live-chart-inspector__series {
+  border: 0;
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding: 0;
+}
+
+.fm-live-chart-inspector__legend {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  margin-bottom: var(--fm-space-1);
+}
+
+.fm-live-chart-inspector__series-row {
+  align-items: center;
+  color: var(--fm-text-primary);
+  display: flex;
+  gap: var(--fm-space-2);
+  min-height: var(--fm-control-height-sm);
+}
+
+.fm-live-chart-inspector__checkbox {
+  accent-color: var(--fm-accent);
+}
+
+.fm-live-chart-inspector__hint {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  margin: 0;
+}

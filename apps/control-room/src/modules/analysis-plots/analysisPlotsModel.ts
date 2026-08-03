@@ -2,19 +2,14 @@ import {
   buildTableRowsQuery,
   type ChartSeries,
   type ChartValueRange,
-  DEFAULT_TABLE_CHART_COLUMNS,
   isTableTimeAxisId,
   type TableRowsQuery,
   tableRowsVisibleRangeQuery,
 } from "./chartTableModel";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import type { AnalysisChartRangeMode } from "@/kernel/workspace/analysisPlotsWorkspace";
+import type { ChartRangeModeState as AnalysisChartRangeMode } from "@/shared/analysis-charts/ChartControlBar";
 import { ANALYSIS_SCALAR_COLUMNS } from "./tableRowsAdapter";
-import {
-  type AxisColumnUnit,
-  nextYAxisIdsForToggle,
-  sanitizeYAxisIdsForUnitLimit,
-} from "@/shared/domain/analysis/TableColumnList";
+import { type AxisColumnUnit, sanitizeYAxisIdsForUnitLimit } from "@/shared/domain/analysis/TableColumnList";
 
 export function formatAnalysisPointValue(value: number, unit: string): string {
   const formatted =
@@ -86,23 +81,6 @@ export function buildAnalysisPlotsTableQuery({
   });
 }
 
-export function shouldFetchAnalysisTableRows({
-  hasVisibleRows,
-  loadScalars,
-  liveMode = "following",
-}: {
-  hasVisibleRows: boolean;
-  loadScalars: boolean;
-  liveMode?: import("@/kernel/workspace/analysisPlotsWorkspace").ChartLiveMode;
-  range?: ChartValueRange | null;
-}): boolean {
-  if (!loadScalars) return false;
-  // When paused, freeze updates if rows are already loaded.
-  // Resuming (liveMode -> 'following') returns true, immediately triggering a fetch.
-  if (liveMode === "paused" && hasVisibleRows) return false;
-  return true;
-}
-
 /** A `tailTime` preference has no server meaning unless the selected X axis is simulation time. */
 export function normalizeTableRangeModeForXAxis(
   rangeMode: AnalysisChartRangeMode,
@@ -119,25 +97,7 @@ export function resolveAnalysisPlotsYAxisIds(
   xAxisId: string,
 ): string[] {
   if (!columns) return yAxisIds.filter((id) => id !== xAxisId);
-  const sanitized = sanitizeYAxisIdsForUnitLimit(yAxisIds, columns, xAxisId);
-  if (sanitized.length > 0) return sanitized;
-
-  const availableColumnIds = new Set(columns.map((column) => column.column_id));
-  const preferredYAxisIds = DEFAULT_TABLE_CHART_COLUMNS.filter(
-    (columnId) =>
-      columnId !== xAxisId &&
-      columnId !== "step" &&
-      columnId !== "t" &&
-      availableColumnIds.has(columnId),
-  );
-  const fallbackYAxisIds =
-    preferredYAxisIds.length > 0
-      ? preferredYAxisIds
-      : columns.flatMap((column) =>
-          column.column_id === xAxisId ? [] : [column.column_id],
-        );
-
-  return sanitizeYAxisIdsForUnitLimit(fallbackYAxisIds, columns, xAxisId);
+  return sanitizeYAxisIdsForUnitLimit(yAxisIds, columns, xAxisId);
 }
 
 export function resolveAnalysisPlotsRequestedSeriesYAxisIds({
@@ -155,10 +115,7 @@ export function resolveAnalysisPlotsRequestedSeriesYAxisIds({
   if (!columns.some((column) => column.column_id === columnId)) {
     return [...yAxisIds];
   }
-  return nextYAxisIdsForToggle(yAxisIds, columnId, true, {
-    columns,
-    xAxisId,
-  });
+  return sanitizeYAxisIdsForUnitLimit([...yAxisIds, columnId], columns, xAxisId);
 }
 
 export function analysisPlotsRangeSelectedEvent({

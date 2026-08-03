@@ -24,6 +24,7 @@ export type BottomPanelTabId =
   | "engine"
   | "logs"
   | "mesh"
+  | "quick-chart"
   | "telemetry";
 
 export interface LayoutState {

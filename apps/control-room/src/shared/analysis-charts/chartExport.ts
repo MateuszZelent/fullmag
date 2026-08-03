@@ -1,5 +1,10 @@
 import type { ChartRenderModel } from "./chartRenderer";
 import type { ChartScientificTrust } from "./chartScientificTrust";
+import {
+  chartValueExtrema,
+  createChartDisplayTransform,
+  createChartYAxisDisplayTransforms,
+} from "./chartScalePolicy";
 
 export type ChartExportFormat = "csv" | "tsv";
 
@@ -37,7 +42,7 @@ export function chartExportProvenance(
       y: model.series.map((series) => series.unit),
     },
     device: model.provenance?.device ?? null,
-    displayUnits: model.provenance?.displayUnits ?? {},
+    displayUnits: resolvedDisplayUnits(model),
     exportedAt,
     precision: model.provenance?.precision ?? null,
     query: model.provenance?.query ?? model.key,
@@ -49,6 +54,29 @@ export function chartExportProvenance(
     scientificTrust: model.provenance?.scientificTrust ?? "unknown",
     stageId: model.provenance?.stageId ?? null,
   };
+}
+
+function resolvedDisplayUnits(model: ChartRenderModel): Record<string, string> {
+  const supplied = model.provenance?.displayUnits;
+  const yTransforms = createChartYAxisDisplayTransforms(model.yAxes, model.series);
+  return {
+    x: createChartDisplayTransform(
+      model.xAxis.unit,
+      chartValueExtrema(iterateXValues(model)),
+    ).displayUnit,
+    ...Object.fromEntries(model.series.map((series) => [
+      `y:${series.id}`,
+      (yTransforms[series.yAxis] ??
+        createChartDisplayTransform(series.unit, null)).displayUnit,
+    ])),
+    ...supplied,
+  };
+}
+
+function* iterateXValues(model: ChartRenderModel): Iterable<number> {
+  for (const series of model.series) {
+    for (const point of series.points) yield point.x;
+  }
 }
 
 export function serializeChartData(

@@ -142,6 +142,9 @@ describe("formatTooltipValue", () => {
     expect(formatTooltipValue(1.5, "J")).toBe("1.5 J");
     expect(formatTooltipValue(1.5, "")).toBe("1.5");
   });
+  it("preserves a dimensionless normalized magnetization value", () => {
+    expect(formatTooltipValue(0.10317, "")).toBe("0.10317");
+  });
   it("handles non-finite", () => {
     expect(formatTooltipValue(NaN, "J")).toBe("—");
   });

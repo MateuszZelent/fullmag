@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import {
+  LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH,
+  readLegacyLiveChartSelectionIdentity,
+  parseLiveChartSelectionIdentity,
+  serializeLiveChartSelectionIdentity,
+} from "./selectionTypes";
 
 import { SelectionController } from "./SelectionController";
 
@@ -77,6 +83,74 @@ describe("SelectionController", () => {
     controller.set(pointSelection, "analysis-plots");
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("treats a Live Chart point revision as part of selection identity", () => {
+    const { bus, controller } = setup();
+    const listener = vi.fn();
+    const livePoint = {
+      kind: "live.chart-point",
+      label: "mx 0.2",
+      nodeId: "live:chart:magnetization:point:mx:1:7",
+      objectId: null,
+      ref: {
+        descriptorId: "magnetization",
+        kind: "live.chart-point",
+        nodeId: "live:chart:magnetization:point:mx:1:7",
+        pointIndex: 1,
+        revision: 7,
+        seriesId: "mx",
+        type: "live-chart-point",
+      },
+    } as const;
+
+    controller.set(livePoint, "live-charts");
+    bus.on("workspace:selection-changed", listener);
+    controller.set(livePoint, "live-charts");
+    controller.set(
+      {
+        ...livePoint,
+        ref: { ...livePoint.ref, revision: 8 },
+      },
+      "live-charts",
+    );
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("parses only bounded current live chart identities and serializes canonically", () => {
+    const parsed = parseLiveChartSelectionIdentity("live:chart:custom%20signal");
+
+    expect(parsed).toEqual({ descriptorId: "custom signal", kind: "live.chart" });
+    expect(serializeLiveChartSelectionIdentity(parsed!)).toBe(
+      "live:chart:custom%20signal",
+    );
+    expect(parseLiveChartSelectionIdentity("analysis:charts:default")).toBeNull();
+    expect(parseLiveChartSelectionIdentity("analysis:charts:frequency-domain:run-1")).toBeNull();
+    expect(parseLiveChartSelectionIdentity("live:chart:bad%ZZ")).toBeNull();
+    expect(parseLiveChartSelectionIdentity(`live:chart:${"a".repeat(LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH)}`)).toBeNull();
+    expect(serializeLiveChartSelectionIdentity({ descriptorId: "bad/id", kind: "live.chart" })).toBeNull();
+  });
+
+  it("reads the one legacy live identity only through the explicit migration context", () => {
+    expect(
+      readLegacyLiveChartSelectionIdentity(
+        "analysis:charts:default",
+        "legacy-live-preference",
+      ),
+    ).toEqual({ descriptorId: "default", kind: "live.chart" });
+    expect(
+      readLegacyLiveChartSelectionIdentity(
+        "analysis:charts:frequency-domain:run-1",
+        "legacy-live-preference",
+      ),
+    ).toBeNull();
+    expect(
+      readLegacyLiveChartSelectionIdentity(
+        "analysis:charts:default",
+        "current-selection",
+      ),
+    ).toBeNull();
   });
 
   it("clear() resets to null", () => {

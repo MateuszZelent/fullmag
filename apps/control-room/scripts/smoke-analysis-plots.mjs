@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+
 const apiBase = (
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -9,13 +12,24 @@ const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const timeoutMs = numericEnv("CONTROL_ROOM_ANALYSIS_PLOTS_TIMEOUT_MS", 90_000);
 const observeMs = numericEnv("CONTROL_ROOM_ANALYSIS_PLOTS_OBSERVE_MS", 8_000);
-const maxRowsBinRequests = numericEnv(
+const maxRowsBinRequests = nonNegativeNumericEnv(
   "CONTROL_ROOM_ANALYSIS_PLOTS_MAX_ROWS_BIN_REQUESTS",
-  12,
+  0,
 );
+const useFixture = process.env.CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE === "1";
+const liveRefreshObserveMs = numericEnv(
+  "ANALYSIS_LIVE_REFRESH_OBSERVE_MS",
+  3_000,
+);
+const acceptanceDirectory =
+  process.env.CONTROL_ROOM_ACCEPTANCE_DIR ??
+  path.resolve(".fullmag/reports/live-charts-analysis-acceptance/latest");
 
+const ANALYSIS_SURFACES = [
+  "Dynamics", "Spectrum", "Frequency Response", "Eigenmodes", "Dispersion", "Hysteresis", "Comparison",
+];
 const ROWS_BIN_PATTERN =
-  /^\/v2\/sessions\/current\/data\/tables\/default\/rows\.bin(?:\?|$)/;
+  /^\/v2\/sessions\/current\/data\/tables\/[^/]+\/rows\.bin(?:\?|$)/;
 
 async function main() {
   const playwright = await loadPlaywright();
@@ -30,10 +44,13 @@ async function main() {
   const errors = [];
   const failedResponses = [];
   const rowsBinRequests = [];
+  const analysisPlotRequests = [];
 
-  await page.addInitScript((baseUrl) => {
+  await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
+      ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
+      ...(allowMissingSessionSmoke ? { disableRealtime: true } : {}),
       controlRoomApiBase: baseUrl,
     };
     window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
@@ -41,10 +58,15 @@ async function main() {
       activeInstances: 0,
       createdInstances: 0,
       disposedInstances: 0,
+      modelBuilds: 0,
+      plannedPoints: 0,
+      renderedPoints: 0,
       resizeCalls: 0,
       setOptionCalls: 0,
     };
-  }, apiBase);
+  }, { allowMissingSessionSmoke: useFixture, baseUrl: apiBase });
+
+  if (useFixture) await installAnalysisDatasetFixtureRoutes(page);
 
   page.on("console", (message) => {
     if (message.type() !== "error") return;
@@ -55,17 +77,24 @@ async function main() {
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("response", (response) => {
     if (response.status() < 400) return;
-    const path = currentSessionPath(response.url());
     failedResponses.push({
-      path,
+      path: currentSessionPath(response.url()),
       status: response.status(),
       url: response.url(),
     });
   });
   page.on("request", (request) => {
     const path = currentSessionPath(request.url());
-    if (!path || !ROWS_BIN_PATTERN.test(path)) return;
-    rowsBinRequests.push({ path, timestamp: Date.now() });
+    if (
+      path &&
+      (path.startsWith("/v2/sessions/current/data/tables") ||
+        path.startsWith("/v2/sessions/current/analysis/"))
+    ) {
+      analysisPlotRequests.push({ path, timestamp: Date.now() });
+    }
+    if (path && ROWS_BIN_PATTERN.test(path)) {
+      rowsBinRequests.push({ path, timestamp: Date.now() });
+    }
   });
 
   try {
@@ -75,25 +104,28 @@ async function main() {
     });
     await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
     await openAnalysisPlots(page);
+    await verifyAnalysisSurfaceContract(page);
+    const selectedDatasetRef = await selectPublishedDataset(page);
     await waitForAnalysisRowsAndCanvas(page);
+    await verifyPinnedDatasetProvenance(page, selectedDatasetRef);
     await verifySeriesLegend(page);
-    await verifyInspectorOwnsChartControls(page);
-    await verifyLast160PointsFetch(page, rowsBinRequests);
     await verifyPointSelection(page);
-    await verifySeriesSelectionEvent(page, rowsBinRequests);
-    if (await hasAxisControlPanel(page)) {
-      await verifyAxisControlInteraction(page, rowsBinRequests);
-      await verifyThirdUnitSelectionDisabled(page);
-      await verifyAtLeastOneYAxisRemainsSelected(page, rowsBinRequests);
-    }
-    await verifyAddSeriesEvent(page, rowsBinRequests);
-    await verifyZoomRangeFetch(page, rowsBinRequests);
+    await verifyAnalysisInspectorSummary(page, selectedDatasetRef);
+    await verifyLocalSeriesSelection(page, rowsBinRequests);
+    await verifyLocalRangeSelection(page, rowsBinRequests);
+    const explicitDatasetRequestBaseline = analysisPlotRequests.length;
+    await verifyNoImplicitLiveRefresh(
+      page,
+      analysisPlotRequests,
+      explicitDatasetRequestBaseline,
+    );
+    await assertNoVisibleResourceErrors(page, errors);
+    const screenshots = await captureAnalysisAcceptanceScreenshots(page, errors);
 
     rowsBinRequests.length = 0;
     await page.waitForTimeout(observeMs);
     const proof = await collectAnalysisPlotProof(page);
-
-    const failures = validateProof(proof);
+    const failures = validateProof(proof, selectedDatasetRef);
     if (rowsBinRequests.length > maxRowsBinRequests) {
       failures.push(
         `rows.bin request budget exceeded: ${rowsBinRequests.length}/${maxRowsBinRequests} in ${observeMs} ms`,
@@ -121,6 +153,8 @@ async function main() {
         failedResponses: failedResponses.length,
         rowsBinRequests: rowsBinRequests.length,
         rowsBinRequestBudget: maxRowsBinRequests,
+        resourceFamilyCounts: countResourceFamilies(analysisPlotRequests),
+        screenshots,
         workspaceUrl,
       })}`,
     );
@@ -130,53 +164,90 @@ async function main() {
   }
 }
 
-async function hasAxisControlPanel(page) {
-  return page
-    .locator(".fm-inspector-panel .fm-analysis-plots__column-row")
-    .first()
-    .isVisible({ timeout: 1_000 })
-    .catch(() => false);
+async function verifyNoImplicitLiveRefresh(
+  page,
+  analysisPlotRequests,
+  explicitDatasetRequestBaseline,
+) {
+  await page.waitForTimeout(liveRefreshObserveMs);
+  const implicitRequests = analysisPlotRequests.slice(explicitDatasetRequestBaseline);
+  if (implicitRequests.length > 0) {
+    throw new Error(
+      `Analysis implicitly refreshed an explicitly selected dataset: ${JSON.stringify(implicitRequests)}`,
+    );
+  }
+  const provenance = await page
+    .locator(".fm-analysis-plots__header")
+    .getByText(/^Dataset provenance:/)
+    .innerText();
+  if (!/Dataset provenance: .+revision\s+\d+/.test(provenance)) {
+    throw new Error(`Analysis did not retain frozen dataset provenance: ${provenance}`);
+  }
 }
 
-async function verifyInspectorOwnsChartControls(page) {
-  await page
-    .locator(".fm-inspector-panel [aria-label='Chart controls']")
-    .waitFor({ state: "visible", timeout: timeoutMs });
-  const controlsInChart = await page
-    .locator(".fm-analysis-plots .fm-chart-control-bar")
-    .count();
-  const columnsInChart = await page
-    .locator(".fm-analysis-plots .fm-analysis-plots__column-row")
-    .count();
-  if (controlsInChart !== 0 || columnsInChart !== 0) {
+async function assertNoVisibleResourceErrors(page, errors) {
+  if (errors.length > 0) {
+    throw new Error(`Browser page errors before screenshot capture: ${errors.join(" | ")}`);
+  }
+  const errorNotifications = page.locator(
+    '.fm-notifications__toast[data-kind="error"], .fm-toast[data-variant="error"]',
+  );
+  const visibleErrors = [];
+  for (let index = 0; index < await errorNotifications.count(); index += 1) {
+    const notification = errorNotifications.nth(index);
+    if (await notification.isVisible()) visibleErrors.push(await notification.innerText());
+  }
+  if (visibleErrors.length > 0) {
     throw new Error(
-      "Analysis chart surface still owns controls or quantity selection instead of the Inspector.",
+      `Visible resource error notification before screenshot capture: ${visibleErrors.join(" | ")}`,
     );
   }
 }
 
-async function verifyLast160PointsFetch(page, rowsBinRequests) {
-  rowsBinRequests.length = 0;
-  await page
-    .locator(".fm-inspector-panel [aria-label='Chart range']")
-    .click({ timeout: timeoutMs });
-  await page
-    .getByRole("option", { exact: true, name: "Last 160 points" })
-    .click({ timeout: timeoutMs });
-
-  const request = await waitForRowsBinRequest(rowsBinRequests, (path) => {
-    const params = queryParams(path);
-    return (
-      params.get("include_tail") === "true" &&
-      params.get("limit") === "160" &&
-      params.get("target_points") === "160"
-    );
-  }, page);
-  if (!request) {
-    throw new Error(
-      "Last 160 points did not request an exact 160-row tail window.",
-    );
+async function captureAnalysisAcceptanceScreenshots(page, errors) {
+  mkdirSync(acceptanceDirectory, { recursive: true });
+  const screenshots = [];
+  for (const [theme, filename] of [
+    ["dark", "analysis-mocha.png"],
+    ["light", "analysis-latte.png"],
+  ]) {
+    await page.evaluate((theme) => {
+      document.documentElement.dataset.theme = theme;
+    }, theme);
+    await page.waitForTimeout(100);
+    await assertNoVisibleResourceErrors(page, errors);
+    const target = path.join(acceptanceDirectory, filename);
+    await page.screenshot({ path: target });
+    screenshots.push(target);
   }
+  await page.evaluate(() => {
+    document.body.style.zoom = "200%";
+  });
+  await assertNoVisibleResourceErrors(page, errors);
+  const zoomTarget = path.join(acceptanceDirectory, "analysis-zoom-200.png");
+  await page.screenshot({ fullPage: true, path: zoomTarget });
+  screenshots.push(zoomTarget);
+  await page.evaluate(() => {
+    document.body.style.zoom = "";
+  });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await assertNoVisibleResourceErrors(page, errors);
+  const reducedTarget = path.join(
+    acceptanceDirectory,
+    "analysis-reduced-motion.png",
+  );
+  await page.screenshot({ path: reducedTarget });
+  screenshots.push(reducedTarget);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  return screenshots;
+}
+
+function countResourceFamilies(requests) {
+  return requests.reduce((counts, request) => {
+    const family = request.path.includes("/data/tables") ? "data.tables" : "analysis";
+    counts[family] = (counts[family] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 async function openAnalysisPlots(page) {
@@ -201,26 +272,51 @@ async function openAnalysisPlots(page) {
     .waitFor({ state: "visible", timeout: timeoutMs });
 }
 
+async function verifyAnalysisSurfaceContract(page) {
+  const tabs = page.locator(".fm-analysis-plots__tabs .fm-analysis-plots__tab");
+  await tabs.first().waitFor({ state: "visible", timeout: timeoutMs });
+  const labels = (await tabs.allTextContents()).map((label) => label.trim());
+  if (JSON.stringify(labels) !== JSON.stringify(ANALYSIS_SURFACES)) {
+    throw new Error(
+      `Analysis workbench surfaces differ from the dataset-driven contract: ${JSON.stringify(labels)}`,
+    );
+  }
+}
+
+async function selectPublishedDataset(page) {
+  const trigger = page.getByRole("combobox", { name: "Analysis dataset" });
+  await trigger.waitFor({ state: "visible", timeout: timeoutMs });
+  await trigger.click({ timeout: timeoutMs });
+  const option = page.getByRole("option").first();
+  await option.waitFor({ state: "visible", timeout: timeoutMs }).catch(async () => {
+    const body = await page.locator(".fm-analysis-plots").innerText();
+    throw new Error(
+      `No published Analysis dataset is available. Analysis snippet:\n${body.slice(0, 1_000)}`,
+    );
+  });
+  const datasetRef = (await option.innerText()).trim();
+  if (!datasetRef) throw new Error("Published Analysis dataset has an empty identity.");
+  await option.click({ timeout: timeoutMs });
+  await page.waitForFunction(
+    (expected) => {
+      const selector = document.querySelector('[aria-label="Analysis dataset"]');
+      return selector?.textContent?.trim().includes(expected);
+    },
+    datasetRef,
+    { timeout: timeoutMs },
+  );
+  return datasetRef;
+}
+
 async function waitForAnalysisRowsAndCanvas(page) {
   await page.waitForFunction(
     () => {
       const root = document.querySelector(".fm-analysis-plots");
-      const summary =
-        root?.querySelector(".fm-analysis-plots__header span")?.textContent ??
-        root?.querySelector(".fm-chart-section__subtitle")?.textContent ??
-        "";
-      const visible =
-        root?.querySelector(".fm-chart-control-bar__points")?.textContent ??
-        root?.querySelector(".fm-chart-section__point-count")?.textContent ??
-        root?.querySelector(".fm-analysis-plots__range span:last-child")?.textContent ??
-        "";
-      const canvas = root?.querySelector(
-        ".fm-analysis-plots__echarts canvas, .fm-analysis-chart-surface canvas",
-      );
+      const pointSummary =
+        root?.querySelector(".fm-chart-section__point-count")?.textContent ?? "";
+      const canvas = root?.querySelector(".fm-analysis-chart-surface canvas");
       return (
-        Boolean(root) &&
-        (/\d+ rows \/ \d+ columns/.test(summary) || summary.length > 0) &&
-        (/\d+/.test(visible)) &&
+        /[1-9]\d*(?:\s*\/\s*[1-9]\d*)?\s+rows/.test(pointSummary) &&
         canvas instanceof HTMLCanvasElement &&
         canvas.width > 0 &&
         canvas.height > 0
@@ -230,10 +326,67 @@ async function waitForAnalysisRowsAndCanvas(page) {
   );
 }
 
+async function verifyPinnedDatasetProvenance(page, datasetRef) {
+  await page.waitForFunction(
+    ({ expectedDatasetRef }) => {
+      const text =
+        document.querySelector(".fm-analysis-plots__header span")?.textContent ?? "";
+      return (
+        text.includes(`Dataset provenance: ${expectedDatasetRef}`) &&
+        /\brevision\s+\d+\b/.test(text)
+      );
+    },
+    { expectedDatasetRef: datasetRef },
+    { timeout: timeoutMs },
+  ).catch(async () => {
+    const header = await page.locator(".fm-analysis-plots__header").innerText();
+    throw new Error(
+      `Analysis dataset provenance lacks the selected identity or frozen revision: ${header}`,
+    );
+  });
+}
+
+async function verifySeriesLegend(page) {
+  await page.waitForFunction(
+    () => {
+      const root = document.querySelector(".fm-analysis-plots");
+      const items = Array.from(
+        root?.querySelectorAll(".fm-chart-legend__item") ?? [],
+      );
+      return items.length > 0 && items.every((item) => {
+        const label = item.querySelector(".fm-chart-legend__label");
+        const latest = item.querySelector(".fm-chart-legend__latest");
+        const swatch = item.querySelector(".fm-chart-legend__swatch");
+        const ariaLabel = item.getAttribute("aria-label") ?? "";
+        return (
+          label?.textContent?.trim() &&
+          latest?.textContent?.trim() &&
+          swatch instanceof HTMLElement &&
+          /, unit (?:dimensionless|.+), latest .+\./.test(ariaLabel) &&
+          (item.getAttribute("aria-pressed") === "true" ||
+            item.getAttribute("aria-pressed") === "false")
+        );
+      });
+    },
+    { timeout: timeoutMs },
+  ).catch(async () => {
+    const body = await page.locator(".fm-analysis-plots").innerText();
+    const items = await page.locator(".fm-chart-legend__item").evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        ariaLabel: node.getAttribute("aria-label"),
+        ariaPressed: node.getAttribute("aria-pressed"),
+        html: node.innerHTML,
+      })),
+    );
+    throw new Error(
+      `analysis series legend is missing or incomplete. Items: ${JSON.stringify(items)}. Analysis snippet:\n${body.slice(0, 1_000)}`,
+    );
+  });
+}
+
 async function verifyPointSelection(page) {
   const dispatched = await page.evaluate(() => {
-    const dispatch =
-      window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchPointClick;
+    const dispatch = window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchPointClick;
     if (typeof dispatch !== "function") return false;
     dispatch(0, 0);
     return true;
@@ -243,8 +396,7 @@ async function verifyPointSelection(page) {
   }
   await page.waitForFunction(
     () => {
-      const root = document.querySelector(".fm-analysis-plots");
-      const cursor = root?.querySelector(".fm-analysis-plots__range-cursor");
+      const cursor = document.querySelector(".fm-analysis-plots__range-cursor");
       return Boolean(cursor && !/cursor\s+—/i.test(cursor.textContent ?? ""));
     },
     { timeout: timeoutMs },
@@ -256,211 +408,58 @@ async function verifyPointSelection(page) {
   });
 }
 
-async function verifySeriesLegend(page) {
-  await page.waitForFunction(
-    () => {
-      const root = document.querySelector(".fm-analysis-plots");
-      const legend = root?.querySelector(".fm-chart-section__legend");
-      const items = Array.from(
-        legend?.querySelectorAll(".fm-chart-legend__item") ?? [],
-      );
-      return (
-        legend instanceof HTMLElement &&
-        items.length > 0 &&
-        items.every((item) => {
-          const label = item.querySelector(".fm-chart-legend__label");
-          const unit = item.querySelector(".fm-chart-legend__unit");
-          const latest = item.querySelector(".fm-chart-legend__latest");
-          const swatch = item.querySelector(".fm-chart-legend__swatch");
-          return (
-            label?.textContent?.trim() &&
-            unit?.textContent?.trim() &&
-            latest?.textContent?.trim() &&
-            swatch instanceof HTMLElement &&
-            item.getAttribute("aria-label")?.includes(" latest ")
-          );
-        })
-      );
-    },
-    { timeout: timeoutMs },
-  ).catch(async () => {
-    const body = await page.locator(".fm-analysis-plots").innerText();
-    throw new Error(
-      `analysis series legend is missing or incomplete. Analysis snippet:\n${body.slice(0, 1_000)}`,
-    );
+async function verifyAnalysisInspectorSummary(page, datasetRef) {
+  const inspector = page.locator(".fm-inspector-panel");
+  await inspector.getByText("Analysis chart", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
   });
+  const text = await inspector.innerText();
+  for (const required of ["Surface", "Dataset", datasetRef, "X axis", "Range", "Series"]) {
+    if (!text.includes(required)) {
+      throw new Error(`Analysis Inspector is missing ${required}: ${text}`);
+    }
+  }
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+    if (text.includes(forbidden)) {
+      throw new Error(`Analysis Inspector still exposes Live Chart control ${forbidden}.`);
+    }
+  }
 }
 
-async function verifySeriesSelectionEvent(page, rowsBinRequests) {
+async function verifyLocalSeriesSelection(page, rowsBinRequests) {
   rowsBinRequests.length = 0;
-  await page
-    .locator(".fm-chart-legend__item")
-    .first()
-    .click({ timeout: timeoutMs });
+  const item = page.locator(".fm-chart-legend__item").first();
+  const before = await item.getAttribute("aria-pressed");
+  if (before !== "true" && before !== "false") {
+    throw new Error(`Analysis legend item lacks selection state: ${before}`);
+  }
+  await item.click({ timeout: timeoutMs });
   await page.waitForFunction(
-    () => {
-      const event =
-        window.__FULLMAG_CHART_DIAGNOSTICS__?.seriesSelectedEvents?.at(-1);
-      return (
-        event?.chartId === "default" &&
-        event.tableId === "default" &&
-        typeof event.seriesId === "string" &&
-        event.seriesId.length > 0 &&
-        typeof event.resourceKey === "string" &&
-        event.resourceKey.includes("/data/tables/default/rows") &&
-        typeof event.quantity === "string" &&
-        event.quantity.length > 0
-      );
-    },
+    ({ previous }) =>
+      document.querySelector(".fm-chart-legend__item")?.getAttribute("aria-pressed") !== previous,
+    { previous: before },
     { timeout: timeoutMs },
-  ).catch(async () => {
-    const events = await page.evaluate(
-      () => window.__FULLMAG_CHART_DIAGNOSTICS__?.seriesSelectedEvents ?? [],
-    );
-    throw new Error(
-      `chart series-selected event was not emitted. Events: ${JSON.stringify(events)}`,
-    );
-  });
+  );
+  await page.waitForTimeout(250);
   if (rowsBinRequests.length > 0) {
     throw new Error(
-      `rows.bin requests after series selection: ${rowsBinRequests.length}`,
+      `rows.bin requests after local series selection: ${rowsBinRequests.length}`,
     );
   }
-}
-
-async function verifyAxisControlInteraction(page, rowsBinRequests) {
-  rowsBinRequests.length = 0;
-  const xAxisRadios = page.locator(
-    ".fm-inspector-panel .fm-analysis-plots__column-row input[type='radio']",
-  );
-  if ((await xAxisRadios.count()) < 2) return;
-  const targetIndex = await xAxisRadios.first().isChecked() ? 1 : 0;
-  await xAxisRadios.nth(targetIndex).click({ timeout: timeoutMs });
+  await item.click({ timeout: timeoutMs });
   await page.waitForFunction(
-    () => {
-      const root = document.querySelector(".fm-inspector-panel");
-      const radios = Array.from(
-        root?.querySelectorAll(".fm-analysis-plots__column-row input[type='radio']") ?? [],
-      );
-      const canvas = document.querySelector(".fm-analysis-chart-surface canvas");
-      return (
-        radios.some((radio) => radio instanceof HTMLInputElement && radio.checked) &&
-        canvas instanceof HTMLCanvasElement &&
-        canvas.width > 0 &&
-        canvas.height > 0
-      );
-    },
+    ({ expected }) =>
+      document.querySelector(".fm-chart-legend__item")?.getAttribute("aria-pressed") === expected,
+    { expected: before },
     { timeout: timeoutMs },
   );
-  if (rowsBinRequests.length > 0) {
-    throw new Error(
-      `rows.bin requests after axis interaction: ${rowsBinRequests.length}`,
-    );
-  }
 }
 
-async function verifyThirdUnitSelectionDisabled(page) {
-  const torqueRow = page
-    .locator(".fm-inspector-panel .fm-analysis-plots__column-row")
-    .filter({ hasText: /max torque/i });
-  if ((await torqueRow.count()) === 0) return;
-  await page.waitForFunction(
-    () => {
-      const root = document.querySelector(".fm-inspector-panel");
-      const row = Array.from(
-        root?.querySelectorAll(".fm-analysis-plots__column-row") ?? [],
-      ).find((element) => /max torque/i.test(element.textContent ?? ""));
-      const checkbox = row?.querySelector("input[type='checkbox']");
-      return (
-        checkbox instanceof HTMLInputElement &&
-        checkbox.disabled &&
-        checkbox.title === "Select at most two Y-axis unit groups"
-      );
-    },
-    { timeout: timeoutMs },
-  ).catch(async () => {
-    const body = await page.locator(".fm-analysis-plots").innerText();
-    throw new Error(
-      `third-unit Y-axis checkbox remained enabled. Analysis snippet:\n${body.slice(0, 1_000)}`,
-    );
-  });
-}
-
-async function verifyAtLeastOneYAxisRemainsSelected(page, rowsBinRequests) {
-  rowsBinRequests.length = 0;
-  const checkedEnabledYAxes = page.locator(
-    ".fm-inspector-panel .fm-analysis-plots__column-row input[type='checkbox']:checked:not(:disabled)",
-  );
-  while ((await checkedEnabledYAxes.count()) > 1) {
-    await checkedEnabledYAxes.first().click({ timeout: timeoutMs });
-  }
-  await page.waitForFunction(
-    () => {
-      const root = document.querySelector(".fm-inspector-panel");
-      const checkboxes = Array.from(
-        root?.querySelectorAll(
-          ".fm-analysis-plots__column-row input[type='checkbox']",
-        ) ?? [],
-      ).filter((input) => input instanceof HTMLInputElement);
-      const checked = checkboxes.filter((input) => input.checked);
-      const enabledChecked = checked.filter((input) => !input.disabled);
-      const canvas = document.querySelector(".fm-analysis-chart-surface canvas");
-      return (
-        checked.length === 1 &&
-        enabledChecked.length === 0 &&
-        canvas instanceof HTMLCanvasElement &&
-        canvas.width > 0 &&
-        canvas.height > 0
-      );
-    },
-    { timeout: timeoutMs },
-  );
-  if (rowsBinRequests.length > 0) {
-    throw new Error(
-      `rows.bin requests after Y-axis toggle: ${rowsBinRequests.length}`,
-    );
-  }
-}
-
-async function verifyAddSeriesEvent(page, rowsBinRequests) {
+async function verifyLocalRangeSelection(page, rowsBinRequests) {
   rowsBinRequests.length = 0;
   const dispatched = await page.evaluate(() => {
-    const dispatch =
-      window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchSeriesRequest;
-    if (typeof dispatch !== "function") return false;
-    dispatch("mx");
-    return true;
-  });
-  if (!dispatched) {
-    throw new Error("Chart add-series diagnostic dispatcher was not installed.");
-  }
-  await page.waitForFunction(
-    () => {
-      const root = document.querySelector(".fm-analysis-plots");
-      const hasRequestedSeries = Array.from(
-        root?.querySelectorAll(".fm-chart-legend__label") ?? [],
-      ).some((element) => element.textContent?.trim() === "mx");
-      return hasRequestedSeries;
-    },
-    { timeout: timeoutMs },
-  ).catch(async () => {
-    const body = await page.locator(".fm-analysis-plots").innerText();
-    throw new Error(
-      `chart add-series event did not add the requested series. Analysis snippet:\n${body.slice(0, 1_000)}`,
-    );
-  });
-  if (rowsBinRequests.length > 0) {
-    throw new Error(
-      `rows.bin requests after add-series event: ${rowsBinRequests.length}`,
-    );
-  }
-}
-
-async function verifyZoomRangeFetch(page, rowsBinRequests) {
-  rowsBinRequests.length = 0;
-  const dispatched = await page.evaluate(() => {
-    const dispatch =
-      window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchDataZoom;
+    const dispatch = window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchDataZoom;
     if (typeof dispatch !== "function") return false;
     dispatch(20, 40);
     return true;
@@ -470,66 +469,22 @@ async function verifyZoomRangeFetch(page, rowsBinRequests) {
   }
   await page.waitForFunction(
     () => {
-      const event =
-        window.__FULLMAG_CHART_DIAGNOSTICS__?.rangeSelectedEvents?.at(-1);
-      return (
-        event?.chartId === "default" &&
-        event.tableId === "default" &&
-        typeof event.xAxisId === "string" &&
-        event.xAxisId.length > 0 &&
-        event.range?.fromValue === 20 &&
-        event.range?.toValue === 40
-      );
+      const zoom = document.querySelector(".fm-analysis-plots__range-zoom");
+      return /zoom\s+20(?:\.0+)?\s*-\s*40(?:\.0+)?/.test(zoom?.textContent ?? "");
     },
     { timeout: timeoutMs },
   ).catch(async () => {
-    const events = await page.evaluate(
-      () => window.__FULLMAG_CHART_DIAGNOSTICS__?.rangeSelectedEvents ?? [],
-    );
+    const body = await page.locator(".fm-analysis-plots").innerText();
     throw new Error(
-      `chart range-selected event was not emitted for zoom. Events: ${JSON.stringify(events)}`,
+      `local Analysis range selection was not retained. Analysis snippet:\n${body.slice(0, 1_000)}`,
     );
   });
-  await page
-    .locator(".fm-inspector-panel .fm-analysis-plots__range-clear")
-    .waitFor({ state: "visible", timeout: timeoutMs });
-  const request = await waitForRowsBinRequest(rowsBinRequests, (path) => {
-    const params = queryParams(path);
-    const hasVisibleRange = params.has("from_row") || params.has("from_t");
-    return hasVisibleRange && !params.has("cursor");
-  }, page);
-  if (!request) {
+  await page.waitForTimeout(250);
+  if (rowsBinRequests.length > 0) {
     throw new Error(
-      "zoom rows.bin request did not include a visible range without cursor",
+      `rows.bin requests after local range selection: ${rowsBinRequests.length}`,
     );
   }
-  await page
-    .locator(".fm-inspector-panel .fm-analysis-plots__range-clear")
-    .click({ timeout: timeoutMs });
-  await page.waitForFunction(
-    () => {
-      const event =
-        window.__FULLMAG_CHART_DIAGNOSTICS__?.rangeSelectedEvents?.at(-1);
-      return (
-        event?.chartId === "default" &&
-        event.tableId === "default" &&
-        typeof event.xAxisId === "string" &&
-        event.xAxisId.length > 0 &&
-        event.range === null
-      );
-    },
-    { timeout: timeoutMs },
-  ).catch(async () => {
-    const events = await page.evaluate(
-      () => window.__FULLMAG_CHART_DIAGNOSTICS__?.rangeSelectedEvents ?? [],
-    );
-    throw new Error(
-      `chart range-selected clear event was not emitted. Events: ${JSON.stringify(events)}`,
-    );
-  });
-  await page
-    .locator(".fm-inspector-panel .fm-analysis-plots__range-clear")
-    .waitFor({ state: "detached", timeout: timeoutMs });
 }
 
 async function collectAnalysisPlotProof(page) {
@@ -539,45 +494,35 @@ async function collectAnalysisPlotProof(page) {
     const canvas = host?.querySelector("canvas") ?? null;
     const rootRect = root?.getBoundingClientRect();
     const hostRect = host?.getBoundingClientRect();
-    const inspector = document.querySelector(".fm-inspector-panel");
-    const columns = Array.from(
-      inspector?.querySelectorAll(".fm-analysis-plots__column-row") ?? [],
+    const selectedDatasetRef =
+      root?.querySelector('[aria-label="Analysis dataset"]')?.textContent?.trim() ?? "";
+    const provenance =
+      root?.querySelector(".fm-analysis-plots__header span")?.textContent?.trim() ?? "";
+    const surfaceLabels = Array.from(
+      root?.querySelectorAll(".fm-analysis-plots__tab") ?? [],
     ).map((element) => element.textContent?.trim() ?? "");
-    const summary =
-      root?.querySelector(".fm-analysis-plots__header span")?.textContent ??
-      "";
-    const range = Array.from(
-      root?.querySelectorAll(".fm-chart-section__footer-row span") ?? [],
-    ).map((element) => element.textContent ?? "");
+    const pointSummary =
+      root?.querySelector(".fm-chart-section__point-count")?.textContent?.trim() ?? "";
+    const cursor =
+      root?.querySelector(".fm-analysis-plots__range-cursor")?.textContent?.trim() ?? "";
     const legend = Array.from(
       root?.querySelectorAll(".fm-chart-legend__item") ?? [],
     ).map((element) => element.getAttribute("aria-label") ?? "");
-    const empty =
-      root?.querySelector(".fm-analysis-plots__chart-empty")?.textContent ??
-      null;
+    const inspectorText =
+      document.querySelector(".fm-inspector-panel")?.textContent ?? "";
 
     let canvasProof = null;
     if (canvas instanceof HTMLCanvasElement) {
       const rect = canvas.getBoundingClientRect();
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) {
-        canvasProof = {
-          cssHeight: rect.height,
-          cssWidth: rect.width,
-          height: canvas.height,
-          nonTransparent: 0,
-          sampled: 0,
-          uniqueColors: 0,
-          width: canvas.width,
-        };
-      } else {
-        const width = Math.max(1, Math.floor(canvas.width));
-        const height = Math.max(1, Math.floor(canvas.height));
+      const width = Math.max(1, Math.floor(canvas.width));
+      const height = Math.max(1, Math.floor(canvas.height));
+      const unique = new Set();
+      let nonTransparent = 0;
+      let sampled = 0;
+      if (ctx) {
         const stepX = Math.max(1, Math.floor(width / 32));
         const stepY = Math.max(1, Math.floor(height / 32));
-        const unique = new Set();
-        let nonTransparent = 0;
-        let sampled = 0;
         for (let y = 0; y < height; y += stepY) {
           for (let x = 0; x < width; x += stepX) {
             const data = ctx.getImageData(x, y, 1, 1).data;
@@ -586,16 +531,16 @@ async function collectAnalysisPlotProof(page) {
             unique.add(`${data[0]},${data[1]},${data[2]},${data[3]}`);
           }
         }
-        canvasProof = {
-          cssHeight: rect.height,
-          cssWidth: rect.width,
-          height: canvas.height,
-          nonTransparent,
-          sampled,
-          uniqueColors: unique.size,
-          width: canvas.width,
-        };
       }
+      canvasProof = {
+        cssHeight: rect.height,
+        cssWidth: rect.width,
+        height: canvas.height,
+        nonTransparent,
+        sampled,
+        uniqueColors: unique.size,
+        width: canvas.width,
+      };
     }
 
     return {
@@ -604,23 +549,20 @@ async function collectAnalysisPlotProof(page) {
           .querySelector("[data-slot-id='viewport-main']")
           ?.getAttribute("data-active-module-id") ?? null,
       canvas: canvasProof,
-      columns,
-      empty,
-      hasAxisControls: columns.length > 0,
-      hostRect: hostRect
-        ? { height: hostRect.height, width: hostRect.width }
-        : null,
+      cursor,
+      hostRect: hostRect ? { height: hostRect.height, width: hostRect.width } : null,
+      inspectorText,
       legend,
-      range,
-      rootRect: rootRect
-        ? { height: rootRect.height, width: rootRect.width }
-        : null,
-      summary,
+      pointSummary,
+      provenance,
+      rootRect: rootRect ? { height: rootRect.height, width: rootRect.width } : null,
+      selectedDatasetRef,
+      surfaceLabels,
     };
   });
 }
 
-function validateProof(proof) {
+function validateProof(proof, expectedDatasetRef) {
   const failures = [];
   if (proof.activeModuleId !== "analysis-plots") {
     failures.push(`analysis-plots is not active: ${proof.activeModuleId}`);
@@ -645,38 +587,227 @@ function validateProof(proof) {
       );
     }
   }
-  if (!/\d+ rows \/ \d+ columns/.test(proof.summary)) {
-    failures.push(`analysis summary did not include rows/columns: ${proof.summary}`);
+  if (proof.selectedDatasetRef !== expectedDatasetRef) {
+    failures.push(
+      `selected Analysis dataset changed: ${proof.selectedDatasetRef} != ${expectedDatasetRef}`,
+    );
   }
-  if (!proof.range.some((entry) => /[1-9]\d* (pts|rows)/.test(entry))) {
-    failures.push(`analysis range did not include visible rows: ${proof.range.join(" | ")}`);
+  if (!proof.provenance.includes(expectedDatasetRef) || !/\brevision\s+\d+\b/.test(proof.provenance)) {
+    failures.push(`analysis provenance is incomplete: ${proof.provenance}`);
+  }
+  if (JSON.stringify(proof.surfaceLabels) !== JSON.stringify(ANALYSIS_SURFACES)) {
+    failures.push(`analysis workbench surfaces changed: ${JSON.stringify(proof.surfaceLabels)}`);
+  }
+  if (!/[1-9]\d*(?:\s*\/\s*[1-9]\d*)?\s+rows/.test(proof.pointSummary)) {
+    failures.push(`analysis point summary is missing: ${proof.pointSummary}`);
   }
   if (!Array.isArray(proof.legend) || proof.legend.length === 0) {
     failures.push("analysis series legend is missing.");
-  } else if (!proof.legend.every((entry) => /.+, unit .+, latest .+/.test(entry))) {
+  } else if (!proof.legend.every((entry) => /.+, unit .+, latest .+\./.test(entry))) {
     failures.push(`analysis series legend is incomplete: ${proof.legend.join(" | ")}`);
   }
-  if (proof.hasAxisControls && proof.columns.length < 2) {
-    failures.push(`analysis column list is too small: ${proof.columns.length}`);
+  if (!proof.cursor || /cursor\s+—/i.test(proof.cursor)) {
+    failures.push(`analysis cursor selection is missing: ${proof.cursor}`);
   }
-  if (proof.empty) {
-    failures.push(`analysis chart still shows empty state: ${proof.empty}`);
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+    if (proof.inspectorText.includes(forbidden)) {
+      failures.push(`Analysis Inspector exposes Live Chart control ${forbidden}.`);
+    }
   }
   return failures;
 }
 
-async function waitForRowsBinRequest(rowsBinRequests, predicate, page) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const request = rowsBinRequests.find(({ path }) => predicate(path));
-    if (request) return request;
-    await page.waitForTimeout(100);
-  }
-  return null;
+async function installAnalysisDatasetFixtureRoutes(page) {
+  const datasetRef = "analysis-fixture";
+  const revision = 17;
+  const columns = [
+    { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
+    { column_id: "mx", component: "x", dimension: "magnetization", label: "mx", quantity_id: "mx", reduction: "mean", unit: "1", value_type: "float" },
+    { column_id: "my", component: "y", dimension: "magnetization", label: "my", quantity_id: "my", reduction: "mean", unit: "1", value_type: "float" },
+    { column_id: "mz", component: "z", dimension: "magnetization", label: "mz", quantity_id: "mz", reduction: "mean", unit: "1", value_type: "float" },
+    { column_id: "e_total", component: null, dimension: "energy", label: "total energy", quantity_id: "e_total", reduction: "sum", unit: "J", value_type: "float" },
+  ];
+  const table = {
+    binary_rows_href: `/v2/sessions/current/data/tables/${datasetRef}/rows.bin`,
+    columns: [],
+    columns_href: `/v2/sessions/current/data/tables/${datasetRef}/columns`,
+    revision,
+    rows_href: `/v2/sessions/current/data/tables/${datasetRef}/rows`,
+    schema_revision: 1,
+    table_id: datasetRef,
+    total_rows: 256,
+  };
+  await page.route("**/v2/sessions/current/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const cors = {
+      "access-control-expose-headers": "x-api-contract-version",
+      "access-control-allow-origin": "*",
+      "x-api-contract-version": "1.0.0",
+    };
+    if (request.method() !== "GET") {
+      await route.fulfill({ body: "", headers: cors, status: 204 });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/status") {
+      await route.fulfill({
+        body: JSON.stringify(analysisStatusFixture()),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/data/tables") {
+      await route.fulfill({
+        body: JSON.stringify({ revision, tables: [table] }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === `/v2/sessions/current/data/tables/${datasetRef}`) {
+      await route.fulfill({
+        body: JSON.stringify(table),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === `/v2/sessions/current/data/tables/${datasetRef}/columns`) {
+      await route.fulfill({
+        body: JSON.stringify(columns),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === `/v2/sessions/current/data/tables/${datasetRef}/rows.bin`) {
+      const requestedColumns = (url.searchParams.get("columns") ?? "")
+        .split(",")
+        .filter(Boolean);
+      await route.fulfill({
+        body: makeRowsFixture(requestedColumns, 256, revision),
+        contentType: "application/vnd.fullmag.table-rows.v1+octet-stream",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    await fulfillMissingFixtureResource(route, cors);
+  });
 }
 
-function queryParams(path) {
-  return new URL(path, "http://control-room.local").searchParams;
+function analysisStatusFixture() {
+  return {
+    api_contract_version: "1.0.0",
+    capabilities: {
+      algorithms_available: [],
+      binary_fields: false,
+      cell_fields: false,
+      eigen_modes: false,
+      explicit_topology: false,
+      gpu_telemetry: false,
+      node_fields: false,
+      preview_2d: false,
+      preview_3d: false,
+      scalar_history: true,
+      structured_grid: false,
+    },
+    display: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+      max_points: 120000,
+      slice_layer: 0,
+      slice_mode: "xy",
+      vector_density: 2,
+      vector_glyphs: false,
+      view_mode: "3d",
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    domain: { cell_count: 0, discretization: "unknown", generation_id: 0 },
+    energies: {},
+    metrics: { steps_per_second: null, total_steps: 0, uptime_seconds: 0 },
+    resources: {
+      artifact_revision: 0,
+      artifacts_revision: 0,
+      command_completion_revision: 0,
+      commands_revision: 0,
+      display_revision: 0,
+      domain_generation_id: 0,
+      engine_log_revision: 0,
+      field_catalog_revision: 0,
+      field_revision: 0,
+      fields_revision: 0,
+      mesh_build_revision: 0,
+      mesh_revision: 0,
+      scalars_revision: 17,
+      scene_revision: 0,
+      slice_revision: 0,
+      stages_revision: 0,
+      topology_revision: 0,
+      visualization_state_revision: 0,
+      workspace_revision: 0,
+    },
+    run: null,
+    runtime_bundle_version: "analysis-plots-fixture",
+    session: {
+      created_at: "0",
+      name: "analysis-plots-fixture",
+      session_id: "analysis-plots-fixture",
+      workspace_root: "/tmp/fullmag-analysis-plots-fixture",
+    },
+    solver: { state: "idle" },
+  };
+}
+
+async function fulfillMissingFixtureResource(route, headers) {
+  await route.fulfill({ body: "", headers, status: 204 });
+}
+
+function makeRowsFixture(columns, rowCount, revision) {
+  if (columns.length === 0) {
+    throw new Error("Analysis rows fixture requires requested columns.");
+  }
+  const buffer = Buffer.alloc(60 + rowCount * columns.length * 8);
+  buffer.write("FMTB", 0, "ascii");
+  buffer.writeUInt16LE(1, 4);
+  buffer.writeUInt16LE(0, 6);
+  buffer.writeBigUInt64LE(BigInt(revision), 8);
+  buffer.writeBigUInt64LE(1n, 16);
+  buffer.writeBigUInt64LE(0n, 24);
+  buffer.writeBigUInt64LE(BigInt(rowCount), 32);
+  buffer.writeBigUInt64LE(BigInt(rowCount), 40);
+  buffer.writeBigUInt64LE(BigInt(rowCount), 48);
+  buffer.writeUInt32LE(columns.length, 56);
+  let offset = 60;
+  for (let row = 0; row < rowCount; row += 1) {
+    for (const column of columns) {
+      const phase = row / 20;
+      const value = column === "step"
+        ? row
+        : column === "mx"
+          ? Math.cos(phase)
+          : column === "my"
+            ? Math.sin(phase)
+            : column === "mz"
+              ? 0.1 * Math.sin(phase / 3)
+              : column === "e_total"
+                ? -1e-18 * (1 + row / rowCount)
+                : row;
+      buffer.writeDoubleLE(value, offset);
+      offset += 8;
+    }
+  }
+  return buffer;
 }
 
 function currentSessionPath(url) {
@@ -704,6 +835,11 @@ async function loadPlaywright() {
 function numericEnv(name, fallback) {
   const value = Number(process.env[name] ?? fallback);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function nonNegativeNumericEnv(name, fallback) {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 main().catch((error) => {

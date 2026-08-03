@@ -153,20 +153,53 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkAnalysisPlotsStableResourceInputs");
     expect(auditScript).toContain("checkAnalysisPlotDecimation");
     expect(auditScript).toContain("src/modules/analysis-plots/AnalysisPlotsModule.tsx");
+    expect(auditScript).toContain("src/modules/analysis-plots/AnalysisPlotsView.tsx");
+    expect(auditScript).toContain(
+      "src/modules/analysis-plots/hooks/useAnalysisDatasetData.ts",
+    );
+    expect(auditScript).toContain(
+      "src/modules/analysis-plots/hooks/useAnalysisFrequencyData.ts",
+    );
+    expect(auditScript).toContain(
+      "src/modules/analysis-plots/components/AnalysisTableSurface.tsx",
+    );
     expect(auditScript).toContain("src/modules/analysis-plots/tableRowsAdapter.ts");
     expect(auditScript).toContain("src/modules/analysis-plots/chartTableModel.ts");
-    expect(auditScript).toContain("src/modules/analysis-plots/analysisPlotsModel.ts");
+    expect(auditScript).toContain(
+      "src/shared/domain/analysis/scalarTableChart.ts",
+    );
     expect(auditScript).toContain("src/modules/analysis-plots/useAnalysisPlotsController.ts");
-    expect(auditScript).toContain("shouldLoadPublishedTableRows(");
-    expect(auditScript).toContain("shouldPausePublishedTableRows(");
-    expect(auditScript).toContain("tableColumnIdsForQuery(tableColumns.data)");
-    expect(auditScript).toContain("hasPublishedTableSchema");
+    expect(auditScript).toContain("useAnalysisDatasetData");
+    expect(auditScript).toContain("useAnalysisFrequencyData");
+    expect(auditScript).toContain("useTableColumnsResource");
+    expect(auditScript).toContain("useTableListResource");
+    expect(auditScript).toContain("useTableResource");
+    expect(auditScript).toContain("useTableRowsBinaryResource");
+    expect(auditScript).toContain("chartTableWindowFromBinary");
+    expect(auditScript).toContain("enabled: enabled && !pinnedForDataset");
+    expect(auditScript).toContain("limit: 5_000");
+    expect(auditScript).toContain("targetPoints: 1_600");
+    expect(auditScript).toContain(
+      "setPinned({ datasetRef, revision: decodedTable.revision, table: decodedTable })",
+    );
+    expect(auditScript).toContain("visibleTable = pinnedForDataset?.table ?? decodedTable");
+    expect(auditScript).toContain("useFrequencyDomainManifestResource");
+    expect(auditScript).toContain("const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch");
+    expect(auditScript).toContain("useSpinWaveGammaResource(activeSurface === \"spectrum\")");
+    expect(auditScript).toContain("useDynamicStructureFactorResource(activeSurface === \"dispersion\")");
+    expect(auditScript).toContain("const chartSeries = useMemo(() => {");
+    expect(auditScript).toContain("const comparisonSeries = useMemo(() => {");
+    expect(auditScript).toContain("allSeries={chartSeries}");
+    expect(auditScript).toContain("series={visibleSeries}");
     expect(auditScript).toContain("ANALYSIS_SCALAR_COLUMNS");
     expect(auditScript).toContain('decimation: "minmax_lttb"');
     expect(auditScript).toContain("targetPoints: clampInteger(");
     expect(auditScript).toContain("Number.isFinite(x) && Number.isFinite(y)");
     expect(auditScript).toContain("DEFAULT_TABLE_CHART_COLUMNS");
     expect(auditScript).toContain("mergeChartTableWindows");
+    expect(auditScript).not.toContain("analysisPlotsModel.ts");
+    expect(auditScript).not.toContain("shouldLoadPublishedTableRows(");
+    expect(auditScript).not.toContain("shouldPausePublishedTableRows(");
     expect(auditScript).toContain("computePerformanceMicrobench.test.ts");
     expect(auditScript).toContain("makeLargeTopologyBuffer");
     expect(auditScript).toContain("makeLargeQualityBuffer");

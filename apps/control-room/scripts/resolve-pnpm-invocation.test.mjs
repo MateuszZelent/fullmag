@@ -154,7 +154,7 @@ describe("dev-server launcher contract", () => {
 
     expect(controlRoomLauncher).toContain("resolvePnpmInvocation");
     expect(controlRoomLauncher).toContain(
-      "const browserOrigin = `http://localhost:${port}`",
+      "const browserOrigin = `http://${formatUrlHost(browserHost)}:${port}`",
     );
     expect(controlRoomLauncher).toContain(
       "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin",
@@ -169,5 +169,15 @@ describe("dev-server launcher contract", () => {
     expect(webShim).toContain("process.execPath");
     expect(webShim).toContain("apps/control-room/dev-server.mjs");
     expect(webShim).not.toMatch(/\bpnpm(?:\.cmd)?\b/);
+  });
+
+  it("derives browser-facing URLs from the public host when WSL is opened by IP", () => {
+    const controlRoomLauncher = readFileSync(
+      resolve(scriptDir, "../dev-server.mjs"),
+      "utf8",
+    );
+
+    expect(controlRoomLauncher).toContain("FULLMAG_WEB_PUBLIC_HOST");
+    expect(controlRoomLauncher).toContain("browserHost");
   });
 });

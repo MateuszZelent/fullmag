@@ -3,9 +3,16 @@ import { useMemo } from "react";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import { ChartDisplayUnitControls } from "@/shared/analysis-charts/ChartDisplayUnitControls";
+import {
+  createChartDisplayTransform,
+  createChartYAxisDisplayTransforms,
+  formatChartDisplayValue,
+} from "@/shared/analysis-charts/chartScalePolicy";
 
-import type { ChartSeries } from "../chartTableModel";
+import type { ChartSeries, ChartValueRange } from "../chartTableModel";
 import {
   buildFrequencyDomainCursorSummary,
   buildFrequencyDomainWorkbenchSummary,
@@ -16,30 +23,35 @@ import {
 import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
 
-function formatFreqLatest(y: number | undefined): string {
-  if (y === undefined || !Number.isFinite(y)) return "—";
-  return y.toPrecision(4);
-}
-
 export function AnalysisFrequencySurface({
-  hiddenSeriesIds = [],
+  chartId,
+  displayUnits,
+  descriptorId,
   kernel,
   onPointSelect,
-  onSolo,
-  onToggleVisibility,
+  onRangeChange = () => undefined,
+  onDisplayUnitsChange = () => undefined,
+  onSelectedSeriesIdsChange,
+  selectedSeriesIds,
   selectedPoint,
   series,
+  range = null,
   status,
   title,
   unavailableReason,
 }: {
-  hiddenSeriesIds?: readonly string[];
+  chartId?: string;
+  displayUnits?: Readonly<Record<string, string>>;
+  descriptorId?: string;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
-  onSolo?: (seriesId: string | null, allSeriesIds?: readonly string[]) => void;
-  onToggleVisibility?: (seriesId: string) => void;
+  onRangeChange?: (range: ChartValueRange) => void;
+  onDisplayUnitsChange?: (patch: Record<string, string>) => void;
+  onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
+  selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   series: readonly ChartSeries[];
+  range?: ChartValueRange | null;
   status: string;
   title: string;
   unavailableReason: string | null;
@@ -49,9 +61,9 @@ export function AnalysisFrequencySurface({
     () => buildFrequencyDomainWorkbenchSummary(series, title, status),
     [series, status, title],
   );
-  const selected = useMemo(
-    () => buildFrequencyDomainCursorSummary(selectedPoint, title),
-    [selectedPoint, title],
+  const selectedPointSummary = useMemo(
+    () => buildFrequencyDomainCursorSummary(selectedPoint, title, series),
+    [selectedPoint, series, title],
   );
 
   if (series.length === 0) {
@@ -68,33 +80,50 @@ export function AnalysisFrequencySurface({
   }
 
   const allIds = series.map((s) => s.id);
-  const hidden = hiddenSeriesIds.filter((id) => allIds.includes(id));
-  const soloedId =
-    hidden.length > 0 && hidden.length === allIds.length - 1
-      ? allIds.find((id) => !hidden.includes(id)) ?? null
+  const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
+
+  const yUnits = [...new Set(series.map((entry) => entry.unit))];
+  const preferredYUnits = yUnits.map((unit) => {
+    const requested = series
+      .filter((entry) => entry.unit === unit)
+      .map((entry) => displayUnits?.[entry.quantity])
+      .filter((value): value is string => Boolean(value));
+    return requested.length > 0 && requested.every((value) => value === requested[0])
+      ? requested[0]
       : null;
+  });
+  const yTransforms = createChartYAxisDisplayTransforms(
+    yUnits.map((unit) => ({ unit })),
+    series.map((entry) => ({
+      points: entry.points,
+      yAxis: yUnits.indexOf(entry.unit),
+    })),
+    preferredYUnits,
+  );
+  const legendItems = series.map((entry, index) => {
+    const transform = yTransforms[yUnits.indexOf(entry.unit)] ??
+      createChartDisplayTransform(entry.unit, null);
+    return {
+      id: entry.id,
+      label: entry.label || entry.quantity,
+      unit: transform.displayUnit,
+      latestValue: formatChartDisplayValue(
+        entry.points.at(-1)?.y ?? Number.NaN,
+        transform,
+      ),
+      colorName: chartColorNameForIndex(index),
+      colorIndex: index,
+    };
+  });
 
-  const legendItems = series.map((s, index) => ({
-    id: s.id,
-    label: s.label || s.quantity,
-    unit: s.unit,
-    latestValue: formatFreqLatest(s.points.at(-1)?.y),
-    colorName: chartColorNameForIndex(index),
-    colorIndex: index,
-    hidden: hidden.includes(s.id),
-    soloed: soloedId !== null && soloedId === s.id,
-  }));
-
-  const visibleSeries = hidden.length === 0
-    ? series
-    : series.filter((s) => !hidden.includes(s.id));
+  const visibleSeries = series.filter(({ id }) => selected.has(id));
 
   const legend = (
     <ChartLegend
       ariaLabel="Frequency-domain series"
       items={legendItems}
-      onToggleVisibility={onToggleVisibility ?? (() => {})}
-      onSolo={(id) => onSolo?.(id, allIds)}
+      onSelectedSeriesIdsChange={onSelectedSeriesIdsChange}
+      selectedSeriesIds={selectedSeriesIds}
     />
   );
 
@@ -106,25 +135,25 @@ export function AnalysisFrequencySurface({
   ].filter(Boolean);
   const workbenchSubtitle = workbenchParts.join(" · ");
 
-  // Cursor footer spans (mirrors AnalysisStatusPill content for backward compat)
-  const footerContent = selected ? (
+  // Cursor footer keeps the selected scientific point visible outside the canvas.
+  const footerContent = selectedPointSummary ? (
     <div
       aria-label="Selected frequency-domain point"
       className="fm-chart-section__footer-row fm-analysis-plots__status--frequency-domain-selection"
     >
       <span className="fm-analysis-plots__range-cursor">
-        {selected.title}&ensp;{selected.xLabel}: {selected.xValue}&ensp;
-        {selected.yLabel}: {selected.yValue}
-        {"linewidthValue" in selected && selected.linewidthValue
-          ? `  Linewidth: ${selected.linewidthValue}`
+        {selectedPointSummary.title}&ensp;{selectedPointSummary.xLabel}: {selectedPointSummary.xValue}&ensp;
+        {selectedPointSummary.yLabel}: {selectedPointSummary.yValue}
+        {"linewidthValue" in selectedPointSummary && selectedPointSummary.linewidthValue
+          ? `  Linewidth: ${selectedPointSummary.linewidthValue}`
           : null}
-        &ensp;{selected.inspectorTarget}
+        &ensp;{selectedPointSummary.inspectorTarget}
       </span>
     </div>
   ) : undefined;
 
   // Workflow summary (visible for FMR modal / FMR driven titles only)
-  const toolbar = workflow ? (
+  const workflowToolbar = workflow ? (
     <div
       aria-label="Frequency-domain workflow"
       className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workflow"
@@ -134,7 +163,11 @@ export function AnalysisFrequencySurface({
       <span className="fm-chart-section__point-count">Mode fields: {workflow.artifacts}</span>
       <span className="fm-chart-section__point-count">{workflow.inspector}</span>
     </div>
-  ) : undefined;
+  ) : null;
+  const toolbar = <>
+    {workflowToolbar}
+    <ChartDisplayUnitControls displayUnits={displayUnits ?? {}} onDisplayUnitsChange={onDisplayUnitsChange} series={series} />
+  </>;
 
   return (
     <ChartSection
@@ -167,14 +200,23 @@ export function AnalysisFrequencySurface({
         className="fm-analysis-plots__chart-frame"
         data-resource-key={series[0]?.source.resourceKey}
       >
-        <EChartsSurface
-          allSeries={series}
-          bus={kernel.bus}
-          dataStatus={status}
-          onPointSelect={onPointSelect}
-          series={visibleSeries}
-          xAxisLabel={frequencyDomainXAxisLabel(series)}
-        />
+        {visibleSeries.length === 0 ? (
+          <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>
+        ) : (
+          <EChartsSurface
+            allSeries={series}
+            bus={kernel.bus}
+            chartId={chartId}
+            dataStatus={status}
+            descriptorId={descriptorId}
+            displayUnits={displayUnits}
+            initialRange={range}
+            onPointSelect={onPointSelect}
+            onRangeChange={onRangeChange}
+            series={visibleSeries}
+            xAxisLabel={frequencyDomainXAxisLabel(series)}
+          />
+        )}
       </div>
     </ChartSection>
   );

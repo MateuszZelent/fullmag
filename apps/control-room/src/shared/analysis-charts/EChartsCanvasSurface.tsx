@@ -21,15 +21,18 @@ import {
   resolveChartTokens,
   type FullmagChartTokens,
 } from "./fullmagChartTokens";
+import type { ChartDataPresentationState } from "./chartPresentationState";
 
 export function EChartsCanvasSurface({
   children,
   className = "fm-analysis-plots__echarts",
   fitRequest = 0,
+  initialRange,
   model,
   onClick,
   onDataZoom,
   onDoubleClick,
+  presentation,
   diagnostics,
   exportRef,
 }: {
@@ -44,13 +47,17 @@ export function EChartsCanvasSurface({
   className?: string;
   exportRef?: MutableRefObject<ChartRendererOwner | null>;
   fitRequest?: number;
+  initialRange?: { fromValue: number; toValue: number } | null;
   model: ChartRenderModel;
   onClick?: (event: unknown) => void;
   onDataZoom?: (event: unknown) => void;
   onDoubleClick?: (event: unknown) => void;
+  presentation?: ChartDataPresentationState;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef(model);
+  const initialRangeRef = useRef(initialRange);
+  const previousInitialRangeRef = useRef(initialRange);
   const ownerRef = useRef<ChartRendererOwner | null>(null);
   const tokensRef = useRef<FullmagChartTokens | null>(null);
   const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick });
@@ -63,6 +70,9 @@ export function EChartsCanvasSurface({
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+  useEffect(() => {
+    initialRangeRef.current = initialRange;
+  }, [initialRange]);
   useEffect(() => {
     callbacksRef.current = { diagnostics, onClick, onDataZoom, onDoubleClick };
   }, [diagnostics, onClick, onDataZoom, onDoubleClick]);
@@ -102,6 +112,7 @@ export function EChartsCanvasSurface({
 
         owner.mount(element);
         owner.update(modelRef.current, tokensRef.current ?? undefined);
+        if (initialRangeRef.current) owner.setRange(initialRangeRef.current.fromValue, initialRangeRef.current.toValue);
         callbacksRef.current.diagnostics?.modelUpdated?.(modelRef.current);
         callbacksRef.current.diagnostics?.setOption?.();
 
@@ -164,8 +175,23 @@ export function EChartsCanvasSurface({
   useEffect(() => {
     if (fitRequest > 0) ownerRef.current?.fitView();
   }, [fitRequest]);
+  useEffect(() => {
+    const previousRange = previousInitialRangeRef.current;
+    if (initialRange) {
+      ownerRef.current?.setRange(initialRange.fromValue, initialRange.toValue);
+    } else if (previousRange) {
+      ownerRef.current?.fitView();
+    }
+    previousInitialRangeRef.current = initialRange;
+  }, [initialRange]);
 
-  const status = surfaceStatus(model, rendererStatus);
+  const hasRenderableData = model.series.some((series) => series.points.length > 0);
+  const blocksPlot =
+    presentation?.kind === "initial-loading" ||
+    presentation?.kind === "error" ||
+    presentation?.kind === "unsupported";
+  const keepCanvas = hasRenderableData && !blocksPlot;
+  const status = surfaceStatus(model, rendererStatus, presentation);
   return (
     <div
       aria-describedby={`${model.key}-summary`}
@@ -177,6 +203,7 @@ export function EChartsCanvasSurface({
         ref={elementRef}
         className={className}
         data-chart-model-key={model.key}
+        data-retained={keepCanvas ? "true" : undefined}
       />
       <p className="fm-visually-hidden" id={`${model.key}-summary`}>
         {model.ariaLabel}. {model.series.length} series and {model.series.reduce((count, series) => count + series.points.length, 0)} plotted points.
@@ -195,7 +222,26 @@ export function EChartsCanvasSurface({
 function surfaceStatus(
   model: ChartRenderModel,
   rendererStatus: "loading" | "ready" | "error",
+  presentation?: ChartDataPresentationState,
 ): { label: string; role: "alert" | "status" } | null {
+  if (presentation) {
+    if (rendererStatus === "error") {
+      return { label: "Chart renderer unavailable", role: "alert" };
+    }
+    if (presentation.kind === "error") {
+      return { label: presentation.error.message, role: "alert" };
+    }
+    if (presentation.kind === "unsupported") {
+      return { label: presentation.reason, role: "status" };
+    }
+    if (presentation.kind === "initial-loading") {
+      return { label: model.statusMessage ?? "Loading chart samples", role: "status" };
+    }
+    if (presentation.kind === "empty") {
+      return { label: model.statusMessage ?? "No chart samples", role: "status" };
+    }
+    return null;
+  }
   if (model.status === "error" || rendererStatus === "error") {
     return {
       label: model.statusMessage ?? "Chart renderer unavailable",
@@ -210,6 +256,13 @@ function surfaceStatus(
     model.series.every((series) => series.points.length === 0)
   ) {
     return { label: model.statusMessage ?? "No chart samples", role: "status" };
+  }
+  if (
+    rendererStatus === "loading" &&
+    model.status === "ready" &&
+    model.series.some((series) => series.points.length > 0)
+  ) {
+    return null;
   }
   if (model.status === "loading" || rendererStatus === "loading") {
     return {

@@ -26,7 +26,8 @@ export function SpinWaveGammaView({
     <ChartSection
       className="fm-analysis-plots__panel--gamma"
       status={{
-        primary: status === "ready" ? "Live" : status,
+        primary: status === "ready" ? "Ready" : status,
+        revision: resource?.schema_version ?? null,
         trust: "unknown",
         pointSummary: sampling.sampleCount ? `${sampling.sampleCount} samples` : undefined,
       }}

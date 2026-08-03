@@ -66,10 +66,9 @@ export interface AnalysisFrequencyDataResult {
  * Only the resource for the active route loads — others remain disabled.
  */
 export function useAnalysisFrequencyData(
-  activeSurface: string,
+  activeSurface: "frequency-response" | "eigenmodes" | "idle",
 ): AnalysisFrequencyDataResult {
-  const loadFrequency =
-    activeSurface === "frequency";
+  const loadFrequency = activeSurface !== "idle";
 
   const frequencyDomainManifest = useFrequencyDomainManifestResource({ enabled: loadFrequency });
   const frequencyDomainManifestRoute = routeFrequencyDomainCalculationMode(
@@ -82,19 +81,29 @@ export function useAnalysisFrequencyData(
     ...frequencyDomainManifestRoute,
     ...frequencyDomainRouteOverride,
   };
+  const expectedChart = activeSurface === "frequency-response"
+    ? "response-sweep"
+    : activeSurface === "eigenmodes"
+      ? "modal-spectrum"
+      : null;
+  const manifestReady = frequencyDomainManifest.status === "ready" &&
+    frequencyDomainRoute.status === "available";
+  const surfaceMismatch = manifestReady && expectedChart !== null &&
+    frequencyDomainRoute.primaryChart !== expectedChart;
+  const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
 
   // Load only the sub-resource required by the active route
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
-    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "modal-spectrum",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "modal-spectrum",
   });
   const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
-    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
-    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
-    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "response-sweep",
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "response-sweep",
   });
 
   const frequencyDomainSpectrumModel = useMemo(
@@ -124,6 +133,7 @@ export function useAnalysisFrequencyData(
   );
 
   const frequencyDomainSeries = useMemo<ChartSeries[]>(() => {
+    if (surfaceMismatch) return [];
     switch (frequencyDomainRoute.primaryChart) {
       case "dispersion":
         return frequencyDomainChartSeriesForAnalysisPlots(
@@ -147,6 +157,7 @@ export function useAnalysisFrequencyData(
     frequencyDomainRoute.primaryChart,
     frequencyDomainResponseModel,
     frequencyDomainSpectrumModel,
+    surfaceMismatch,
   ]);
 
   const frequencyDomainResourceStatus =
@@ -159,12 +170,13 @@ export function useAnalysisFrequencyData(
           : frequencyDomainManifest.status;
 
   const frequencyDomainStatus =
-    frequencyDomainRoute.primaryChart === "response-map"
+    surfaceMismatch ? "unsupported"
+      : frequencyDomainRoute.primaryChart === "response-map"
       ? "error"
       : frequencyDomainRoute.status === "available"
         ? frequencyDomainResourceStatus
         : frequencyDomainManifest.status === "ready"
-          ? "stale"
+          ? "unsupported"
           : frequencyDomainManifest.status;
 
   const frequencyDomainTitle = frequencyDomainChartTitle(
@@ -173,7 +185,9 @@ export function useAnalysisFrequencyData(
   );
 
   const frequencyDomainUnavailableReason =
-    frequencyDomainRoute.primaryChart === "response-map"
+    surfaceMismatch
+      ? `This artifact does not publish the ${activeSurface === "frequency-response" ? "frequency-response" : "eigenmode"} resource required by this surface.`
+      : frequencyDomainRoute.primaryChart === "response-map"
       ? "response-map chart adapter is not available yet"
       : frequencyDomainRoute.unavailableReason ??
         firstFrequencyDomainDiagnostic([

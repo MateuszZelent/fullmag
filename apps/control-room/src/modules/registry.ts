@@ -10,6 +10,7 @@ import { explorerManifest } from "./explorer/manifest";
 import { fieldMapManifest } from "./field-map/manifest";
 import { footerManifest } from "./footer/manifest";
 import { inspectorManifest } from "./inspector/manifest";
+import { liveChartsManifest } from "./live-charts/manifest";
 import { overlayManifest } from "./overlay/manifest";
 import { ribbonManifest } from "./ribbon/manifest";
 import { statusBarManifest } from "./status-bar/manifest";
@@ -21,6 +22,7 @@ const REGISTERED_MODULES: ModuleManifest[] = [
   explorerManifest,
   viewport3dManifest,
   fieldMapManifest,
+  liveChartsManifest,
   analysisPlotsManifest,
   inspectorManifest,
   footerManifest,

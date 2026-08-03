@@ -1,29 +1,27 @@
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import type { AnalysisWorkbenchSurface } from "@/kernel/workspace/analysisPlotsWorkspace";
+import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { chartTableWindowValue, type ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
+import {
+  chartValueExtrema,
+  createChartDisplayTransform,
+} from "@/shared/analysis-charts/chartScalePolicy";
 
 import type { ChartSeries, ChartValueRange, TableRowsLike } from "./chartTableModel";
 
-export function surfaceTitle(surface: AnalysisWorkbenchSurface): string {
+export function surfaceTitle(surface: AnalysisSurface): string {
   switch (surface) {
-    case "energy": return "Energy balance";
     case "dynamics": return "Magnetization dynamics";
-    case "convergence": return "Solver convergence";
-    case "frequency": return "Frequency-domain analysis";
-    default: return "Analysis overview";
+    case "spectrum": return "Spectrum";
+    case "frequency-response": return "Frequency response";
+    case "eigenmodes": return "Eigenmodes";
+    case "dispersion": return "Spin-wave dispersion";
+    case "hysteresis": return "Hysteresis";
+    case "comparison": return "Comparison";
   }
 }
 
-export function filterSeriesForSurface(series: readonly ChartSeries[], surface: AnalysisWorkbenchSurface): ChartSeries[] {
-  if (surface === "overview") return series.filter((item) => !item.quantity.startsWith("e_"));
-  if (surface === "dynamics") return series.filter((item) => ["mx", "my", "mz", "m"].includes(item.quantity));
-  if (surface === "convergence") {
-    return series.filter((item) => item.quantity.includes("torque") || item.quantity.includes("residual") || item.quantity.includes("energy_delta"));
-  }
-  return [...series];
-}
 
 export function tableRowsLike(table: ChartTableWindow | null): TableRowsLike | null {
   if (!table) return null;
@@ -113,10 +111,22 @@ export function buildFrequencyDomainWorkbenchSummary(series: readonly ChartSerie
   };
 }
 
-export function buildFrequencyDomainCursorSummary(point: AnalysisChartCursorPoint | null, chartTitle: string) {
+export function buildFrequencyDomainCursorSummary(
+  point: AnalysisChartCursorPoint | null,
+  chartTitle: string,
+  series: readonly ChartSeries[] = [],
+) {
   if (!point || point.source.kind !== "analysis.frequency_domain") return null;
-  const xValue = formatPointValue(point.point.x, point.xUnit);
-  const yValue = formatPointValue(point.point.y, point.unit);
+  const xValue = formatPointValue(
+    point.point.x,
+    point.xUnit,
+    chartValueExtrema(iterateSeriesValues(series, "x")),
+  );
+  const yValue = formatPointValue(
+    point.point.y,
+    point.unit,
+    chartValueExtrema(iterateSeriesValues(series, "y")),
+  );
   if (point.source.tableId === "frequency-domain:eigen-spectrum") return { inspectorTarget: chartTitle.toLowerCase().startsWith("fmr") ? "FMR mode inspector and 3D overlay controls" : "Mode inspector and 3D mode controls", title: chartTitle.toLowerCase().startsWith("fmr") ? "FMR mode" : "eigen mode", xLabel: "mode", xValue, yLabel: point.quantity || "frequency", yValue };
   if (point.source.tableId === "frequency-domain:eigen-dispersion") return { inspectorTarget: "Dispersion inspector", linewidthValue: point.point.linewidthHz != null ? formatFrequencyHz(point.point.linewidthHz) : null, title: "dispersion point", xLabel: point.point.label ? "k-label" : "path_s", xValue: point.point.label ?? xValue, yLabel: point.quantity || "frequency", yValue };
   if (point.source.tableId === "frequency-domain:response-sweep") return { inspectorTarget: chartTitle.toLowerCase().startsWith("fmr") ? "FMR response point inspector and 3D response overlay" : "Response point inspector and 3D response controls", title: chartTitle.toLowerCase().startsWith("fmr") ? "FMR response point" : "response point", xLabel: "frequency", xValue, yLabel: point.quantity || "response", yValue };
@@ -145,12 +155,27 @@ function frequencyDomainFieldHandoff(tableId: string, chartTitle: string): strin
 function formatFrequencyDomainWorkbenchRange(min: number, max: number, firstSeries: ChartSeries | undefined): string {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return "not available";
   const unit = firstSeries?.source.tableId === "frequency-domain:response-sweep" ? firstSeries.xUnit : firstSeries?.unit;
-  return min === max ? formatPointValue(min, unit) : `${formatPointValue(min, unit)}-${formatPointValue(max, unit)}`;
+  const extrema = chartValueExtrema([min, max]);
+  return min === max
+    ? formatPointValue(min, unit, extrema)
+    : `${formatPointValue(min, unit, extrema)}-${formatPointValue(max, unit, extrema)}`;
 }
 
-function formatPointValue(value: number, unit: string | undefined): string {
-  const formatted = formatLatestValue(value);
-  return unit ? `${formatted} ${unit}` : formatted;
+function formatPointValue(
+  value: number,
+  unit: string | undefined,
+  extrema: readonly [number, number] | null = null,
+): string {
+  return createChartDisplayTransform(unit ?? "", extrema).formatValue(value);
+}
+
+function* iterateSeriesValues(
+  series: readonly ChartSeries[],
+  coordinate: "x" | "y",
+): Iterable<number> {
+  for (const entry of series) {
+    for (const point of entry.points) yield point[coordinate];
+  }
 }
 
 export function formatLatestValue(value: number | undefined): string {

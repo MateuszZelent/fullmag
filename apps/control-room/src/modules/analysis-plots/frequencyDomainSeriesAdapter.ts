@@ -4,7 +4,7 @@ import type {
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { finiteFrequencySeries } from "@/shared/analysis-charts/frequencyRenderModels";
 
-import type { ChartSeries } from "./chartTableModel";
+import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
 export function frequencyDomainChartSeriesForAnalysisPlots<TPoint>(
   model: FrequencyDomainChartBuildResult<TPoint>,

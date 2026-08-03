@@ -1,7 +1,7 @@
 # Frontend v2 - Module Kernel Architecture
 
 **Status:** Proposed architecture
-**Date:** 2026-05-11
+**Date:** 2026-05-11; updated 2026-08-03
 
 ## 1. Kernel Responsibility
 
@@ -42,16 +42,24 @@ Slots are stable mount points owned by the kernel:
 | `app-menu` | top menu bar | main menu renderer |
 | `ribbon` | context command groups | geometry, mesh, solver, view commands |
 | `panel-left` | primary navigation | explorer, results navigator |
-| `viewport-main` | central primary view, optionally tabbed by kernel | 3D viewport, cross-section image, analysis plots |
+| `viewport-main` | central primary view, optionally tabbed by kernel | 3D viewport, field map, Live Charts, Analysis |
 | `viewport-aux` | split or secondary view for optional future modules | slice view, profile view, small chart |
 | `panel-right` | selected object details | inspector, properties, provenance |
-| `panel-bottom` | temporal/output docks | charts, logs, jobs, diagnostics |
+| `panel-bottom` | temporal/output docks | Quick Chart, logs, jobs, diagnostics |
 | `status-bar` | connection and runtime state | backend, precision, revisions |
 | `overlay` | global transient surfaces | command palette, dialogs, toasts |
 
 Slots are not feature flags. A disabled module means its manifest is not registered or its capability gate fails; the slot remains valid.
 
 When multiple modules are eligible for `viewport-main`, the kernel renders them through a tab host. Only the active center-surface module is mounted. Inactive center surfaces must not be retained through hidden DOM panels, CSS-only hiding, cached React subtrees, or Radix `forceMount`. This is a lifecycle contract: switching away from `viewport-3d` releases its WebGL context, resource subscriptions, timers, render buffers, and client-ack effects.
+
+Chart ownership is intentionally split. `live-charts` is the **Live Charts**
+center module for active-run time series. `analysis-plots` is the **Analysis**
+center module for an **explicit selected dataset**, run, stage, or artifact.
+`transport-footer` exclusively owns `panel-bottom` and mounts **Quick Chart**
+content only while that footer tab is active. Quick Chart is shared content, not
+a second mount of either center module. This prevents implicit server-resource
+subscriptions and keeps the spatial viewport mounted while the dock is open.
 
 ## 4. Manifest Contract
 

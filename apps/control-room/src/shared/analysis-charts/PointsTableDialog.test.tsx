@@ -77,8 +77,8 @@ describe("PointsTableDialog", () => {
     const html = renderToStaticMarkup(
       <PointsTableDialog model={model} onClose={() => undefined} open />,
     );
-    expect(html).toContain("time [s]");
-    expect(html).toContain("Total [J]");
+    expect(html).toContain("time [ns]");
+    expect(html).toContain("energy [pJ]");
     expect(html).toContain("Row");
   });
 
@@ -89,6 +89,28 @@ describe("PointsTableDialog", () => {
     // row index 0 and 1 should be present
     expect(html).toContain(">0<");
     expect(html).toContain(">1<");
+  });
+
+  it("keeps dimensionless table values and headers free of SI prefixes", () => {
+    const normalizedModel: ChartRenderModel = {
+      ...model,
+      series: [{
+        ...model.series[0]!,
+        id: "my",
+        label: "my",
+        points: [{ rowIndex: 0, x: 0, y: 4.447e-6 }],
+        unit: "1",
+      }],
+      yAxes: [{ label: "Normalized magnetization m", unit: "1" }],
+    };
+    const html = renderToStaticMarkup(
+      <PointsTableDialog model={normalizedModel} onClose={() => undefined} open />,
+    );
+
+    expect(html).toContain("Normalized magnetization m");
+    expect(html).not.toContain("[1]");
+    expect(html).toContain(">4.4470e-6<");
+    expect(html).not.toContain("4.447 µ");
   });
 
   it("shows truncation notice when series has more than MAX_ROWS points", () => {

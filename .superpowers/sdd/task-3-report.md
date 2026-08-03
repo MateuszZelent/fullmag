@@ -418,3 +418,119 @@ Result: exit `0`; all 14 material/runtime targets built and ran.
 
 Final source hygiene: `git diff --check` exited `0`. No commit or staging was
 created.
+
+---
+
+# Task 3 — retained charts during background refresh
+
+## Scope
+
+Added the `ChartDataPresentationState` reducer and changed chart presentation
+only. The table resource hook remains the HTTP v2 snapshot owner; the view now
+receives a read-only status/error/revision projection solely to distinguish the
+retained revision from the requested refresh revision. No endpoint, polling,
+resource authority, or Task 2 semantics changed.
+
+The brief's listed components did not include the owners of the raw refresh
+metadata. The minimal forwarding path is therefore:
+
+`useAnalysisTableData` resource result -> analysis controller -> module/view ->
+`AnalysisTableSurface`.
+
+## RED
+
+The required three-file command failed as intended before implementation:
+
+- `chartPresentationState.test.ts` could not import the missing reducer;
+- the 100-rerender canvas regression had no refresh presentation contract;
+- `EChartsSurface` rendered `Loading chart renderer` with usable data and
+  `Loading table samples` during refresh.
+
+Result: 3 failed files, 3 failed tests, 10 passed tests.
+
+## GREEN
+
+```text
+env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run \
+  src/shared/analysis-charts/chartPresentationState.test.ts \
+  src/shared/analysis-charts/EChartsCanvasSurface.test.tsx \
+  src/shared/analysis-charts/ChartSection.test.tsx \
+  src/modules/analysis-plots/components/EChartsSurface.test.tsx \
+  src/shared/analysis-charts/ChartLegend.rowsBinary.integration.test.tsx
+```
+
+Result: 5 files passed, 23 tests passed. The canvas test rerenders a retained
+chart 100 times and verifies one ECharts owner, stable bounds, and no loading
+overlay. Header tests verify `Updating` with both revisions and retained stale
+data with its error text.
+
+```text
+corepack pnpm --dir apps/control-room typecheck
+git diff --check
+```
+
+Both passed.
+
+## Behavior
+
+- Only an absent payload is allowed to show initial loading or a no-payload
+  error.
+- `refreshing` keeps the existing canvas and reports static `Updating` with
+  the visible and requested revisions.
+- A failed refresh keeps the canvas and reports the error beside the visible
+  revision.
+- `paused` retains the visible revision and adds no activity animation.
+
+## Follow-up — empty and unsupported table states
+
+The presentation projection now carries explicit semantic metadata rather than
+inferring emptiness from a decoded object. A valid `ChartTableWindow` with
+`rowCount: 0` projects as `empty` and renders `No table samples`; a non-empty
+retained window still projects as `refreshing` during a background refresh and
+keeps its canvas. `unsupported` is a distinct projection state with a supplied
+reason, so `AnalysisTableSurface` does not collapse it into `idle`.
+
+### RED
+
+Before the fix, the focused test command failed with three regressions:
+
+- an explicitly empty zero-row payload derived `ready`;
+- an `unsupported` snapshot derived `empty`;
+- the table surface rendered `No table samples` instead of the explicit
+  unsupported reason.
+
+### GREEN
+
+Focused tests: `chartPresentationState`, `EChartsCanvasSurface`, `ChartSection`,
+`EChartsSurface`, `ChartLegend.rowsBinary.integration`, and
+`AnalysisTableSurface` all passed: 6 files, 27 tests.
+
+The state-matrix tests cover both explicit states and the surface tests assert
+the visible empty and unsupported messages. The Control Room typecheck and
+`git diff --check` both passed. No resource hook, endpoint, polling policy, or
+resource ownership changed.
+
+## Follow-up — semantic unsupported precedence
+
+The semantic table state now crosses the actual control-room path:
+
+`published table schema -> useAnalysisTableData -> controller -> module -> view -> AnalysisTableSurface`.
+
+An explicitly published empty schema means scalar table samples are not
+available from the active runtime, so the hook supplies a semantic
+`unsupported` reason. The controller publishes that semantic status and reason
+separately from the raw `tableRowsRefresh` resource result. The surface gives
+the semantic `unsupported` state precedence over a raw `ready`/`loading`/
+`stale` resource status; all other states keep using the raw refresh metadata.
+
+### RED and GREEN
+
+The real view-path regression mounted `AnalysisPlotsView` with semantic
+`tableRowsStatus="unsupported"`, its explicit reason, and
+`tableRowsRefresh.status="ready"`. Before the change it showed the retained
+ready chart and omitted the reason. It now shows the semantic unsupported
+message.
+
+Focused verification passed: 8 files, 92 tests, including the raw-refresh
+precedence regression and the empty-schema reason owner test. Control Room
+typecheck and `git diff --check` also passed.

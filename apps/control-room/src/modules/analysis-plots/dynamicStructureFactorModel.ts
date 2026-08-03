@@ -1,7 +1,7 @@
 import type { DynamicStructureFactorResource } from "@/kernel/api/apiTypes";
 import { ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH } from "@/kernel/api/apiPaths";
 
-import type { ChartSeries } from "./chartTableModel";
+import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
 export interface StructureFactorCell {
   frequencyHz: number;

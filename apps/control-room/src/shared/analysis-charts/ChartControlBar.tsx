@@ -1,6 +1,5 @@
 "use client";
 
-import type { AnalysisChartRangeMode, ChartLiveMode } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { Button } from "@/shared/ui/Button";
 import {
   Select,
@@ -9,8 +8,14 @@ import {
   SelectTrigger,
 } from "@/shared/ui/Select";
 
-export type ChartRangeMode = AnalysisChartRangeMode["mode"];
-export type ChartRangeModeState = AnalysisChartRangeMode;
+export type ChartLiveMode = "following" | "paused";
+export type ChartRangeModeState =
+  | { mode: "follow" }
+  | { mode: "tailRows"; rows: number }
+  | { mode: "tailTime"; durationS: number }
+  | { mode: "fixed" }
+  | { mode: "fullDecimated" };
+export type ChartRangeMode = ChartRangeModeState["mode"];
 
 interface ChartControlBarProps {
   liveMode: ChartLiveMode;

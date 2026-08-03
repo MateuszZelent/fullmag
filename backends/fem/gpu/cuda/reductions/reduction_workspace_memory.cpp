@@ -12,6 +12,7 @@
 #include "gpu/cuda/state/device_memory.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -59,14 +60,31 @@ bool gpu_reduction_workspace_allocate(
         !gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error)) {
         return false;
     }
-    if (!cuda_ok(
-            cudaHostAlloc(
-                reinterpret_cast<void **>(&reductions.host_scalar_result),
-                FEM_GPU_SCALAR_RESULT_SLOTS * sizeof(double),
-                cudaHostAllocDefault),
-            "cudaHostAlloc FemGpuState scalar readback staging",
-            error)) {
+    const cudaError_t host_scalar_status = cudaHostAlloc(
+        reinterpret_cast<void **>(&reductions.host_scalar_result),
+        FEM_GPU_SCALAR_RESULT_SLOTS * sizeof(double),
+        cudaHostAllocDefault);
+    if (host_scalar_status == cudaSuccess) {
+        reductions.scalar_result_pinned = true;
+    } else if (host_scalar_status == cudaErrorMemoryAllocation) {
+        // A pageable fixed-size fallback preserves numerical semantics when
+        // the process or driver has exhausted its pinned-host allowance. The
+        // readback helper synchronizes the stream before consuming the data,
+        // so only transfer overlap is degraded. Clear the allocation error
+        // before issuing subsequent CUDA work on this thread.
+        cudaGetLastError();
+        reductions.host_scalar_result = reductions.pageable_scalar_result.data();
+        reductions.scalar_result_pinned = false;
+        std::fprintf(
+            stderr,
+            "[fullmag_fem][warning] cudaHostAlloc scalar readback staging "
+            "returned cudaErrorMemoryAllocation; using pageable fallback; "
+            "numerical semantics are unchanged, transfer overlap is disabled\n");
+    } else {
+        error = std::string("cudaHostAlloc FemGpuState scalar readback staging failed: ") +
+            cudaGetErrorString(host_scalar_status);
         reductions.host_scalar_result = nullptr;
+        reductions.scalar_result_pinned = false;
         return false;
     }
 
@@ -115,12 +133,14 @@ bool gpu_reduction_workspace_allocate(
 void gpu_reduction_workspace_free(FemGpuReductionWorkspaceDeviceState &reductions)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
-    if (reductions.host_scalar_result != nullptr) {
+    if (reductions.host_scalar_result != nullptr && reductions.scalar_result_pinned) {
         cudaFreeHost(reductions.host_scalar_result);
-        reductions.host_scalar_result = nullptr;
     }
+    reductions.host_scalar_result = nullptr;
+    reductions.scalar_result_pinned = false;
 #else
     reductions.host_scalar_result = nullptr;
+    reductions.scalar_result_pinned = false;
 #endif
     gpu_device_free_double(reductions.scalar_workspace);
     gpu_device_free_double(reductions.scalar_result);

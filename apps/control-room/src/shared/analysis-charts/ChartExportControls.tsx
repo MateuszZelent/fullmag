@@ -46,9 +46,11 @@ export function exportChartPng(
 export function ChartExportControls({
   model,
   rendererRef,
+  onExportRequested,
   onOpenPointsTable,
 }: {
   model: ChartRenderModel;
+  onExportRequested?: (format: ChartExportFormat | "png") => void;
   rendererRef: MutableRefObject<ChartRendererOwner | null>;
   onOpenPointsTable?: () => void;
 }) {
@@ -59,9 +61,9 @@ export function ChartExportControls({
           Data Table
         </Button>
       ) : null}
-      <Button size="sm" type="button" variant="secondary" onClick={() => exportChartData(model, "csv")}>CSV</Button>
-      <Button size="sm" type="button" variant="secondary" onClick={() => exportChartData(model, "tsv")}>TSV</Button>
-      <Button size="sm" type="button" variant="secondary" onClick={() => exportChartPng(model, rendererRef)}>PNG</Button>
+      <Button size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("csv"); exportChartData(model, "csv"); }}>CSV</Button>
+      <Button size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("tsv"); exportChartData(model, "tsv"); }}>TSV</Button>
+      <Button size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("png"); exportChartPng(model, rendererRef); }}>PNG</Button>
     </div>
   );
 }

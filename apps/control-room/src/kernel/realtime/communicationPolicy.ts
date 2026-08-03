@@ -46,6 +46,10 @@ export function realtimeCommunicationPolicy(): RealtimeCommunicationPolicy {
   return currentPolicy;
 }
 
+export function resetRealtimeCommunicationPolicyForTests(): void {
+  currentPolicy = DEFAULT_REALTIME_COMMUNICATION_POLICY;
+}
+
 export function updateRealtimeCommunicationPolicy(value: unknown): void {
   if (!value || typeof value !== "object") return;
   const record = value as Record<string, unknown>;

@@ -1,13 +1,13 @@
 # Frontend v2 - Module Catalog
 
 **Status:** Active migration contract
-**Date:** 2026-05-22
+**Date:** 2026-08-03
 
 Each module below maps to `apps/control-room/src/modules/<module-id>/`. Modules are optional at registration time, but the shell must remain stable when any non-core module is disabled.
 
 ## 0. Current Implementation Snapshot
 
-As of 2026-05-22, `apps/control-room` registers these manifests through `src/modules/index.ts`:
+As of 2026-08-03, `apps/control-room` registers these manifests through `src/modules/index.ts`:
 
 | Manifest id | Directory | Slot | Status |
 |---|---|---|---|
@@ -17,10 +17,11 @@ As of 2026-05-22, `apps/control-room` registers these manifests through `src/mod
 | `viewport-3d` | `src/modules/viewport-3d` | `viewport-main` | implemented |
 | `cross-section-image` | `src/modules/cross-section-image` | `viewport-main` | implemented compatibility export/fallback; removed as a competing top-level workflow after field-map parity |
 | `field-map` | `src/modules/field-map` | `viewport-main` | production target for interactive planar spatial quantities; implementation tracked by ADR 0020 |
-| `analysis-plots` | `src/modules/analysis-plots` | `viewport-main` | implemented baseline; refactor to the canonical workbench and slot-aware Quick Chart is active |
+| `live-charts` | `src/modules/live-charts` | `viewport-main` | implemented active-run scalar time-series surface |
+| `analysis-plots` | `src/modules/analysis-plots` | `viewport-main` | implemented explicit-dataset postprocessing surface |
 | `viewport-aux` slot | `src/kernel/layout` | `viewport-aux` | implemented as an empty auxiliary dock slot, rendered only when a registered module targets it |
 | `inspector` | `src/modules/inspector` | `panel-right` | implemented |
-| `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented as the current footer/log dock |
+| `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented footer owner; mounts Quick Chart content only in its active tab |
 | `command-palette` | `src/modules/overlay` | `overlay` | implemented as the current overlay module |
 | `status-bar` | `src/modules/status-bar` | `status-bar` | implemented |
 
@@ -73,7 +74,9 @@ Authoring modules never mutate local-only physics state. They submit semantic tr
 | `viewport-3d` | `viewport-main` | 3D scene, mesh, field, glyph, overlay, selection visualization. | Mesh/topology/field binary resources. |
 | `cross-section-image` | `viewport-main` during migration; export/fallback after cutover | Server-rendered mesh cross-section preview and PNG export. | Meshing cross-section image resource plus FMCS/FMQS statistics resources. |
 | `field-map` | `viewport-main` | Interactive heatmaps, contours, probes, vectors, mesh overlays, plane/slab/depth reductions, and surface projections for every compatible published spatial quantity. | Canonical planar-monitor metadata plus bounded scalar, vector, occupancy, mesh-overlay, probe, and PNG resources. |
-| `analysis-plots` | `viewport-main` | Full Analysis workbench in the active-only center surface. | Revisioned scalar/analysis resources through the shared chart data-plan and renderer boundary; no server payload in workspace stores. |
+| `live-charts` | `viewport-main` | **Live Charts** follows active-run scalar histories with local series visibility and explicit Follow/Pause controls. | Revisioned table resources through the shared chart data-plan; retained-data background refresh; no polling. |
+| `analysis-plots` | `viewport-main` | **Analysis** postprocesses an **explicit selected dataset**, run, stage, or artifact in an active-only center surface. | Revisioned table and analysis resources; no active-tail adoption and no server payload in workspace stores. |
+| `transport-footer` Quick Chart content | `panel-bottom` | **Quick Chart** displays one pinned table descriptor while its footer tab is active and coexists with 3D. | Shared chart contracts and table resources only; never imports either center-module store. |
 | `viewport-2d` | disabled after replacement | Legacy live WebGL slices, projections, probes, line profiles, and mesh cross-sections. | Removed from default registration once `cross-section-image` is active. |
 | `legend-scale` | `viewport-main` overlay | Quantity legend, units, range, stale/degraded status. | Visualization state and field stats. |
 | `view-controls` | `ribbon`, `viewport-main` overlay | Camera, layer, quantity, clip, selection, display controls. | Command registry and visualization resource. |

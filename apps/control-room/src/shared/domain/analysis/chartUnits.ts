@@ -64,7 +64,12 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
       dimension: "frequency",
       scaleToCanonical: 1e9,
     },
+    "pJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-12 },
+    "nJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-9 },
+    "µJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-6 },
+    "mJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-3 },
     "J": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1 },
+    "kJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e3 },
     "J/m3": {
       canonicalUnit: "J/m3",
       dimension: "energy_density",
@@ -75,11 +80,14 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
       dimension: "energy_density",
       scaleToCanonical: 1,
     },
+    "mA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e-3 },
     "A/m": {
       canonicalUnit: "A/m",
       dimension: "field",
       scaleToCanonical: 1,
     },
+    "kA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e3 },
+    "MA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e6 },
     "rad/m": {
       canonicalUnit: "rad/m",
       dimension: "wavevector",
@@ -100,6 +108,15 @@ export function chartUnitsCompatible(left: string, right: string): boolean {
     leftUnit.dimension === rightUnit.dimension &&
     leftUnit.canonicalUnit === rightUnit.canonicalUnit
   );
+}
+
+/** Available display units within the same physical dimension for chart controls. */
+export function chartDisplayUnitOptions(unit: string): string[] {
+  const resolved = resolveChartUnit(unit);
+  if (!resolved) return [unit.trim()];
+  const compatible = Object.keys(UNIT_DEFINITIONS)
+    .filter((candidate) => candidate !== "" && chartUnitsCompatible(unit, candidate));
+  return [...new Set(compatible.length > 0 ? compatible : [unit.trim()])];
 }
 
 export function convertChartUnitValue(

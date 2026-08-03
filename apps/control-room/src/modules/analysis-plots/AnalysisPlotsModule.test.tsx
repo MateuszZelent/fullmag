@@ -16,7 +16,6 @@ import {
   buildAnalysisPlotsTableQuery,
   resolveAnalysisPlotsRequestedSeriesYAxisIds,
   resolveAnalysisPlotsYAxisIds,
-  shouldFetchAnalysisTableRows,
 } from "./analysisPlotsModel";
 import {
   frequencyDomainChartRouteOverrideFromSelection,
@@ -49,6 +48,7 @@ import {
   HYSTERESIS_CHART_VALUE_AXIS_SCALE,
   hysteresisChartReplayActionPresentation,
   hysteresisTargetMetadataFromOrientation,
+  hysteresisPointsProvenanceLabel,
   nextHysteresisPlaybackIndex,
   resolveHysteresisKeyboardNavigationIndex,
   resolveHysteresisScrubberPointIndex,
@@ -151,6 +151,11 @@ function chartWindow(value: {
 }
 
 describe("AnalysisPlotsView", () => {
+  it("reports the actual hysteresis points revision or an honest unavailable state", () => {
+    expect(hysteresisPointsProvenanceLabel(42)).toBe("Hysteresis points · revision 42");
+    expect(hysteresisPointsProvenanceLabel(null)).toBe("Hysteresis points · revision unavailable");
+  });
+
   it("fits hysteresis chart axes to collected points during live sweeps", () => {
     expect(HYSTERESIS_CHART_VALUE_AXIS_SCALE).toBe(true);
   });
@@ -1184,33 +1189,54 @@ describe("AnalysisPlotsView", () => {
   it("renders chart and axis column controls in the analysis surface", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
+        onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
-        xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedDatasetRef="default"
+        table={chartWindow(table)}
+        tableStatus="ready"
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).toContain("Analysis overview");
-    expect(html).toContain("2 rows / 2 columns");
+    expect(html).toContain("Magnetization dynamics");
+    expect(html).toContain("2 rows");
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain("mx");
   });
 
+  it("prefers semantic table unsupported status over a ready raw refresh", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
+        kernel={mockKernel}
+        onDatasetRefChange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        range={null}
+        selectedPoint={null}
+        selectedDatasetRef="default"
+        table={chartWindow(table)}
+        tableStatus="unsupported"
+        tableUnsupportedReason="The selected dataset does not publish scalar table samples."
+        selectedSeriesIds={["data.table:default:step:mx"]}
+      />,
+    );
+
+    expect(html).toContain("The selected dataset does not publish scalar table samples.");
+  });
+
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="overview"
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1230,18 +1256,15 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain response sweep"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        sourceChartId="frequency-response:artifact://response-sweep"
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["analysis.frequency-domain:response:amplitude"]}
       />,
     );
 
@@ -1249,11 +1272,39 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("Frequency-domain series");
     expect(html).toContain("Amplitude");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
+    expect(html).toContain("frequency-response:artifact://response-sweep");
+  });
+
+  it("keeps an explicit empty artifact selection empty instead of falling back to table selection", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        activeSurface="frequency-response"
+        kernel={mockKernel}
+        frequencyDomainSeries={[{
+          id: "analysis.frequency-domain:response:amplitude",
+          label: "Amplitude",
+          points: [{ rowIndex: 0, x: 9.5, y: 2 }],
+          quantity: "amplitude",
+          source: { kind: "analysis.frequency_domain", resourceKey: "artifact://response-sweep", tableId: "frequency-domain:response-sweep" },
+          status: "ready",
+          unit: "a.u.",
+          xUnit: "GHz",
+        }]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="Frequency-domain response sweep"
+        selectedSeriesIds={[]}
+        sourceChartId="frequency-response:artifact://response-sweep"
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
+    expect(html).not.toContain('data-chart-model-key="frequency-response:artifact://response-sweep"');
   });
 
   it("renders FMR workflow context for modal spectrum charts", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="eigenmodes"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1273,18 +1324,14 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1305,6 +1352,7 @@ describe("AnalysisPlotsView", () => {
   it("renders FMR workflow context for driven response charts", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1324,18 +1372,14 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1354,6 +1398,7 @@ describe("AnalysisPlotsView", () => {
   it("renders selected frequency-domain point context for inspector follow-up", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1373,10 +1418,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain modal spectrum"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Eigen frequency",
@@ -1391,12 +1434,10 @@ describe("AnalysisPlotsView", () => {
           unit: "GHz",
           xUnit: "mode index",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1413,6 +1454,7 @@ describe("AnalysisPlotsView", () => {
   it("renders selected FMR modal point context as a 3D overlay workflow", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="eigenmodes"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1432,10 +1474,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Eigen frequency",
@@ -1450,12 +1490,10 @@ describe("AnalysisPlotsView", () => {
           unit: "GHz",
           xUnit: "mode index",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1463,9 +1501,10 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("FMR mode inspector and 3D overlay controls");
   });
 
-  it("renders selected dispersion high-symmetry labels from chart points", () => {
+  it("renders the DSF dispersion surface instead of modal-point labels", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dispersion"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1487,10 +1526,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain dispersion"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Branch acoustic",
@@ -1511,26 +1548,21 @@ describe("AnalysisPlotsView", () => {
           unit: "GHz",
           xUnit: "rad/m",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).toContain("dispersion point");
-    expect(html).toContain("k-label");
-    expect(html).toContain("G");
-    expect(html).toContain("Linewidth");
-    expect(html).toContain("2.8 MHz");
-    expect(html).toContain("Dispersion inspector");
+    expect(html).toContain("Dynamic structure factor S(k,f)");
+    expect(html).toContain("bounded heatmap");
   });
 
   it("renders selected FMR response point context as a response-field overlay workflow", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1550,10 +1582,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Amplitude",
@@ -1568,12 +1598,10 @@ describe("AnalysisPlotsView", () => {
           unit: "a.u.",
           xUnit: "GHz",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1583,53 +1611,47 @@ describe("AnalysisPlotsView", () => {
     );
   });
 
-  it("hides uncomputed frequency-domain results instead of rendering a stale placeholder subchart", () => {
+  it("shows the explicit unavailable artifact state for an uncomputed frequency response", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="stale"
         frequencyDomainTitle="Frequency-domain modal spectrum"
         frequencyDomainUnavailableReason="spectrum artifact is missing"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).not.toContain("Frequency-domain modal spectrum");
-    expect(html).not.toContain("spectrum artifact is missing");
+    expect(html).toContain("Frequency-domain modal spectrum");
+    expect(html).toContain("spectrum artifact is missing");
     expect(html).not.toContain("Frequency-domain series legend");
   });
 
   it("renders frequency-domain loading state while artifact resources resolve", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="loading"
         frequencyDomainTitle="Frequency-domain dispersion"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1640,23 +1662,20 @@ describe("AnalysisPlotsView", () => {
   it("renders explicit response-map unavailable state when the mode is selected", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="error"
         frequencyDomainTitle="Frequency-domain response map"
         frequencyDomainUnavailableReason="response-map chart adapter is not available yet"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1815,13 +1834,14 @@ describe("AnalysisPlotsView", () => {
         "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
       objectId: null,
       ref: {
+        artifactPath: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
         calculationMode: "free_modes",
         fieldId: "analysis:eigen:sample-0000:mode-0001",
         kind: "results.eigen.mode",
         modeIndex: 1,
         nodeId:
           "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
-        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        resourceRef: analysisFieldVectorResourceKey("analysis:eigen:sample-0000:mode-0001"),
         sampleIndex: 0,
         type: "frequency-domain",
       },
@@ -1864,6 +1884,7 @@ describe("AnalysisPlotsView", () => {
         "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
       objectId: null,
       ref: {
+        artifactPath: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
         branchId: "acoustic",
         calculationMode: "dispersion_modal",
         fieldId: "analysis:eigen:sample-0004:mode-0005",
@@ -1957,19 +1978,19 @@ describe("AnalysisPlotsView", () => {
   it("renders active zoom range with a clear action", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
+        onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={{ fromValue: 10, toValue: 20 }}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -1980,19 +2001,18 @@ describe("AnalysisPlotsView", () => {
   it("renders compact chart status for axes, sample counts, and zoom state", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2007,11 +2027,11 @@ describe("AnalysisPlotsView", () => {
   it("renders selected chart cursor point in compact status", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "mx",
@@ -2026,12 +2046,11 @@ describe("AnalysisPlotsView", () => {
           unit: "1",
           xUnit: "1",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2044,19 +2063,17 @@ describe("AnalysisPlotsView", () => {
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="loading"
-        visibleTable={null}
-        xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedDatasetRef="default"
+        table={null}
+        tableStatus="loading"
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2067,19 +2084,18 @@ describe("AnalysisPlotsView", () => {
   it("renders a series legend with units and latest values from visible rows", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
@@ -2088,12 +2104,75 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain('<button');
     expect(html).toContain('type="button"');
     // ChartLegend aria-label format: "label, unit UNIT, latest VALUE. Visible/Hidden..."
-    expect(html).toContain('aria-label="mx, unit 1, latest 0.2');
+    expect(html).toContain('aria-label="mx, unit dimensionless, latest 0.2');
     expect(html).toContain('class="fm-chart-legend__swatch');
     expect(html).toContain('class="fm-chart-legend__latest"');
   });
 
-  it("renders solver energy history as a separate chart source when available", () => {
+  it("renders an empty selected-series state without restoring chart data", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
+        kernel={mockKernel}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        range={null}
+        selectedPoint={null}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
+        xAxisId="step"
+        selectedSeriesIds={[]}
+      />,
+    );
+
+    expect(html).toContain("Select at least one signal");
+    expect(html).not.toContain("Loading chart renderer");
+  });
+
+  it("keeps normalized legend readings dimensionless", () => {
+    const normalizedTable = {
+      ...table,
+      rows: [[1, 4.447e-6]],
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
+        kernel={mockKernel}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        range={null}
+        selectedPoint={{
+          label: "mx",
+          point: { rowIndex: 0, x: 1, y: 4.447e-6 },
+          quantity: "mx",
+          seriesId: "data.table:default:step:mx",
+          source: {
+            kind: "data.table.rows",
+            resourceKey: tableRowsResourceKey("default"),
+            tableId: "default",
+          },
+          unit: "1",
+          xUnit: "1",
+        }}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(normalizedTable)}
+        xAxisId="step"
+        selectedSeriesIds={["data.table:default:step:mx"]}
+      />,
+    );
+
+    expect(html).toContain(
+      'aria-label="mx, unit dimensionless, latest 4.4470e-6',
+    );
+    expect(html).toContain("cursor mx: 4.4470e-6");
+    expect(html).not.toContain("m1");
+  });
+
+  it("keeps solver energy adaptation independent of the Analysis dataset view", () => {
     const solverEnergySeries = buildSolverEnergyHistoryChartSeries({
       returned_rows: 2,
       revision: 2,
@@ -2122,31 +2201,11 @@ describe("AnalysisPlotsView", () => {
       total_rows: 2,
     });
 
-    const html = renderToStaticMarkup(
-      <AnalysisPlotsView
-        kernel={mockKernel}
-        onClearRange={() => undefined}
-        onPointSelect={() => undefined}
-        onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
-        range={null}
-        selectedPoint={null}
-        activeSurface="energy"
-        solverEnergySeries={solverEnergySeries}
-        solverEnergyStatus="ready"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
-        xAxisId="step"
-        yAxisIds={["mx"]}
-      />,
+    expect(solverEnergySeries).toHaveLength(6);
+    expect(solverEnergySeries.map((series) => series.label)).toEqual(
+      expect.arrayContaining(["E exchange", "E total"]),
     );
-
-    expect(html).toContain("Energy history");
-    expect(html).toContain("6 series");
-    expect(html).toContain('aria-label="Energy series"');
-    expect(html).toContain("E exchange");
-    expect(html).toContain("E total");
-    expect(html).toContain("time [s]");
+    expect(solverEnergySeries[0]?.xUnit).toBe("s");
   });
 
   it("builds visible-range table queries when chart zoom is active", () => {
@@ -2177,37 +2236,6 @@ describe("AnalysisPlotsView", () => {
     });
   });
 
-  it("fetches binary table rows during live follow and pauses when liveMode is paused", () => {
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: false,
-        loadScalars: true,
-        liveMode: "following",
-      }),
-    ).toBe(true);
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: true,
-        loadScalars: true,
-        liveMode: "following",
-      }),
-    ).toBe(true);
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: true,
-        loadScalars: true,
-        liveMode: "paused",
-      }),
-    ).toBe(false);
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: false,
-        loadScalars: false,
-        liveMode: "following",
-      }),
-    ).toBe(false);
-  });
-
   it("sanitizes selected Y columns to the two unit groups that ECharts renders", () => {
     expect(
       resolveAnalysisPlotsYAxisIds(
@@ -2224,7 +2252,7 @@ describe("AnalysisPlotsView", () => {
     ).toEqual(["t", "mx", "my"]);
   });
 
-  it("falls back to production Y columns when persisted Y selection has no visible series", () => {
+  it("keeps persisted empty selection empty when no selected series is available", () => {
     expect(
       resolveAnalysisPlotsYAxisIds(
         ["deleted-column"],
@@ -2239,7 +2267,7 @@ describe("AnalysisPlotsView", () => {
         ],
         "step",
       ),
-    ).toEqual(["mx", "my", "mz", "e_total"]);
+    ).toEqual([]);
   });
 
   it("declares the add-series event path in the module manifest", () => {

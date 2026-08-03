@@ -3,7 +3,15 @@
 import { useEffect, useId, useRef } from "react";
 
 import type { ChartRenderModel, ChartRenderSeries } from "./chartRenderer";
-import { formatAxisValue } from "./scientificChartFormatting";
+import {
+  chartAxisName,
+  chartValueExtrema,
+  createChartDisplayTransform,
+  createChartYAxisDisplayTransforms,
+  formatChartDisplayValue,
+  type ChartDisplayTransform,
+} from "./chartScalePolicy";
+import { parseLabelAndUnit } from "./scientificChartFormatting";
 
 const MAX_ROWS = 500;
 
@@ -21,7 +29,7 @@ interface PointsTableDialogProps {
  * - Shows at most MAX_ROWS rows per series (with a truncation notice).
  * - Accessible: dialog role, focus trap, Escape to close, ARIA labels.
  * - No ECharts instance or Canvas dependency.
- * - Numeric values use formatAxisValue (SI prefix); units shown in column headers.
+ * - Numeric values and units use the same dimension-aware transform as the canvas.
  * - Data is provenance-stamped (revision, decimation, trust).
  */
 export function PointsTableDialog({ model, open, onClose }: PointsTableDialogProps) {
@@ -51,6 +59,11 @@ export function PointsTableDialog({ model, open, onClose }: PointsTableDialogPro
 
   const provenance = model.provenance;
   const isStaleOrDegraded = model.status === "stale" || model.status === "degraded";
+  const xTransform = createChartDisplayTransform(
+    model.xAxis.unit,
+    chartValueExtrema(iterateXValues(model.series)),
+  );
+  const yTransforms = createChartYAxisDisplayTransforms(model.yAxes, model.series);
 
   return (
     <dialog
@@ -96,7 +109,17 @@ export function PointsTableDialog({ model, open, onClose }: PointsTableDialogPro
 
       <div className="fm-points-table-dialog__body">
         {model.series.map((series) => (
-          <SeriesTable key={series.id} series={series} xAxis={model.xAxis} />
+          <SeriesTable
+            key={series.id}
+            series={series}
+            xAxis={model.xAxis}
+            xTransform={xTransform}
+            yAxis={model.yAxes[series.yAxis] ?? {
+              label: series.label,
+              unit: series.unit,
+            }}
+            yTransform={yTransforms[series.yAxis] ?? createChartDisplayTransform(series.unit, null)}
+          />
         ))}
         {model.series.length === 0 ? (
           <p className="fm-points-table-dialog__empty">No data points.</p>
@@ -119,20 +142,36 @@ export function PointsTableDialog({ model, open, onClose }: PointsTableDialogPro
 function SeriesTable({
   series,
   xAxis,
+  xTransform,
+  yAxis,
+  yTransform,
 }: {
   series: ChartRenderSeries;
   xAxis: { label: string; unit: string };
+  xTransform: ChartDisplayTransform;
+  yAxis: { label: string; unit: string };
+  yTransform: ChartDisplayTransform;
 }) {
   const truncated = series.points.length > MAX_ROWS;
   const points = truncated ? series.points.slice(0, MAX_ROWS) : series.points;
-  const xLabel = xAxis.unit ? `${xAxis.label} [${xAxis.unit}]` : xAxis.label;
-  const yLabel = series.unit ? `${series.label} [${series.unit}]` : series.label;
+  const xLabel = chartAxisName(
+    parseLabelAndUnit(xAxis.label, xAxis.unit).baseLabel,
+    xTransform,
+  );
+  const yLabel = chartAxisName(
+    parseLabelAndUnit(yAxis.label, yAxis.unit).baseLabel,
+    yTransform,
+  );
 
   return (
     <div className="fm-points-table-dialog__series">
       <h3 className="fm-points-table-dialog__series-title">
         {series.label}
-        {series.unit ? <span className="fm-points-table-dialog__series-unit"> [{series.unit}]</span> : null}
+        {yTransform.displayUnit ? (
+          <span className="fm-points-table-dialog__series-unit">
+            {` [${yTransform.displayUnit}]`}
+          </span>
+        ) : null}
       </h3>
       {truncated ? (
         <p
@@ -160,10 +199,10 @@ function SeriesTable({
               <tr key={point.rowIndex}>
                 <td>{point.rowIndex}</td>
                 <td className="fm-points-table-dialog__numeric">
-                  {formatAxisValue(point.x, 5)}
+                  {formatChartDisplayValue(point.x, xTransform)}
                 </td>
                 <td className="fm-points-table-dialog__numeric">
-                  {formatAxisValue(point.y, 5)}
+                  {formatChartDisplayValue(point.y, yTransform)}
                 </td>
               </tr>
             ))}
@@ -172,4 +211,12 @@ function SeriesTable({
       </div>
     </div>
   );
+}
+
+function* iterateXValues(
+  series: readonly ChartRenderSeries[],
+): Iterable<number> {
+  for (const entry of series) {
+    for (const point of entry.points) yield point.x;
+  }
 }

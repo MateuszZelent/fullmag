@@ -21,6 +21,7 @@ export interface CommandContext {
   source:
     | "explorer"
     | "analysis-plots"
+    | "live-charts"
     | "inspector"
     | "menu"
     | "palette"

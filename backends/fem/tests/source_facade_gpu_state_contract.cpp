@@ -667,6 +667,10 @@ void gpu_scalar_reduction_workspace_is_owned_by_cuda_reductions_module() {
                 std::string::npos &&
             reduction_workspace_header.find("double *host_scalar_result") !=
                 std::string::npos &&
+            reduction_workspace_header.find("pageable_scalar_result") !=
+                std::string::npos &&
+            reduction_workspace_header.find("scalar_result_pinned") !=
+                std::string::npos &&
             reduction_workspace_header.find("void *temp_storage") != std::string::npos &&
             reduction_workspace_header.find("uint64_t temp_storage_bytes") !=
                 std::string::npos,
@@ -713,6 +717,14 @@ void gpu_scalar_reduction_workspace_is_owned_by_cuda_reductions_module() {
             reduction_workspace_memory_source.find("reductions.scalar_result") !=
                 std::string::npos &&
             reduction_workspace_memory_source.find("reductions.host_scalar_result") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("cudaErrorMemoryAllocation") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("pageable_scalar_result.data()") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("numerical semantics are unchanged") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("cudaGetLastError()") !=
                 std::string::npos &&
             reduction_workspace_memory_source.find("cudaHostAlloc") !=
                 std::string::npos &&

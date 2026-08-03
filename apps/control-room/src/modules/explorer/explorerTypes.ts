@@ -305,8 +305,17 @@ export interface ExplorerNode {
   oerstedFieldIndex?: number;
   regionId?: string;
   resourceRef?: string;
+  displayUnits?: Record<string, string>;
+  range?: { fromSI: number; toSI: number } | null;
+  selectedSeriesIds?: readonly string[];
   tableId?: string;
   xAxisId?: string;
+  /**
+   * Compatibility owner: Quick Chart Explorer descriptor parser.
+   * Removal gate: remove yAxisIds after one released Control Room version writes
+   * only selectedSeriesIds and migration tests prove no persisted or Explorer
+   * descriptor still depends on yAxisIds.
+   */
   yAxisIds?: readonly string[];
   sampleIndex?: number;
   stageId?: string;

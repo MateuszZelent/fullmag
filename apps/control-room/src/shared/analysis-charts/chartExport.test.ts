@@ -35,7 +35,7 @@ describe("chart export", () => {
       decimation: "minmax_lttb",
       descriptorId: "energy@7",
       device: null,
-      displayUnits: {},
+      displayUnits: { x: "ns", "y:e,total": "pJ" },
       exportedAt: "2026-07-26T00:00:00.000Z",
       precision: null,
       query: "limit=5000",
@@ -48,6 +48,41 @@ describe("chart export", () => {
       scientificTrust: "unknown",
     });
     expect(safeChartExportFilename(model, "csv")).toBe("energy-total.csv");
+  });
+
+  it("records resolved display units while retaining canonical CSV values", () => {
+    const normalizedModel: ChartRenderModel = {
+      ...model,
+      series: [{
+        id: "my",
+        kind: "line",
+        label: "my",
+        points: [{ rowIndex: 3, x: 1e-9, y: 0.10317 }],
+        unit: "1",
+        yAxis: 0,
+      }],
+      yAxes: [{ label: "Normalized magnetization m", unit: "1" }],
+    };
+
+    expect(chartExportProvenance(normalizedModel, "2026-07-26T00:00:00.000Z").displayUnits).toEqual({
+      x: "ns",
+      "y:my": "",
+    });
+    expect(serializeChartData(normalizedModel, "csv")).toContain(
+      "my,3,1e-9,0.10317,s,1,7,minmax_lttb",
+    );
+  });
+
+  it("fills deterministic display units around a partial caller override", () => {
+    const partialOverride: ChartRenderModel = {
+      ...model,
+      provenance: { ...model.provenance!, displayUnits: { "y:e,total": "fJ" } },
+    };
+
+    expect(chartExportProvenance(partialOverride).displayUnits).toEqual({
+      x: "ns",
+      "y:e,total": "fJ",
+    });
   });
 
   it("revokes object URLs after initiating a download", async () => {
