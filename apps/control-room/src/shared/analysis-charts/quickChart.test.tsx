@@ -1,11 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+
 import { chartTableWindowFromBinary } from "@/shared/domain/analysis/chartDataPlan";
+
 import {
   buildQuickChartRenderModel,
   quickChartColumnIdsForQuery,
-  quickChartDescriptorFromSelection,
 } from "./quickChart";
+import { chartRenderModelToEChartsOption } from "./chartRenderer";
 import {
   QuickChartView,
   quickChartKeyboardPoints,
@@ -13,57 +15,37 @@ import {
   quickChartSelectionFromKeyboard,
 } from "./QuickChartView";
 
-const descriptor = { chartId: "default", resourceKey: "data.table:default", tableId: "default", xAxisId: "step", yAxisIds: ["mx"] };
+const seriesId = "data.table:default:step:mx";
+const descriptor = {
+  chartId: "default",
+  displayUnits: { mx: "1" },
+  range: null,
+  resourceKey: "data.table:default",
+  selectedSeriesIds: [seriesId],
+  tableId: "default",
+  xAxisId: "step",
+};
 
-describe("Inspector Quick Chart", () => {
-  it("maps chart selections to a payload-free descriptor", () => {
-    expect(quickChartDescriptorFromSelection({
-      selection: { kind: "analysis.chart", label: "Chart", moduleSource: "analysis-plots", nodeId: "chart", objectId: null, ref: { chartId: "default", kind: "analysis.chart", nodeId: "chart", tableId: "default", type: "analysis-chart" } },
-      xAxisId: "step",
-      yAxisIds: ["mx"],
-    })).toEqual(descriptor);
-  });
-
-  it("keeps axes frozen for a pinned Quick Chart", () => {
-    expect(quickChartDescriptorFromSelection({
-      selection: {
-        kind: "results.quick_chart",
-        label: "Quick Chart",
-        moduleSource: "analysis-plots",
-        nodeId: "results:quick-charts:default",
-        objectId: null,
-        ref: {
-          chartId: "default",
-          kind: "results.quick_chart",
-          nodeId: "results:quick-charts:default",
-          tableId: "default",
-          type: "quick-chart",
-          xAxisId: "step",
-          yAxisIds: ["mx", "my"],
-        },
-      },
-      xAxisId: "t",
-      yAxisIds: ["e_total"],
-    })).toEqual({
-      ...descriptor,
-      yAxisIds: ["mx", "my"],
-    });
-  });
-
-  it("queries only schema-published columns required by the Quick Chart", () => {
+describe("Quick Chart", () => {
+  it("queries only schema-published columns required by full series identities", () => {
     expect(quickChartColumnIdsForQuery(
       [
         { column_id: "step" },
         { column_id: "mx" },
         { column_id: "e_total" },
       ],
-      { ...descriptor, yAxisIds: ["mx", "my", "mx", "e_total"] },
+      {
+        ...descriptor,
+        selectedSeriesIds: [
+          seriesId,
+          "data.table:default:step:my",
+          seriesId,
+          "data.table:default:step:e_total",
+        ],
+      },
     )).toEqual(["step", "mx", "e_total"]);
 
-    expect(quickChartColumnIdsForQuery(
-      [{ column_id: "mx" }],
-      descriptor,
-    )).toEqual([]);
+    expect(quickChartColumnIdsForQuery([{ column_id: "mx" }], descriptor)).toEqual([]);
   });
 
   it("reports an unsupported selection instead of pretending absent quantities are empty data", () => {
@@ -77,29 +59,230 @@ describe("Inspector Quick Chart", () => {
     expect(model.statusMessage).toContain("not available");
   });
 
+  it("fails closed when any selected full series identity is absent from the published window", () => {
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "mx", label: "mx", unit: "1" },
+      ],
+      decoded: {
+        columnCount: 2,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 4,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 0.10317]),
+      },
+      tableId: "default",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        ...descriptor,
+        selectedSeriesIds: [seriesId, "data.table:default:step:my"],
+      },
+      status: "ready",
+      window,
+    });
+
+    expect(model.status).toBe("unsupported");
+    expect(model.statusMessage).toContain("my");
+    expect(model.series).toEqual([]);
+  });
+
+  it("rejects three incompatible y-axis unit groups instead of mapping the third to axis zero", () => {
+    const selectedSeriesIds = [
+      "data.table:mixed:step:mx",
+      "data.table:mixed:step:e_total",
+      "data.table:mixed:step:H",
+    ];
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "mx", label: "mx", unit: "1" },
+        { column_id: "e_total", label: "Energy", unit: "J" },
+        { column_id: "H", label: "Field", unit: "A/m" },
+      ],
+      decoded: {
+        columnCount: 4,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 8,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 0.1, 2e-12, 1000]),
+      },
+      tableId: "mixed",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        chartId: "mixed",
+        displayUnits: { e_total: "pJ", H: "kA/m" },
+        range: null,
+        resourceKey: "data.table:mixed",
+        selectedSeriesIds,
+        tableId: "mixed",
+        xAxisId: "step",
+      },
+      status: "ready",
+      window,
+    });
+
+    expect(model.status).toBe("unsupported");
+    expect(model.statusMessage).toContain("at most two");
+    expect(model.series).toEqual([]);
+  });
+
+  it("groups compatible raw and display units on one axis before enforcing the dual-axis limit", () => {
+    const selectedSeriesIds = [
+      "data.table:compatible:step:e_total",
+      "data.table:compatible:step:e_demag",
+      "data.table:compatible:step:H",
+    ];
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "e_total", label: "Total", unit: "J" },
+        { column_id: "e_demag", label: "Demag", unit: "pJ" },
+        { column_id: "H", label: "Field", unit: "A/m" },
+      ],
+      decoded: {
+        columnCount: 4,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 9,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 2e-12, 2, 1000]),
+      },
+      tableId: "compatible",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        chartId: "compatible",
+        displayUnits: { e_total: "pJ", e_demag: "pJ", H: "kA/m" },
+        range: null,
+        resourceKey: "data.table:compatible",
+        selectedSeriesIds,
+        tableId: "compatible",
+        xAxisId: "step",
+      },
+      status: "ready",
+      window,
+    });
+
+    expect(model.status).toBe("ready");
+    expect(model.yAxes).toHaveLength(2);
+    expect(model.series.map((entry) => entry.yAxis)).toEqual([0, 0, 1]);
+    expect(model.series[1]).toMatchObject({
+      points: [{ rowIndex: 0, x: 1, y: 2e-12 }],
+      unit: "J",
+    });
+  });
+
+  it("keeps an explicit zero-series selection as a stable local empty state", () => {
+    const model = buildQuickChartRenderModel({
+      descriptor: { ...descriptor, selectedSeriesIds: [] },
+      status: "ready",
+      window: null,
+    });
+
+    expect(model.status).toBe("empty");
+    expect(model.statusMessage).toBe("Select at least one signal");
+    expect(model.series).toEqual([]);
+  });
+
   it("builds a neutral model from the shared bounded columnar window", () => {
     const window = chartTableWindowFromBinary({
-      columns: [{ column_id: "step", label: "Step", unit: "1" }, { column_id: "mx", label: "mx", unit: "1" }],
-      decoded: { columnCount: 2, cursorEnd: 2, cursorStart: 1, resyncRequired: false, revision: 4, rowCount: 2, schemaRevision: 1, totalRows: 2, values: new Float64Array([1, 0.1, 2, 0.2]) },
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "mx", label: "mx", unit: "1" },
+      ],
+      decoded: {
+        columnCount: 2,
+        cursorEnd: 2,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 4,
+        rowCount: 2,
+        schemaRevision: 1,
+        totalRows: 2,
+        values: new Float64Array([1, 0.1, 2, 0.2]),
+      },
       tableId: "default",
     });
     const model = buildQuickChartRenderModel({ descriptor, status: "ready", window });
     expect(model.key).toContain("data.table:default@4");
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 1, y: 0.1 }, { rowIndex: 1, x: 2, y: 0.2 }]);
+    expect(model.provenance?.displayUnits).toEqual({ [`y:${seriesId}`]: "1" });
+    expect(model.series[0]?.id).toBe(seriesId);
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 1, y: 0.1 },
+      { rowIndex: 1, x: 2, y: 0.2 },
+    ]);
     expect(buildQuickChartRenderModel({
-      descriptor: { ...descriptor, yAxisIds: ["mx", "mx"] },
+      descriptor: { ...descriptor, selectedSeriesIds: [seriesId, seriesId] },
       status: "ready",
       window,
     }).series).toHaveLength(1);
-    expect(renderToStaticMarkup(<QuickChartView model={model} />)).toContain("Inspector Quick Chart");
-    expect(quickChartSelectionFromEvent({ data: [2, 0.2, 1], seriesIndex: 0 }, model)).toEqual({ rowIndex: 1, seriesId: "mx", x: 2, y: 0.2 });
+    expect(renderToStaticMarkup(<QuickChartView model={model} />)).toContain("Quick Chart");
+    expect(quickChartSelectionFromEvent({ data: [2, 0.2, 1], seriesIndex: 0 }, model)).toEqual({ rowIndex: 1, seriesId, x: 2, y: 0.2 });
     const points = quickChartKeyboardPoints(model);
     expect(quickChartSelectionFromKeyboard("ArrowRight", 0, points)).toEqual({
       cursor: 1,
-      selection: { rowIndex: 1, seriesId: "mx", x: 2, y: 0.2 },
+      selection: { rowIndex: 1, seriesId, x: 2, y: 0.2 },
     });
     expect(quickChartSelectionFromKeyboard("Home", 1, points)?.cursor).toBe(0);
     expect(quickChartSelectionFromKeyboard("End", 0, points)?.cursor).toBe(1);
     expect(quickChartSelectionFromKeyboard("Escape", 0, points)).toBeNull();
+  });
+
+  it("maps quantity display preferences to full series IDs used by the real renderer", () => {
+    const fieldSeriesId = "data.table:field:step:H";
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "H", label: "Field", unit: "T" },
+      ],
+      decoded: {
+        columnCount: 2,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 5,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 0.10317]),
+      },
+      tableId: "field",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        chartId: "field",
+        displayUnits: { H: "mT" },
+        range: null,
+        resourceKey: "data.table:field",
+        selectedSeriesIds: [fieldSeriesId],
+        tableId: "field",
+        xAxisId: "step",
+      },
+      status: "ready",
+      window,
+    });
+    const option = chartRenderModelToEChartsOption(model);
+
+    expect(model.provenance?.displayUnits).toEqual({ [`y:${fieldSeriesId}`]: "mT" });
+    expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Field [mT]" })]));
+    const axisFormatter = (option.yAxis as Array<{ axisLabel?: { formatter?: (value: number) => string } }>)[0]?.axisLabel?.formatter;
+    expect(axisFormatter?.(0.10317)).toBe("103.2");
+    expect(option.series).toEqual(expect.arrayContaining([
+      expect.objectContaining({ data: [[1, 0.10317, 0]] }),
+    ]));
   });
 });

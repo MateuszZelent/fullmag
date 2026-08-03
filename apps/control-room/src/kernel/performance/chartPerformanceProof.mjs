@@ -1,9 +1,10 @@
-export const CHART_PERFORMANCE_PROOF_VERSION = 1;
+export const CHART_PERFORMANCE_PROOF_VERSION = 2;
 
 const STRING_PATHS = [
   "schema",
   "recordedAt",
   "build.commit",
+  "build.diffFingerprint",
   "build.mode",
   "browser.name",
   "browser.version",
@@ -23,8 +24,6 @@ const NUMBER_PATHS = [
   "timing.longTasks",
   "transport.requests",
   "transport.payloadBytes",
-  "transport.cacheHits",
-  "transport.cacheMisses",
   "transport.cancelledRequests",
   "chart.modelBuilds",
   "chart.plannedPoints",
@@ -50,6 +49,7 @@ const NUMBER_PATHS = [
 ];
 
 const BOOLEAN_PATHS = [
+  "build.dirty",
   "scenario.sessionAbort",
   "viewport3d.mounted",
   "viewport3d.contextLost",
@@ -92,9 +92,43 @@ export function assertChartPerformanceProof(value) {
     }
   }
 
+  if (
+    value.transport.cacheMeasurement !== "NOT_MEASURED" ||
+    value.transport.cacheHits !== null ||
+    value.transport.cacheMisses !== null
+  ) {
+    throw invalid(
+      "transport.cacheMeasurement",
+      '"NOT_MEASURED" with null cacheHits/cacheMisses',
+    );
+  }
+
   const phase = readPath(value, "scenario.phase");
   if (phase !== "cold" && phase !== "warm") {
     throw invalid("scenario.phase", '"cold" or "warm"');
+  }
+
+  if (value.scenario.sessionAbort) {
+    const sourceRevision = value.cancellation.sourceRevision;
+    const latestRevision = value.cancellation.latestRevision;
+    if (
+      typeof sourceRevision !== "number" ||
+      !Number.isFinite(sourceRevision) ||
+      typeof latestRevision !== "number" ||
+      !Number.isFinite(latestRevision) ||
+      latestRevision <= sourceRevision
+    ) {
+      throw invalid(
+        "cancellation.latestRevision",
+        "a finite revision newer than cancellation.sourceRevision",
+      );
+    }
+    if (value.cancellation.staleRevisionVisible !== false) {
+      throw invalid("cancellation.staleRevisionVisible", "false");
+    }
+    if (value.cancellation.staleValuesAdopted !== false) {
+      throw invalid("cancellation.staleValuesAdopted", "false");
+    }
   }
 
   return value;

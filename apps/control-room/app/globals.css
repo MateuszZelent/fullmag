@@ -32,6 +32,7 @@
 @import "../src/design/styles/viewport-3d.css" layer(fm-modules);
 @import "../src/design/styles/field-map.css" layer(fm-modules);
 @import "../src/design/styles/analysis-plots.css" layer(fm-modules);
+@import "../src/design/styles/live-charts.css" layer(fm-modules);
 @import "../src/design/styles/footer.css" layer(fm-modules);
 @import "../src/design/styles/footer-command-audit.css" layer(fm-modules);
 @import "../src/design/styles/footer-transport-log.css" layer(fm-modules);

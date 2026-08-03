@@ -50,6 +50,7 @@ const BOTTOM_PANEL_TABS: readonly BottomPanelTabId[] = [
   "engine",
   "logs",
   "mesh",
+  "quick-chart",
   "telemetry",
 ];
 

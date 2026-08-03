@@ -6,9 +6,11 @@ import { ChartExportControls } from "./ChartExportControls";
 import type { ChartRendererOwner, ChartRenderModel } from "./chartRenderer";
 
 export function QuickChartView({
+  initialRange,
   model,
   onPointSelect,
 }: {
+  initialRange?: { fromSI: number; toSI: number } | null;
   model: ChartRenderModel;
   onPointSelect?: (selection: { rowIndex: number; seriesId: string; x: number; y: number }) => void;
 }) {
@@ -17,7 +19,7 @@ export function QuickChartView({
   const keyboardPoints = quickChartKeyboardPoints(model);
   const activePoint = keyboardPoints[keyboardCursor] ?? keyboardPoints[0];
   return (
-    <section className="fm-quick-chart" aria-label="Inspector Quick Chart">
+    <section className="fm-quick-chart" aria-label="Quick Chart">
       <div
         aria-label={activePoint
           ? `Quick Chart cursor ${activePoint.seriesId}, row ${activePoint.rowIndex}, x ${activePoint.x}, y ${activePoint.y}`
@@ -40,6 +42,10 @@ export function QuickChartView({
         <EChartsCanvasSurface
           className="fm-quick-chart__canvas"
           exportRef={exportRef}
+          initialRange={initialRange ? {
+            fromValue: initialRange.fromSI,
+            toValue: initialRange.toSI,
+          } : null}
           model={model}
           onClick={(event) => {
             const selection = quickChartSelectionFromEvent(event, model);

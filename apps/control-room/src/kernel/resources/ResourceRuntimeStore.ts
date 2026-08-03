@@ -138,6 +138,18 @@ export class ResourceRuntimeStore<TData = unknown> {
     return counts;
   }
 
+  resetForTests(): void {
+    for (const stored of this.entries.values()) {
+      const entry = stored as unknown as ResourceRuntimeEntry<unknown>;
+      entry.controller?.abort();
+      if (entry.pendingTimer) {
+        clearTimeout(entry.pendingTimer);
+      }
+    }
+    this.entries.clear();
+    this.pausePredicates.clear();
+  }
+
   getSnapshot<TSnapshotData = TData>(
     resourceKey: ResourceKey,
   ): ResourceRuntimeSnapshot<TSnapshotData> {
@@ -450,6 +462,10 @@ export class ResourceRuntimeStore<TData = unknown> {
 }
 
 export const sharedResourceRuntimeStore = new ResourceRuntimeStore();
+
+export function resetSharedResourceRuntimeStoreForTests(): void {
+  sharedResourceRuntimeStore.resetForTests();
+}
 
 function refetchDelayMs<TData>(
   entry: ResourceRuntimeEntry<TData>,

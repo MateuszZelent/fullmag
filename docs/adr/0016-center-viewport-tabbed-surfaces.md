@@ -1,7 +1,7 @@
 # ADR 0016: Center Viewport Tabbed Surfaces
 
 - Status: accepted
-- Date: 2026-05-30
+- Date: 2026-05-30; amended 2026-08-03
 
 ## Context
 
@@ -22,9 +22,18 @@ The existing binary cross-section resources stay authoritative for statistics an
 
 `viewport-aux` remains a valid kernel slot for future optional modules, but mesh cross-section workflows no longer register or focus an auxiliary viewport module.
 
+The center host now has two chart surfaces with separate ownership. **Live Charts**
+(`live-charts`) follows active-run scalar time series. **Analysis**
+(`analysis-plots`) opens an **explicit selected dataset**, run, stage, or artifact
+for postprocessing and never adopts the active table tail implicitly. **Quick
+Chart** is not a center surface: it is active-tab-only content owned by
+`transport-footer` in `panel-bottom`, so it can coexist with the 3D viewport.
+
 ## Consequences
 
 - Switching to a non-3D center tab must unmount `Viewport3DModule`; hiding it with CSS is not sufficient.
+- `Live Charts` and `Analysis` are independent registered center modules; neither imports the other's store or controller.
+- Quick Chart imports neither center module and does not change the active center surface.
 - Inactive center tabs must not keep resource hooks, WebGL canvases, animation frames, object URLs, workers, or large render buffers alive.
 - Realtime remains invalidation-only. HTTP v2 resources remain the source of truth for cross-section images, binary geometry, binary quality, visualization state, and client acknowledgements.
 - Cross-section image generation is cacheable by ETag and independent of browser GPU capacity.

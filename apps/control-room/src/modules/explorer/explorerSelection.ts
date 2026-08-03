@@ -2,6 +2,7 @@ import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
+import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 
 import type { ExplorerNode } from "./explorerTypes";
 
@@ -88,21 +89,19 @@ function modeVisualizationTargetId(
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
-  if (
-    node.kind === "results.quick_chart" &&
-    node.chartId &&
-    node.tableId &&
-    node.xAxisId &&
-    node.yAxisIds
-  ) {
+  if (node.kind === "results.quick_chart") {
+    const descriptor = parsePinnedQuickChart(node);
+    if (!descriptor) return null;
     return {
-      chartId: node.chartId,
+      chartId: descriptor.chartId,
+      displayUnits: descriptor.displayUnits,
       kind: "results.quick_chart",
       nodeId: node.id,
-      tableId: node.tableId,
+      range: descriptor.range,
+      selectedSeriesIds: descriptor.selectedSeriesIds,
+      tableId: descriptor.tableId,
       type: "quick-chart",
-      xAxisId: node.xAxisId,
-      yAxisIds: node.yAxisIds,
+      xAxisId: descriptor.xAxisId,
     };
   }
 

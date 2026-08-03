@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -18,10 +19,11 @@ describe("TableColumnList", () => {
       <TableColumnList
         columns={columns}
         onSelectXAxis={() => undefined}
-        onToggleYAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
-        yAxisIds={[]}
+        selectedSeriesIds={[]}
       />,
     );
 
@@ -29,8 +31,32 @@ describe("TableColumnList", () => {
     expect(html).toContain("mx");
   });
 
-  it("does not allow disabling the last selected Y axis", () => {
-    expect(nextYAxisIdsForToggle(["mx"], "mx", false)).toEqual(["mx"]);
+  it("keeps the quantity-id markup backed by its exact design selector", () => {
+    const html = renderToStaticMarkup(
+      <TableColumnList
+        columns={columns}
+        onSelectXAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
+        showQuantityId
+        xAxisId="step"
+        xAxisRadioName="fm-analysis-plots-x-axis"
+        selectedSeriesIds={[]}
+      />,
+    );
+    const styles = readFileSync(
+      new URL("../../../design/styles/analysis-plots.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(html).toContain('class="fm-analysis-plots__column-id"');
+    expect(styles).toMatch(
+      /\.fm-analysis-plots__column-id\s*\{[^}]*margin-left:\s*var\(--fm-space-1\);[^}]*color:\s*var\(--fm-text-muted\);[^}]*font-family:\s*var\(--fm-font-mono\);[^}]*font-size:\s*var\(--fm-font-size-2xs\);[^}]*\}/,
+    );
+  });
+
+  it("allows disabling the last selected Y axis", () => {
+    expect(nextYAxisIdsForToggle(["mx"], "mx", false)).toEqual([]);
     expect(nextYAxisIdsForToggle(["mx", "my"], "mx", false)).toEqual(["my"]);
     expect(nextYAxisIdsForToggle(["mx"], "my", true)).toEqual(["mx", "my"]);
   });
@@ -66,19 +92,20 @@ describe("TableColumnList", () => {
     ).toEqual(["t", "mx", "my"]);
   });
 
-  it("disables the last selected Y-axis checkbox", () => {
+  it("keeps the final selected checkbox enabled", () => {
     const html = renderToStaticMarkup(
       <TableColumnList
-        columns={columns}
+        columns={[columns[1]!]}
         onSelectXAxis={() => undefined}
-        onToggleYAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
-        yAxisIds={["mx"]}
+        selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).toContain('class="fm-analysis-plots__checkbox" disabled=""');
+    expect(html).not.toContain('class="fm-analysis-plots__checkbox" disabled=""');
   });
 
   it("disables third-unit Y-axis checkboxes", () => {
@@ -90,10 +117,14 @@ describe("TableColumnList", () => {
           { column_id: "max_torque", label: "max torque", unit: "A/m" },
         ]}
         onSelectXAxis={() => undefined}
-        onToggleYAxis={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        seriesIdForColumn={(columnId) => `data.table:default:step:${columnId}`}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
-        yAxisIds={["mx", "e_total"]}
+        selectedSeriesIds={[
+          "data.table:default:step:mx",
+          "data.table:default:step:e_total",
+        ]}
       />,
     );
 

@@ -9,6 +9,7 @@ import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsP
 import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
+import { LiveChartInspectorPanel } from "./panels/LiveChartInspectorPanel";
 import { QuickChartInspectorPanel } from "./panels/QuickChartInspectorPanel";
 import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
@@ -474,6 +475,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Charts",
     selectionKinds: ["analysis.chart", "analysis.chart-point"],
     component: ChartInspectorPanel,
+  },
+  {
+    id: "live-chart",
+    title: "Live Chart",
+    selectionKinds: ["live.chart", "live.chart-point"],
+    component: LiveChartInspectorPanel,
   },
   {
     id: "quick-chart",

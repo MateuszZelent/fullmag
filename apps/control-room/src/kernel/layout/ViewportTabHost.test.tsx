@@ -78,20 +78,28 @@ describe("ViewportTabHost", () => {
     const kernel = makeKernel();
     kernel.modules.register(makeManifest("viewport-3d-test", "3D"));
     kernel.modules.register(makeManifest("cross-section-image-test", "Section"));
+    kernel.modules.register(makeManifest("live-charts-test", "Live Charts"));
     kernel.modules.register(makeManifest("analysis-plots-test", "Plots"));
-    kernel.layout.setActiveViewportMainModule("cross-section-image-test");
 
-    const html = renderToStaticMarkup(
-      <KernelContext.Provider value={kernel}>
-        <ViewportTabHost />
-      </KernelContext.Provider>,
-    );
+    for (const activeModuleId of [
+      "viewport-3d-test",
+      "live-charts-test",
+      "analysis-plots-test",
+      "viewport-3d-test",
+    ]) {
+      kernel.layout.setActiveViewportMainModule(activeModuleId);
+      const html = renderToStaticMarkup(
+        <KernelContext.Provider value={kernel}>
+          <ViewportTabHost />
+        </KernelContext.Provider>,
+      );
 
-    expect(html).toContain('data-active-module-id="cross-section-image-test"');
-    expect(html).toContain("3D");
-    expect(html).toContain("Section");
-    expect(html).toContain("Plots");
-    expect(html.match(/Loading/g)).toHaveLength(1);
+      expect(html).toContain(`data-active-module-id="${activeModuleId}"`);
+      expect(html).toContain("3D");
+      expect(html).toContain("Live Charts");
+      expect(html).toContain("Plots");
+      expect(html.match(/Loading/g)).toHaveLength(1);
+    }
   });
 
   it("falls back to the first registered center surface when persisted active id is stale", () => {

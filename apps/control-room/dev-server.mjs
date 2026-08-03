@@ -37,12 +37,17 @@ const apiTarget =
   apiTargetIdx >= 0
     ? (args[apiTargetIdx + 1] ?? "http://localhost:8081")
     : "http://localhost:8081";
-const browserOrigin = `http://localhost:${port}`;
+const browserHost = process.env.FULLMAG_WEB_PUBLIC_HOST ?? "localhost";
+const browserOrigin = `http://${formatUrlHost(browserHost)}:${port}`;
 const staticRootIdx = args.indexOf("--static-root");
 const staticRoot =
   staticRootIdx >= 0
     ? (args[staticRootIdx + 1] ?? process.env.FULLMAG_STATIC_WEB_ROOT)
     : process.env.FULLMAG_STATIC_WEB_ROOT;
+
+function formatUrlHost(host) {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
 
 if (staticRoot) {
   startStaticServer(staticRoot);
@@ -85,6 +90,7 @@ function startDevServer() {
         ...process.env,
         FULLMAG_API_PROXY_TARGET: apiTarget,
         FULLMAG_API_URL: apiTarget,
+        FULLMAG_WEB_PUBLIC_HOST: browserHost,
         NEXT_PUBLIC_API_URL: browserOrigin,
         NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin,
         NEXT_PUBLIC_FULLMAG_API_URL: browserOrigin,

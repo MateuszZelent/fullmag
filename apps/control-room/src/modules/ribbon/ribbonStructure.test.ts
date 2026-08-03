@@ -419,6 +419,9 @@ describe("ribbon structure", () => {
     const analysisAction = workspaceGroup?.actions.find(
       (action) => action.id === "ws-analyze",
     );
+    const liveChartsAction = workspaceGroup?.actions.find(
+      (action) => action.id === "ws-live-charts",
+    );
     const panelAction = workspaceGroup?.actions.find(
       (action) => action.id === "ws-panel",
     );
@@ -434,6 +437,11 @@ describe("ribbon structure", () => {
     expect(analysisAction).toMatchObject({
       commandId: "analysis-plots.open",
       disabled: false,
+    });
+    expect(liveChartsAction).toMatchObject({
+      commandId: "live-charts.open",
+      disabled: false,
+      label: "Live Charts",
     });
     expect(panelAction).toMatchObject({
       disabled: false,

@@ -23,11 +23,11 @@ describe("footerManifest", () => {
       "utf8",
     );
 
-    for (const tab of ["logs", "telemetry", "diagnostics", "engine", "mesh"]) {
+    for (const tab of ["logs", "telemetry", "diagnostics", "engine", "mesh", "quick-chart"]) {
       expect(source).toContain(`TabsTrigger value="${tab}"`);
       expect(source).toContain(`activeTab === "${tab}"`);
     }
     expect(source).not.toContain('TabsTrigger value="analysis"');
-    expect(source).not.toContain("Quick Chart");
+    expect(source).toContain("<QuickChartResourceView />");
   });
 });

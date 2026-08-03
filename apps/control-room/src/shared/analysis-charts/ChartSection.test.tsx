@@ -54,6 +54,50 @@ describe("ChartSection", () => {
     expect(html).toContain('role="alert"');
   });
 
+  it("renders a non-blocking refresh revision beside retained chart metadata", () => {
+    const html = renderToStaticMarkup(
+      <ChartSection
+        title="Table"
+        status={{
+          presentation: {
+            kind: "refreshing",
+            requestedRevision: 42,
+            visibleRevision: 41,
+          },
+          primary: "Live",
+        }}
+      >
+        <div>Chart Content</div>
+      </ChartSection>,
+    );
+
+    expect(html).toContain("Updating");
+    expect(html).toContain("rev 41");
+    expect(html).toContain("→ 42");
+  });
+
+  it("keeps the visible revision and refresh error in the section header", () => {
+    const html = renderToStaticMarkup(
+      <ChartSection
+        title="Table"
+        status={{
+          presentation: {
+            error: new Error("connection lost"),
+            kind: "stale",
+            visibleRevision: 41,
+          },
+          primary: "Live",
+        }}
+      >
+        <div>Chart Content</div>
+      </ChartSection>,
+    );
+
+    expect(html).toContain("Refresh failed");
+    expect(html).toContain("connection lost");
+    expect(html).toContain("rev 41");
+  });
+
   it("renders toolbar, legend, and footer slots when provided", () => {
     const html = renderToStaticMarkup(
       <ChartSection

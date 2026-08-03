@@ -1,13 +1,13 @@
 # ADR 0022: Separate Live Charts from Analysis
 
 - Status: accepted
-- Date: 2026-08-02
+- Date: 2026-08-02; implementation ownership published 2026-08-03
 
 ## Context
 
-The `analysis-plots` center module currently combines active-run scalar monitoring with scientific postprocessing. This gives one surface two different lifecycles: revision-following live data and explicitly selected analysis datasets or artifacts. It also makes the name `Analysis` misleading for users who only want to observe `mx`, `my`, `mz`, energies, torque, or residuals while a stage runs.
+Before this decision, the `analysis-plots` center module combined active-run scalar monitoring with scientific postprocessing. That gave one surface two different lifecycles: revision-following live data and explicitly selected analysis datasets or artifacts. It also made the name `Analysis` misleading for users who only wanted to observe `mx`, `my`, `mz`, energies, torque, or residuals while a stage ran.
 
-The current composition has produced user-visible correctness and lifecycle defects: normalized magnetization can be displayed with a nonsensical SI-prefixed unit such as `m1`, series selection has conflicting Inspector and legend owners, and retained-data refresh is presented as blocking `Loading` churn.
+That composition produced user-visible correctness and lifecycle defects: normalized magnetization could be displayed with a nonsensical SI-prefixed unit such as `m1`, series selection had conflicting Inspector and legend owners, and retained-data refresh appeared as blocking `Loading` churn.
 
 The product invariants remain one workspace, one center-surface host, one typed resource-first browser contract, one shared chart renderer boundary, and one unified FDM/FEM UI tree.
 
@@ -15,7 +15,7 @@ The product invariants remain one workspace, one center-surface host, one typed 
 
 Add a `live-charts` module titled **Live Charts** in `viewport-main`. It owns active-run scalar histories and Follow/Pause/range behavior.
 
-Keep `analysis-plots` titled **Analysis** in `viewport-main`, but restrict it to analysis of an explicit selected run, stage, dataset, or artifact: dynamics, spectra, frequency response, eigenmodes, dispersion, hysteresis, and comparisons.
+Keep `analysis-plots` titled **Analysis** in `viewport-main`, but restrict it to analysis of an **explicit selected dataset**, run, stage, or artifact: dynamics, spectra, frequency response, eigenmodes, dispersion, hysteresis, and comparisons.
 
 Keep Quick Chart as optional `transport-footer` content that can coexist with the 3D viewport. It consumes shared chart contracts and compact descriptors, not another module's store.
 
@@ -25,7 +25,7 @@ Normalized magnetization uses a dimension-aware fixed display scale of one. Live
 
 ## Consequences
 
-- The workspace gains distinct `Live Charts` and `Analysis` center tabs.
+- The workspace has distinct `Live Charts` and `Analysis` center tabs.
 - Live state and preferences no longer share ownership with analysis-dataset state.
 - The `analysis-plots` module becomes simpler but commands, selection refs, preferences, explorer nodes, tests, and documentation require coordinated migration.
 - Shared chart contracts must remain module-neutral.
@@ -44,6 +44,10 @@ Normalized magnetization uses a dimension-aware fixed display scale of one. Live
 - Update ADR 0016, the module catalog, chart spec, old Analysis hardening plan, active plans, and verification scripts.
 - Contain any compatibility reader behind a documented version/removal gate; new writes use the new identities.
 
+The implementation is in frontend-v2 Phase 6 (modules/parity). This decision does
+not declare global cutover or legacy removal; `apps/legacy_web` remains
+reference-only under the migration policy.
+
 ## Validation
 
 - Regression fixtures prove exact normalized magnetization values and no prefixed dimensionless units.
@@ -56,5 +60,23 @@ Normalized magnetization uses a dimension-aware fixed display scale of one. Live
 ## Migration and rollback
 
 Implement in independently testable commits. Migrate old live-table preferences once into the new versioned live preference model. Read old live selection identities only during the bounded compatibility window; never write them after cutover.
+
+Compatibility ownership and removal gates:
+
+- Live preference migration is owned by `liveChartPreferences.ts`. Remove its
+  `fm:analysis-chart-preferences:v1` reader after one released preference schema
+  version has written `fm:live-chart-preferences:v1` and browser migration tests
+  prove no old live identity remains.
+- Quick Chart descriptor migration is owned by `quickChartWorkspace.ts`; the
+  Explorer input type only admits the same bounded read. Remove `yAxisIds` after
+  one released Control Room version writes only `selectedSeriesIds` and
+  migration tests prove no persisted or Explorer descriptor depends on it.
+- Analysis comparison preference migration is owned by
+  `analysisViewPreferences.ts`. Remove `comparisonSelectedSeriesKeys` after one
+  released `analysis-view-preferences:v2` writer uses `selectedSeriesIds` and
+  migration tests prove no stored descriptor depends on the old field.
+
+All three bridges are read-only. New writes use their current versioned keys and
+`selectedSeriesIds` identities.
 
 Before final deletion, preserve the ability to unregister `live-charts` and restore the previous center-tab set without changing canonical server data. Rollback may restore the previous module arrangement, but it must not restore incorrect dimensionless scaling, conflicting series ownership, or blocking refresh overlays.

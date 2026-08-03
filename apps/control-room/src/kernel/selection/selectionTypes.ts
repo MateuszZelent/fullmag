@@ -37,6 +37,109 @@ type ObjectSelectionKind =
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 export type RegionVisualizationTargetId = `region:${string}:${string}`;
+
+export type LiveChartSelection = {
+  kind: "live.chart";
+  descriptorId: string;
+};
+
+export type LiveChartPointSelection = {
+  kind: "live.chart-point";
+  descriptorId: string;
+  seriesId: string;
+  pointIndex: number;
+  revision: string | number;
+};
+
+export type LiveChartSelectionRef = LiveChartSelection & {
+  nodeId: string;
+  type: "live-chart";
+};
+
+export type LiveChartPointSelectionRef = LiveChartPointSelection & {
+  nodeId: string;
+  type: "live-chart-point";
+};
+
+export const LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH = 256;
+const LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH = 128;
+const LIVE_CHART_IDENTITY_PREFIX = "live:chart:";
+const LEGACY_LIVE_CHART_IDENTITY = "analysis:charts:default";
+
+export type LiveChartSelectionMigrationSource = "legacy-live-preference";
+
+function parseLiveChartDescriptorId(encoded: string): string | null {
+  if (
+    encoded.length === 0 ||
+    encoded.length > LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH ||
+    !/^(?:[A-Za-z0-9\-_.!~*'()]|%[0-9A-F]{2})+$/.test(encoded)
+  ) {
+    return null;
+  }
+
+  try {
+    const descriptorId = decodeURIComponent(encoded);
+    return descriptorId.length > 0 &&
+      descriptorId.length <= LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH &&
+      !/[/:\\\u0000-\u001F\u007F]/.test(descriptorId) &&
+      encodeURIComponent(descriptorId) === encoded
+      ? descriptorId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses only the current live-chart identity namespace. Legacy Analysis
+ * identities remain Analysis identities outside the explicit migration reader.
+ */
+export function parseLiveChartSelectionIdentity(
+  identity: string,
+): LiveChartSelection | null {
+  if (
+    identity.length > LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH ||
+    !identity.startsWith(LIVE_CHART_IDENTITY_PREFIX)
+  ) {
+    return null;
+  }
+  const descriptorId = parseLiveChartDescriptorId(
+    identity.slice(LIVE_CHART_IDENTITY_PREFIX.length),
+  );
+  return descriptorId !== null
+    ? { descriptorId, kind: "live.chart" }
+    : null;
+}
+
+export function serializeLiveChartSelectionIdentity(
+  selection: LiveChartSelection,
+): string | null {
+  if (
+    selection.descriptorId.length === 0 ||
+    selection.descriptorId.length > LIVE_CHART_DESCRIPTOR_ID_MAX_LENGTH ||
+    /[/:\\\u0000-\u001F\u007F]/.test(selection.descriptorId)
+  ) {
+    return null;
+  }
+  const identity = `${LIVE_CHART_IDENTITY_PREFIX}${encodeURIComponent(selection.descriptorId)}`;
+  return identity.length <= LIVE_CHART_SELECTION_IDENTITY_MAX_LENGTH
+    ? identity
+    : null;
+}
+
+/**
+ * Read the one legacy live identity only while migrating old live preferences.
+ * Remove after one released schema version has written `fm:live-chart-preferences:v1`
+ * and browser migration tests prove no old live identity remains.
+ */
+export function readLegacyLiveChartSelectionIdentity(
+  identity: string,
+  source: LiveChartSelectionMigrationSource | "current-selection",
+): LiveChartSelection | null {
+  return source === "legacy-live-preference" && identity === LEGACY_LIVE_CHART_IDENTITY
+    ? { descriptorId: "default", kind: "live.chart" }
+    : null;
+}
 export interface VisualizationMeshPartLike {
   geometry_id?: string | null;
   id: string;
@@ -111,6 +214,8 @@ export function visualizationObjectIdForMeshPartLike(part: {
 export type MeshElementFamily = "hex8" | "prism6" | "pyramid5" | "tet4";
 
 export type SelectionRef =
+  | LiveChartSelectionRef
+  | LiveChartPointSelectionRef
   | {
       kind: "model.planar.monitor";
       monitorId: string;
@@ -278,12 +383,14 @@ export type SelectionRef =
     }
   | {
       chartId: string;
+      displayUnits: Record<string, string>;
       kind: "results.quick_chart";
       nodeId: string;
+      range: { fromSI: number; toSI: number } | null;
+      selectedSeriesIds: readonly string[];
       tableId: string;
       type: "quick-chart";
       xAxisId: string;
-      yAxisIds: readonly string[];
     }
   | {
       kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
@@ -427,6 +534,15 @@ function centroidEquals(
   return left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
 }
 
+function recordEquals(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const entries = Object.entries(left);
+  return entries.length === Object.keys(right).length &&
+    entries.every(([key, value]) => right[key] === value);
+}
+
 export function selectionRefEquals(
   left: Selection["ref"],
   right: Selection["ref"],
@@ -436,6 +552,23 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "live-chart":
+      return (
+        right.type === "live-chart" &&
+        left.kind === right.kind &&
+        left.descriptorId === right.descriptorId &&
+        left.nodeId === right.nodeId
+      );
+    case "live-chart-point":
+      return (
+        right.type === "live-chart-point" &&
+        left.kind === right.kind &&
+        left.descriptorId === right.descriptorId &&
+        left.seriesId === right.seriesId &&
+        left.pointIndex === right.pointIndex &&
+        left.revision === right.revision &&
+        left.nodeId === right.nodeId
+      );
     case "planar-monitor":
       return (
         right.type === "planar-monitor" &&
@@ -624,8 +757,11 @@ export function selectionRefEquals(
         left.chartId === right.chartId &&
         left.tableId === right.tableId &&
         left.xAxisId === right.xAxisId &&
-        left.yAxisIds.length === right.yAxisIds.length &&
-        left.yAxisIds.every((id, index) => id === right.yAxisIds[index])
+        left.selectedSeriesIds.length === right.selectedSeriesIds.length &&
+        left.selectedSeriesIds.every((id, index) => id === right.selectedSeriesIds[index]) &&
+        left.range?.fromSI === right.range?.fromSI &&
+        left.range?.toSI === right.range?.toSI &&
+        recordEquals(left.displayUnits, right.displayUnits)
       );
     case "study":
       return (

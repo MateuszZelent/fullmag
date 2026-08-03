@@ -1,7 +1,7 @@
 import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
-import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
-import { quickChartWorkspaceStore } from "@/kernel/workspace/quickChartWorkspace";
+import { analysisWorkspaceStore, type AnalysisWorkspaceState } from "@/kernel/workspace/analysisWorkspace";
+import { quickChartWorkspaceStore, type PinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 
 export const analysisPlotsManifest: ModuleManifest = {
   id: "analysis-plots",
@@ -19,45 +19,19 @@ export const analysisPlotsManifest: ModuleManifest = {
   contributes: {
     commands: [
       {
-        id: "analysis-plots.quick-chart.open",
+        id: "quick-chart.pin",
         title: "Pin Quick Chart",
-        group: "analysis-plots",
+        group: "quick-chart",
         category: "View",
         scope: "workspace",
-        isEnabled: (context: CommandContext) =>
-          context.layout?.get().activeViewportMainModuleId === "viewport-3d" &&
-          analysisPlotsWorkspaceStore.getSnapshot().yAxisIds.length > 0,
+        isEnabled: () =>
+          resolveQuickChartDescriptor(analysisWorkspaceStore.getSnapshot()).descriptor !== null,
         run: (context: CommandContext) => {
-          const chart = analysisPlotsWorkspaceStore.getSnapshot();
-          const chartId = "default";
-          const tableId = "default";
-          const nodeId = `results:quick-charts:${chartId}`;
-          quickChartWorkspaceStore.pin({
-            chartId,
-            tableId,
-            xAxisId: chart.xAxisId,
-            yAxisIds: chart.yAxisIds,
-          });
-          context.bus?.emit("explorer:tab-requested", {
-            source: "analysis-plots",
-            tab: "results",
-          });
-          context.selection?.set({
-            kind: "results.quick_chart",
-            label: "Quick Chart",
-            nodeId,
-            objectId: null,
-            ref: {
-              chartId,
-              kind: "results.quick_chart",
-              nodeId,
-              tableId,
-              type: "quick-chart",
-              xAxisId: chart.xAxisId,
-              yAxisIds: chart.yAxisIds,
-            },
-          }, "analysis-plots");
-          context.layout?.setFocusedSlot("panel-right");
+          const analysis = analysisWorkspaceStore.getSnapshot();
+          const resolved = resolveQuickChartDescriptor(analysis);
+          if (!resolved.descriptor) return { status: "failed", message: resolved.message };
+          quickChartWorkspaceStore.pin(resolved.descriptor);
+          context.layout?.openBottomPanel("quick-chart");
           return { status: "completed" };
         },
       },
@@ -68,11 +42,9 @@ export const analysisPlotsManifest: ModuleManifest = {
         category: "Analysis",
         scope: "selection" as const,
         run: (context: CommandContext) => {
-          const ref = context.selection?.get().ref;
-          const chartId =
-            ref?.type === "analysis-chart" || ref?.type === "analysis-chart-point"
-              ? ref.chartId
-              : "default";
+          const chartId = analysisWorkspaceStore.getSnapshot().focusedChartId ??
+            analysisWorkspaceStore.getSnapshot().sourceChartId;
+          if (!chartId) return { status: "failed" as const, message: "Select an Analysis dataset first." };
           context.bus?.emit("analysis-plots:export-requested", {
             chartId,
             format,
@@ -98,3 +70,59 @@ export const analysisPlotsManifest: ModuleManifest = {
     ],
   },
 };
+
+function resolveQuickChartDescriptor(
+  analysis: AnalysisWorkspaceState,
+): { descriptor: PinnedQuickChart | null; message: string } {
+  if (analysis.activeSurface !== "dynamics" && analysis.activeSurface !== "comparison") {
+    return {
+      descriptor: null,
+      message: "Quick Chart supports explicit Analysis table datasets only.",
+    };
+  }
+  if (!analysis.selectedDatasetRef || !analysis.sourceTableId) {
+    return {
+      descriptor: null,
+      message: "Select a published Analysis dataset first.",
+    };
+  }
+  const secondaryFocused = analysis.activeSurface === "comparison" &&
+    Boolean(analysis.comparisonDatasetRef) &&
+    analysis.focusedChartId === `comparison:${analysis.comparisonDatasetRef}`;
+  const tableId = secondaryFocused
+    ? analysis.comparisonDatasetRef!
+    : analysis.sourceTableId;
+  const xAxisId = secondaryFocused ? analysis.comparisonXAxisId : analysis.xAxisId;
+  if (!xAxisId) {
+    return { descriptor: null, message: "The selected Analysis table is not ready." };
+  }
+  const selectedSeriesIds = analysis.activeSurface === "comparison"
+    ? analysis.comparisonSelectedSeriesKeys.flatMap((key) => {
+        const separator = key.indexOf("|");
+        const encodedColumnId = separator >= 0 ? key.slice(0, separator) : key;
+        try {
+          const columnId = decodeURIComponent(encodedColumnId);
+          return columnId && columnId !== xAxisId
+            ? [`data.table:${tableId}:${xAxisId}:${columnId}`]
+            : [];
+        } catch {
+          return [];
+        }
+      })
+    : analysis.activeDescriptorSelectedSeriesIds;
+  return {
+    descriptor: {
+      chartId: secondaryFocused
+        ? `comparison:${tableId}`
+        : analysis.sourceChartId ?? `${analysis.activeSurface}:${tableId}`,
+      displayUnits: analysis.activeDescriptorDisplayUnits,
+      range: secondaryFocused && analysis.xAxisId !== xAxisId
+        ? null
+        : analysis.activeDescriptorRange,
+      selectedSeriesIds,
+      tableId,
+      xAxisId,
+    },
+    message: "",
+  };
+}

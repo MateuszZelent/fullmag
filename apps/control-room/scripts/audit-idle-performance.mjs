@@ -3,6 +3,15 @@ import path from "node:path";
 
 const appRoot = process.cwd();
 const viewportRoot = path.join(appRoot, "src/modules/viewport-3d");
+const chartRoots = [
+  path.join(appRoot, "src/modules/analysis-plots"),
+  path.join(appRoot, "src/modules/live-charts"),
+  path.join(appRoot, "src/shared/analysis-charts"),
+];
+const quickChartResourceView = readFileSync(
+  path.join(appRoot, "src/shared/analysis-charts/QuickChartResourceView.tsx"),
+  "utf8",
+);
 const viewportModule = readFileSync(
   path.join(viewportRoot, "Viewport3DModule.tsx"),
   "utf8",
@@ -51,6 +60,7 @@ for (const filePath of listSourceFiles(viewportRoot)) {
 }
 
 auditVisualizationDebugIdleContracts();
+auditChartIdleContracts();
 
 if (failures.length > 0) {
   console.error(`Idle performance audit failed:\n${failures.join("\n")}`);
@@ -80,6 +90,51 @@ function auditVisualizationDebugIdleContracts() {
       failures.push(`Visualization Debug publisher must not call ${forbidden}.`);
     }
   }
+}
+
+function auditChartIdleContracts() {
+  for (const root of chartRoots) {
+    for (const filePath of listSourceFiles(root)) {
+      if (isNonProductionSource(filePath)) continue;
+      const content = readFileSync(filePath, "utf8");
+      const relativePath = path.relative(appRoot, filePath);
+      if (content.includes("setInterval(")) {
+        failures.push(`${relativePath} uses setInterval().`);
+      }
+      if (content.includes("refreshInterval")) {
+        failures.push(`${relativePath} configures polling through refreshInterval.`);
+      }
+      if (
+        content.includes("requestAnimationFrame(") &&
+        !allowsChartDemandFrameOneShots(relativePath, content)
+      ) {
+        failures.push(`${relativePath} uses an undocumented chart animation frame.`);
+      }
+    }
+  }
+
+  if (!quickChartResourceView.includes("useTableRowsBinaryResource")) {
+    failures.push("QuickChartResourceView.tsx must remain revision-resource driven.");
+  }
+  if (quickChartResourceView.includes("setInterval(")) {
+    failures.push("QuickChartResourceView.tsx must not poll while idle.");
+  }
+}
+
+function allowsChartDemandFrameOneShots(relativePath, content) {
+  if (
+    relativePath !==
+    path.join("src", "shared", "analysis-charts", "EChartsCanvasSurface.tsx")
+  ) {
+    return false;
+  }
+  return (
+    countOccurrences(content, "requestAnimationFrame(") === 1 &&
+    countOccurrences(content, "cancelAnimationFrame(frame)") === 2 &&
+    content.includes("observer = new ResizeObserver") &&
+    content.includes("observer?.disconnect()") &&
+    content.includes("ownerRef.current?.dispose()")
+  );
 }
 
 function allowsViewport3DDemandFrameOneShots(relativePath, content) {
@@ -138,6 +193,14 @@ function countOccurrences(content, needle) {
     count += 1;
     offset = next + needle.length;
   }
+}
+
+function isNonProductionSource(filePath) {
+  return (
+    filePath.includes(".test.") ||
+    filePath.includes(".stories.") ||
+    filePath.endsWith(".d.ts")
+  );
 }
 
 function listSourceFiles(root) {

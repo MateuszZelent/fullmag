@@ -1,159 +1,217 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { KernelApi } from "@/kernel/types";
-import {
-  analysisPlotsWorkspaceStore,
-  type AnalysisChartRangeMode,
-  type AnalysisWorkbenchSurface,
-  type ChartLiveMode,
-} from "@/kernel/workspace/analysisPlotsWorkspace";
-import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
-import { useAnalysisChartPreferencesHydration } from "@/kernel/workspace/useAnalysisChartPreferencesHydration";
+import { useDynamicStructureFactorResource, useSpinWaveGammaResource } from "@/kernel/resources/spinWaveResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import type { KernelApi } from "@/kernel/types";
+import { analysisWorkspaceStore } from "@/kernel/workspace/analysisWorkspace";
+import { analysisDescriptorId, type AnalysisDescriptorPreference } from "@/kernel/workspace/analysisViewPreferences";
+import { useAnalysisViewPreferencesHydration } from "@/kernel/workspace/useAnalysisViewPreferencesHydration";
+import { useAnalysisWorkspaceSelector } from "@/kernel/workspace/useAnalysisWorkspace";
 
-import type { ChartValueRange } from "./chartTableModel";
-import type { ChartSeries } from "./chartTableModel";
+import { useAnalysisDatasetData } from "./hooks/useAnalysisDatasetData";
 import {
-  analysisPlotsRangeSelectedEvent,
-  analysisPlotsSeriesSelectedEvent,
-  formatAnalysisPointValue,
-  normalizeTableRangeModeForXAxis,
-} from "./analysisPlotsModel";
-import {
-  recordChartRangeSelectedEvent,
-  recordChartSeriesSelectedEvent,
-} from "./components/chartDiagnostics";
-import {
-  buildEigenDispersionPointSelectionRef,
-  buildEigenModeSelectionRef,
-  buildEigenSpectrumChartModel,
-  buildEigenDispersionChartModel,
-  buildFrequencyResponsePointSelectionRef,
-  buildFrequencyResponseChartModel,
-  routeFrequencyDomainCalculationMode,
-} from "@/shared/domain/analysis/frequencyDomainChartModels";
+  useAnalysisFrequencyData,
+  type AnalysisFrequencyDataResult,
+} from "./hooks/useAnalysisFrequencyData";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import type { ChartValueRange } from "./chartTableModel";
 
-import {
-  tableRowsStatusForDisplay,
-  useAnalysisTableData,
-} from "./hooks/useAnalysisTableData";
-import { useAnalysisEnergyData } from "./hooks/useAnalysisEnergyData";
-import { useAnalysisFrequencyData } from "./hooks/useAnalysisFrequencyData";
+const EMPTY_DISPLAY_UNITS: Record<string, string> = {};
 
 export function useAnalysisPlotsController(kernel: KernelApi) {
-  const { bus, selection } = kernel;
-  const { activeSurface, range, rangeMode, targetPoints, liveMode, hiddenSeriesIds } =
-    useAnalysisPlotsWorkspaceSelector((state) => state);
-  const selectedPoint = useAnalysisPlotsWorkspaceSelector(
-    (state) => state.selectedPoint,
-  );
-
-  // Wire preferences hydration (Etap 3)
-  const descriptorId = analysisChartDescriptorId(activeSurface);
-  const preferences = useAnalysisChartPreferencesHydration(descriptorId);
-  const appliedActiveSurfaceRef = useRef(false);
-  const appliedDescriptorRef = useRef<unknown>(null);
-
+  const activeSurface = useAnalysisWorkspaceSelector((state) => state.activeSurface);
+  const selectedDatasetRef = useAnalysisWorkspaceSelector((state) => state.selectedDatasetRef);
+  const sourceChartId = useAnalysisWorkspaceSelector((state) => state.sourceChartId);
+  const comparisonDatasetRef = useAnalysisWorkspaceSelector((state) => state.comparisonDatasetRef);
+  const comparisonSelectedSeriesKeys = useAnalysisWorkspaceSelector((state) => state.comparisonSelectedSeriesKeys);
+  const hasChartState = useAnalysisWorkspaceSelector((state) => state.hasChartState);
+  const hasComparisonSelection = useAnalysisWorkspaceSelector((state) => state.hasComparisonSelection);
+  const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
+  const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId);
+  const preferences = useAnalysisViewPreferencesHydration();
+  const applied = useRef(false);
   useEffect(() => {
-    if (!preferences.isHydrated) return;
-    if (!appliedActiveSurfaceRef.current) {
-      appliedActiveSurfaceRef.current = true;
-      analysisPlotsWorkspaceStore.setActiveSurface(preferences.prefs.activeSurface);
-    }
-    const descriptor = preferences.descriptor;
-    if (!descriptor || appliedDescriptorRef.current === descriptor) return;
-    appliedDescriptorRef.current = descriptor;
-    analysisPlotsWorkspaceStore.setLiveMode(descriptor.liveMode);
-    analysisPlotsWorkspaceStore.setHiddenSeriesIds(descriptor.hiddenSeriesIds);
-    analysisPlotsWorkspaceStore.setAxes(descriptor.xAxisId, descriptor.yAxisIds);
-    analysisPlotsWorkspaceStore.setTargetPoints(descriptor.targetPoints);
-    if (descriptor.range.mode === "fixed") {
-      analysisPlotsWorkspaceStore.setRange({
-        fromValue: descriptor.range.fromSI,
-        toValue: descriptor.range.toSI,
-      });
-    } else {
-      analysisPlotsWorkspaceStore.setRangeMode(descriptor.range);
-    }
-  }, [preferences.descriptor, preferences.isHydrated, preferences.prefs.activeSurface]);
+    if (!preferences.isHydrated || applied.current) return;
+    applied.current = true;
+    analysisWorkspaceStore.setActiveSurface(preferences.preferences.activeSurface);
+    analysisWorkspaceStore.setSelectedDatasetRef(preferences.preferences.selectedDatasetRef);
+  }, [preferences.isHydrated, preferences.preferences.activeSurface, preferences.preferences.selectedDatasetRef]);
 
-  // Delegate data family loading to dedicated resource hooks (Etap 10)
-  const tableData = useAnalysisTableData(kernel, {
-    activeSurface,
-    liveMode,
-    range,
-    rangeMode,
-    targetPoints,
-  });
-  const setDescriptorRange = preferences.setDescriptorRange;
-
+  const dataset = useAnalysisDatasetData({ datasetRef: selectedDatasetRef, enabled: activeSurface === "dynamics" || activeSurface === "comparison" });
+  const comparisonDataset = useAnalysisDatasetData({ datasetRef: comparisonDatasetRef, enabled: activeSurface === "comparison" && comparisonDatasetRef !== null });
+  useEffect(() => { analysisWorkspaceStore.setVisibleDatasetRevision(dataset.visibleRevision); }, [dataset.visibleRevision]);
+  const comparisonXAxisId = comparisonDataset.visibleTable?.columns[0]?.column_id ?? null;
   useEffect(() => {
-    const normalized = normalizeTableRangeModeForXAxis(
-      rangeMode,
-      tableData.xAxisId,
-    );
-    if (normalized === rangeMode) return;
-    setDescriptorRange(descriptorId, { mode: "follow" });
-    analysisPlotsWorkspaceStore.setRangeMode(normalized);
-  }, [descriptorId, rangeMode, setDescriptorRange, tableData.xAxisId]);
-
-  const energyData = useAnalysisEnergyData(activeSurface);
-
-  const frequencyData = useAnalysisFrequencyData(activeSurface);
-
-  const selectedStageId = useSelectionSelector(
-    selectedHysteresisStageIdFromSelection,
-  );
-
-  // Side-effect: sync initial analysis.chart selection
+    analysisWorkspaceStore.setComparisonXAxisId(comparisonXAxisId);
+  }, [comparisonXAxisId]);
+  const frequency = useAnalysisFrequencyData(activeSurface === "frequency-response" || activeSurface === "eigenmodes" ? activeSurface : "idle");
+  const frequencyChartId = (activeSurface === "frequency-response" || activeSurface === "eigenmodes") && frequency.frequencyDomainSeries[0]
+    ? `${activeSurface}:${frequency.frequencyDomainSeries[0].source.resourceKey}`
+    : null;
   useEffect(() => {
-    const currentSelection = selection.get();
-    if (selectedHysteresisStageIdFromSelection(currentSelection)) return;
-    selection.set(
-      {
-        kind: "analysis.chart",
-        label: "Table charts",
-        nodeId: "analysis:charts:default",
-        objectId: null,
-        ref: {
-          chartId: "default",
-          kind: "analysis.chart",
-          nodeId: "analysis:charts:default",
-          tableId: "default",
-          type: "analysis-chart",
-        },
-      },
-      "analysis-plots",
-    );
-  }, [selection]);
-
-  const selectPoint = (point: AnalysisChartCursorPoint) => {
-    analysisPlotsWorkspaceStore.setSelectedPoint(point);
-    const frequencyDomainSelection = frequencyDomainSelectionFromPoint({
-      dispersionModel: frequencyData.frequencyDomainDispersionModel,
-      point,
-      responseModel: frequencyData.frequencyDomainResponseModel,
-      routeMode: frequencyData.frequencyDomainRoute.mode,
-      spectrumModel: frequencyData.frequencyDomainSpectrumModel,
-    });
-    if (frequencyDomainSelection) {
-      selection.set(frequencyDomainSelection, "analysis-plots");
+    if (activeSurface === "frequency-response" || activeSurface === "eigenmodes") {
+      analysisWorkspaceStore.setFocusedChartId(frequencyChartId);
       return;
     }
-    selection.set(
-      {
-        kind: "analysis.chart",
-        label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
-        nodeId: analysisChartPointNodeId(point),
+    analysisWorkspaceStore.setFocusedChartId(sourceChartId);
+  }, [activeSurface, frequencyChartId, sourceChartId]);
+  const gamma = useSpinWaveGammaResource(activeSurface === "spectrum");
+  const dynamicStructureFactor = useDynamicStructureFactorResource(activeSurface === "dispersion");
+  const selectedStageId = useSelectionSelector(selectedHysteresisStageIdFromSelection);
+  const [selectedPoint, setSelectedPoint] = useState<AnalysisChartCursorPoint | null>(null);
+  const descriptorId = useMemo(
+    () => analysisDescriptorId({ kind: "dataset", surface: activeSurface, datasetRef: selectedDatasetRef }),
+    [activeSurface, selectedDatasetRef],
+  );
+  const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
+  const frequencyDescriptorId = frequencyChartId
+    ? analysisDescriptorId({ kind: "artifact", surface: activeSurface === "eigenmodes" ? "eigenmodes" : "frequency-response", resourceKey: frequency.frequencyDomainSeries[0]!.source.resourceKey })
+    : null;
+  const frequencyDescriptor = frequencyDescriptorId
+    ? preferences.preferences.descriptorPreferences[frequencyDescriptorId]
+    : undefined;
+  const tableDefaultSeriesIds = dataset.visibleTable
+    ? dataset.visibleTable.columns.slice(1).map((column) => `data.table:${dataset.visibleTable!.tableId}:${dataset.visibleTable!.columns[0]?.column_id ?? "x"}:${column.column_id}`)
+    : selectedSeriesIds;
+  const effectiveSelectedSeriesIds = frequencyChartId
+    ? frequencyDescriptor?.selectedSeriesIds ?? frequency.frequencyDomainSeries.map((series) => series.id)
+    : selectedSeriesIds;
+  const comparisonDescriptorId = useMemo(
+    () => analysisDescriptorId({ kind: "comparison", primaryDatasetRef: selectedDatasetRef, secondaryDatasetRef: comparisonDatasetRef }),
+    [comparisonDatasetRef, selectedDatasetRef],
+  );
+  const comparisonDescriptor = preferences.preferences.descriptorPreferences[comparisonDescriptorId];
+  const comparisonDefaultSeriesIds = useMemo(() => {
+    if (!comparisonDataset.visibleTable || !dataset.visibleTable) return [];
+    const secondary = new Set(comparisonDataset.visibleTable.columns.slice(1).map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`));
+    return dataset.visibleTable.columns.slice(1)
+      .map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`)
+      .filter((key) => secondary.has(key));
+  }, [comparisonDataset.visibleTable, dataset.visibleTable]);
+  const comparisonAxesCompatible = dataset.visibleTable?.columns[0]?.column_id === comparisonDataset.visibleTable?.columns[0]?.column_id &&
+    dataset.visibleTable?.columns[0]?.unit === comparisonDataset.visibleTable?.columns[0]?.unit;
+  const effectiveDescriptor = frequencyDescriptorId
+    ? frequencyDescriptor
+    : activeSurface === "comparison"
+      ? comparisonDescriptor
+      : descriptor;
+  const effectiveDescriptorSelection = frequencyDescriptorId
+    ? effectiveSelectedSeriesIds
+    : activeSurface === "comparison"
+      ? comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds
+      : descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds;
+  const activeDescriptorId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+  const activeDescriptorDisplayUnits = effectiveDescriptor?.displayUnits ?? EMPTY_DISPLAY_UNITS;
+  const activeDescriptorRange = activeSurface === "comparison" && !comparisonAxesCompatible
+    ? null
+    : effectiveDescriptor?.range ?? null;
+  useEffect(() => {
+    analysisWorkspaceStore.setActiveDescriptorId(activeDescriptorId);
+    analysisWorkspaceStore.setActiveDescriptorView({
+      descriptorId: activeDescriptorId,
+      displayUnits: activeDescriptorDisplayUnits,
+      range: activeDescriptorRange,
+      selectedSeriesIds: effectiveDescriptorSelection,
+    });
+  }, [activeDescriptorDisplayUnits, activeDescriptorId, activeDescriptorRange, effectiveDescriptorSelection]);
+  useEffect(() => {
+    if (!selectedDatasetRef || !dataset.visibleTable || hasChartState) return;
+    const xAxisId = dataset.visibleTable.columns[0]?.column_id ?? "x";
+    analysisWorkspaceStore.setChartState(
+      xAxisId,
+      descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds,
+    );
+  }, [dataset.visibleTable, descriptor, hasChartState, selectedDatasetRef, tableDefaultSeriesIds]);
+  useEffect(() => {
+    if (!comparisonDataset.visibleTable || !dataset.visibleTable || hasComparisonSelection) return;
+    analysisWorkspaceStore.setComparisonSelection(
+      comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds,
+    );
+  }, [comparisonDataset.visibleTable, comparisonDefaultSeriesIds, comparisonDescriptor?.selectedSeriesIds, dataset.visibleTable, hasComparisonSelection]);
+  return {
+    activeSurface,
+    datasetRefs: dataset.tableList.data?.tables.map((table) => table.table_id) ?? [],
+    dynamicStructureFactor: dynamicStructureFactor.data ?? null,
+    dynamicStructureFactorStatus: dynamicStructureFactor.status,
+    frequencyDomainSeries: frequency.frequencyDomainSeries,
+    frequencyDomainStatus: frequency.frequencyDomainStatus,
+    frequencyDomainTitle: frequency.frequencyDomainTitle,
+    frequencyDomainUnavailableReason: frequency.frequencyDomainUnavailableReason,
+    frequencyDomainProvenance: frequency.frequencyDomainSeries[0] ? `${frequency.frequencyDomainSeries[0].source.resourceKey} · revision ${frequency.frequencyDomainSeries[0].dataRevision}` : null,
+    selectedDatasetRef,
+    descriptorId: activeDescriptorId,
+    sourceChartId: frequencyChartId ?? sourceChartId,
+    comparisonDatasetRef,
+    comparisonSelectedSeriesKeys,
+    comparisonTable: comparisonDataset.visibleTable,
+    comparisonTableStatus: comparisonDataset.rows.status,
+    comparisonTableUnsupportedReason: comparisonDataset.unsupportedReason,
+    comparisonVisibleRevision: comparisonDataset.visibleRevision,
+    comparisonPrimaryDisplayUnits: comparisonDescriptor?.displayUnits ?? {},
+    comparisonSecondaryDisplayUnits: comparisonDescriptor?.displayUnits ?? {},
+    hasComparisonSelection,
+    selectedStageId,
+    surfaceProvenance: {
+      dispersion: dynamicStructureFactor.data ? `${dynamicStructureFactor.data.artifact_ref} · revision ${dynamicStructureFactor.data.schema_version}` : undefined,
+      hysteresis: selectedStageId ? `hysteresis · ${selectedStageId}` : undefined,
+      spectrum: gamma.data ? `spin-wave-gamma · revision ${gamma.data.schema_version}` : undefined,
+    },
+    selectedPoint,
+    selectedSeriesIds: effectiveSelectedSeriesIds,
+    displayUnits: effectiveDescriptor?.displayUnits ?? {},
+    range: comparisonAxesCompatible || activeSurface !== "comparison"
+      ? effectiveDescriptor?.range ? { fromValue: effectiveDescriptor.range.fromSI, toValue: effectiveDescriptor.range.toSI } : null
+      : null,
+    setActiveSurface: (surface: typeof activeSurface) => {
+      preferences.setActiveSurface(surface);
+      analysisWorkspaceStore.setActiveSurface(surface);
+    },
+    setSelectedDatasetRef: (datasetRef: string | null) => {
+      preferences.setSelectedDatasetRef(datasetRef);
+      analysisWorkspaceStore.setSelectedDatasetRef(datasetRef);
+    },
+    setComparisonDatasetRef: (datasetRef: string | null) => analysisWorkspaceStore.setComparisonDatasetRef(datasetRef),
+    onComparisonSelectedSeriesKeysChange: (seriesKeys: string[]) => {
+      analysisWorkspaceStore.setComparisonSelection(seriesKeys);
+      preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, { selectedSeriesIds: seriesKeys }));
+    },
+    onComparisonPrimaryDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, {
+      displayUnits: { ...(comparisonDescriptor?.displayUnits ?? {}), ...patch },
+    })),
+    onComparisonSecondaryDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, {
+      displayUnits: { ...(comparisonDescriptor?.displayUnits ?? {}), ...patch },
+    })),
+    onPointSelect: (point: AnalysisChartCursorPoint) => {
+      setSelectedPoint(point);
+      const chartId = activeSurface === "comparison" && point.source.tableId === comparisonDatasetRef
+        ? `comparison:${comparisonDatasetRef}`
+        : frequencyChartId ?? sourceChartId ?? descriptorId;
+      analysisWorkspaceStore.setFocusedChartId(chartId);
+      if (activeSurface === "frequency-response" || activeSurface === "eigenmodes") {
+        const mapped = frequencyDomainSelectionFromPoint({
+          dispersionModel: frequency.frequencyDomainDispersionModel,
+          point,
+          responseModel: frequency.frequencyDomainResponseModel,
+          routeMode: frequency.frequencyDomainRoute.mode,
+          spectrumModel: frequency.frequencyDomainSpectrumModel,
+          chartId,
+        });
+        kernel.selection.set(mapped, "analysis-plots");
+        return;
+      }
+      const nodeId = `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
+      kernel.selection.set({
+        kind: "analysis.chart-point",
+        label: `${point.label} ${point.point.y} ${point.unit}`,
+        nodeId,
         objectId: null,
         ref: {
-          chartId: point.source.tableId,
+          chartId,
           kind: "analysis.chart-point",
-          nodeId: analysisChartPointNodeId(point),
+          nodeId,
           quantity: point.quantity,
           rowIndex: point.point.rowIndex,
           seriesId: point.seriesId,
@@ -162,225 +220,79 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
           x: point.point.x,
           y: point.point.y,
         },
-      },
-      "analysis-plots",
-    );
+      }, "analysis-plots");
+    },
+    onRangeChange: (range: ChartValueRange) => {
+      if (activeSurface === "comparison" && !comparisonAxesCompatible) return;
+      const targetId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+      preferences.setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, { range: { fromSI: range.fromValue, toSI: range.toValue } }));
+    },
+    onSelectedSeriesIdsChange: (nextSelectedSeriesIds: string[]) => {
+      if (frequencyDescriptorId) {
+        preferences.setDescriptorPreference(frequencyDescriptorId, completeDescriptorPreference(frequencyDescriptor, effectiveSelectedSeriesIds, { selectedSeriesIds: nextSelectedSeriesIds }));
+        return;
+      }
+      preferences.setDescriptorPreference(descriptorId, completeDescriptorPreference(descriptor, tableDefaultSeriesIds, { selectedSeriesIds: nextSelectedSeriesIds }));
+      analysisWorkspaceStore.setChartState(dataset.visibleTable?.columns[0]?.column_id ?? "x", nextSelectedSeriesIds);
+    },
+    onDisplayUnitsChange: (patch: Record<string, string>) => {
+      const targetId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+      preferences.setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, {
+        displayUnits: { ...(effectiveDescriptor?.displayUnits ?? {}), ...patch },
+      }));
+    },
+    spinWaveGamma: gamma.data ?? null,
+    spinWaveGammaStatus: gamma.status,
+    table: dataset.visibleTable,
+    tableStatus: dataset.rows.status,
+    tableUnsupportedReason: dataset.unsupportedReason,
+    visibleDatasetRevision: dataset.visibleRevision,
+    xAxisId,
   };
+}
 
-  const selectSeries = (series: ChartSeries) => {
-    const event = analysisPlotsSeriesSelectedEvent(series);
-    bus.emit("analysis-plots:series-selected", {
-      ...event,
-      source: "analysis-plots",
-    });
-    recordChartSeriesSelectedEvent(event);
-  };
+export function selectedHysteresisStageIdFromSelection(selection: Selection | null): string | null {
+  const ref = selection?.ref as { stageId?: string; stageKind?: string; type?: string } | null;
+  if (!ref?.stageId) return null;
+  return (ref.type === "study-stage" && selection?.nodeId?.includes("hysteresis")) || ref.type === "hysteresis-snapshot" || ref.type === "analysis-chart-point"
+    ? ref.stageId
+    : null;
+}
 
-  const setRange = (nextRange: ChartValueRange) => {
-    preferences.setDescriptorRange(descriptorId, {
-      fromSI: nextRange.fromValue,
-      mode: "fixed",
-      toSI: nextRange.toValue,
-    });
-    analysisPlotsWorkspaceStore.setRange(nextRange);
-    emitRangeSelected(bus, nextRange, tableData.xAxisId);
-  };
-
-  const clearRange = () => {
-    preferences.setDescriptorRange(descriptorId, { mode: "follow" });
-    analysisPlotsWorkspaceStore.clearRange();
-    emitRangeSelected(bus, null, tableData.xAxisId);
-  };
-
+function completeDescriptorPreference(
+  descriptor: AnalysisDescriptorPreference | undefined,
+  defaults: readonly string[],
+  patch: Partial<AnalysisDescriptorPreference>,
+): AnalysisDescriptorPreference {
   return {
-    activeSurface,
-    clearRange,
-    hiddenSeriesIds,
-    liveMode,
-    range,
-    rangeMode,
-    targetPoints,
-    selectedPoint,
-    selectPoint,
-    selectSeries,
-    setRange,
-    frequencyDomainSeries: frequencyData.frequencyDomainSeries,
-    frequencyDomainStatus: frequencyData.frequencyDomainStatus,
-    frequencyDomainTitle: frequencyData.frequencyDomainTitle,
-    frequencyDomainUnavailableReason: frequencyData.frequencyDomainUnavailableReason,
-    setActiveSurface: (surface: AnalysisWorkbenchSurface) => {
-      preferences.setActiveSurface(surface);
-      analysisPlotsWorkspaceStore.setActiveSurface(surface);
-    },
-    setLiveMode: (mode: ChartLiveMode) => {
-      preferences.setDescriptorLiveMode(descriptorId, mode);
-      analysisPlotsWorkspaceStore.setLiveMode(mode);
-    },
-    setRangeMode: (mode: AnalysisChartRangeMode) => {
-      if (mode.mode === "fixed" && !analysisPlotsWorkspaceStore.getSnapshot().range) return;
-      preferences.setDescriptorRange(
-        descriptorId,
-        mode.mode === "fixed"
-          ? { mode: "follow" }
-          : mode,
-      );
-      analysisPlotsWorkspaceStore.setRangeMode(mode);
-    },
-    setTargetPoints: (points: typeof targetPoints) => {
-      preferences.setDescriptorTargetPoints(descriptorId, points);
-      analysisPlotsWorkspaceStore.setTargetPoints(points);
-    },
-    toggleSeriesVisibility: (seriesId: string) => {
-      analysisPlotsWorkspaceStore.toggleSeriesVisibility(seriesId);
-      const next = analysisPlotsWorkspaceStore.getSnapshot().hiddenSeriesIds;
-      preferences.setDescriptorHiddenSeries(descriptorId, [...next]);
-    },
-    setSoloSeries: (seriesId: string | null, allSeriesIds?: readonly string[]) => {
-      analysisPlotsWorkspaceStore.setSoloSeries(seriesId, allSeriesIds);
-      preferences.setDescriptorSoloSeries(descriptorId, seriesId);
-      preferences.setDescriptorHiddenSeries(
-        descriptorId,
-        [...analysisPlotsWorkspaceStore.getSnapshot().hiddenSeriesIds],
-      );
-    },
-    clearHiddenSeries: () => {
-      analysisPlotsWorkspaceStore.clearHiddenSeries();
-      preferences.setDescriptorHiddenSeries(descriptorId, []);
-      preferences.setDescriptorSoloSeries(descriptorId, null);
-    },
-    solverEnergySeries: energyData.solverEnergySeries,
-    solverEnergyStatus: energyData.solverEnergyStatus,
-    setXAxisId: (columnId: string) => {
-      tableData.setXAxisId(columnId);
-      const next = analysisPlotsWorkspaceStore.getSnapshot();
-      preferences.setDescriptorXAxisId(descriptorId, next.xAxisId);
-      preferences.setDescriptorYAxisIds(descriptorId, next.yAxisIds);
-    },
-    availableColumns: tableData.availableColumns,
-    tableRowsStatus: tableRowsStatusForDisplay(
-      tableData.tableRows.status,
-      liveMode,
-      Boolean(tableData.visibleTable && tableData.visibleTable.rowCount > 0),
-    ),
-    toggleYAxis: (columnId: string, enabled: boolean) => {
-      tableData.toggleYAxis(columnId, enabled);
-      preferences.setDescriptorYAxisIds(
-        descriptorId,
-        analysisPlotsWorkspaceStore.getSnapshot().yAxisIds,
-      );
-    },
-    visibleTable: tableData.visibleTable,
-    xAxisId: tableData.xAxisId,
-    yAxisIds: tableData.yAxisIds,
-    selectedStageId,
+    displayUnits: patch.displayUnits ?? descriptor?.displayUnits ?? {},
+    range: patch.range ?? descriptor?.range ?? null,
+    selectedSeriesIds: patch.selectedSeriesIds ?? descriptor?.selectedSeriesIds ?? [...defaults],
   };
 }
 
 export { frequencyDomainChartRouteOverrideFromSelection } from "@/shared/domain/analysis/frequencyDomainChartModels";
 export { frequencyDomainChartTitle } from "./hooks/useAnalysisFrequencyData";
-
-export function frequencyDomainSelectionFromPoint({
-  dispersionModel,
-  point,
-  responseModel,
-  routeMode,
-  spectrumModel,
-}: {
-  dispersionModel: ReturnType<typeof buildEigenDispersionChartModel>;
+/** Compatibility export while point ownership moves to the selected artifact surface. */
+export function frequencyDomainSelectionFromPoint(input: {
+  chartId?: string;
+  dispersionModel: AnalysisFrequencyDataResult["frequencyDomainDispersionModel"];
   point: AnalysisChartCursorPoint;
-  responseModel: ReturnType<typeof buildFrequencyResponseChartModel>;
-  routeMode: ReturnType<typeof routeFrequencyDomainCalculationMode>["mode"];
-  spectrumModel: ReturnType<typeof buildEigenSpectrumChartModel>;
-}): Partial<Omit<Selection, "moduleSource">> | null {
-  if (point.source.kind !== "analysis.frequency_domain") return null;
-  const nodeId = analysisChartPointNodeId(point);
-  const base = {
-    calculationMode: routeMode,
-    nodeId,
-    resourceRef: point.source.resourceKey,
-  };
-  if (point.source.tableId === "frequency-domain:eigen-spectrum") {
-    const spectrumPoint = spectrumModel.points[point.point.rowIndex];
-    if (!spectrumPoint) return null;
-    const ref = buildEigenModeSelectionRef(spectrumPoint, base);
-    return {
-      kind: ref.kind,
-      label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
-      nodeId,
-      objectId: null,
-      ref,
-    };
+  responseModel: AnalysisFrequencyDataResult["frequencyDomainResponseModel"];
+  routeMode: AnalysisFrequencyDataResult["frequencyDomainRoute"]["mode"];
+  spectrumModel: AnalysisFrequencyDataResult["frequencyDomainSpectrumModel"];
+}) {
+  const point = input.point;
+  const nodeId = `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
+  if (input.routeMode === "fmr_response") {
+    const match = input.responseModel.points.find((entry) =>
+      entry.frequencyIndex === point.point.rowIndex ||
+      entry.frequencyHz / 1e9 === point.point.x
+    );
+    return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: { calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, type: "frequency-domain" as const } };
   }
-
-  if (point.source.tableId === "frequency-domain:eigen-dispersion") {
-    const dispersionPoint = dispersionModel.points[point.point.rowIndex];
-    if (!dispersionPoint) return null;
-    const ref = buildEigenDispersionPointSelectionRef(dispersionPoint, base);
-    return {
-      kind: ref.kind,
-      label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
-      nodeId,
-      objectId: null,
-      ref,
-    };
-  }
-
-  if (point.source.tableId === "frequency-domain:response-sweep") {
-    const responsePoint = responseModel.points[point.point.rowIndex];
-    if (!responsePoint) return null;
-    const ref = buildFrequencyResponsePointSelectionRef(responsePoint, base);
-    return {
-      kind: ref.kind,
-      label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
-      nodeId,
-      objectId: null,
-      ref,
-    };
-  }
-
-  return null;
-}
-
-function analysisChartPointNodeId(point: AnalysisChartCursorPoint): string {
-  return `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
-}
-
-function analysisChartDescriptorId(surface: AnalysisWorkbenchSurface): string {
-  if (surface === "energy") return "analysis:solver-energy-history";
-  if (surface === "frequency") return "analysis:frequency-domain";
-  return "analysis:data-table:default";
-}
-
-function emitRangeSelected(
-  bus: KernelApi["bus"],
-  range: ChartValueRange | null,
-  xAxisId: string,
-): void {
-  const event = analysisPlotsRangeSelectedEvent({ range, xAxisId });
-  bus.emit("analysis-plots:range-selected", {
-    ...event,
-    source: "analysis-plots",
-  });
-  recordChartRangeSelectedEvent(event);
-}
-
-export function selectedHysteresisStageIdFromSelection(
-  state: Selection | null | undefined,
-): string | null {
-  if (!state) return null;
-  const ref = state.ref;
-  if (!ref) return null;
-  const stageId = (ref as { stageId?: unknown }).stageId;
-  if (typeof stageId === "string" && stageId.length > 0) {
-    const kind = state.kind ?? "";
-    const type = (ref as { type?: string }).type ?? "";
-    if (
-      stageId.startsWith("hysteresis") ||
-      kind.includes("hysteresis") ||
-      type.includes("hysteresis")
-    ) {
-      return stageId;
-    }
-  }
-  return null;
+  const mode = input.routeMode === "dispersion_modal"
+    ? input.dispersionModel.points[point.point.rowIndex]
+    : input.spectrumModel.points[point.point.rowIndex];
+  return { kind: "results.eigen.mode", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: { artifactPath: point.source.resourceKey, branchId: mode?.branchId ?? undefined, calculationMode: input.routeMode, chartId: input.chartId, fieldId: mode?.modeFieldId ?? undefined, kind: "results.eigen.mode", modeIndex: mode?.rawModeIndex, nodeId, resourceRef: mode?.modeFieldResourceKey ?? point.source.resourceKey, sampleIndex: mode?.sampleIndex, type: "frequency-domain" as const } };
 }

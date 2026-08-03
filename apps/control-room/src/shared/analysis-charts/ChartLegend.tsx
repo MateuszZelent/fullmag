@@ -2,6 +2,12 @@
 
 import { type KeyboardEvent } from "react";
 
+import {
+  selectAllSeriesIds,
+  soloSeriesId,
+  toggleSelectedSeriesId,
+} from "./chartSeriesSelection";
+
 export interface ChartLegendItem {
   /** Stable series ID */
   id: string;
@@ -15,21 +21,12 @@ export interface ChartLegendItem {
   colorName: string;
   /** Index in the palette (for fallback modulo) */
   colorIndex: number;
-  /** Whether this series is currently hidden */
-  hidden: boolean;
-  /** Whether another series is soloed (making this one hidden unless it is the solo) */
-  soloed: boolean;
 }
 
 interface ChartLegendProps {
   items: readonly ChartLegendItem[];
-  /**
-   * Called when user clicks/keys a legend item.
-   * Caller decides the toggle semantics (hide vs. solo).
-   */
-  onToggleVisibility?: (id: string) => void;
-  /** Called when user activates Solo action (Shift+click or dedicated button) */
-  onSolo?: (id: string | null) => void;
+  selectedSeriesIds: readonly string[];
+  onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
   /** Accessible label for the legend region */
   ariaLabel?: string;
 }
@@ -63,32 +60,36 @@ export function chartColorNameForIndex(index: number): string {
  * ChartLegend — shared scientific series legend.
  *
  * Interactions:
- * - Click / Enter / Space: toggle series visibility (hide/show).
- * - Shift+Click / Shift+Enter: solo this series (hide all others).
- * - Second Shift+Click on already-soloed item: clear solo (show all).
+ * - Click / Enter / Space: toggle series selection.
+ * - Shift+Click / Shift+Enter: solo this series; repeat to show all.
  *
  * No fetches are triggered by any of these actions.
  */
 export function ChartLegend({
   items,
-  onToggleVisibility,
-  onSolo,
+  onSelectedSeriesIdsChange,
+  selectedSeriesIds,
   ariaLabel = "Chart series",
 }: ChartLegendProps) {
   if (items.length === 0) return null;
 
-  const visibleItems = items.filter((item) => !item.hidden);
-  const soloedId = items.length > 1 && visibleItems.length === 1 ? visibleItems[0]?.id ?? null : null;
+  const selected = new Set(selectedSeriesIds);
+  const availableIds = items.map((item) => item.id);
 
   function handleClick(
     event: React.MouseEvent<HTMLButtonElement>,
     item: ChartLegendItem,
   ) {
     if (event.shiftKey) {
-      // Solo semantics: toggle off if already soloed, else solo target item
-      onSolo?.(soloedId === item.id ? null : item.id);
+      onSelectedSeriesIdsChange?.(
+        selected.size === 1 && selected.has(item.id)
+          ? selectAllSeriesIds(availableIds)
+          : soloSeriesId(item.id),
+      );
     } else {
-      onToggleVisibility?.(item.id);
+      onSelectedSeriesIdsChange?.(
+        toggleSelectedSeriesId(selectedSeriesIds, item.id, !selected.has(item.id)),
+      );
     }
   }
 
@@ -99,9 +100,15 @@ export function ChartLegend({
     if (event.key === " " || event.key === "Enter") {
       event.preventDefault();
       if (event.shiftKey) {
-        onSolo?.(soloedId === item.id ? null : item.id);
+        onSelectedSeriesIdsChange?.(
+          selected.size === 1 && selected.has(item.id)
+            ? selectAllSeriesIds(availableIds)
+            : soloSeriesId(item.id),
+        );
       } else {
-        onToggleVisibility?.(item.id);
+        onSelectedSeriesIdsChange?.(
+          toggleSelectedSeriesId(selectedSeriesIds, item.id, !selected.has(item.id)),
+        );
       }
     }
   }
@@ -113,23 +120,23 @@ export function ChartLegend({
       role="group"
     >
       {items.map((item) => {
-        const isHidden = item.hidden;
+        const isSelected = selected.has(item.id);
         const colorName = item.colorName || chartColorNameForIndex(item.colorIndex);
         return (
           <button
-            aria-label={`${item.label}, unit ${item.unit || "dimensionless"}, latest ${item.latestValue}. ${isHidden ? "Hidden" : "Visible"}. Press Shift to solo.`}
-            aria-pressed={!isHidden}
+            aria-label={`${item.label}, unit ${item.unit || "dimensionless"}, latest ${item.latestValue}. ${isSelected ? "Selected" : "Hidden"}. Press Shift to solo.`}
+            aria-pressed={isSelected}
             className={[
               "fm-chart-legend__item",
-              isHidden ? "fm-chart-legend__item--hidden" : "",
+              isSelected ? "" : "fm-chart-legend__item--hidden",
             ]
               .filter(Boolean)
               .join(" ")}
-            disabled={!onToggleVisibility && !onSolo}
+            disabled={!onSelectedSeriesIdsChange}
             key={item.id}
             onClick={(e) => handleClick(e, item)}
             onKeyDown={(e) => handleKeyDown(e, item)}
-            title={`${item.label}${item.unit ? ` · ${chartLegendUnitLabel(item.unit)}` : ""} — latest: ${item.latestValue}${onToggleVisibility || onSolo ? ". Click to hide/show. Shift+click to solo." : "."}`}
+            title={`${item.label}${item.unit ? ` · ${chartLegendUnitLabel(item.unit)}` : ""} — latest: ${item.latestValue}${onSelectedSeriesIdsChange ? ". Click to select/hide. Shift+click to solo." : "."}`}
             type="button"
           >
             <span

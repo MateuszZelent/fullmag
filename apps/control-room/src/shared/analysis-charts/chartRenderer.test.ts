@@ -20,6 +20,7 @@ describe("chart renderer owner", () => {
     owner.update(model);
     owner.resize();
     owner.fitView();
+    owner.setRange(1e-9, 2e-9);
     expect(owner.exportPng()).toContain("image/png");
     owner.dispose();
     owner.update({ ...model, key: "later" });
@@ -28,6 +29,7 @@ describe("chart renderer owner", () => {
     expect(chart.setOption).toHaveBeenCalledTimes(1);
     expect(chart.resize).toHaveBeenCalledTimes(1);
     expect(chart.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 });
+    expect(chart.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 1e-9, endValue: 2e-9 });
     expect(chart.dispose).toHaveBeenCalledTimes(1);
   });
 
@@ -41,13 +43,31 @@ describe("chart renderer owner", () => {
     }), false);
   });
 
-  it("keeps axes semantic, enables ECharts aria and removes the bottom slider", () => {
+  it("keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider", () => {
     const option = chartRenderModelToEChartsOption(model);
     expect(option.aria).toMatchObject({ enabled: true });
     expect(option.dataZoom).toEqual([{ filterMode: "none", type: "inside", zoomOnMouseWheel: "ctrl" }]);
     expect(option.xAxis).toMatchObject({ name: "time [s]" });
-    expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "magnetization [m1]" })]));
+    expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "magnetization" })]));
+    const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+    expect(formatter([{
+      axisValue: 1,
+      data: [1, 0.10317, 7],
+      seriesName: "mx",
+      value: [1, 0.10317, 7],
+    }])).toContain("0.10317");
     expect(JSON.stringify(option)).not.toContain("var(--fm-");
+  });
+
+  it("uses a compatible persisted display unit in the rendered y-axis", () => {
+    const option = chartRenderModelToEChartsOption({
+      ...model,
+      provenance: { dataRevision: 1, decimation: "none", displayUnits: { "y:period": "ns" }, query: "period", resourceKey: "period" },
+      series: [{ id: "period", kind: "line", label: "Period", points: [{ rowIndex: 0, x: 0, y: 2e-9 }], unit: "s", yAxis: 0 }],
+      yAxes: [{ label: "Period", unit: "s" }],
+    });
+
+    expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Period [ns]" })]));
   });
 
   it("computes axis scales without flattening every chart point into temporary arrays", () => {

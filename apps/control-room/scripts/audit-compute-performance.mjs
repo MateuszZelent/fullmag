@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const appRoot = process.cwd();
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeCommandsPath = path.join(
   appRoot,
   "src/kernel/runtime/studyRuntimeCommandContributions.ts",
@@ -173,21 +173,13 @@ const analysisPlotsControllerPath = path.join(
   appRoot,
   "src/modules/analysis-plots/useAnalysisPlotsController.ts",
 );
-const analysisPlotsModelPath = path.join(
-  appRoot,
-  "src/modules/analysis-plots/analysisPlotsModel.ts",
-);
 const analysisPlotsViewPath = path.join(
   appRoot,
   "src/modules/analysis-plots/AnalysisPlotsView.tsx",
 );
-const analysisTableDataHookPath = path.join(
+const analysisDatasetDataHookPath = path.join(
   appRoot,
-  "src/modules/analysis-plots/hooks/useAnalysisTableData.ts",
-);
-const analysisEnergyDataHookPath = path.join(
-  appRoot,
-  "src/modules/analysis-plots/hooks/useAnalysisEnergyData.ts",
+  "src/modules/analysis-plots/hooks/useAnalysisDatasetData.ts",
 );
 const analysisFrequencyDataHookPath = path.join(
   appRoot,
@@ -204,6 +196,10 @@ const analysisTableRowsAdapterPath = path.join(
 const chartTableModelPath = path.join(
   appRoot,
   "src/modules/analysis-plots/chartTableModel.ts",
+);
+const scalarTableChartPath = path.join(
+  appRoot,
+  "src/shared/domain/analysis/scalarTableChart.ts",
 );
 const visualizationDebugControllerPath = path.join(
   appRoot,
@@ -1717,10 +1713,8 @@ function checkComputePerformanceMicrobenchCoverage() {
 function checkAnalysisPlotsStableResourceInputs() {
   const moduleSource = readFileSync(analysisPlotsModulePath, "utf8");
   const controllerSource = readFileSync(analysisPlotsControllerPath, "utf8");
-  const modelSource = readFileSync(analysisPlotsModelPath, "utf8");
   const viewSource = readFileSync(analysisPlotsViewPath, "utf8");
-  const tableDataHookSource = readFileSync(analysisTableDataHookPath, "utf8");
-  const energyDataHookSource = readFileSync(analysisEnergyDataHookPath, "utf8");
+  const datasetDataHookSource = readFileSync(analysisDatasetDataHookPath, "utf8");
   const frequencyDataHookSource = readFileSync(analysisFrequencyDataHookPath, "utf8");
   const tableSurfaceSource = readFileSync(analysisTableSurfacePath, "utf8");
   const adapterSource = readFileSync(analysisTableRowsAdapterPath, "utf8");
@@ -1728,53 +1722,49 @@ function checkAnalysisPlotsStableResourceInputs() {
   requireTokens(moduleSource, "analysis plots stable resource inputs", [
     "useAnalysisPlotsController(kernel)",
     "AnalysisPlotsView",
-    "onRangeChange={controller.setRange}",
-    "visibleTable={controller.visibleTable}",
-    "xAxisId={controller.xAxisId}",
-    "yAxisIds={controller.yAxisIds}",
+    "{...controller}",
+    "onComparisonDatasetRefChange={controller.setComparisonDatasetRef}",
+    "onDatasetRefChange={controller.setSelectedDatasetRef}",
+    "onSurfaceChange={controller.setActiveSurface}",
   ]);
   requireTokens(controllerSource, "analysis plots stable resource inputs", [
-    "useAnalysisTableData",
-    "useAnalysisEnergyData",
+    "useAnalysisDatasetData",
     "useAnalysisFrequencyData",
+    'activeSurface === "dynamics" || activeSurface === "comparison"',
+    'activeSurface === "comparison" && comparisonDatasetRef !== null',
+    'activeSurface === "frequency-response" || activeSurface === "eigenmodes"',
+    'useSpinWaveGammaResource(activeSurface === "spectrum")',
+    'useDynamicStructureFactorResource(activeSurface === "dispersion")',
   ]);
-  forbidTokens(
-    controllerSource,
-    "basic analysis excludes deferred dynamics resources",
-    [
-      "useSpinWaveGammaResource",
-      "useDynamicStructureFactorResource",
-    ],
-  );
-  requireTokens(tableDataHookSource, "analysis plots table resource owner", [
+  requireTokens(datasetDataHookSource, "analysis plots dataset resource owner", [
+    "resolveAnalysisDatasetTableId",
     "useTableColumnsResource",
+    "useTableListResource",
+    "useTableResource",
     "useTableRowsBinaryResource",
-    "tableRowsResourceFromBinary",
-    "buildAnalysisPlotsTableQuery({",
-    "shouldLoadPublishedTableRows(",
-    "shouldPausePublishedTableRows(",
-  ]);
-  requireTokens(energyDataHookSource, "analysis plots energy resource owner", [
-    "activeSurface === \"energy\"",
-    "useSolverEnergyHistoryResource",
+    "chartTableWindowFromBinary",
+    "enabled: enabled && !pinnedForDataset",
+    "limit: 5_000",
+    "targetPoints: 1_600",
+    "setPinned({ datasetRef, revision: decodedTable.revision, table: decodedTable })",
+    "visibleTable = pinnedForDataset?.table ?? decodedTable",
   ]);
   requireTokens(frequencyDataHookSource, "analysis plots frequency resource owner", [
-    "activeSurface === \"frequency\"",
+    'activeSurface: "frequency-response" | "eigenmodes" | "idle"',
+    'const loadFrequency = activeSurface !== "idle"',
     "useFrequencyDomainManifestResource",
-  ]);
-  requireTokens(modelSource, "analysis plots stable resource inputs", [
-    "targetPoints = 1_600",
-  ]);
-  requireTokens(tableDataHookSource, "analysis plots runtime table schema", [
-    "tableColumnIdsForQuery(tableColumns.data)",
-    "hasPublishedTableSchema",
-    "targetPoints",
+    "const manifestReady = frequencyDomainManifest.status === \"ready\"",
+    "const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch",
+    'enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "modal-spectrum"',
+    'enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion"',
+    'enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "response-sweep"',
   ]);
   requireTokens(viewSource, "analysis plots stable resource inputs", [
-    "const table = useMemo<TableRowsLike | null>(",
-    "buildScalarChartSeries(table,",
-    "const chartSeries = useMemo(",
-    "onRangeChange={onRangeChange}",
+    "const chartSeries = useMemo(() => {",
+    "buildScalarChartSeries(rows,",
+    "const comparisonSeries = useMemo(() => {",
+    "comparisonSeriesKey",
+    "onComparisonSelectedSeriesKeysChange",
   ]);
   requireTokens(tableSurfaceSource, "analysis plots stable resource inputs", [
     // allSeries={chartSeries} ensures the full series list is passed for stable axis labels
@@ -1791,17 +1781,20 @@ function checkAnalysisPlotsStableResourceInputs() {
     "tableRowsResourceFromScalarSample",
   ]);
   requireTokens(chartTableSource, "analysis plots chart table model", [
-    "export interface ChartSeries",
+    'export type { ChartPoint, ChartSeries } from "@/shared/domain/analysis/chartSeries"',
     "DEFAULT_TABLE_CHART_COLUMNS",
     "buildScalarChartSeries",
     "buildTableRowsQuery",
   ]);
   forbidTokens(
-    [moduleSource, controllerSource, modelSource].join("\n"),
+    [moduleSource, controllerSource, datasetDataHookSource, viewSource].join("\n"),
     "analysis plots stable resource inputs",
     [
       "useTableRowsResource(",
+      "useAnalysisTableData",
+      "useAnalysisEnergyData",
       'columns: ["step", "e_total", "mx", "my", "mz"]',
+      "buildAnalysisPlotsTableQuery(",
       "buildLineChartModel(points)",
     ],
   );
@@ -1809,6 +1802,7 @@ function checkAnalysisPlotsStableResourceInputs() {
 
 function checkAnalysisPlotDecimation() {
   const source = readFileSync(chartTableModelPath, "utf8");
+  const scalarTableSource = readFileSync(scalarTableChartPath, "utf8");
   const testSource = readFileSync(
     path.join(appRoot, "src/modules/analysis-plots/chartTableModel.test.ts"),
     "utf8",
@@ -1821,7 +1815,12 @@ function checkAnalysisPlotDecimation() {
     "MAX_TARGET_POINTS",
     "DEFAULT_TABLE_ROW_LIMIT",
     "buildScalarChartSeries",
+  ]);
+  requireTokens(scalarTableSource, "analysis scalar-table finite-point projection", [
+    "buildScalarTableSeries",
+    "buildScalarChartSeries",
     "Number.isFinite(x) && Number.isFinite(y)",
+    "points.push({ rowIndex, x, y })",
   ]);
   requireTokens(testSource, "analysis plot decimation", [
     "decimation: \"minmax_lttb\"",

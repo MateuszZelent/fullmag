@@ -5,7 +5,6 @@ import type {
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeCouplingSnapshot,
-  ModelTreeFieldDriveSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
@@ -1431,17 +1430,19 @@ export function buildExplorerTree(
           },
           ...(resources.pinnedQuickChart
             ? [{
-                badge: `${resources.pinnedQuickChart.yAxisIds.length} series`,
+                badge: `${resources.pinnedQuickChart.selectedSeriesIds.length} series`,
                 chartId: resources.pinnedQuickChart.chartId,
+                displayUnits: resources.pinnedQuickChart.displayUnits,
                 icon: "wave" as const,
                 id: `results:quick-charts:${resources.pinnedQuickChart.chartId}`,
                 kind: "results.quick_chart" as const,
                 label: "Quick Chart",
                 parentId: "results:root",
                 status: "ready" as const,
+                range: resources.pinnedQuickChart.range,
+                selectedSeriesIds: resources.pinnedQuickChart.selectedSeriesIds,
                 tableId: resources.pinnedQuickChart.tableId,
                 xAxisId: resources.pinnedQuickChart.xAxisId,
-                yAxisIds: resources.pinnedQuickChart.yAxisIds,
               }]
             : []),
         ],

@@ -108,6 +108,15 @@ export class ResourceInvalidationController {
       }
     };
   }
+
+  resetForTests(): void {
+    this.revisions.clear();
+    this.revisionOrders.clear();
+    this.prefixRevisions.clear();
+    this.prefixRevisionOrders.clear();
+    this.listeners.clear();
+    this.sequence = 0;
+  }
 }
 
 function selectRevision(

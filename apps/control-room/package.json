@@ -34,6 +34,8 @@
     "smoke:study-runtime-control": "node scripts/smoke-study-runtime-control.mjs",
     "smoke:inspector": "node scripts/smoke-inspector.mjs",
     "smoke:analysis-plots": "node scripts/smoke-analysis-plots.mjs",
+    "smoke:analysis-quick-chart": "node scripts/smoke-analysis-quick-chart.mjs",
+    "smoke:live-charts": "node scripts/smoke-live-charts.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",
     "smoke:viewport-2d": "node scripts/smoke-viewport-2d.mjs",

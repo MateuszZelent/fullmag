@@ -6,13 +6,26 @@ SESSION_ID="${1:-}"
 API_PORT="${FULLMAG_API_PORT:-8081}"
 API_URL="${FULLMAG_API_URL:-http://localhost:${API_PORT}}"
 WEB_BIND_HOST="${FULLMAG_WEB_BIND_HOST:-0.0.0.0}"
-WEB_PUBLIC_HOST="${FULLMAG_WEB_HOST:-localhost}"
 CONTROL_ROOM_URL_FILE=".fullmag/control-room-url.txt"
-LOOPBACK_HOST="$(python3 - <<'PY'
-import socket
-print(socket.gethostbyname("localhost"))
-PY
-)"
+PORT_HELPER="${REPO_ROOT}/scripts/control_room_port.py"
+
+default_web_public_host() {
+  if [[ -n "${FULLMAG_WEB_HOST:-}" ]]; then
+    printf '%s\n' "${FULLMAG_WEB_HOST}"
+    return
+  fi
+  if [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" ]]; then
+    local wsl_host
+    wsl_host="$(hostname -I 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i !~ /:/) { print $i; exit } }')"
+    if [[ -n "$wsl_host" ]]; then
+      printf '%s\n' "$wsl_host"
+      return
+    fi
+  fi
+  printf '%s\n' "localhost"
+}
+
+WEB_PUBLIC_HOST="$(default_web_public_host)"
 
 cd "$REPO_ROOT"
 
@@ -37,48 +50,12 @@ trap cleanup EXIT
 mkdir -p .fullmag/logs
 
 pick_web_port() {
-  python3 - <<'PY'
-import socket
-LOOPBACK = socket.gethostbyname("localhost")
-for port in (3000, 3001, 3002, 3003, 3004, 3005, 3010):
-    sock = socket.socket()
-    try:
-        sock.bind((LOOPBACK, port))
-    except OSError:
-        pass
-    else:
-        print(port)
-        sock.close()
-        raise SystemExit(0)
-    finally:
-        try:
-            sock.close()
-        except OSError:
-            pass
-raise SystemExit("no free control-room port found in 3000,3001,3002,3003,3004,3005,3010")
-PY
+  python3 "${PORT_HELPER}" pick "${WEB_BIND_HOST}" \
+    3000 3001 3002 3003 3004 3005 3010
 }
 
 port_is_bindable() {
-  python3 - "$1" <<'PY'
-import socket
-import sys
-
-port = int(sys.argv[1])
-sock = socket.socket()
-loopback = socket.gethostbyname("localhost")
-try:
-    sock.bind((loopback, port))
-except OSError:
-    raise SystemExit(1)
-else:
-    raise SystemExit(0)
-finally:
-    try:
-        sock.close()
-    except OSError:
-        pass
-PY
+  python3 "${PORT_HELPER}" check "${WEB_BIND_HOST}" "$1"
 }
 
 web_url_is_healthy() {
@@ -87,10 +64,17 @@ web_url_is_healthy() {
 
 stop_next_on_port() {
   local port="$1"
-  for host in "${WEB_BIND_HOST}" 0.0.0.0 "${LOOPBACK_HOST}" localhost; do
-    pkill -f "next dev --hostname ${host} --port ${port}" >/dev/null 2>&1 || true
-    pkill -f "node dev-server.mjs --hostname ${host} --port ${port}" >/dev/null 2>&1 || true
-  done
+  local pid cwd cmdline
+  while read -r pid; do
+    [[ -z "$pid" || "$pid" == "$$" ]] && continue
+    cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+    [[ "$cwd" == "${REPO_ROOT}/apps/control-room" ]] || continue
+    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    if [[ "$cmdline" == *"dev-server.mjs"* && ( "$cmdline" == *"--port ${port}"* || "$cmdline" == *" -p ${port}"* ) ]] || \
+       [[ "$cmdline" == *"next"*" dev "* && ( "$cmdline" == *"--port ${port}"* || "$cmdline" == *" -p ${port}"* ) ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -f 'next|dev-server\.mjs' 2>/dev/null || true)
 
   for _ in $(seq 1 25); do
     if port_is_bindable "${port}"; then
@@ -118,6 +102,7 @@ elif [[ -f "${CONTROL_ROOM_URL_FILE}" ]]; then
   WEB_URL_BASE="$(tr -d '\n' < "${CONTROL_ROOM_URL_FILE}")"
   if [[ -n "${WEB_URL_BASE}" ]] && web_url_is_healthy "${WEB_URL_BASE}"; then
     WEB_PORT="${WEB_URL_BASE##*:}"
+    WEB_URL_BASE="http://${WEB_PUBLIC_HOST}:${WEB_PORT}"
   else
     if [[ -n "${WEB_URL_BASE}" ]]; then
       STORED_PORT="${WEB_URL_BASE##*:}"
@@ -204,4 +189,5 @@ fi
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
 FULLMAG_API_PROXY_TARGET="${API_URL}" \
+  FULLMAG_WEB_PUBLIC_HOST="${WEB_PUBLIC_HOST}" \
   "${PNPM_CMD[@]}" --dir apps/control-room exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "${API_URL}"

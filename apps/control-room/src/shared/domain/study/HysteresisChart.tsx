@@ -1522,12 +1522,16 @@ function useHysteresisChartView({
       data-hysteresis-active-snapshot-id={activePointSnapshotId ?? ""}
       data-hysteresis-live-field-mt={liveFieldValue ?? ""}
       data-hysteresis-point-count={points.length}
+      data-hysteresis-points-revision={pointsRes.revision ?? ""}
       data-hysteresis-stage-id={stageId}
       role="group"
       aria-label="Hysteresis chart"
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
+      <div className="fm-hysteresis-provenance" role="status">
+        {hysteresisPointsProvenanceLabel(pointsRes.revision)}
+      </div>
       <div className="fm-hysteresis-controls">
         <div className="fm-hysteresis-control-group">
           <select
@@ -1709,4 +1713,8 @@ function useHysteresisChartView({
       )}
     </div>
   );
+}
+
+export function hysteresisPointsProvenanceLabel(revision: string | number | null | undefined): string {
+  return `Hysteresis points · revision ${revision ?? "unavailable"}`;
 }
