@@ -840,10 +840,10 @@ async function verifyChartInstanceLifecycle(cdp, page, switchCount) {
 
   for (let index = 0; index < switchCount; index += 1) {
     const transitionStartedAt = performance.now();
-    await analysisTab.first().evaluate((button) => button.click());
+    await analysisTab.first().click({ timeout: timeoutMs });
     await waitForActiveViewportModule(page, "analysis-plots");
     await waitForAnalysisChart(page);
-    await viewport3dTab.first().evaluate((button) => button.click());
+    await viewport3dTab.first().click({ timeout: timeoutMs });
     await waitForActiveViewportModule(page, "viewport-3d");
     await page.waitForFunction(
       () => window.__FULLMAG_CHART_DIAGNOSTICS__?.activeInstances === 0,
