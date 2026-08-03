@@ -15,7 +15,6 @@
 
 #include <cuda_runtime.h>
 
-#include <cmath>
 #include <string>
 
 namespace fullmag::fem {
@@ -34,14 +33,6 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 bool cuda_launch_ok(const char *operation, std::string &reason)
 {
     return cuda_ok(cudaPeekAtLastError(), operation, reason);
-}
-
-double gpu_rk_current_density_magnitude(const Context &ctx)
-{
-    const double jx = ctx.stt.current_density_am2[0];
-    const double jy = ctx.stt.current_density_am2[1];
-    const double jz = ctx.stt.current_density_am2[2];
-    return std::sqrt(jx * jx + jy * jy + jz * jz);
 }
 
 } // namespace
@@ -75,11 +66,14 @@ bool gpu_rk_add_slonczewski_torque(
         gpu.materials.ms,
         gpu.materials.alpha,
         gpu.mesh_regions.magnetic_node_mask,
+        gpu.mesh_regions.stt_active_node_mask,
         rhs.x,
         rhs.y,
         rhs.z,
         gpu.reductions.scalar_workspace,
-        gpu_rk_current_density_magnitude(ctx),
+        ctx.stt.current_density_am2[0],
+        ctx.stt.current_density_am2[1],
+        ctx.stt.current_density_am2[2],
         ctx.stt.current_sign,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,
@@ -90,6 +84,10 @@ bool gpu_rk_add_slonczewski_torque(
         ctx.stt.spin_polarization[0],
         ctx.stt.spin_polarization[1],
         ctx.stt.spin_polarization[2],
+        ctx.stt.stack_normal[0],
+        ctx.stt.stack_normal[1],
+        ctx.stt.stack_normal[2],
+        ctx.stt.formula_version,
         n,
         stream);
     return cuda_launch_ok("launch GPU RK Slonczewski STT RHS", reason);

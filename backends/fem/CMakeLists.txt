@@ -611,6 +611,17 @@ target_include_directories(fem_cuda_tetra_gradient_contract PRIVATE
 )
 add_test(NAME fem_cuda_tetra_gradient_contract COMMAND fem_cuda_tetra_gradient_contract)
 
+add_executable(fem_cuda_slonczewski_contract tests/cuda_slonczewski_contract.cpp)
+target_link_libraries(fem_cuda_slonczewski_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_cuda_slonczewski_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_cuda_slonczewski_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
+
 add_executable(fem_cuda_rk_guard_contract tests/cuda_rk_guard_contract.cpp)
 target_link_libraries(fem_cuda_rk_guard_contract PRIVATE fullmag_fem)
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)

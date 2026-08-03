@@ -313,9 +313,9 @@
     {
       "id": "spin_torque.slonczewski.fullmag.v2", "capability_id": "spin_torque.slonczewski", "formula_version": "slonczewski.fullmag.v2",
       "realization_versions":["slonczewski_thin_layer_homogenized.v1"],
-      "lanes": {"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"production_executable","fem_cpu_public":"reference_executable","fem_gpu_public":"unsupported"},
+      "lanes": {"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"production_executable","fem_cpu_public":"reference_executable","fem_gpu_public":"reference_executable"},
       "precision_scope":["double","single only after qualification"], "execution_mode_scope":["strict","extended"], "workload_scope":"Canonical oriented-current macrospin and current-scaling workloads.", "validated_workloads":[],
-      "notes":"The thin-layer homogenized realization is executable on the FDM CPU reference, native FDM CUDA production lane, and FEM CPU reference lane. The managed native FDM CUDA one-step CPU↔device parity gate passes with signed J·n_stack and a separate target mask. Full trajectory/current-scaling qualification, FP32 envelope, and FEM cross-backend validation remain open; FEM GPU fails closed before provenance. Interface-flux remains a separate semantic-only realization."
+      "notes":"The thin-layer homogenized realization is executable on the FDM CPU reference, native FDM CUDA production lane, FEM CPU reference lane, and FEM GPU reference lane. Managed one-step FP64 CPU↔device contracts pass for FDM and FEM with signed J·n_stack, complete vector descriptor data, current reversal, and separate target masks. Full trajectory/current-scaling qualification, FP32 envelope, FEM multi-grid convergence, and cross-backend validation remain open; FEM GPU is reference-executable only and must not be promoted to production or validated. Interface-flux remains a separate semantic-only realization."
     },
     {
       "id":"spin_torque.slonczewski.interface_flux.v1", "capability_id":"spin_torque.slonczewski", "formula_version":"slonczewski.fullmag.v2",

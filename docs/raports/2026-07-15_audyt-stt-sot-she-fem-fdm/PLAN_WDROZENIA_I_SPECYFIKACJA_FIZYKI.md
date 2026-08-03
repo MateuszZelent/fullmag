@@ -5559,3 +5559,102 @@ To zamyka bramę **kontrolowanego runtime fallbacku**, ale nie awansuje SP4 do
 `validated`: pełne medium/fine, mapy przestrzenne, CPU/GPU parity i fizyczna
 kwalifikacja cross-backend nadal są wymagane. Nie zmieniam szerokiej oceny
 **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.41. Kanoniczny Slonczewski v2 FEM GPU: descriptor, maska i kontrakt FP64 (2026-08-04)
+
+### 32.41.1. Zakres i decyzja fizyczna
+
+Po zamknięciu obserwowanej bramy demaga wybrano następną bramę P0: usunięcie
+nieuzasadnionego blokowania `slonczewski.fullmag.v2` na FEM GPU, ale tylko po
+przeniesieniu pełnego deskryptora fizycznego. Implementacja nie wraca do
+legacy `|J|` ani do `current_sign` jako substytutu orientacji. Kernel v2
+otrzymuje wektor `J_c`, znormalizowaną normalną `n_stack`, dokładną wartość
+`e=1.602176634e-19 C`, niezależne `epsilon_prime`, `t_F`, `M_s`, `alpha`,
+polaryzację i opcjonalną maskę aktywnego celu. Wzór pozostaje:
+
+```text
+J_n = J_c · n_stack
+Omega_J = gamma_e hbar J_n / (e M_s t_F)
+T_explicit = Omega_J [ (epsilon + alpha epsilon_prime) D
+                      + (epsilon_prime - alpha epsilon) C ]/(1+alpha^2)
+```
+
+gdzie `D=m×(m×p)` i `C=m×p`. Maska jest opcjonalnym stanem urządzenia w
+`FemGpuMeshRegionDeviceState`; jej brak oznacza wszystkie węzły magnetyczne,
+a jej obecność wymaga długości równej liczbie węzłów. Nie dodano nowej fizyki
+do `Context` ani do `mfem_bridge.cpp`.
+
+### 32.41.2. Zmiany wykonawcze
+
+- `stt_kernels.cu/.hpp` rozdziela gałąź legacy od canonical v2 i zachowuje
+  zgodność legacy, ale v2 korzysta z `J_c·n_stack`, bez czynnika `2` i bez
+  faktoryzowania `epsilon_prime` przez `epsilon(c)`;
+- `rk_slonczewski_torque.cu` przekazuje pełny deskryptor z `Context`,
+  `rk_plan.cpp` usuwa blokadę wersji v2 i pozostawia fail-closed dla brakującej
+  rezydencji urządzenia lub niezaładowanej maski;
+- `gpu_state_upload_stt_target_mask` odpowiada za alokację, upload,
+  zwolnienie, księgowanie bajtów i transfer audit; bootstrap wywołuje go po
+  uploadzie współczynników materiałowych;
+- `engine.rs` i testy wyboru silnika nie oznaczają już v2 jako CPU-only;
+  Zhang–Li v1 pozostaje zablokowany na FEM GPU;
+- dodano `fem_cuda_slonczewski_contract`, a receptury managed STT i
+  time-domain budują oraz uruchamiają ten target.
+
+### 32.41.3. Dowód RED → GREEN
+
+Najpierw uruchomiono istniejącą recepturę po dodaniu testu kompletności
+deskryptora. Otrzymano oczekiwany RED:
+
+```text
+FAIL: FEM GPU Slonczewski descriptor must carry formula version, vector current, stack normal, and target mask
+```
+
+Po implementacji wykonano w kontenerze zarządzanym:
+
+```text
+just verify-fem-stt-native-contract
+```
+
+Wynik GREEN:
+
+```text
+FEM CUDA Slonczewski v2 numeric contract PASS
+fullmag-fem-sys: 1 passed; 0 failed
+```
+
+Test numeryczny sprawdza niezależnie: `J=(3e12,-4e12,0) A/m^2`,
+`n_stack=(0,1,0)`, `t_F=1e-9 m`, `P=0.5`, `Lambda=1`, `epsilon_prime=0.35`,
+`alpha=0.2`, `M_s=800 kA/m`, maskę `{1,0}`, zgodność z CPU oraz zmianę znaku
+po odwróceniu prądu. Węzeł poza celem pozostaje dokładnie zerowy.
+
+Następnie wykonano pełną recepturę:
+
+```text
+just verify-fem-time-domain-native-contract
+```
+
+Wynik: dokumentacja czasu LLG, managed CUDA/MFEM/SLEPc build, wszystkie
+kontrakty natywne, nowy `fem_cuda_slonczewski_contract`, kontrolowany pageable
+demag readback oraz `fullmag-fem-sys` (`35 passed; 0 failed`) przeszły.
+
+Source map `docs/physics/0960-spin-torque-sign-units-and-prescribed-sot.source-map.json`
+przechodzi walidator `validate_scientific_docs.py`; nota fizyczna opisuje teraz
+descriptor GPU, zakres dowodu i granice kwalifikacji.
+
+### 32.41.4. Granica kwalifikacji i ocena
+
+Macierz capability zmieniono wyłącznie dla krotki
+`FEM/GPU/double/strict/slonczewski.fullmag.v2/thin_layer`: z `unsupported` na
+`reference_executable`. Nie jest to `production_executable` ani `validated`.
+Dowód obejmuje jeden krok FP64 i operatorową inwolucję znaku, ale nie obejmuje
+pełnej trajektorii RK, trzech siatek, zbieżności przestrzennej, długiego
+przebiegu demaga, cross-backend parity z FDM/MuMax3, FP32 ani pełnego
+Python/UI round-trip. Interfejsowy `slonczewski_interface_flux.v1` nadal
+pozostaje fail-closed/semantic-only.
+
+Otwarte P0 pozostają: pełna trajektoria i cross-backend parity STT, SHE/SOT
+z BORIS i wzajemnością, RT0/KKT Oersteda, fizyczny adapter DOS→`C_s`, SML v2,
+skin/MQS, pełny Python/OpenAPI/UI round-trip oraz produkcyjna kwalifikacja
+FEM GPU. Szeroka ocena celu pozostaje konserwatywnie **86% implementacji /
+60% gotowości produkcyjnej**; zmiana podnosi jedynie wykonawczą granicę FEM
+GPU z fail-closed do ograniczonego `reference_executable`.

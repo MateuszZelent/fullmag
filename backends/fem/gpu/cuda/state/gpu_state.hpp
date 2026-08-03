@@ -172,6 +172,14 @@ bool gpu_state_upload_runtime_coefficients(
     TransferAudit &audit,
     std::string &error);
 
+/* Upload the optional canonical Slonczewski target-node mask. */
+bool gpu_state_upload_stt_target_mask(
+    FemGpuState &state,
+    const uint8_t *active_node_mask,
+    uint64_t active_node_mask_len,
+    TransferAudit &audit,
+    std::string &error);
+
 bool gpu_state_upload_magnetoelastic_strain(
     FemGpuState &state,
     const double *strain_voigt,

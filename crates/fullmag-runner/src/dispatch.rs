@@ -9922,25 +9922,40 @@ mod tests {
     }
 
     #[test]
-    fn auto_fem_canonical_stt_falls_back_to_cpu_with_versioned_reason() {
-        for formula_version in ["slonczewski.fullmag.v2", "zhang_li.fullmag.v1"] {
-            let resolution = apply_fem_gpu_plan_constraints(
-                &canonical_stt_fem_plan(formula_version),
-                EngineResolution {
-                    engine: FemEngine::NativeGpu,
-                    fallback: None,
-                },
-                false,
-                None,
-            )
-            .expect("auto FEM must resolve canonical CPU-only STT to CPU");
+    fn auto_fem_canonical_slonczewski_v2_remains_gpu_eligible() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &canonical_stt_fem_plan("slonczewski.fullmag.v2"),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+            None,
+        )
+        .expect("canonical Slonczewski v2 should reach native GPU runtime prerequisites");
 
-            assert_eq!(resolution.engine, FemEngine::CpuNative);
-            let fallback = resolution.fallback.expect("typed fallback provenance");
-            assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
-            assert!(fallback.message.contains(formula_version));
-            assert!(fallback.message.contains("canonical FEM STT"));
-        }
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
+    }
+
+    #[test]
+    fn auto_fem_canonical_zhang_li_falls_back_to_cpu_with_versioned_reason() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &canonical_stt_fem_plan("zhang_li.fullmag.v1"),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+            None,
+        )
+        .expect("auto FEM must resolve canonical Zhang-Li CPU-only STT to CPU");
+
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        let fallback = resolution.fallback.expect("typed fallback provenance");
+        assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
+        assert!(fallback.message.contains("zhang_li.fullmag.v1"));
+        assert!(fallback.message.contains("canonical FEM STT"));
     }
 
     #[test]
@@ -9980,23 +9995,36 @@ mod tests {
     }
 
     #[test]
-    fn strict_fem_canonical_stt_gpu_fails_before_provenance() {
-        for formula_version in ["slonczewski.fullmag.v2", "zhang_li.fullmag.v1"] {
-            let err = apply_fem_gpu_plan_constraints(
-                &canonical_stt_fem_plan(formula_version),
-                EngineResolution {
-                    engine: FemEngine::NativeGpu,
-                    fallback: None,
-                },
-                true,
-                None,
-            )
-            .expect_err("strict canonical FEM STT GPU must fail during selection");
+    fn strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &canonical_stt_fem_plan("slonczewski.fullmag.v2"),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            true,
+            None,
+        )
+        .expect("strict canonical Slonczewski v2 should reach native runtime validation");
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+    }
 
-            assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
-            assert!(err.message.contains(formula_version));
-            assert!(err.message.contains("canonical FEM STT"));
-        }
+    #[test]
+    fn strict_fem_canonical_zhang_li_gpu_fails_before_provenance() {
+        let err = apply_fem_gpu_plan_constraints(
+            &canonical_stt_fem_plan("zhang_li.fullmag.v1"),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            true,
+            None,
+        )
+        .expect_err("strict canonical Zhang-Li GPU must fail during selection");
+
+        assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
+        assert!(err.message.contains("zhang_li.fullmag.v1"));
+        assert!(err.message.contains("canonical FEM STT"));
     }
 
     #[test]

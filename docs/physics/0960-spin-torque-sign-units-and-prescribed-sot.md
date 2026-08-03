@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-07-15
+- Last updated: 2026-08-04
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v2`,
@@ -12,6 +12,7 @@ Formula, operator, realization, and engine identifiers are classified by the
 normative registry in section 8.1 of the runtime contract; this note never uses
 an engine identifier as a formula or operator version.
 
+(problem-statement)=
 ## 1. Problem statement
 
 Fullmag needs one backend-independent convention for current-induced torque.
@@ -28,6 +29,7 @@ a local source model, not a Spin Hall drift-diffusion solver.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations and immutable conventions
 
 The elementary charge symbol is the positive magnitude `e>0`. `J_c` is
@@ -209,6 +211,7 @@ proves `q_SML=0` and `q_other=0`. SML/lattice flux never contributes to the
 magnetization torque. FEM may retain the `q_mag` surface functional instead of
 inventing a thickness.
 
+(symbols-and-si-units)=
 ### 2.6 Symbols and SI units
 
 | Symbol | Meaning | SI unit / constraint |
@@ -244,6 +247,7 @@ inventing a thickness.
 | `R_J`, `R_phi`, `r_m^Q` | charge-equivalent volumetric absorption | A/m^3 |
 | `mathcal R_m` | angular-momentum transfer density | J/m^3 |
 
+(assumptions-and-validity)=
 ### 2.7 Assumptions, validity, and prohibited interpretations
 
 The model assumes continuum micromagnetics, a resolved or explicitly
@@ -295,17 +299,26 @@ cell from signed stage current, then passed through the common Gilbert
 transform. Interface-flux torque uses the same single face flux with opposite
 signs in adjacent balances; it is not inserted twice as two cell sources.
 
-CPU double is the algebraic oracle. CUDA uses the same immutable descriptor,
-mask, signed current, formula version, and stage time with persistent device
-buffers. FP64 parity precedes a separately bounded FP32 qualification.
+CPU double is the algebraic oracle. CUDA now consumes the same immutable
+descriptor fields—vector current, oriented stack normal, formula version,
+explicit thickness, polarization, Gilbert coefficients, and optional target
+mask—through persistent device buffers. The target mask is owned by the GPU
+state mesh-region module; an absent mask means all magnetic nodes. FP64 parity
+precedes a separately bounded FP32 qualification.
 
-Until a CUDA descriptor carries that complete canonical data, a requested
-`slonczewski.fullmag.v2` CUDA execution fails before native construction. It
-must not reuse the legacy current norm, fixed-layer sign, or global-only mask.
+The managed FEM-GPU realization is intentionally bounded: the CUDA kernel and
+wrapper are executable and pass a one-step FP64 CPU↔GPU oracle, target-mask,
+and current-reversal contract. This does not yet prove a full RK trajectory,
+multi-grid convergence, cross-backend physical agreement, or production
+qualification. Before this descriptor was present, a requested
+`slonczewski.fullmag.v2` CUDA execution failed before native construction; it
+must never reuse the legacy current norm, fixed-layer sign, or global-only
+mask.
 Likewise, an FDM request for `slonczewski_interface_flux.v1` fails in planning;
 FDM may not replace the oriented interface functional with the homogenized
 bulk `1/t_F` source.
 
+(discrete-realization)=
 ### 3.2 FEM
 
 For P1 `m`, Zhang–Li starts with an explicitly selected advective weak form,
@@ -317,7 +330,11 @@ Local prescribed SOT and homogenized Slonczewski are assembled as `L2`
 projections to nodal Gilbert-source RHS with local `M_s`, `alpha`, mask, and
 thickness. Interface flux is a surface functional on the oriented trace.
 Production CPU ownership is under `backends/fem/cpu/mfem/interactions/*`;
-GPU ownership is separate hypre/libCEED-capable code. `mfem_bridge.cpp` passes
+GPU ownership is separate hypre/libCEED-capable code. The FEM-GPU
+Slonczewski descriptor is uploaded by
+`gpu_state_upload_stt_target_mask` and consumed by the device kernel; the RK
+wrapper forwards `J_c`, `n_stack`, `formula_version`, and the target mask
+without rebuilding them from a current norm. `mfem_bridge.cpp` passes
 descriptors only. Strict GPU may not invoke a CPU torque path or claim GPU
 provenance after a fallback.
 
@@ -333,6 +350,7 @@ that state.
 
 ## 4. API, IR, planner, runtime, and workspace impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 The canonical classes are `PrescribedSpinOrbitTorque` and
@@ -343,6 +361,32 @@ Zhang–Li/Slonczewski inputs gain explicit formula and realization versions.
 Canonical Python export never drops signs, orientations, `t_F`, formula
 versions, or source bindings.
 
+```python
+# %%
+from fullmag.model.spin_torque import RegionRef, SlonczewskiSTT
+
+torque = SlonczewskiSTT(
+    current_density=(0.0, 0.0, 1.0e12),
+    spin_polarization=(0.0, 0.0, 1.0),
+    degree=0.4,
+    lambda_asymmetry=1.0,
+    epsilon_prime=0.0,
+    free_layer_thickness_m=1.0e-9,
+    id="mtj_stt",
+    target=RegionRef("free_layer"),
+    stack_normal=(0.0, 0.0, 1.0),
+)
+```
+
+The canonical parameter-to-ProblemIR contract is:
+
+| Python | type | default | SI unit | validation | meaning | backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `SlonczewskiSTT.current_density` | `tuple[float, float, float]` | required unless `current_source` is used | `\\mathrm{A\\,m^{-2}}` | finite signed vector; `J dot n_stack` is retained | conventional charge-current density | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].current_density` |
+| `SlonczewskiSTT.free_layer_thickness_m` | `float` | required for canonical thin layer | `\\mathrm m` | finite and positive; no hidden geometry fallback in v2 | homogenized free-layer thickness | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].free_layer_thickness` |
+| `SlonczewskiSTT.stack_normal` | `vec3` | required for canonical v2 | `1` | finite non-zero vector normalized once at plan import | fixed-to-free stack orientation | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].stack_normal` |
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 IR uses typed `PrescribedSotIR`, a vector of resolved torque plans, explicit
@@ -376,6 +420,29 @@ prescribed versus solved, signed source, axes, normal, units, formula version,
 freshness, and capability scope. Apply uses the same validation as IR; export
 produces canonical Python. Heavy vector fields remain data-plane resources.
 
+(round-trip-and-failure-semantics)=
+### 4.5 Round-trip and failure semantics
+
+Python and UI authoring preserve the requested intent (formula, realization,
+current vector, target, normal, thickness, device, precision, and execution
+mode) in `ProblemIR`. The planner publishes resolved execution separately.
+Missing thickness, zero normal, mismatched target-mask length, unsupported
+interface flux, and unavailable device residency are validation errors; they
+must not be hidden by a CPU fallback in strict GPU mode. Extended mode may
+report an explicit fallback reason, but the artifact retains both requested and
+resolved lanes. The same validation rejects unsupported combinations before a
+native call, rather than silently changing the formula or realization.
+
+(implementation-mapping)=
+### 4.6 Implementation mapping
+
+The CPU implementation is the independent algebraic reference. The GPU path
+uses the same v2 expression in a device kernel and uploads only the optional
+target mask as mutable runtime state. No new physical state is added to
+`Context`; runtime ownership remains split between the STT descriptor and
+`FemGpuMeshRegionDeviceState`.
+
+(validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical and dimensional checks
@@ -424,6 +491,7 @@ Python–SceneDocument–UI–canonical-Python normalized round-trip.
 
 Unchecked items are implementation work; this note alone does not satisfy them.
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 Ballistic transport, first-principles MTJ tunnelling, Rashba–Edelstein torque,
@@ -431,6 +499,7 @@ spin pumping, higher-order FEM, stabilized Zhang–Li forms, and hybrid executio
 need separate publications and capability gates. Spin pumping must never be a
 hidden change to `alpha`.
 
+(scientific-bibliography)=
 ## 8. References
 
 1. J. C. Slonczewski, JMMM 159, L1–L7 (1996), DOI: 10.1016/0304-8853(96)00062-5.
@@ -440,3 +509,35 @@ hidden change to `alpha`.
 5. A. Manchon et al., Rev. Mod. Phys. 91, 035004 (2019), DOI: 10.1103/RevModPhys.91.035004.
 6. T. Schrefl, `docs/papers/mic_intro.pdf` (local copy, 2016).
 7. MuMax3/amumax executable references under `external_solvers/3` and `external_solvers/amumax`; used only with an explicit conversion table.
+
+(source-code-index)=
+## Source code index
+
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU canonical v2 algebraic oracle |
+| `backends/fem/cpu/mfem/interactions/stt.cpp` | `initialize_stt_plan_fields` | FEM STT descriptor validation and normalization |
+| `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `slonczewski_stt_rhs_kernel` | FEM GPU v2 device torque kernel |
+| `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `fullmag_cuda_add_slonczewski_stt_rhs` | FEM GPU kernel launch wrapper |
+| `backends/fem/gpu/cuda/integrators/rk/rk_slonczewski_torque.cu` | `gpu_rk_add_slonczewski_torque` | Device-RK descriptor forwarding |
+| `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` | `gpu_rk_plan_device_resident` | Strict GPU readiness and target-mask gate |
+| `backends/fem/gpu/cuda/state/gpu_state.cpp` | `gpu_state_upload_stt_target_mask` | Optional target-mask device ownership and transfer audit |
+| `backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp` | `initialize_context_gpu_state` | Bootstrap upload ordering |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
+| `backends/fem/tests/cuda_slonczewski_contract.cpp` | `main` | Managed one-step CPU↔GPU numeric contract |
+| `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
+
+```{math}
+:label: slonczewski-canonical-gilbert
+\\mathbf T_{\\mathrm{SL},G}=\\Omega_J\\left[\\epsilon(c)\\,\\mathbf m\\times(\\mathbf m\\times\\mathbf p)+\\epsilon'\\,\\mathbf m\\times\\mathbf p\\right].
+```
+
+```{math}
+:label: slonczewski-explicit-v2
+\\mathbf T_{\\mathrm{SL},\\mathrm{explicit}}=\\frac{\\Omega_J}{1+\\alpha^2}\\left[(\\epsilon+\\alpha\\epsilon')\\mathbf D+(\\epsilon'-\\alpha\\epsilon)\\mathbf C\\right].
+```
+
+```{math}
+:label: slonczewski-signed-current
+J_n=\\mathbf J_c\\cdot\\mathbf n_{\\mathrm{stack}},\\qquad \\Omega_J=\\frac{\\gamma_e\\hbar J_n}{eM_st_F}.
+```

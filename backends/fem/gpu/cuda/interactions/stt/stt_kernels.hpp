@@ -7,6 +7,8 @@
 #pragma once
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "fullmag_fem.h"
+
 #include <cuda_runtime.h>
 #include <cstdint>
 
@@ -20,11 +22,14 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
     const double *ms,
     const double *alpha,
     const uint8_t *magnetic_node_mask,
+    const uint8_t *active_node_mask,
     double *dmx,
     double *dmy,
     double *dmz,
     double *block_max_rhs,
-    double current_density_mag,
+    double current_density_x,
+    double current_density_y,
+    double current_density_z,
     double current_sign,
     double gamma_mu0,
     double uniform_alpha,
@@ -35,6 +40,10 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
     double px,
     double py,
     double pz,
+    double stack_normal_x,
+    double stack_normal_y,
+    double stack_normal_z,
+    uint32_t formula_version,
     int N,
     cudaStream_t stream = nullptr);
 
