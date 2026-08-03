@@ -1,5 +1,5 @@
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import type { AnalysisWorkbenchSurface } from "@/kernel/workspace/analysisPlotsWorkspace";
+import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { chartTableWindowValue, type ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
@@ -10,24 +10,18 @@ import {
 
 import type { ChartSeries, ChartValueRange, TableRowsLike } from "./chartTableModel";
 
-export function surfaceTitle(surface: AnalysisWorkbenchSurface): string {
+export function surfaceTitle(surface: AnalysisSurface): string {
   switch (surface) {
-    case "energy": return "Energy balance";
     case "dynamics": return "Magnetization dynamics";
-    case "convergence": return "Solver convergence";
-    case "frequency": return "Frequency-domain analysis";
-    default: return "Analysis overview";
+    case "spectrum": return "Spectrum";
+    case "frequency-response": return "Frequency response";
+    case "eigenmodes": return "Eigenmodes";
+    case "dispersion": return "Spin-wave dispersion";
+    case "hysteresis": return "Hysteresis";
+    case "comparison": return "Comparison";
   }
 }
 
-export function filterSeriesForSurface(series: readonly ChartSeries[], surface: AnalysisWorkbenchSurface): ChartSeries[] {
-  if (surface === "overview") return series.filter((item) => !item.quantity.startsWith("e_"));
-  if (surface === "dynamics") return series.filter((item) => ["mx", "my", "mz", "m"].includes(item.quantity));
-  if (surface === "convergence") {
-    return series.filter((item) => item.quantity.includes("torque") || item.quantity.includes("residual") || item.quantity.includes("energy_delta"));
-  }
-  return [...series];
-}
 
 export function tableRowsLike(table: ChartTableWindow | null): TableRowsLike | null {
   if (!table) return null;

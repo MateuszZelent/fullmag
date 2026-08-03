@@ -2,8 +2,6 @@
 
 import type { KernelApi } from "@/kernel/types";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
-import type { ChartLiveMode } from "@/kernel/workspace/analysisPlotsWorkspace";
-import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
@@ -34,7 +32,6 @@ import { EChartsSurface } from "./EChartsSurface";
 export function AnalysisTableSurface({
   chartSeries,
   kernel,
-  liveMode = "following",
   onPointSelect,
   onRangeChange,
   onSelectedSeriesIdsChange,
@@ -50,7 +47,6 @@ export function AnalysisTableSurface({
 }: {
   chartSeries: readonly ChartSeries[];
   kernel: KernelApi;
-  liveMode?: ChartLiveMode;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
@@ -65,7 +61,6 @@ export function AnalysisTableSurface({
   xAxisId: string;
   xAxisLabel: string;
 }) {
-  const fitRequest = useAnalysisPlotsWorkspaceSelector((state) => state.fitRequest);
   const allIds = chartSeries.map((series) => series.id);
   const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
   const visibleSeries = chartSeries.filter(({ id }) => selected.has(id));
@@ -119,7 +114,7 @@ export function AnalysisTableSurface({
     visibleRevision: table?.revision ?? null,
   }, {
     latestKnownRevision: tableRowsRefresh?.revision ?? null,
-    paused: liveMode === "paused",
+    paused: false,
   });
 
   return (
@@ -149,7 +144,7 @@ export function AnalysisTableSurface({
           ? `${rowCount.toLocaleString()}${totalRows > rowCount ? ` / ${totalRows.toLocaleString()}` : ""} rows`
           : undefined,
         presentation,
-        primary: "Live",
+        primary: "Ready",
         trust: "unknown",
       }}
       title={xAxisId}
@@ -161,7 +156,6 @@ export function AnalysisTableSurface({
           allSeries={chartSeries}
           bus={kernel.bus}
           dataStatus={status}
-          fitRequest={fitRequest}
           onPointSelect={onPointSelect}
           onRangeChange={onRangeChange}
           series={visibleSeries}

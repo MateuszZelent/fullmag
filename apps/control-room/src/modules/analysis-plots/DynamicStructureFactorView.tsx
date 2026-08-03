@@ -28,7 +28,7 @@ export function DynamicStructureFactorView({
     <ChartSection
       className="fm-analysis-plots__panel--dsf"
       status={{
-        primary: status === "ready" ? "Live" : status,
+        primary: status === "ready" ? "Ready" : status,
         trust: "unknown",
         pointSummary: cells.length > 0 ? `${cells.length} cells` : undefined,
       }}

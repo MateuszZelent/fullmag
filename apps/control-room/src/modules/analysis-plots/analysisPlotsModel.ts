@@ -82,23 +82,6 @@ export function buildAnalysisPlotsTableQuery({
   });
 }
 
-export function shouldFetchAnalysisTableRows({
-  hasVisibleRows,
-  loadScalars,
-  liveMode = "following",
-}: {
-  hasVisibleRows: boolean;
-  loadScalars: boolean;
-  liveMode?: import("@/kernel/workspace/analysisPlotsWorkspace").ChartLiveMode;
-  range?: ChartValueRange | null;
-}): boolean {
-  if (!loadScalars) return false;
-  // When paused, freeze updates if rows are already loaded.
-  // Resuming (liveMode -> 'following') returns true, immediately triggering a fetch.
-  if (liveMode === "paused" && hasVisibleRows) return false;
-  return true;
-}
-
 /** A `tailTime` preference has no server meaning unless the selected X axis is simulation time. */
 export function normalizeTableRangeModeForXAxis(
   rangeMode: AnalysisChartRangeMode,

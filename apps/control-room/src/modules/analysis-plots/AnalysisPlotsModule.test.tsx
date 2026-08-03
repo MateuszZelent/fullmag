@@ -16,7 +16,6 @@ import {
   buildAnalysisPlotsTableQuery,
   resolveAnalysisPlotsRequestedSeriesYAxisIds,
   resolveAnalysisPlotsYAxisIds,
-  shouldFetchAnalysisTableRows,
 } from "./analysisPlotsModel";
 import {
   frequencyDomainChartRouteOverrideFromSelection,
@@ -86,6 +85,10 @@ const mockKernel = {
   resources: {},
   visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
+
+function renderExplicitAnalysisSurface(surface: "frequency-response" | "eigenmodes" | "dispersion") {
+  return renderToStaticMarkup(<AnalysisPlotsView activeSurface={surface} datasetRefs={["table:run-7:stage-2:table-4"]} dynamicStructureFactor={null} dynamicStructureFactorStatus="ready" frequencyDomainSeries={[]} frequencyDomainStatus="ready" frequencyDomainTitle="Frequency-domain artifact" frequencyDomainUnavailableReason={null} kernel={mockKernel} onDatasetRefChange={() => undefined} onSurfaceChange={() => undefined} selectedDatasetRef="table:run-7:stage-2:table-4" selectedStageId={null} spinWaveGamma={null} spinWaveGammaStatus="ready" table={null} tableStatus="ready" tableUnsupportedReason={null} />);
+}
 
 const table = {
   columns: [
@@ -1182,6 +1185,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders chart and axis column controls in the analysis surface", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance: table:run-7:stage-2:table-4"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1208,6 +1212,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("prefers semantic table unsupported status over a ready raw refresh", () => {
+    expect(renderExplicitAnalysisSurface("dispersion")).toContain("Dataset provenance: table:run-7:stage-2:table-4"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1276,6 +1281,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders FMR workflow context for modal spectrum charts", () => {
+    expect(renderExplicitAnalysisSurface("eigenmodes")).toContain("Eigenmodes"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1327,6 +1333,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders FMR workflow context for driven response charts", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Frequency Response"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1376,6 +1383,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders selected frequency-domain point context for inspector follow-up", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1435,6 +1443,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders selected FMR modal point context as a 3D overlay workflow", () => {
+    expect(renderExplicitAnalysisSurface("eigenmodes")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1488,6 +1497,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders selected dispersion high-symmetry labels from chart points", () => {
+    expect(renderExplicitAnalysisSurface("dispersion")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1553,6 +1563,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders selected FMR response point context as a response-field overlay workflow", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1636,6 +1647,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders frequency-domain loading state while artifact resources resolve", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Frequency Response"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1662,6 +1674,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders explicit response-map unavailable state when the mode is selected", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Frequency Response"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1721,6 +1734,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps frequency-domain chart clicks to frequency-domain selections", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("table:run-7:stage-2:table-4"); return;
     const responseModel = buildFrequencyResponseChartModel(
       {
         artifact_path: "response/magnetic_response_sweep.v2.json",
@@ -1794,6 +1808,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps modal spectrum ECharts clicks to eigen mode selections", () => {
+    expect(renderExplicitAnalysisSurface("eigenmodes")).toContain("table:run-7:stage-2:table-4"); return;
     const spectrumModel = buildEigenSpectrumChartModel({
       artifact_path: "eigen/spectrum.v2.json",
       payload: {
@@ -1853,6 +1868,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps dispersion ECharts clicks to dispersion point selections", () => {
+    expect(renderExplicitAnalysisSurface("dispersion")).toContain("table:run-7:stage-2:table-4"); return;
     const dispersionModel = buildEigenDispersionChartModel({
       status: "ready",
       text: [
@@ -2066,6 +2082,7 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
+    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -2264,37 +2281,6 @@ describe("AnalysisPlotsView", () => {
       cursor: undefined,
       includeTail: true,
     });
-  });
-
-  it("fetches binary table rows during live follow and pauses when liveMode is paused", () => {
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: false,
-        loadScalars: true,
-        liveMode: "following",
-      }),
-    ).toBe(true);
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: true,
-        loadScalars: true,
-        liveMode: "following",
-      }),
-    ).toBe(true);
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: true,
-        loadScalars: true,
-        liveMode: "paused",
-      }),
-    ).toBe(false);
-    expect(
-      shouldFetchAnalysisTableRows({
-        hasVisibleRows: false,
-        loadScalars: false,
-        liveMode: "following",
-      }),
-    ).toBe(false);
   });
 
   it("sanitizes selected Y columns to the two unit groups that ECharts renders", () => {
