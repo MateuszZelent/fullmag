@@ -124,6 +124,7 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("unobserve(target)");
     expect(auditScript).toContain("__fullmagAuditTargets");
     expect(auditScript).toContain("__fullmagAuditListenerRegistry");
+    expect(auditScript).toContain("sweepActiveListeners");
     expect(auditScript).toContain("normalizeListenerCapture");
     expect(auditScript).toContain("options?.once");
     expect(auditScript).toContain("options?.signal");

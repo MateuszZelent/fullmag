@@ -120,6 +120,7 @@ async function main() {
     const addEventListener = EventTarget.prototype.addEventListener;
     const removeEventListener = EventTarget.prototype.removeEventListener;
     const __fullmagAuditListenerRegistry = new WeakMap();
+    const __fullmagAuditListenerTargets = new Set();
     const normalizeListenerCapture = (options) =>
       typeof options === "boolean" ? options : options?.capture === true;
     const listenerBucket = (target, type, capture, create) => {
@@ -127,6 +128,7 @@ async function main() {
       if (!targetRegistry && create) {
         targetRegistry = new Map();
         __fullmagAuditListenerRegistry.set(target, targetRegistry);
+        __fullmagAuditListenerTargets.add(target);
       }
       if (!targetRegistry) return null;
       const key = `${type}\u0000${capture ? "capture" : "bubble"}`;
@@ -137,6 +139,25 @@ async function main() {
       }
       return bucket ?? null;
     };
+    const sweepActiveListeners = () => {
+      let active = 0;
+      for (const target of __fullmagAuditListenerTargets) {
+        const isDetachedNode =
+          typeof Node !== "undefined" &&
+          target instanceof Node &&
+          !target.isConnected;
+        if (isDetachedNode) {
+          __fullmagAuditListenerRegistry.delete(target);
+          __fullmagAuditListenerTargets.delete(target);
+          continue;
+        }
+        const targetRegistry = __fullmagAuditListenerRegistry.get(target);
+        if (!targetRegistry) continue;
+        for (const bucket of targetRegistry.values()) active += bucket.size;
+      }
+      runtime.listeners = active;
+    };
+    runtime.sweepActiveListeners = sweepActiveListeners;
     EventTarget.prototype.addEventListener = function (type, listener, options) {
       if (listener === null || listener === undefined) {
         return addEventListener.call(this, type, listener, options);
@@ -1112,6 +1133,7 @@ async function verifyLocalQuickChartActionBudget(page, sessionRequests) {
 async function collectLifecycleSnapshot(page) {
   return page.evaluate(() => {
     const runtime = window.__FULLMAG_CHART_AUDIT_RUNTIME__ ?? {};
+    runtime.sweepActiveListeners?.();
     const resizeObservers = runtime.resizeObservers ?? 0;
     const mutationObservers = runtime.mutationObservers ?? 0;
     return {
