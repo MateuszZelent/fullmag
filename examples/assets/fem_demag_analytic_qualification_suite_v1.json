@@ -14,7 +14,8 @@
     "demag_rtol": 1e-12,
     "fresh_zero_solve": true,
     "precision": "double",
-    "demag_realization": "poisson_robin"
+    "demag_realization": "poisson_robin",
+    "magnetic_weighted_volume_relative_error_max": 0.05
   },
   "acceptance": {
     "finest_factor_relative_error_max": 0.05,

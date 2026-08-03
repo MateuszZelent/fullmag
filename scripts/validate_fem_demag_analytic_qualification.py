@@ -187,7 +187,7 @@ def _validate_row(row: dict[str, Any], index: int, case: dict[str, Any], source_
     _require(_sha256(row_source.get("source_snapshot_sha256"), f"{label}.source_provenance.source_snapshot_sha256") == source_snapshot_sha256, f"{label}: source snapshot provenance differs from artifact identity")
     _sha256(row_source.get("serialized_typed_mesh_sha256"), f"{label}.source_provenance.serialized_typed_mesh_sha256")
     _sha256(row_source.get("problem_ir_sha256"), f"{label}.source_provenance.problem_ir_sha256")
-    for key in ("ms_Apm", "magnetic_volume_m3", "e_demag_J", "e_demag_analytic_J", "n_analytic"):
+    for key in ("ms_Apm", "analytic_geometry_volume_m3", "magnetic_weighted_volume_m3", "e_demag_J", "e_demag_analytic_J", "n_analytic"):
         _finite(row.get(key), f"{label}.{key}")
     ms = _finite(row["ms_Apm"], f"{label}.ms_Apm")
     _require(ms > 0.0, f"{label}.ms_Apm must be positive")
@@ -202,14 +202,17 @@ def _validate_row(row: dict[str, Any], index: int, case: dict[str, Any], source_
         _require(abs(_finite(value, f"{label}.prescribed_m") - expected) <= 1.0e-15, f"{label}.prescribed_m must be the declared principal-axis uniform state")
     n_from_field = -field_values[axis_index] / ms
     n_from_energy = 2.0 * _finite(row["e_demag_J"], f"{label}.e_demag_J") / (
-        4.0e-7 * math.pi * ms * ms * _case_volume(case)
+        4.0e-7 * math.pi * ms * ms * _finite(row["magnetic_weighted_volume_m3"], f"{label}.magnetic_weighted_volume_m3")
     )
     n_analytic = _finite(row["n_analytic"], f"{label}.n_analytic")
     oracle = _case_oracle(case, str(row["axis"]))
     _require(_relative_error(n_analytic, oracle) <= 1.0e-12, f"{label}: n_analytic is not the geometry-derived sphere/Osborn oracle")
     _require(n_analytic > 0.0, f"{label}.n_analytic must be positive")
     expected_volume = _case_volume(case)
-    _require(_relative_error(_finite(row["magnetic_volume_m3"], f"{label}.magnetic_volume_m3"), expected_volume) <= 1.0e-12, f"{label}: magnetic_volume_m3 differs from suite geometry")
+    _require(_relative_error(_finite(row["analytic_geometry_volume_m3"], f"{label}.analytic_geometry_volume_m3"), expected_volume) <= 1.0e-12, f"{label}: analytic_geometry_volume_m3 differs from suite geometry")
+    weighted_volume = _finite(row["magnetic_weighted_volume_m3"], f"{label}.magnetic_weighted_volume_m3")
+    _require(weighted_volume > 0.0, f"{label}: magnetic_weighted_volume_m3 must be positive")
+    _require(_relative_error(weighted_volume, expected_volume) <= _finite(policy.get("magnetic_weighted_volume_relative_error_max"), "suite.physics_row_policy.magnetic_weighted_volume_relative_error_max"), f"{label}: weighted magnetic volume exceeds the suite discretization envelope")
     expected_energy = 0.5 * 4.0e-7 * math.pi * oracle * ms * ms * expected_volume
     _require(_relative_error(_finite(row["e_demag_analytic_J"], f"{label}.e_demag_analytic_J"), expected_energy) <= 1.0e-12, f"{label}: e_demag_analytic_J is not geometry-derived")
     _require(row.get("magnetic_region_only") is True, f"{label}: magnetic_region_only must be true")
@@ -323,6 +326,14 @@ def _validate_cpu_gpu_parity(rows: list[dict[str, Any]]) -> None:
         cpu, gpu = pair["fem_cpu"], pair["fem_gpu"]
         _require(cpu["solver_mesh_signature"] == gpu["solver_mesh_signature"], f"{key}: CPU/GPU typed mesh mismatch")
         _require(cpu["source_provenance"]["serialized_typed_mesh_sha256"] == gpu["source_provenance"]["serialized_typed_mesh_sha256"], f"{key}: CPU/GPU serialized typed mesh bytes mismatch")
+        cpu_field = _list(cpu.get("h_demag_mean_magnetic_Apm"), f"{key}: CPU H_demag mean")
+        gpu_field = _list(gpu.get("h_demag_mean_magnetic_Apm"), f"{key}: GPU H_demag mean")
+        _require(len(cpu_field) == len(gpu_field) == 3, f"{key}: CPU/GPU H_demag mean vectors must have three components")
+        cpu_values = [_finite(value, f"{key}: CPU H_demag mean") for value in cpu_field]
+        gpu_values = [_finite(value, f"{key}: GPU H_demag mean") for value in gpu_field]
+        for component, (left, right) in enumerate(zip(cpu_values, gpu_values)):
+            component_scale = max(abs(left), abs(right), 1.0e-300)
+            _require(abs(left - right) / component_scale <= CPU_GPU_RTOL, f"{key}: CPU/GPU full H_demag vector mismatch exceeds 1e-6 at component {component}")
         _require(_relative_error(cpu["_n_from_field"], gpu["_n_from_field"]) <= CPU_GPU_RTOL, f"{key}: CPU/GPU field mismatch exceeds 1e-6")
         _require(_relative_error(_finite(cpu["e_demag_J"], "cpu energy"), _finite(gpu["e_demag_J"], "gpu energy")) <= CPU_GPU_RTOL, f"{key}: CPU/GPU energy mismatch exceeds 1e-6")
 
@@ -386,6 +397,10 @@ def validate_qualification(
     A missing artifact is a failure, not a skipped or inferred qualification.
     """
     artifact = _load_artifact(artifact_path)
+    _require(
+        expected_source_identity_path is not None and expected_runtime_manifest_path is not None,
+        "expected source identity and expected runtime manifest are required for analytic qualification",
+    )
     _require(artifact.get("schema_version") == SCHEMA, "analytic qualification schema_version is invalid")
     rows = [_object(value, f"physics_rows[{index}]") for index, value in enumerate(_list(artifact.get("physics_rows"), "physics_rows"))]
     _require(rows, "physics_rows must not be empty")
@@ -425,12 +440,12 @@ def validate_qualification(
         _require(case_id in cases, f"physics_rows[{index}]: unknown suite case_id {case_id}")
         _validate_row(row, index, cases[case_id], source_snapshot_sha256, policy, transverse_rtol)
     _validate_exact_matrix(rows, suite)
+    _validate_cpu_gpu_parity(rows)
+    _validate_mesh_airbox_identities(rows)
     _validate_timing_rows(rows, _list(artifact.get("timing_rows"), "timing_rows"))
     _validate_fine_errors(rows)
     _validate_refinement_and_airbox(rows)
     _validate_ellipsoid_sums(rows, suite)
-    _validate_cpu_gpu_parity(rows)
-    _validate_mesh_airbox_identities(rows)
     return {
         "schema_version": SCHEMA,
         "qualified": True,
@@ -444,8 +459,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--suite", type=Path)
-    parser.add_argument("--expected-source-identity", type=Path)
-    parser.add_argument("--expected-runtime-manifest", type=Path)
+    parser.add_argument("--expected-source-identity", type=Path, required=True)
+    parser.add_argument("--expected-runtime-manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:

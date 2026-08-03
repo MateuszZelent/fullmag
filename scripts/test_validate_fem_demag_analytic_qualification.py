@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import io
 import json
 import math
 import copy
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 
@@ -72,7 +74,7 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
                             volume = 4.0 * math.pi * math.prod(case["semi_axes_m"]) / 3.0
                             ms = 800_000.0
                             error = errors[refinement] + scale_errors[scale]
-                            energy = 0.5 * 4.0e-7 * math.pi * n_oracle * ms * ms * volume * (1.0 + error)
+                            energy = 0.5 * 4.0e-7 * math.pi * n_oracle * ms * ms * volume * 1.001 * (1.0 + error)
                             axis_index = {"x": 0, "y": 1, "z": 2}[axis]
                             field = [0.0, 0.0, 0.0]
                             field[axis_index] = -n_oracle * ms * (1.0 + error)
@@ -90,7 +92,8 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
                                     "solver_mesh_cell_count": {"coarse": 200, "medium": 400, "fine": 800}[refinement],
                                     "airbox_identity_sha256": airbox_sha256,
                                     "source_provenance": {"source_snapshot_sha256": source_snapshot_sha256, "serialized_typed_mesh_sha256": mesh_sha256, "problem_ir_sha256": problem_sha256},
-                                    "ms_Apm": ms, "magnetic_volume_m3": volume,
+                                    "ms_Apm": ms, "analytic_geometry_volume_m3": volume,
+                                    "magnetic_weighted_volume_m3": volume * 1.001,
                                     "prescribed_m": [1.0 if component == axis_index else 0.0 for component in range(3)],
                                     "h_demag_mean_magnetic_Apm": field, "e_demag_J": energy,
                                     "e_demag_analytic_J": 0.5 * 4.0e-7 * math.pi * n_oracle * ms * ms * volume,
@@ -113,13 +116,17 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
             )
 
             self.assertTrue(summary["qualified"])
+            with self.assertRaisesRegex(ValueError, "expected source identity and expected runtime manifest are required"):
+                MODULE.validate_qualification(artifact_path, suite_path)
             mutations = (
                 ("source identity", lambda value: value["source_provenance"].update({"source_snapshot_sha256": "0" * 64}), "current expected identity"),
                 ("runtime identity", lambda value: value["managed_runtime_identity"].update({"native_library_sha256": "0" * 64}), "current managed runtime"),
                 ("solve policy", lambda value: value["physics_rows"][0].update({"demag_solver": "GMRES"}), "solve policy"),
                 ("typed mesh parity", lambda value: value["physics_rows"][1]["source_provenance"].update({"serialized_typed_mesh_sha256": "0" * 64}), "serialized typed mesh bytes mismatch"),
+                ("field vector parity", lambda value: value["physics_rows"][1].update({"h_demag_mean_magnetic_Apm": [value["physics_rows"][1]["h_demag_mean_magnetic_Apm"][0], 0.04, -0.04]}), "full H_demag vector mismatch"),
                 ("positive timing", lambda value: value["timing_rows"][0].update({"demag_wall_time_ns": 0}), "must be positive"),
                 ("weight identity", lambda value: value["physics_rows"][0].update({"energy_lumped_weight_sha256": "0" * 64}), "same lumped-volume weights"),
+                ("weighted volume envelope", lambda value: value["physics_rows"][0].update({"magnetic_weighted_volume_m3": value["physics_rows"][0]["magnetic_weighted_volume_m3"] * 1.2}), "weighted magnetic volume"),
             )
             for name, mutate, message in mutations:
                 with self.subTest(name=name):
@@ -129,6 +136,10 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
                     candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
                     with self.assertRaisesRegex(ValueError, message):
                         MODULE.validate_qualification(candidate_path, suite_path, source_path, runtime_path)
+
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as missing_identity:
+                MODULE.main(["--artifact", str(artifact_path), "--suite", str(suite_path)])
+            self.assertEqual(missing_identity.exception.code, 2)
 
     def test_rejects_missing_complete_managed_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -158,7 +169,11 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "prescribed_uniform"):
-                MODULE.validate_qualification(artifact)
+                MODULE.validate_qualification(
+                    artifact,
+                    expected_source_identity_path=Path("source-identity.json"),
+                    expected_runtime_manifest_path=Path("runtime-manifest.json"),
+                )
 
     def test_rejects_self_certified_sphere_factor(self) -> None:
         ms = 800_000.0
@@ -189,7 +204,8 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
                 "problem_ir_sha256": "d" * 64,
             },
             "ms_Apm": ms,
-            "magnetic_volume_m3": volume,
+            "analytic_geometry_volume_m3": volume,
+            "magnetic_weighted_volume_m3": volume,
             "prescribed_m": [0.0, 0.0, 1.0],
             "h_demag_mean_magnetic_Apm": [0.0, 0.0, -ms / 3.0],
             "e_demag_J": 0.5 * 4.0e-7 * math.pi * (1.0 / 3.0) * ms * ms * volume,
@@ -213,7 +229,7 @@ class FemDemagAnalyticQualificationRedTests(unittest.TestCase):
                 0,
                 sphere,
                 snapshot,
-                {"demag_solver": "CG", "demag_preconditioner": "AMG", "demag_rtol": 1e-12, "fresh_zero_solve": True, "precision": "double", "demag_realization": "poisson_robin"},
+                {"demag_solver": "CG", "demag_preconditioner": "AMG", "demag_rtol": 1e-12, "fresh_zero_solve": True, "precision": "double", "demag_realization": "poisson_robin", "magnetic_weighted_volume_relative_error_max": 0.05},
                 0.05,
             )
 
