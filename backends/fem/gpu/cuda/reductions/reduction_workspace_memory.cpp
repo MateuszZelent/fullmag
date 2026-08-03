@@ -12,6 +12,8 @@
 #include "gpu/cuda/state/device_memory.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <limits>
 
@@ -33,6 +35,12 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
     }
     error = std::string(operation) + " failed: " + cudaGetErrorString(rc);
     return false;
+}
+
+bool force_pageable_scalar_readback()
+{
+    const char *value = std::getenv("FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK");
+    return value != nullptr && std::strcmp(value, "1") == 0;
 }
 #endif
 
@@ -60,10 +68,13 @@ bool gpu_reduction_workspace_allocate(
         !gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error)) {
         return false;
     }
-    const cudaError_t host_scalar_status = cudaHostAlloc(
-        reinterpret_cast<void **>(&reductions.host_scalar_result),
-        FEM_GPU_SCALAR_RESULT_SLOTS * sizeof(double),
-        cudaHostAllocDefault);
+    const bool forced_pageable = force_pageable_scalar_readback();
+    const cudaError_t host_scalar_status = forced_pageable
+        ? cudaErrorMemoryAllocation
+        : cudaHostAlloc(
+              reinterpret_cast<void **>(&reductions.host_scalar_result),
+              FEM_GPU_SCALAR_RESULT_SLOTS * sizeof(double),
+              cudaHostAllocDefault);
     if (host_scalar_status == cudaSuccess) {
         reductions.scalar_result_pinned = true;
     } else if (host_scalar_status == cudaErrorMemoryAllocation) {
@@ -77,9 +88,12 @@ bool gpu_reduction_workspace_allocate(
         reductions.scalar_result_pinned = false;
         std::fprintf(
             stderr,
-            "[fullmag_fem][warning] cudaHostAlloc scalar readback staging "
-            "returned cudaErrorMemoryAllocation; using pageable fallback; "
-            "numerical semantics are unchanged, transfer overlap is disabled\n");
+            "[fullmag_fem][warning] %s; using pageable scalar readback "
+            "fallback; numerical semantics are unchanged, transfer overlap "
+            "is disabled\n",
+            forced_pageable
+                ? "pageable scalar readback was forced for qualification"
+                : "cudaHostAlloc scalar readback staging returned cudaErrorMemoryAllocation");
     } else {
         error = std::string("cudaHostAlloc FemGpuState scalar readback staging failed: ") +
             cudaGetErrorString(host_scalar_status);

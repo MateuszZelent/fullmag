@@ -5519,3 +5519,43 @@ mapy przestrzenne i cross-backend parity pozostają otwarte. Pełna suita Python
 pozostaje niezielona (`1406 passed, 49 failed, 3 skipped` w bieżącym rerunie),
 więc nie zmieniam szerokiej oceny **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.40. Kontrolowana kwalifikacja pageable scalar readback GPU (2026-08-03)
+
+Zamknięto wcześniej otwartą bramę testowalności fallbacku stagingu scalarów
+GPU. Sam obserwowany SP4 nadal używa pinned path, dlatego nie wolno było
+udawać, że przypadkowe obciążenie hosta jest deterministycznym testem. Dodano
+wyłącznie kwalifikacyjny hook środowiskowy
+`FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1`; domyślna produkcyjna ścieżka
+nadal próbuje `cudaHostAlloc`, a każdy błąd inny niż
+`cudaErrorMemoryAllocation` pozostaje fatalny.
+
+Zakres zmiany:
+
+- `backends/fem/gpu/cuda/reductions/reduction_workspace_memory.cpp` wybiera
+  fixed 32-slot pageable array tylko dla kontrolowanego hooka albo rzeczywistego
+  `cudaErrorMemoryAllocation`; nie zmienia żadnego równania, redukcji ani
+  kryterium solvera;
+- `backends/fem/gpu/cuda/integrators/rk/rk_scalar_readback.cu` opisuje teraz
+  scalar host staging, ponieważ zarówno pinned, jak i pageable destination
+  korzysta z tego samego `cudaMemcpyAsync` i stream fence;
+- `backends/fem/tests/gpu_pageable_scalar_readback_contract.cpp` jest
+  wykonywalnym testem CUDA, nie testem tekstowym: alokuje workspace, sprawdza
+  `scalar_result_pinned=false`, wykonuje D2H na urządzeniu, synchronizuje,
+  sprawdza wartość `3.25` i weryfikuje bezpieczny cleanup;
+- `just verify-fem-time-domain-native-contract` buduje i uruchamia ten target
+  w zarządzanym kontenerze, bez hooka w normalnym runtime.
+
+Świeży managed wynik:
+
+```text
+just verify-fem-time-domain-native-contract: PASS
+pageable scalar readback: forced qualification branch, warning emitted,
+  async D2H + synchronization + numeric preservation + cleanup: PASS
+fullmag-fem-sys ABI: 35 passed; 0 failed
+```
+
+To zamyka bramę **kontrolowanego runtime fallbacku**, ale nie awansuje SP4 do
+`validated`: pełne medium/fine, mapy przestrzenne, CPU/GPU parity i fizyczna
+kwalifikacja cross-backend nadal są wymagane. Nie zmieniam szerokiej oceny
+**86% implementacji / 60% gotowości produkcyjnej**.
