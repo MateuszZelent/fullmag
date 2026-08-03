@@ -631,6 +631,47 @@ the explicit `Q_ia=Js_ia/MUB_E` normalization, potential profiles improve with
 refinement but `mu_s`, interface fluxes, and torque do not meet the comparison
 contract. This does not promote either solver to cross-backend validation.
 
+#### 5.2.1 BORIS residual units and scope
+
+The BORIS display contract is not dimensionally identical to the Fullmag field
+catalog. In `Transport_Spin_Display.cpp`, the native spin accumulation is
+`S [A/m]` and the displayed tensor `Js_ia` is `A/s`; the latter is an angular
+momentum-current representation, not a charge-equivalent current density. The
+adapter therefore uses
+
+```text
+V_s       = De S/(sigma MUB_E),
+mu_s      = 2 V_s,
+Q_ia      = Js_ia/MUB_E [A/m^2].
+```
+
+An independent residual must use one unit system consistently. In native BORIS
+variables, a homogeneous normal-metal interior obeys
+
+```text
+R_S,a = partial_i Js_ia + De S_a/lambda_sf^2 = 0,
+```
+
+where the direct-SHE contribution is already present in `Js`. The equivalent
+Fullmag form is
+
+```text
+R_Q,a = partial_i Q_ia + sigma mu_s,a/(2 lambda_sf^2) = 0.
+```
+
+Adding `partial_i Js_ia` to the Fullmag reaction term mixes `A/(m s)` and
+`A/(m^3)` and introduces a spurious factor `1/MUB_E`. A residual scale must
+also have divergence units (for example `max(|Js|/h, |De S|/lambda_sf^2)`),
+not the current magnitude `max(|Js|)`. A validator that violates either rule
+can report orders-of-magnitude false residuals even when BORIS' discrete
+Poisson equation is satisfied.
+
+The ferromagnetic BORIS equation is a separate scope: it adds transverse
+exchange/dephasing terms (`l_ex`, `l_ph`) and, when enabled, magnetization-drift,
+topological-Hall, or pumping sources. A normal-metal scalar residual must never
+be applied to an F mesh; an N/F comparison either evaluates those terms from an
+explicit material/magnetization manifest or marks the F residual unsupported.
+
 ### 5.3 Regression and quantitative gates
 
 Tests cover local FV residual, electrode balance, anisotropic N/F balance,

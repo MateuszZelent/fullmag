@@ -34,12 +34,15 @@ class NfCaseConfig:
     conductivity_spm: float = 5.8e7
     de_m2_per_s: float = 0.01
     lambda_sf_m: float = 5.0e-9
+    l_ex_m: float = 2.0e-9
+    l_ph_m: float = 4.0e-9
     gi_spm2: float = 5.0e14
     gmix_real_spm2: float = 1.5e15
     gmix_imag_spm2: float = 0.0
     current_density_apm2: float = 1.0e11
     saturation_magnetization_apm: float = 8.0e5
     exchange_jpm: float = 1.3e-11
+    polarization: float = 0.4
     magnetization: Vector3 = (1.0, 0.0, 0.0)
     transport_tolerance: float = 1.0e-5
     transport_max_iterations: int = 200
@@ -61,6 +64,8 @@ class NfCaseConfig:
             "conductivity_spm": self.conductivity_spm,
             "de_m2_per_s": self.de_m2_per_s,
             "lambda_sf_m": self.lambda_sf_m,
+            "l_ex_m": self.l_ex_m,
+            "l_ph_m": self.l_ph_m,
             "gi_spm2": self.gi_spm2,
             "gmix_real_spm2": self.gmix_real_spm2,
             "saturation_magnetization_apm": self.saturation_magnetization_apm,
@@ -74,6 +79,7 @@ class NfCaseConfig:
             "theta_sh": self.theta_sh,
             "gmix_imag_spm2": self.gmix_imag_spm2,
             "current_density_apm2": self.current_density_apm2,
+            "polarization": self.polarization,
         }.items():
             if not isinstance(value, (int, float)):
                 raise ValueError(f"{name} must be numeric")
@@ -139,12 +145,15 @@ def scenario_manifest(config: NfCaseConfig) -> dict[str, object]:
             "elC_Spm": config.conductivity_spm,
             "De_m2_per_s": config.de_m2_per_s,
             "lambda_sf_m": config.lambda_sf_m,
+            "l_ex_m": config.l_ex_m,
+            "l_ph_m": config.l_ph_m,
             "Gi_Spm2": config.gi_spm2,
             "Gmix_Spm2": [config.gmix_real_spm2, config.gmix_imag_spm2],
             "barrier_conductance_Spm2": config.barrier_conductance_spm2,
             "Jc_apm2": [config.current_density_apm2, 0.0, 0.0],
             "Ms_apm": config.saturation_magnetization_apm,
             "A_Jpm": config.exchange_jpm,
+            "P": config.polarization,
             "magnetization": list(config.magnetization),
             "transport_tolerance": config.transport_tolerance,
             "transport_max_iterations": config.transport_max_iterations,
@@ -280,7 +289,8 @@ ferromagnet.param.elC = {config.conductivity_spm!r}
 ferromagnet.param.De = {config.de_m2_per_s!r}
 ferromagnet.param.SHA = {config.theta_sh!r}
 ferromagnet.param.l_sf = {config.lambda_sf_m!r}
-ferromagnet.param.P = 0.4
+ferromagnet.param.l_phi = {config.l_ph_m!r}
+ferromagnet.param.P = {config.polarization!r}
 ferromagnet.param.beta = 0.01
 ferromagnet.param.Gi = [{config.gi_spm2!r}, 0.0]
 ferromagnet.param.Gmix = [{config.gmix_real_spm2!r}, {config.gmix_imag_spm2!r}]

@@ -32,6 +32,9 @@ class ScenarioParameters:
     conductivity_spm: float
     de_m2_per_s: float
     lambda_sf_m: float
+    l_ex_m: float | None = None
+    l_ph_m: float | None = None
+    magnetization: Vector3 = (1.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -41,6 +44,15 @@ class ScenarioParameters:
         ):
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
+        for name, value in (("l_ex_m", self.l_ex_m), ("l_ph_m", self.l_ph_m)):
+            if value is not None and (not math.isfinite(value) or value <= 0.0):
+                raise ValueError(f"{name} must be finite and positive when provided")
+        if len(self.magnetization) != 3 or not all(
+            math.isfinite(float(component)) for component in self.magnetization
+        ):
+            raise ValueError("magnetization must be finite and three-dimensional")
+        if sum(float(component) ** 2 for component in self.magnetization) == 0.0:
+            raise ValueError("magnetization must be non-zero")
 
 
 @dataclass(frozen=True)
@@ -224,10 +236,23 @@ def _charge_divergence(field: OvfField, i: int, j: int, k: int) -> float:
 
 
 def compute_field_residuals(
-    fields: MeshFields, parameters: ScenarioParameters
+    fields: MeshFields,
+    parameters: ScenarioParameters,
+    *,
+    material: str = "normal",
 ) -> dict[str, object]:
-    """Recompute finite-volume charge and mapped spin residuals."""
+    """Recompute finite-volume residuals in one consistent BORIS unit system.
 
+    BORIS stores ``Js`` in ``A/s`` and ``S`` in ``A/m``.  The native residual
+    therefore uses ``div(Js) + De * reaction(S)``.  A charge-equivalent
+    ``Q=Js/MUB_E`` residual would be mathematically equivalent, but mixing the
+    two unit systems is invalid.  The ferromagnetic branch is limited to the
+    rendered N/F workload: constant magnetization, uniform material, and no
+    topological-Hall or pumping source.
+    """
+
+    if material not in {"normal", "ferromagnet"}:
+        raise ValueError("material must be normal or ferromagnet")
     all_fields = (
         fields.charge_current,
         fields.spin_current_x,
@@ -246,29 +271,62 @@ def compute_field_residuals(
         for j in range(1, shape[1] - 1)
         for i in range(1, shape[0] - 1)
     ]
-    charge_scale = max(
-        max(abs(component) for row in fields.charge_current.values for component in row),
-        1.0,
+    h_ref = min(fields.charge_current.step_m)
+    charge_magnitude = max(
+        (abs(component) for row in fields.charge_current.values for component in row),
+        default=0.0,
     )
-    spin_scale = max(
-        max(
+    spin_magnitude = max(
+        (
             abs(component)
             for field in (fields.spin_current_x, fields.spin_current_y, fields.spin_current_z)
             for row in field.values
             for component in row
         ),
+        default=0.0,
+    )
+    accumulation_magnitude = max(
+        (abs(component) for row in fields.spin_accumulation.values for component in row),
+        default=0.0,
+    )
+    charge_scale = max(charge_magnitude / h_ref, 1.0)
+    spin_reaction_lengths = [parameters.lambda_sf_m]
+    if material == "ferromagnet":
+        if parameters.l_ex_m is None or parameters.l_ph_m is None:
+            raise ValueError("ferromagnet residual requires l_ex_m and l_ph_m")
+        spin_reaction_lengths.extend((parameters.l_ex_m, parameters.l_ph_m))
+    spin_scale = max(
+        spin_magnitude / h_ref,
+        parameters.de_m2_per_s * accumulation_magnitude / min(spin_reaction_lengths) ** 2,
         1.0,
     )
+    magnetization = tuple(float(component) for component in parameters.magnetization)
+    magnetization_norm = math.sqrt(sum(component * component for component in magnetization))
+    m = tuple(component / magnetization_norm for component in magnetization)
+
+    def cross(left: Vector3, right: Vector3) -> Vector3:
+        return (
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0],
+        )
+
     charge_defects: list[float] = []
     spin_defects: list[float] = []
-    reaction_coefficient = parameters.conductivity_spm / (2.0 * parameters.lambda_sf_m**2)
-    mapped_accumulation = map_boris_spin_to_fullmag_mu_s(
-        fields.spin_accumulation.values,
-        parameters.de_m2_per_s,
-        parameters.conductivity_spm,
-    )
     for i, j, k in interior:
         charge_defects.append(_charge_divergence(fields.charge_current, i, j, k))
+        accumulation = fields.spin_accumulation.values[_flat_index(shape, i, j, k)]
+        reaction = [accumulation[index] / (parameters.lambda_sf_m**2) for index in range(3)]
+        if material == "ferromagnet":
+            if parameters.l_ex_m is None or parameters.l_ph_m is None:
+                raise ValueError("ferromagnet residual requires l_ex_m and l_ph_m")
+            transverse_exchange = cross(accumulation, m)
+            transverse_dephasing = cross(m, transverse_exchange)
+            for index in range(3):
+                reaction[index] += (
+                    transverse_exchange[index] / (parameters.l_ex_m**2)
+                    + transverse_dephasing[index] / (parameters.l_ph_m**2)
+                )
         for component in range(3):
             spin_divergence = _divergence(
                 fields.spin_current_x,
@@ -279,9 +337,7 @@ def compute_field_residuals(
                 k,
                 component,
             )
-            spin_defects.append(
-                spin_divergence + reaction_coefficient * mapped_accumulation[_flat_index(shape, i, j, k)][component]
-            )
+            spin_defects.append(spin_divergence + parameters.de_m2_per_s * reaction[component])
     if not interior:
         charge_defects = [0.0]
         spin_defects = [0.0]
@@ -291,7 +347,16 @@ def compute_field_residuals(
         "charge_scaled_l2": charge_l2 / charge_scale,
         "spin_scaled_l2": spin_l2 / spin_scale,
         "interior_cell_count": len(interior),
-        "spin_reaction_model": "sigma_s_mu_s/(2*lambda_sf^2), mu_s=2*De*S/(elC*MUB_E)",
+        "material": material,
+        "spin_reaction_model": (
+            "De*S/lambda_sf^2 (normal, native BORIS units)"
+            if material == "normal"
+            else "De*(S/lambda_sf^2+(Sxm)/l_ex^2+(mx(Sxm))/l_ph^2) "
+            "(exchange/dephasing, constant-magnetization F workload, native BORIS units)"
+        ),
+        "residual_unit": "A/(m*s) native BORIS divergence",
+        "residual_scale": "max(|J|/h, |De*S|/reaction_length^2, 1)",
+        "characteristic_length_m": h_ref,
     }
 
 

@@ -5172,3 +5172,88 @@ referencji MuMax3 pozostaje `max|Δ|=2.2795424643e-4`, więc oba artefakty mają
 siatki, niezależna relaksacja, adaptive CPU/GPU, BORIS/SHE, FEM/GPU, pełny
 round-trip Python/UI, skin-effect/MQS, FEM Oersted RT0/KKT, fizyczne M3
 `C_s` oraz `validated_workloads`.
+
+## 32.35. Korekta walidacji residualu BORIS N/F (2026-08-03)
+
+### 32.35.1. Root cause
+
+Powtórzenie BORIS N/F na średniej siatce z limitem `5000` iteracji nadal dawało
+`spin_scaled_l2≈2.47e11`. Ponieważ zwiększenie limitu nie zmieniło rzędu
+wyniku, wykonano audyt jednostek i źródeł zamiast kolejnego strojenia SOR.
+`Transport_Spin_Display.cpp` publikuje `S [A/m]` oraz `Js [A/s]`, podczas gdy
+Fullmag `Q_ia=Js_ia/MUB_E` ma `A/m²`. Stary walidator dodawał dywergencję
+`Js` do reakcji zapisanej w jednostkach `Q`, a dzielił przez `max(|Js|,1)`
+zamiast przez skalę dywergencji. Dodatkowo stosował normal-metalowy człon
+`lambda_sf` do F, pomijając `l_ex`, `l_ph` i ograniczenia stałego workloadu.
+
+Normatywny zapis korekty trafił do
+`docs/physics/0970-spin-hall-drift-diffusion-transport.md` §5.2.1 oraz do
+porównania BORIS/Fullmag §7.7. W native BORIS variables sprawdzane jest:
+
+```text
+R_S = div(Js) + De*S/lambda_sf^2                    (N),
+R_S = div(Js) + De*(S/lambda_sf^2 + (S×m)/l_ex^2
+                    + m×(S×m)/l_ph^2)              (F, constant m),
+scale = max(|J|/h, |De*S|/reaction_length^2, 1).
+```
+
+Źródła topological-Hall, charge/spin pumping oraz `E·grad(m)` nie są ukryte:
+F branch jest jawnie ograniczony do manifestu z jednorodnym materiałem i
+stałym `m`; dla ogólnego F potrzebny jest osobny manifest źródeł.
+
+### 32.35.2. Test-first i implementacja
+
+Dodano testy `scripts/test_verify_boris_nf_interface.py` dla native `S` residualu
+oraz dla exchange/dephasing F. Zaktualizowano `NfCaseConfig`/manifest o
+`l_ex_m`, `l_ph_m`, `P` i mapowanie Python BORIS `l_phi`; CLI runner przyjmuje
+`--transport-tolerance` i `--transport-max-iterations`. Testy:
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=scripts \
+python3 -m pytest -s -q \
+  scripts/test_boris_nf_interface_smoke.py \
+  scripts/test_run_boris_nf_interface.py \
+  scripts/test_verify_boris_nf_interface.py
+19 passed; 0 failed
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=packages/fullmag-py/src:scripts \
+python3 -m pytest -s -q \
+  scripts/test_compare_boris_fullmag_she_nf.py \
+  scripts/test_boris_fullmag_she_nf_matrix.py
+12 passed; 0 failed
+```
+
+### 32.35.3. Managed evidence after correction
+
+Nowy artefakt CPU/double z trwałego `boris-nf-runtime`:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+runner-fine-5000-native/summary.json
+```
+
+Konfiguracja: `20×8×4 + 4`, `tol=1e-8`, `5000` iteracji, `SHA=iSHA=0.1`,
+`Gi=5e14 S/m²`, `Gmix=(1.5e15,0)`, `l_sf=5 nm`, `l_ex=2 nm`, `l_phi=4 nm`,
+`m=(1,0,0)`. Residuale z `216` komórek wewnętrznych na materiał:
+
+```text
+normal:       charge=5.147004968391239e-13  spin=3.806146941508527e-3
+ferromagnet:  charge=3.978584955133736e-12  spin=9.615227124935865e-10
+```
+
+Porównanie do Fullmag fine jest w
+`runner-fine-5000-native/comparison.json`; nadal ma `status=incomparable` i
+max-relative-error: potential `5.393051572602266e-5`, `mu_s`
+`1.8919613718899064`, `Q_ia` `1.9999958674595317`, absorbed flux
+`1.000123101888642`, charge `1.2906273307379117`. Torque pozostaje jawnie
+nieporównywalny (`BORIS Tsi A/(m s)` vs Fullmag `[1/s]`). Korekta zamyka tylko
+niezależny test jednostek/residualu; nie daje parity ani awansu capability.
+
+### 32.35.4. Status bramy i ocena celu
+
+`SHE-BORIS-001`, mapowanie `G_i/Gmix`, N/T/F, BORIS CPU↔CUDA, Fullmag
+CPU↔CUDA, FEM/GPU, cross-backend common-limit, torque normalization,
+`validated_workloads`, skin-effect/MQS, FEM Oersted RT0/KKT, fizyczny M3 `C_s`
+i pełny Python/UI round-trip pozostają otwarte. Zapisany zakres poprawia
+wiarygodność diagnostyki BORIS, ale nie zwiększa oceny produkcyjnej: nadal
+**86% implementacji / 60% gotowości produkcyjnej**.

@@ -114,6 +114,80 @@ def test_charge_residual_uses_matching_flux_component_for_each_axis() -> None:
     assert result["charge_scaled_l2"] == pytest.approx(1.5)
 
 
+def test_spin_residual_uses_native_boris_units() -> None:
+    """The independent check must evaluate div(Js)+De*S/lambda^2 in BORIS units."""
+
+    shape = (3, 3, 3)
+    zero_vectors = tuple((0.0, 0.0, 0.0) for _ in range(27))
+    accumulation_values = list(zero_vectors)
+    accumulation_values[13] = (1.0, 0.0, 0.0)
+    spin_z_values = list(zero_vectors)
+    spin_z_values[22] = (-1.0, 0.0, 0.0)  # k=2 at the interior x/y index
+    spin_z_values[4] = (1.0, 0.0, 0.0)   # k=0 at the interior x/y index
+    fields = MeshFields(
+        charge_current=OvfField(
+            Path("charge.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3,
+            zero_vectors, "charge",
+        ),
+        spin_current_x=OvfField(
+            Path("spin_x.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3,
+            zero_vectors, "spin_x",
+        ),
+        spin_current_y=OvfField(
+            Path("spin_y.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3,
+            zero_vectors, "spin_y",
+        ),
+        spin_current_z=OvfField(
+            Path("spin_z.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3,
+            tuple(spin_z_values), "spin_z",
+        ),
+        spin_accumulation=OvfField(
+            Path("accumulation.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3,
+            tuple(accumulation_values), "accumulation",
+        ),
+    )
+
+    result = compute_field_residuals(
+        fields,
+        ScenarioParameters(conductivity_spm=2.0, de_m2_per_s=1.0, lambda_sf_m=1.0),
+    )
+
+    assert result["spin_scaled_l2"] == pytest.approx(0.0)
+
+
+def test_ferromagnet_residual_includes_exchange_and_dephasing() -> None:
+    shape = (3, 3, 3)
+    zero_vectors = tuple((0.0, 0.0, 0.0) for _ in range(27))
+    accumulation_values = list(zero_vectors)
+    accumulation_values[13] = (0.0, 1.0, 0.0)
+    spin_z_values = list(zero_vectors)
+    spin_z_values[22] = (0.0, -2.0, 1.0)
+    spin_z_values[4] = (0.0, 2.0, -1.0)
+    fields = MeshFields(
+        OvfField(Path("charge.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3, zero_vectors, "charge"),
+        OvfField(Path("spin_x.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3, zero_vectors, "spin_x"),
+        OvfField(Path("spin_y.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3, zero_vectors, "spin_y"),
+        OvfField(Path("spin_z.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3, tuple(spin_z_values), "spin_z"),
+        OvfField(Path("accumulation.ovf"), shape, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 3, tuple(accumulation_values), "accumulation"),
+    )
+
+    result = compute_field_residuals(
+        fields,
+        ScenarioParameters(
+            conductivity_spm=2.0,
+            de_m2_per_s=1.0,
+            lambda_sf_m=1.0,
+            l_ex_m=1.0,
+            l_ph_m=1.0,
+            magnetization=(1.0, 0.0, 0.0),
+        ),
+        material="ferromagnet",
+    )
+
+    assert result["spin_scaled_l2"] == pytest.approx(0.0)
+    assert "exchange" in str(result["spin_reaction_model"])
+
+
 def test_interface_balance_rejects_wrong_normal_sign() -> None:
     with pytest.raises(ValueError, match="normal"):
         compute_interface_balance(

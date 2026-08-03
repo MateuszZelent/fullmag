@@ -327,9 +327,16 @@ def _artifact_summary(root: Path, config: NfCaseConfig, identity: Mapping[str, o
         conductivity_spm=float(parameters["elC_Spm"]),
         de_m2_per_s=float(parameters["De_m2_per_s"]),
         lambda_sf_m=float(parameters["lambda_sf_m"]),
+        l_ex_m=float(parameters["l_ex_m"]),
+        l_ph_m=float(parameters["l_ph_m"]),
+        magnetization=tuple(float(value) for value in parameters["magnetization"]),
     )
-    normal_residuals = compute_field_residuals(normal, solver_parameters)
-    ferromagnet_residuals = compute_field_residuals(ferromagnet, solver_parameters)
+    normal_residuals = compute_field_residuals(
+        normal, solver_parameters, material="normal"
+    )
+    ferromagnet_residuals = compute_field_residuals(
+        ferromagnet, solver_parameters, material="ferromagnet"
+    )
     interface = compute_interface_slice(
         normal,
         ferromagnet,
@@ -474,7 +481,13 @@ def run_boris_case(
     return summary_path
 
 
-def _resolution_config(resolution: str, output_dir: Path) -> NfCaseConfig:
+def _resolution_config(
+    resolution: str,
+    output_dir: Path,
+    *,
+    transport_tolerance: float = 1.0e-5,
+    transport_max_iterations: int = 200,
+) -> NfCaseConfig:
     values = {
         "0": (10, 4, 2, 2),
         "coarse": (4, 2, 2, 2),
@@ -485,7 +498,15 @@ def _resolution_config(resolution: str, output_dir: Path) -> NfCaseConfig:
         nx, ny, nz_n, nz_f = values[resolution]
     except KeyError as error:
         raise ValueError(f"unsupported BORIS N/F resolution: {resolution}") from error
-    return NfCaseConfig(nx=nx, ny=ny, nz_n=nz_n, nz_f=nz_f, output_dir=output_dir)
+    return NfCaseConfig(
+        nx=nx,
+        ny=ny,
+        nz_n=nz_n,
+        nz_f=nz_f,
+        output_dir=output_dir,
+        transport_tolerance=transport_tolerance,
+        transport_max_iterations=transport_max_iterations,
+    )
 
 
 def main() -> int:
@@ -495,10 +516,17 @@ def main() -> int:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--resolution", choices=("0", "coarse", "medium", "fine"), default="0")
     parser.add_argument("--timeout-s", type=int, default=180)
+    parser.add_argument("--transport-tolerance", type=float, default=1.0e-5)
+    parser.add_argument("--transport-max-iterations", type=int, default=200)
     parser.add_argument("--image-digest", default=os.environ.get("FULLMAG_BORIS_IMAGE", DEFAULT_BORIS_IMAGE))
     parser.add_argument("--runtime-container", default=os.environ.get("FULLMAG_BORIS_RUNTIME_CONTAINER"))
     args = parser.parse_args()
-    config = _resolution_config(args.resolution, args.output_dir)
+    config = _resolution_config(
+        args.resolution,
+        args.output_dir,
+        transport_tolerance=args.transport_tolerance,
+        transport_max_iterations=args.transport_max_iterations,
+    )
     summary = run_boris_case(
         config,
         args.build_root,

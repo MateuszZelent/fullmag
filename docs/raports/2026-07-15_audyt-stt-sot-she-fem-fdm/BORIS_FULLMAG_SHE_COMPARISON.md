@@ -693,6 +693,77 @@ managed image `nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b174525024
 Jednorazowy kontener bez `libnvidia-ml.so.1` dawał `exit=127`; macierz końcową
 wykonano w trwałym zarządzanym runtime, a błąd środowiskowy zachowano w logach.
 
+## 7.7. Korekta niezależnego residualu BORIS (2026-08-03)
+
+Ponowny przebieg średniej siatki N/F (`20×8×4 + 4`, `tol=1e-8`, `5000`
+iteracji) zakończył się poprawnie w zarządzanym kontenerze, ale stary
+walidator nadal zgłaszał `spin_scaled_l2=2.472593934595472e11`. Zwiększenie
+limitu z `200` do `5000` nie zmieniło rzędu błędu, więc nie był to problem
+samego limitu SOR.
+
+Źródłem jest błąd jednostek w walidatorze, nie potwierdzona wada solvera:
+
+1. BORIS publikuje `S [A/m]` i `Js [A/s]`; Fullmag porównuje
+   `Q_ia=Js_ia/MUB_E [A/m²]`.
+2. Stary kod dodawał `div(Js)` do reakcji zapisanej już w jednostkach `Q`;
+   brakowało czynnika `MUB_E` (albo równoważnego podzielenia całego residualu
+   przez `MUB_E`).
+3. Dzielnik `max(|Js|,1)` miał jednostki prądu, podczas gdy residual jest
+   dywergencją prądu. Brakowało skali długości `h`, przez co wynik nie był
+   bezwymiarowym residualem PDE.
+4. Ten sam normal-metalowy wzór był stosowany do F, mimo że BORIS dodaje tam
+   `l_ex`, `l_ph` oraz opcjonalne źródła dryfu/pompowania/topologicznego Hall.
+
+Kontrakt korekty został zapisany w `docs/physics/0970-spin-hall-drift-diffusion-transport.md`
+§5.2.1 i wdrożony w `scripts/verify_boris_nf_interface.py`. Stare wartości
+residuali z wcześniejszych `summary.json` są **nieważne jako dowód zbieżności**
+i nie mogą służyć do promocji `SHE-BORIS-001`. Nadal pozostaje otwarte
+ilościowe porównanie `mu_s`, `Q_ia`, interfejsu i torque; ta korekta usuwa
+tylko fałszywy test jednostek/residualu.
+
+## 7.8. Powtórzony managed run po korekcie residualu (2026-08-03)
+
+Wykonano ponownie BORIS CPU/double w trwałym `boris-nf-runtime`, z tym samym
+workloadem `N/F`, `SHA=iSHA=0.1`, `Gi=5e14 S/m²`, `Gmix=1.5e15 S/m²`,
+`tol=1e-8` i `5000` iteracji:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+runner-fine-5000-native/summary.json
+```
+
+Siatka `20×8×4 + 4` ma po `216` komórek wewnętrznych na materiał. Nowy,
+jednostkowo spójny walidator daje:
+
+| pole | normal | ferromagnet |
+|---|---:|---:|
+| `charge_scaled_l2` | `5.147004968391239e-13` | `3.978584955133736e-12` |
+| `spin_scaled_l2` | `3.806146941508527e-3` | `9.615227124935865e-10` |
+
+Normalny residual jest teraz skończony i ma skalę oczekiwaną dla niezależnej
+centralnej różnicy na czterech warstwach `z`; nie ma już sztucznego czynnika
+`1/MUB_E` ani mieszania jednostek. F residual używa jawnie
+`l_sf=5 nm`, domyślnego BORIS `l_ex=2 nm`, ustawionego przez API `l_phi=4 nm`,
+stałego `m=(1,0,0)` oraz wyłączenia źródeł topologicznych/pompowania. Nie jest
+to jeszcze ogólny walidator F dla niejednorodnego `m`.
+
+Porównanie z Fullmag fine (`fullmag-m2-current-fine-final-20260803`) zapisano w
+`runner-fine-5000-native/comparison.json`. Status pozostaje
+`incomparable` z powodu torque, a po korekcie nadal obserwujemy:
+
+| observable | max. względny błąd |
+|---|---:|
+| `potential_v` | `5.393051572602266e-5` |
+| `mu_s` | `1.8919613718899064` |
+| `spin_current_qia` | `1.9999958674595317` |
+| `interface_absorbed_spin_flux` | `1.000123101888642` |
+| `charge_current` | `1.2906273307379117` |
+
+To rozdziela dwa fakty: niezależny BORIS residual jest już liczony poprawnie,
+ale nie ma jeszcze zgodności solverów. `SHE-BORIS-001`, mapowanie `G_i/Gmix`,
+normalizacja torque, CPU↔CUDA, N/T/F oraz cross-backend qualification pozostają
+otwarte.
+
 ## 8. Źródła i mapowanie symboli
 
 | Twierdzenie | Źródło |
@@ -702,6 +773,8 @@ wykonano w trwałym zarządzanym runtime, a błąd środowiskowy zachowano w log
 | inverse SHE RHS i charge BC | `external_solvers/BORIS/Boris/Transport_Spin.cpp::Transport::Evaluate_SpinSolver_delsqV_RHS`, `Transport::NHNeumann_Vdiff` |
 | CUDA inverse SHE | `external_solvers/BORIS/Boris/TransportCUDA.cu::CalculateElectricField_Spin_withISHE_Kernel` |
 | `S → V_s` adapter | `external_solvers/BORIS/Boris/TransportBase.h::TransportBase::cfunc_sec` and `cfunc_pri` contract |
+| native BORIS residual and `A/s` units | `scripts/verify_boris_nf_interface.py::compute_field_residuals`; `external_solvers/BORIS/Boris/Transport_Spin_Display.cpp::Transport::GetSpinCurrent`; `Simulation.cpp` descriptors |
+| F exchange/dephasing residual | `external_solvers/BORIS/Boris/Transport_Spin.cpp::Transport::Evaluate_SpinSolver_delsqS_RHS`; Python parameter name `l_phi` in `external_solvers/BORIS/Boris/NetSocks.py` |
 | N/F/T contacts | `external_solvers/BORIS/Boris/STransport_Spin.cpp::STransport::set_cmbnd_spin_transport_V`, `set_cmbnd_spin_transport_S` |
 | `Gi` and `Gmix` | `external_solvers/BORIS/Boris/STransport_Spin_GInterf.cpp::STransport::Afunc_V`, `Afunc_N_S`, `Afunc_F_S`, `Bfunc_N_S`, `Bfunc_F_S`; `Transport_Spin_Display.cpp::Transport::CalculateDisplaySAInterfaceTorque` |
 | Fullmag variable convention | `docs/physics/0970-spin-hall-drift-diffusion-transport.md` sections 2.1–2.5 |
