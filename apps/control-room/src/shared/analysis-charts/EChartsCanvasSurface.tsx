@@ -27,6 +27,7 @@ export function EChartsCanvasSurface({
   children,
   className = "fm-analysis-plots__echarts",
   fitRequest = 0,
+  initialRange,
   model,
   onClick,
   onDataZoom,
@@ -46,6 +47,7 @@ export function EChartsCanvasSurface({
   className?: string;
   exportRef?: MutableRefObject<ChartRendererOwner | null>;
   fitRequest?: number;
+  initialRange?: { fromValue: number; toValue: number } | null;
   model: ChartRenderModel;
   onClick?: (event: unknown) => void;
   onDataZoom?: (event: unknown) => void;
@@ -54,6 +56,7 @@ export function EChartsCanvasSurface({
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef(model);
+  const initialRangeRef = useRef(initialRange);
   const ownerRef = useRef<ChartRendererOwner | null>(null);
   const tokensRef = useRef<FullmagChartTokens | null>(null);
   const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick });
@@ -66,6 +69,9 @@ export function EChartsCanvasSurface({
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+  useEffect(() => {
+    initialRangeRef.current = initialRange;
+  }, [initialRange]);
   useEffect(() => {
     callbacksRef.current = { diagnostics, onClick, onDataZoom, onDoubleClick };
   }, [diagnostics, onClick, onDataZoom, onDoubleClick]);
@@ -105,6 +111,7 @@ export function EChartsCanvasSurface({
 
         owner.mount(element);
         owner.update(modelRef.current, tokensRef.current ?? undefined);
+        if (initialRangeRef.current) owner.setRange(initialRangeRef.current.fromValue, initialRangeRef.current.toValue);
         callbacksRef.current.diagnostics?.modelUpdated?.(modelRef.current);
         callbacksRef.current.diagnostics?.setOption?.();
 
@@ -167,6 +174,9 @@ export function EChartsCanvasSurface({
   useEffect(() => {
     if (fitRequest > 0) ownerRef.current?.fitView();
   }, [fitRequest]);
+  useEffect(() => {
+    if (initialRange) ownerRef.current?.setRange(initialRange.fromValue, initialRange.toValue);
+  }, [initialRange]);
 
   const hasRenderableData = model.series.some((series) => series.points.length > 0);
   const blocksPlot =

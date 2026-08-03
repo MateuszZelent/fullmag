@@ -4,6 +4,7 @@ export interface AnalysisWorkspaceState {
   activeSurface: AnalysisSurface;
   comparisonDatasetRef: string | null;
   comparisonSelectedSeriesKeys: string[];
+  focusedChartId: string | null;
   hasComparisonSelection: boolean;
   hasChartState: boolean;
   selectedDatasetRef: string | null;
@@ -14,7 +15,7 @@ export interface AnalysisWorkspaceState {
   visibleDatasetRevision: string | number | null;
 }
 
-const INITIAL_STATE: AnalysisWorkspaceState = { activeSurface: "dynamics", comparisonDatasetRef: null, comparisonSelectedSeriesKeys: [], hasChartState: false, hasComparisonSelection: false, selectedDatasetRef: null, selectedSeriesIds: [], sourceChartId: null, sourceTableId: null, visibleDatasetRevision: null, xAxisId: null };
+const INITIAL_STATE: AnalysisWorkspaceState = { activeSurface: "dynamics", comparisonDatasetRef: null, comparisonSelectedSeriesKeys: [], focusedChartId: null, hasChartState: false, hasComparisonSelection: false, selectedDatasetRef: null, selectedSeriesIds: [], sourceChartId: null, sourceTableId: null, visibleDatasetRevision: null, xAxisId: null };
 const MAX_DATASET_REF_LENGTH = 160;
 
 class AnalysisWorkspaceStore {
@@ -54,6 +55,12 @@ class AnalysisWorkspaceStore {
     this.update({ ...this.state, visibleDatasetRevision: valid });
   }
   setChartState(xAxisId: string, selectedSeriesIds: string[]): void { this.update({ ...this.state, hasChartState: true, selectedSeriesIds: selectedSeriesIds.slice(0, 100), xAxisId: xAxisId.slice(0, 160) }); }
+  setFocusedChartId(focusedChartId: string | null): void {
+    const valid = typeof focusedChartId === "string" && focusedChartId.length > 0 && focusedChartId.length <= 512
+      ? focusedChartId
+      : null;
+    this.update({ ...this.state, focusedChartId: valid });
+  }
   setComparisonSelection(comparisonSelectedSeriesKeys: string[]): void {
     this.update({ ...this.state, comparisonSelectedSeriesKeys: [...new Set(comparisonSelectedSeriesKeys)].slice(0, 100), hasComparisonSelection: true });
   }
@@ -64,6 +71,7 @@ class AnalysisWorkspaceStore {
     if (
       next.activeSurface === previous.activeSurface &&
       next.comparisonDatasetRef === previous.comparisonDatasetRef &&
+      next.focusedChartId === previous.focusedChartId &&
       next.hasComparisonSelection === previous.hasComparisonSelection &&
       next.hasChartState === previous.hasChartState &&
       next.selectedDatasetRef === previous.selectedDatasetRef &&

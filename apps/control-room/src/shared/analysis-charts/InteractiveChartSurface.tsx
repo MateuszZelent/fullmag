@@ -42,6 +42,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
     setOption?: () => void;
   };
   fitRequest?: number;
+  initialRange?: { fromValue: number; toValue: number } | null;
   presentation?: ChartDataPresentationState;
   requestedExportFormat?: "csv" | "tsv" | "png" | null;
   series: readonly ChartSeries[];
@@ -55,6 +56,7 @@ export function InteractiveChartSurface({
   dataStatus,
   diagnostics,
   fitRequest = 0,
+  initialRange = null,
   onExportRequested,
   onPointSelected,
   onRangeSelected,
@@ -91,6 +93,7 @@ export function InteractiveChartSurface({
       <EChartsCanvasSurface
         diagnostics={diagnostics}
         exportRef={exportRef}
+        initialRange={initialRange}
         model={model}
         presentation={presentation}
         onClick={(event) => {

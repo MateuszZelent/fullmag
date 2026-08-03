@@ -7,10 +7,14 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 const renderedFormats: Array<string | null> = [];
+const renderedRequests: Array<{ chartId: string; format: string | null }> = [];
+const renderedRanges: Array<{ fromValue: number; toValue: number } | null> = [];
 
 vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
-  InteractiveChartSurface: ({ requestedExportFormat }: { requestedExportFormat: string | null }) => {
+  InteractiveChartSurface: ({ initialRange, requestedExportFormat, surface }: { initialRange: { fromValue: number; toValue: number } | null; requestedExportFormat: string | null; surface: { chartId: string } }) => {
     renderedFormats.push(requestedExportFormat);
+    renderedRequests.push({ chartId: surface.chartId, format: requestedExportFormat });
+    renderedRanges.push(initialRange);
     return <div />;
   },
   chartSeriesRenderModel: vi.fn(),
@@ -32,6 +36,7 @@ const series = [{
 describe("Analysis chart export routing", () => {
   it("delivers a CSV request exactly once to the mounted chart with the current Analysis chart identity", async () => {
     renderedFormats.length = 0;
+    renderedRequests.length = 0;
     const dom = installSimulationPreparationTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
     const bus = new EventBus<KernelEventMap>();
@@ -41,6 +46,34 @@ describe("Analysis chart export routing", () => {
       await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "comparison:table-a", format: "png", source: "analysis-plots" }));
       expect(renderedFormats.filter((format) => format === "csv")).toHaveLength(1);
       expect(renderedFormats).not.toContain("png");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("routes a right comparison-pane export only to its secondary chart identity", async () => {
+    renderedRequests.length = 0;
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    try {
+      await act(async () => root.render(<><EChartsSurface bus={bus} chartId="comparison:table-a" series={series} /><EChartsSurface bus={bus} chartId="comparison:table-b" series={series} /></>));
+      await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "comparison:table-b", format: "png", source: "analysis-plots" }));
+      expect(renderedRequests.filter((request) => request.format === "png")).toEqual([{ chartId: "comparison:table-b", format: "png" }]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("passes a restored persisted range to the shared chart surface on mount", async () => {
+    renderedRanges.length = 0;
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => root.render(<EChartsSurface initialRange={{ fromValue: 1e-9, toValue: 2e-9 }} series={series} />));
+      expect(renderedRanges).toContainEqual({ fromValue: 1e-9, toValue: 2e-9 });
     } finally {
       await act(async () => root.unmount());
       dom.restore();

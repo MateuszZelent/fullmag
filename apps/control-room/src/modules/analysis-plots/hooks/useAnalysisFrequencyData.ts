@@ -176,7 +176,7 @@ export function useAnalysisFrequencyData(
       : frequencyDomainRoute.status === "available"
         ? frequencyDomainResourceStatus
         : frequencyDomainManifest.status === "ready"
-          ? "stale"
+          ? "unsupported"
           : frequencyDomainManifest.status;
 
   const frequencyDomainTitle = frequencyDomainChartTitle(

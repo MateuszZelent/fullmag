@@ -24,6 +24,7 @@ import { EChartsSurface } from "./EChartsSurface";
 
 export function AnalysisFrequencySurface({
   chartId,
+  displayUnits,
   kernel,
   onPointSelect,
   onSelectedSeriesIdsChange,
@@ -35,6 +36,7 @@ export function AnalysisFrequencySurface({
   unavailableReason,
 }: {
   chartId?: string;
+  displayUnits?: Readonly<Record<string, string>>;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
@@ -72,12 +74,22 @@ export function AnalysisFrequencySurface({
   const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
+  const preferredYUnits = yUnits.map((unit) => {
+    const requested = series
+      .filter((entry) => entry.unit === unit)
+      .map((entry) => displayUnits?.[entry.quantity])
+      .filter((value): value is string => Boolean(value));
+    return requested.length > 0 && requested.every((value) => value === requested[0])
+      ? requested[0]
+      : null;
+  });
   const yTransforms = createChartYAxisDisplayTransforms(
     yUnits.map((unit) => ({ unit })),
     series.map((entry) => ({
       points: entry.points,
       yAxis: yUnits.indexOf(entry.unit),
     })),
+    preferredYUnits,
   );
   const legendItems = series.map((entry, index) => {
     const transform = yTransforms[yUnits.indexOf(entry.unit)] ??
@@ -183,6 +195,7 @@ export function AnalysisFrequencySurface({
             bus={kernel.bus}
             chartId={chartId}
             dataStatus={status}
+            displayUnits={displayUnits}
             onPointSelect={onPointSelect}
             series={visibleSeries}
             xAxisLabel={frequencyDomainXAxisLabel(series)}

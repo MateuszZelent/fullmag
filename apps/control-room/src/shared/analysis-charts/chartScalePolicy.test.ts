@@ -25,6 +25,14 @@ describe("chart scale policy", () => {
     expect(chartAxisName("Magnetization M", transform)).toContain("A/m");
   });
 
+  it("honors a compatible persisted display-unit preference", () => {
+    const transform = createChartDisplayTransform("s", [1e-9, 2e-9], "ns");
+
+    expect(transform.factor).toBe(1e-9);
+    expect(transform.displayUnit).toBe("ns");
+    expect(transform.formatValue(2e-9)).toBe("2 ns");
+  });
+
   it.each(["m1", "u1", "µ1", "n1"])(
     "never emits the prefixed dimensionless unit %s",
     (forbidden) => {

@@ -32,6 +32,7 @@ import { EChartsSurface } from "./EChartsSurface";
 export function AnalysisTableSurface({
   chartSeries,
   chartId,
+  displayUnits,
   kernel,
   onPointSelect,
   onRangeChange,
@@ -48,6 +49,7 @@ export function AnalysisTableSurface({
 }: {
   chartSeries: readonly ChartSeries[];
   chartId?: string;
+  displayUnits?: Readonly<Record<string, string>>;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
@@ -67,12 +69,22 @@ export function AnalysisTableSurface({
   const selected = new Set(sanitizeSelectedSeriesIds(selectedSeriesIds, allIds));
   const visibleSeries = chartSeries.filter(({ id }) => selected.has(id));
   const yUnits = [...new Set(chartSeries.map((series) => series.unit))];
+  const preferredYUnits = yUnits.map((unit) => {
+    const requested = chartSeries
+      .filter((series) => series.unit === unit)
+      .map((series) => displayUnits?.[series.quantity])
+      .filter((value): value is string => Boolean(value));
+    return requested.length > 0 && requested.every((value) => value === requested[0])
+      ? requested[0]
+      : null;
+  });
   const yTransforms = createChartYAxisDisplayTransforms(
     yUnits.map((unit) => ({ unit })),
     chartSeries.map((series) => ({
       points: series.points,
       yAxis: yUnits.indexOf(series.unit),
     })),
+    preferredYUnits,
   );
   const displayTransforms = new Map(chartSeries.map((series) => [
     series.id,
@@ -159,6 +171,8 @@ export function AnalysisTableSurface({
           bus={kernel.bus}
           chartId={chartId}
           dataStatus={status}
+          displayUnits={displayUnits}
+          initialRange={range}
           onPointSelect={onPointSelect}
           onRangeChange={onRangeChange}
           series={visibleSeries}

@@ -1,4 +1,4 @@
-import { resolveChartUnit } from "../domain/analysis/chartUnits";
+import { chartUnitsCompatible, resolveChartUnit } from "../domain/analysis/chartUnits";
 import {
   axisScaleFromExtrema,
   formatTooltipValue,
@@ -45,6 +45,7 @@ export function formatChartDisplayValue(
 export function createChartYAxisDisplayTransforms(
   axes: readonly { unit: string }[],
   series: readonly ChartYAxisSeries[],
+  preferredUnits: readonly (string | null | undefined)[] = [],
 ): ChartDisplayTransform[] {
   let axisCount = Math.max(axes.length, 1);
   for (const entry of series) axisCount = Math.max(axisCount, entry.yAxis + 1);
@@ -68,6 +69,7 @@ export function createChartYAxisDisplayTransforms(
     createChartDisplayTransform(
       axes[index]?.unit ?? "",
       axis.hasFiniteNonZeroValue ? [axis.absMin, axis.absMax] : null,
+      preferredUnits[index],
     ),
   );
 }
@@ -85,7 +87,20 @@ export function resolveChartScalePolicy(unit: string): ChartScalePolicy {
 export function createChartDisplayTransform(
   unit: string,
   extrema: readonly [number, number] | null,
+  preferredUnit: string | null | undefined = null,
 ): ChartDisplayTransform {
+  const resolved = resolveChartUnit(unit);
+  const preferred = preferredUnit && chartUnitsCompatible(unit, preferredUnit)
+    ? resolveChartUnit(preferredUnit)
+    : null;
+  if (preferred && resolved) {
+    const transform: ChartDisplayTransform = {
+      factor: preferred.scaleToCanonical / resolved.scaleToCanonical,
+      displayUnit: preferred.unit === "1" ? "" : preferred.unit,
+      formatValue: (value) => `${formatChartDisplayValue(value, transform)}${transform.displayUnit ? ` ${sanitizeLabelText(transform.displayUnit)}` : ""}`,
+    };
+    return transform;
+  }
   const policy = resolveChartScalePolicy(unit);
   if (policy.kind === "dimensionless") {
     const transform: ChartDisplayTransform = {
@@ -107,7 +122,6 @@ export function createChartDisplayTransform(
     return transform;
   }
 
-  const resolved = resolveChartUnit(unit);
   const scaleToCanonical = resolved?.scaleToCanonical ?? 1;
   const scale = extrema
     ? axisScaleFromExtrema(

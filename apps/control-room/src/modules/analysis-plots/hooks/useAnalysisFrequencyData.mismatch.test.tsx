@@ -61,4 +61,19 @@ describe("frequency surface mismatch", () => {
       for (const call of [spectrum, dispersion, branches, response]) expect(call).toHaveBeenCalledWith({ enabled: false });
     } finally { await act(async () => root.unmount()); dom.restore(); }
   });
+
+  it("marks a ready manifest without its required response artifact unsupported", async () => {
+    manifestState = { data: { result_manifest: { payload: { artifacts: {}, requested_execution: { calculation_mode: "fmr_response" } } } }, status: "ready" };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<Harness surface="frequency-response" />));
+      expect(container.textContent).toBe("unsupported:0");
+      for (const call of [spectrum, dispersion, branches, response]) expect(call).toHaveBeenLastCalledWith({ enabled: false });
+    } finally {
+      manifestState = { data: { result_manifest: { payload: { artifacts: { response_sweep_v2_path: "response.json" }, requested_execution: { calculation_mode: "fmr_response" } } } }, status: "ready" };
+      await act(async () => root.unmount()); dom.restore();
+    }
+  });
 });

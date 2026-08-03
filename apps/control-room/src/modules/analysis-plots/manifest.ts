@@ -77,7 +77,8 @@ export const analysisPlotsManifest: ModuleManifest = {
         category: "Analysis",
         scope: "selection" as const,
         run: (context: CommandContext) => {
-          const chartId = analysisWorkspaceStore.getSnapshot().sourceChartId;
+          const chartId = analysisWorkspaceStore.getSnapshot().focusedChartId ??
+            analysisWorkspaceStore.getSnapshot().sourceChartId;
           if (!chartId) return { status: "failed" as const, message: "Select an Analysis dataset first." };
           context.bus?.emit("analysis-plots:export-requested", {
             chartId,

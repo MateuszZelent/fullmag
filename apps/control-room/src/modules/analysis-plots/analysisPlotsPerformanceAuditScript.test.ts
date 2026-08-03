@@ -6,6 +6,10 @@ const auditScriptUrl = new URL(
   "../../../scripts/audit-chart-performance.mjs",
   import.meta.url,
 );
+const computeAuditScriptUrl = new URL(
+  "../../../scripts/audit-compute-performance.mjs",
+  import.meta.url,
+);
 const chartSurfaceUrl = new URL(
   "./components/EChartsSurface.tsx",
   import.meta.url,
@@ -16,6 +20,33 @@ const chartDiagnosticsUrl = new URL(
 );
 
 describe("analysis plots performance audit", () => {
+  it("audits the dataset-driven Analysis resource ownership and bounded table projection", () => {
+    const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.["audit:compute-performance"]).toBe(
+      "node scripts/audit-compute-performance.mjs",
+    );
+    expect(existsSync(computeAuditScriptUrl)).toBe(true);
+
+    const auditScript = readFileSync(computeAuditScriptUrl, "utf8");
+    expect(auditScript).toContain("fileURLToPath(import.meta.url)");
+    expect(auditScript).toContain('path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")');
+    expect(auditScript).toContain("useAnalysisDatasetData.ts");
+    expect(auditScript).toContain("analysis plots dataset resource owner");
+    expect(auditScript).toContain('activeSurface === "dynamics" || activeSurface === "comparison"');
+    expect(auditScript).toContain('activeSurface === "frequency-response" || activeSurface === "eigenmodes"');
+    expect(auditScript).toContain('useSpinWaveGammaResource(activeSurface === "spectrum")');
+    expect(auditScript).toContain('useDynamicStructureFactorResource(activeSurface === "dispersion")');
+    expect(auditScript).toContain("targetPoints: 1_600");
+    expect(auditScript).toContain("limit: 5_000");
+    expect(auditScript).toContain("enabled: enabled && !pinnedForDataset");
+    expect(auditScript).toContain("setPinned({ datasetRef, revision: decodedTable.revision, table: decodedTable })");
+    expect(auditScript).not.toContain("useAnalysisTableData.ts");
+    expect(auditScript).not.toContain("useAnalysisEnergyData.ts");
+  });
+
   it("is registered and verifies chart idle and lifecycle budgets", () => {
     const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as {
       scripts?: Record<string, string>;

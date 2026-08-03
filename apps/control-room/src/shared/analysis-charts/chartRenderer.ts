@@ -73,7 +73,7 @@ export interface ChartRenderModel {
 export type ChartRendererEventName = "click" | "dblclick" | "dataZoom" | "legendselectchanged";
 
 export interface ChartRendererInstance {
-  dispatchAction?(action: { type: string; start?: number; end?: number }): void;
+  dispatchAction?(action: { type: string; start?: number; end?: number; startValue?: number; endValue?: number }): void;
   dispose(): void;
   getDataURL(options?: { pixelRatio?: number; type?: string }): string;
   off?(name: ChartRendererEventName, listener: (event: unknown) => void): void;
@@ -98,6 +98,7 @@ export interface ChartRendererOwner {
   exportPng(): string | null;
   fitView(): void;
   mount(element: HTMLElement): void;
+  setRange(fromValue: number, toValue: number): void;
   resize(): void;
   update(model: ChartRenderModel, tokens?: FullmagChartTokens): void;
 }
@@ -132,6 +133,11 @@ export function createChartRendererOwner(
         chart.dispatchAction?.({ type: "dataZoom", start: 0, end: 100 });
       }
     },
+    setRange(fromValue, toValue) {
+      if (!disposed && chart) {
+        chart.dispatchAction?.({ type: "dataZoom", startValue: fromValue, endValue: toValue });
+      }
+    },
     mount(element) {
       if (disposed || chart) return;
       chart = engine.init(element);
@@ -160,7 +166,16 @@ function computeYScales(
   model: ChartRenderModel,
   axes: readonly { label: string; unit: string }[],
 ): ChartDisplayTransform[] {
-  return createChartYAxisDisplayTransforms(axes, model.series);
+  const preferredUnits = axes.map((_, axisIndex) => {
+    const requested = model.series
+      .filter((series) => series.yAxis === axisIndex)
+      .map((series) => model.provenance?.displayUnits?.[`y:${series.id}`])
+      .filter((unit): unit is string => Boolean(unit));
+    return requested.length > 0 && requested.every((unit) => unit === requested[0])
+      ? requested[0]
+      : null;
+  });
+  return createChartYAxisDisplayTransforms(axes, model.series, preferredUnits);
 }
 
 function axisScale(transform: ChartDisplayTransform): AxisScale {

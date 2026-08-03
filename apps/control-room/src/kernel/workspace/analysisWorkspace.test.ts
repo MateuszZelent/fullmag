@@ -42,4 +42,18 @@ describe("analysis workspace", () => {
       hasComparisonSelection: true,
     });
   });
+
+  it("keeps a bounded focused chart identity separate from the primary source chart", () => {
+    resetAnalysisWorkspaceForTests();
+    analysisWorkspaceStore.setSelectedDatasetRef("table-a");
+    analysisWorkspaceStore.setFocusedChartId("comparison:table-b");
+
+    expect(analysisWorkspaceStore.getSnapshot()).toMatchObject({
+      focusedChartId: "comparison:table-b",
+      sourceChartId: "dynamics:table-a",
+    });
+
+    analysisWorkspaceStore.setFocusedChartId("x".repeat(513));
+    expect(analysisWorkspaceStore.getSnapshot().focusedChartId).toBeNull();
+  });
 });

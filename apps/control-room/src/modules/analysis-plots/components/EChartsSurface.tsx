@@ -34,7 +34,9 @@ interface EChartsSurfaceProps {
   bus?: EventBus<KernelEventMap>;
   chartId?: string;
   dataStatus?: string;
+  displayUnits?: Readonly<Record<string, string>>;
   fitRequest?: number;
+  initialRange?: ChartValueRange | null;
   onPointSelect?: (point: ChartCursorPoint) => void;
   onRangeChange?: (range: ChartValueRange) => void;
   presentation?: ChartDataPresentationState;
@@ -47,7 +49,9 @@ export function EChartsSurface({
   bus,
   chartId,
   dataStatus,
+  displayUnits,
   fitRequest,
+  initialRange,
   onPointSelect,
   onRangeChange,
   presentation,
@@ -57,8 +61,8 @@ export function EChartsSurface({
   const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
   const surface = useMemo(
-    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation),
-    [dataStatus, presentation, series, xAxisLabel],
+    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits),
+    [chartId, dataStatus, displayUnits, presentation, series, xAxisLabel],
   );
 
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
@@ -91,6 +95,7 @@ export function EChartsSurface({
         setOption: recordChartSetOption,
       }}
       fitRequest={fitRequest}
+      initialRange={initialRange}
       presentation={presentation}
       requestedExportFormat={requestedExportFormat}
       series={series}
@@ -117,10 +122,12 @@ function analysisChartSurfaceIdentity(
   xAxisLabel: string | undefined,
   dataStatus: string | undefined,
   presentation: ChartDataPresentationState | undefined,
+  chartId?: string,
+  displayUnits?: Readonly<Record<string, string>>,
 ): InteractiveChartSurfaceIdentity {
   return {
     ariaLabel: "Analysis chart",
-    chartId: JSON.stringify([
+    chartId: chartId ?? JSON.stringify([
       xAxisLabel ?? "x",
       presentation?.kind ?? dataStatus ?? "ready",
       ...series.map((item) => [item.id, item.points.length, item.points.at(-1)?.rowIndex]),
@@ -135,6 +142,10 @@ function analysisChartSurfaceIdentity(
       dataRevision: series[0]?.dataRevision ?? null,
       decimation: "minmax_lttb",
       descriptorId: `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
+      displayUnits: Object.fromEntries(series.flatMap((item) => {
+        const unit = displayUnits?.[item.quantity];
+        return unit ? [[`y:${item.id}`, unit]] : [];
+      })),
       query: JSON.stringify({ xAxisLabel, series: series.map((item) => item.id) }),
       resourceKey: series[0]?.source.resourceKey ?? "data.table:default",
     },

@@ -6,17 +6,20 @@ This closure removes the remaining legacy Analysis chart boundary and makes the 
 
 ## Delivered contract
 
-- Frequency-domain child resources remain disabled while the manifest is loading or unresolved. After a ready manifest resolves a route, only the resource matching the active Analysis surface can load; a route/surface mismatch is explicit `unsupported` with no chart series.
-- Analysis export requests use the same `surface:dataset` chart identity accepted by the mounted ECharts owner. A request addressed to another chart is ignored.
-- Comparison stores semantic `quantity|unit` keys, never either table's full series IDs. Each comparison pane derives its own IDs; initial compatible quantities are selected, and an explicit empty selection is preserved.
+- Frequency-domain child resources remain disabled while the manifest is loading or unresolved. After a ready manifest resolves a route, only the resource matching the active Analysis surface can load; a route/surface mismatch or a missing required artifact is explicit `unsupported` with no chart series.
+- Analysis export requests use the mounted chart identity. Dataset charts use `surface:dataset`; frequency-domain charts use `surface:artifact-resource`; and comparison uses a focused primary or secondary pane identity. A request addressed to another chart is ignored.
+- Comparison stores semantic `quantity|unit` keys, never either table's full series IDs. Dataset B remains replaceable and explicitly clearable after selection. Each pane derives its own IDs; initial compatible quantities are selected, and an explicit empty selection is preserved. B's loading, error, and unsupported state is rendered directly rather than misreported as incompatibility.
+- Persisted Analysis ranges now drive the shared ECharts `dataZoom` at mount/remount and interaction persists SI bounds back to the descriptor. Persisted display-unit preferences are passed through the shared chart contract and are applied only for compatible unit conversions.
 - The Analysis Inspector reads `analysisWorkspace` plus Analysis V2 preferences. It reports the selected dataset, surface, range, axes, and series, and no longer exposes Live Chart follow/pause controls.
 - The unused Analysis workspace, legacy Analysis preferences, and Analysis energy surface were removed. Live Charts retain their separate preferences and controls.
 - Gamma and DSF expose their resource schema revision; hysteresis shows the actual points-resource revision or `revision unavailable` when the resource has no revision.
 
 ## Evidence
 
-- Focused Control Room gate: 13 files, 96 tests passed.
+- Focused Control Room gate: 16 files, 118 tests passed.
 - `corepack pnpm --dir apps/control-room typecheck` passed.
+- `corepack pnpm --dir apps/control-room audit:compute-performance` passed.
+- Browser `smoke:analysis-plots` passed with the host browser runtime. The sandboxed browser cannot launch Chromium in this environment, so the final smoke was run outside that sandbox.
 - Negative scan found no legacy Analysis workspace/preferences/energy-surface imports and no `following`/`paused` wording in the Analysis Inspector.
 - `git diff --check` passed.
 
