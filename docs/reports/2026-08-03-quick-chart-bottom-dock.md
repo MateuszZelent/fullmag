@@ -33,10 +33,23 @@ behavior.
   descriptor contract.
 - Point clicks publish a small semantic chart-point selection with source
   `transport-footer`; they do not trigger field, topology, or viewport work.
+- Quick Chart fails closed when any selected full series identity is absent
+  from the published schema. It does not fetch or render an available subset.
+- The compact renderer accepts at most two compatible y-axis unit groups.
+  Compatible scales such as `J` and `pJ` share one group; a third physical
+  dimension produces an explicit unsupported state with no partially mapped
+  series. Values from compatible raw scales are converted into the group's
+  representative raw unit before the shared display-unit transform runs.
+- Clearing a pinned range on an already mounted renderer performs one explicit
+  fit-to-data action. Stable `null` range renders do not repeat that action and
+  the separate explicit fit-request contract remains unchanged.
 
 ## Evidence
 
 - Task 9 focused regression gate: 71 files, 553 tests passed.
+- Fail-closed follow-up TDD gate: 3 files, 19 tests passed; the five new
+  assertions were red before the implementation change.
+- Fail-closed follow-up regression gate: 69 files, 538 tests passed.
 - `corepack pnpm --dir apps/control-room typecheck` passed.
 - `git diff --check` passed.
 - Architecture scans found no new `yAxisIds` writes, no Analysis/Live/private

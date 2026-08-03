@@ -137,4 +137,35 @@ describe("QuickChartResourceView", () => {
       dom.restore();
     }
   });
+
+  it("does not request or render a partial chart when one selected signal is unpublished", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const kernel = { selection: { set: vi.fn() } } as unknown as KernelApi;
+    try {
+      quickChartWorkspaceStore.pin({
+        chartId: "dynamics:default",
+        displayUnits: {},
+        range: null,
+        selectedSeriesIds: [
+          "data.table:default:step:mx",
+          "data.table:default:step:my",
+        ],
+        tableId: "default",
+        xAxisId: "step",
+      });
+      await act(async () => {
+        root.render(<KernelContext.Provider value={kernel}><QuickChartResourceView /></KernelContext.Provider>);
+      });
+
+      expect(resources.rows).toHaveBeenLastCalledWith("default", expect.objectContaining({ enabled: false }));
+      expect(container.textContent).toContain("my");
+      expect(container.textContent).not.toContain("data.table:default:step:mx");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

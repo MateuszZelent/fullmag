@@ -18,6 +18,7 @@ import { QuickChartView } from "./QuickChartView";
 import {
   buildQuickChartRenderModel,
   quickChartColumnIdsForQuery,
+  quickChartUnavailableSeriesIds,
 } from "./quickChart";
 
 export function QuickChartResourceView() {
@@ -35,13 +36,17 @@ export function QuickChartResourceView() {
     () => quickChartColumnIdsForQuery(tableColumns.data, descriptor),
     [descriptor, tableColumns.data],
   );
+  const unavailableSeriesIds = useMemo(
+    () => quickChartUnavailableSeriesIds(tableColumns.data, descriptor),
+    [descriptor, tableColumns.data],
+  );
   const query = useMemo(
     () => buildSharedAnalysisTableQuery({ columns: queryColumns }),
     [queryColumns],
   );
   const rows = useTableRowsBinaryResource(tableId, {
     ...query,
-    enabled: queryColumns.length > 0,
+    enabled: queryColumns.length > 0 && unavailableSeriesIds.length === 0,
   });
   const window = useMemo(() => {
     const decoded = rows.data;
@@ -59,6 +64,8 @@ export function QuickChartResourceView() {
       ? "ready"
     : tableColumns.status === "error"
     ? "error"
+    : tableColumns.status === "ready" && unavailableSeriesIds.length > 0
+      ? "unsupported"
     : tableColumns.status === "ready" &&
         descriptor.selectedSeriesIds.length > 0 && queryColumns.length === 0
       ? "unsupported"
@@ -76,6 +83,7 @@ export function QuickChartResourceView() {
       xAxisId: "x",
     },
     status: resourceStatus,
+    unavailableSeriesIds,
     window,
   });
 

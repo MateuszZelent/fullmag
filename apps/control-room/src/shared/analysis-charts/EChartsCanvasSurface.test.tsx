@@ -210,4 +210,37 @@ describe("EChartsCanvasSurface", () => {
     await act(async () => secondRoot.unmount());
     dom.restore();
   });
+
+  it("fits exactly once when a mounted pinned range is cleared", async () => {
+    const dom = installSimulationPreparationTestDom();
+    globalThis.getComputedStyle = (() => ({
+      direction: "ltr",
+      getPropertyValue: () => "",
+    })) as unknown as typeof getComputedStyle;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(<EChartsCanvasSurface initialRange={{ fromValue: 2, toValue: 8 }} model={dummyModel} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const instance = echarts.init.mock.results.at(-1)?.value;
+    instance?.dispatchAction.mockClear();
+
+    await act(async () => {
+      root.render(<EChartsCanvasSurface initialRange={null} model={dummyModel} />);
+    });
+    expect(instance?.dispatchAction).toHaveBeenCalledTimes(1);
+    expect(instance?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 });
+
+    await act(async () => {
+      root.render(<EChartsCanvasSurface initialRange={null} model={dummyModel} />);
+    });
+    expect(instance?.dispatchAction).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
 });

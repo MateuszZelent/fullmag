@@ -57,6 +57,7 @@ export function EChartsCanvasSurface({
   const elementRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef(model);
   const initialRangeRef = useRef(initialRange);
+  const previousInitialRangeRef = useRef(initialRange);
   const ownerRef = useRef<ChartRendererOwner | null>(null);
   const tokensRef = useRef<FullmagChartTokens | null>(null);
   const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick });
@@ -175,7 +176,13 @@ export function EChartsCanvasSurface({
     if (fitRequest > 0) ownerRef.current?.fitView();
   }, [fitRequest]);
   useEffect(() => {
-    if (initialRange) ownerRef.current?.setRange(initialRange.fromValue, initialRange.toValue);
+    const previousRange = previousInitialRangeRef.current;
+    if (initialRange) {
+      ownerRef.current?.setRange(initialRange.fromValue, initialRange.toValue);
+    } else if (previousRange) {
+      ownerRef.current?.fitView();
+    }
+    previousInitialRangeRef.current = initialRange;
   }, [initialRange]);
 
   const hasRenderableData = model.series.some((series) => series.points.length > 0);

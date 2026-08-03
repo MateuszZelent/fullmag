@@ -59,6 +59,133 @@ describe("Quick Chart", () => {
     expect(model.statusMessage).toContain("not available");
   });
 
+  it("fails closed when any selected full series identity is absent from the published window", () => {
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "mx", label: "mx", unit: "1" },
+      ],
+      decoded: {
+        columnCount: 2,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 4,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 0.10317]),
+      },
+      tableId: "default",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        ...descriptor,
+        selectedSeriesIds: [seriesId, "data.table:default:step:my"],
+      },
+      status: "ready",
+      window,
+    });
+
+    expect(model.status).toBe("unsupported");
+    expect(model.statusMessage).toContain("my");
+    expect(model.series).toEqual([]);
+  });
+
+  it("rejects three incompatible y-axis unit groups instead of mapping the third to axis zero", () => {
+    const selectedSeriesIds = [
+      "data.table:mixed:step:mx",
+      "data.table:mixed:step:e_total",
+      "data.table:mixed:step:H",
+    ];
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "mx", label: "mx", unit: "1" },
+        { column_id: "e_total", label: "Energy", unit: "J" },
+        { column_id: "H", label: "Field", unit: "A/m" },
+      ],
+      decoded: {
+        columnCount: 4,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 8,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 0.1, 2e-12, 1000]),
+      },
+      tableId: "mixed",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        chartId: "mixed",
+        displayUnits: { e_total: "pJ", H: "kA/m" },
+        range: null,
+        resourceKey: "data.table:mixed",
+        selectedSeriesIds,
+        tableId: "mixed",
+        xAxisId: "step",
+      },
+      status: "ready",
+      window,
+    });
+
+    expect(model.status).toBe("unsupported");
+    expect(model.statusMessage).toContain("at most two");
+    expect(model.series).toEqual([]);
+  });
+
+  it("groups compatible raw and display units on one axis before enforcing the dual-axis limit", () => {
+    const selectedSeriesIds = [
+      "data.table:compatible:step:e_total",
+      "data.table:compatible:step:e_demag",
+      "data.table:compatible:step:H",
+    ];
+    const window = chartTableWindowFromBinary({
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "e_total", label: "Total", unit: "J" },
+        { column_id: "e_demag", label: "Demag", unit: "pJ" },
+        { column_id: "H", label: "Field", unit: "A/m" },
+      ],
+      decoded: {
+        columnCount: 4,
+        cursorEnd: 1,
+        cursorStart: 1,
+        resyncRequired: false,
+        revision: 9,
+        rowCount: 1,
+        schemaRevision: 1,
+        totalRows: 1,
+        values: new Float64Array([1, 2e-12, 2, 1000]),
+      },
+      tableId: "compatible",
+    });
+    const model = buildQuickChartRenderModel({
+      descriptor: {
+        chartId: "compatible",
+        displayUnits: { e_total: "pJ", e_demag: "pJ", H: "kA/m" },
+        range: null,
+        resourceKey: "data.table:compatible",
+        selectedSeriesIds,
+        tableId: "compatible",
+        xAxisId: "step",
+      },
+      status: "ready",
+      window,
+    });
+
+    expect(model.status).toBe("ready");
+    expect(model.yAxes).toHaveLength(2);
+    expect(model.series.map((entry) => entry.yAxis)).toEqual([0, 0, 1]);
+    expect(model.series[1]).toMatchObject({
+      points: [{ rowIndex: 0, x: 1, y: 2e-12 }],
+      unit: "J",
+    });
+  });
+
   it("keeps an explicit zero-series selection as a stable local empty state", () => {
     const model = buildQuickChartRenderModel({
       descriptor: { ...descriptor, selectedSeriesIds: [] },
