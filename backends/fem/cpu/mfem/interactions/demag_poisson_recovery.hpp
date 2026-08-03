@@ -39,7 +39,8 @@ bool recover_demag_poisson_field(
     double &demag_energy,
     const std::vector<double> &m_xyz,
     uint64_t *energy_wall_time_ns,
-    std::string &error);
+    std::string &error,
+    const mfem::Vector *assembled_rhs = nullptr);
 #endif
 
 } // namespace fullmag::fem

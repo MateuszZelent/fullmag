@@ -169,6 +169,11 @@ bool initialize_demag_poisson_hypre_device_solver(
     }
     ensure_mpi_initialized();
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
+    if (ctx.gpu_state.device.demag_poisson.scalar_dof_count !=
+        static_cast<uint64_t>(glob_size)) {
+        error = "GPU Poisson scalar buffer size does not match the Hypre operator";
+        return false;
+    }
     workspace.row_starts[0] = 0;
     workspace.row_starts[1] = glob_size;
     workspace.A_par = std::make_unique<mfem::HypreParMatrix>(

@@ -53,8 +53,15 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
             return false;
         }
 
+        // The micromagnetic state remains nodal P1.  Open-boundary Poisson
+        // demag uses an independent quadratic scalar-potential space so edge
+        // DOFs can resolve the thin-film surface charge.  The legacy static
+        // periodic reduction is node-class based and therefore remains P1
+        // until periodic P2 equivalence classes are implemented explicitly.
+        const int potential_order =
+            demag_periodic_poisson_reduction_requested(ctx) ? 1 : 2;
         auto *potential_fec = new mfem::H1_FECollection(
-            static_cast<int>(ctx.base_plan.fe_order),
+            potential_order,
             mesh->Dimension());
         auto *potential_fes = new mfem::FiniteElementSpace(mesh, potential_fec);
 
@@ -70,6 +77,9 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
 
         ctx.poisson_demag.potential_fec = potential_fec;
         ctx.poisson_demag.potential_fes = potential_fes;
+        ctx.poisson_demag.potential_order = potential_order;
+        ctx.poisson_demag.potential_true_dof_count =
+            static_cast<uint64_t>(potential_fes->GetTrueVSize());
         ctx.poisson_demag.poisson_bilinear = poisson_bilinear;
         ctx.poisson_demag.gf_potential = gf_potential;
 
@@ -136,6 +146,10 @@ void context_destroy_poisson(Context &ctx)
     ctx.poisson_demag.poisson_bilinear = nullptr;
     ctx.poisson_demag.potential_fes = nullptr;
     ctx.poisson_demag.potential_fec = nullptr;
+    ctx.poisson_demag.potential_order = 0;
+    ctx.poisson_demag.potential_true_dof_count = 0;
+    ctx.poisson_demag.last_variational_energy_joules = 0.0;
+    ctx.poisson_demag.last_recovered_field_energy_joules = 0.0;
     ctx.poisson_demag.ess_tdof_list.clear();
     ctx.poisson_demag.ready = false;
 }

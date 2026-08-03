@@ -31,10 +31,10 @@ public:
 
     MagnetizationCoefficient(
         const Context &ctx_ref,
-        mfem::FiniteElementSpace *fes_ref)
+        mfem::FiniteElementSpace *source_fes_ref)
         : mfem::VectorCoefficient(3)
         , ctx_(ctx_ref)
-        , fes_(fes_ref)
+        , source_fes_(source_fes_ref)
     {
     }
 
@@ -68,10 +68,10 @@ public:
 
         thread_local EvalScratch scratch;
         mfem::Array<int> &dofs = scratch.dofs;
-        fes_->GetElementDofs(elem_no, dofs);
+        source_fes_->GetElementDofs(elem_no, dofs);
         const int ndof = dofs.Size();
 
-        const mfem::FiniteElement *fe = fes_->GetFE(elem_no);
+        const mfem::FiniteElement *fe = source_fes_->GetFE(elem_no);
         mfem::Vector &shape = scratch.shape;
         shape.SetSize(ndof);
         fe->CalcShape(ip, shape);
@@ -119,15 +119,18 @@ public:
 private:
     const Context &ctx_;
     const std::vector<double> *m_xyz_ = nullptr;
-    mfem::FiniteElementSpace *fes_;
+    mfem::FiniteElementSpace *source_fes_;
 };
 
 struct PoissonRhsWorkspace {
-    PoissonRhsWorkspace(Context &ctx, mfem::FiniteElementSpace *fes)
-        : fes(fes)
-        , m_coeff(ctx, fes)
-        , rhs_form(fes)
-        , rhs_true(fes->GetTrueVSize())
+    PoissonRhsWorkspace(
+        Context &ctx,
+        mfem::FiniteElementSpace *potential_fes,
+        mfem::FiniteElementSpace *source_fes)
+        : fes(potential_fes)
+        , m_coeff(ctx, source_fes)
+        , rhs_form(potential_fes)
+        , rhs_true(potential_fes->GetTrueVSize())
     {
         rhs_form.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(m_coeff));
     }
@@ -147,7 +150,13 @@ bool initialize_demag_poisson_rhs_workspace(
     std::string &error)
 {
     try {
-        auto *rhs_workspace = new PoissonRhsWorkspace(ctx, &fes);
+        auto *source_fes = static_cast<mfem::FiniteElementSpace *>(
+            ctx.mfem_context.fes);
+        if (source_fes == nullptr) {
+            error = "Poisson RHS requires the base magnetization FE space";
+            return false;
+        }
+        auto *rhs_workspace = new PoissonRhsWorkspace(ctx, &fes, source_fes);
         ctx.poisson_demag.rhs_workspace = rhs_workspace;
         ctx.poisson_demag.rhs_form = &rhs_workspace->rhs_form;
         ctx.poisson_demag.rhs_vec = &rhs_workspace->rhs_true;
@@ -192,6 +201,13 @@ bool assemble_demag_poisson_rhs(
     }
 
     mfem::FiniteElementSpace *fes = workspace->fes;
+    auto *source_fes = static_cast<mfem::FiniteElementSpace *>(
+        ctx.mfem_context.fes);
+    if (source_fes == nullptr ||
+        m_xyz.size() != 3u * static_cast<size_t>(source_fes->GetNDofs())) {
+        error = "Poisson RHS magnetization extent does not match the base P1 state space";
+        return false;
+    }
     mfem::LinearForm &b = workspace->rhs_form;
     mfem::Vector &rhs_true = workspace->rhs_true;
     workspace->m_coeff.SetMagnetization(m_xyz);

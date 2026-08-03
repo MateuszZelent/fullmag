@@ -16,6 +16,10 @@
 #include <cmath>
 #include <limits>
 
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
 namespace fullmag::fem {
 
 double demag_poisson_energy_from_field(
@@ -72,6 +76,18 @@ double demag_poisson_cached_energy_from_field(
 {
     return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads);
 }
+
+#if FULLMAG_HAS_MFEM_STACK
+double demag_poisson_energy_from_rhs_potential(
+    const mfem::Vector &rhs,
+    const mfem::Vector &potential)
+{
+    if (rhs.Size() != potential.Size()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return 0.5 * kMu0 * (rhs * potential);
+}
+#endif
 
 relaxation::EnergyDifference demag_poisson_energy_difference_from_endpoint_fields(
     const Context &ctx,

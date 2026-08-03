@@ -90,6 +90,9 @@ void demag_phi_snapshot_contract_is_declared() {
         state_io.find("copy_demag_phi_observable_f64") != std::string::npos &&
             state_io.find("gf_potential") != std::string::npos,
         "state I/O must copy demag phi from the MFEM scalar-potential grid function");
+    check(
+        state_io.find("potential->GetNodalValues(nodal_values)") != std::string::npos,
+        "P2 demag phi snapshots must evaluate the scalar potential at mesh vertices");
 }
 
 void gpu_snapshot_preserves_full_domain_observable_fields() {

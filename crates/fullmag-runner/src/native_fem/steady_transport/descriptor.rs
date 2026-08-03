@@ -221,15 +221,22 @@ fn resolved_fem_descriptor_contradiction(
         || descriptor.charge_conductivity_spm_per_element.len() != mesh.cell_count()
         || descriptor.charge_domain.element_mask.len() != mesh.cell_count()
         || descriptor.spin_domain.element_mask.len() != mesh.cell_count()
-        || descriptor.charge_domain.element_mask.iter().any(|selected| !selected)
-        || descriptor.spin_domain.element_mask.iter().any(|selected| !selected)
+        || descriptor
+            .charge_domain
+            .element_mask
+            .iter()
+            .any(|selected| !selected)
+        || descriptor
+            .spin_domain
+            .element_mask
+            .iter()
+            .any(|selected| !selected)
         || descriptor.torque_target.as_ref().is_some_and(|target| {
             target.element_mask.len() != mesh.cell_count()
                 || !target.element_mask.iter().any(|selected| *selected)
         })
-        || transport_boundary_attributes(descriptor).any(|attribute| {
-            attribute == 0 || !mesh.boundary_markers.contains(&attribute)
-        })
+        || transport_boundary_attributes(descriptor)
+            .any(|attribute| attribute == 0 || !mesh.boundary_markers.contains(&attribute))
         || descriptor.charge_solver.operator_version != "fem_charge_conforming_h1_p1.transparent.v1"
         || descriptor.charge_solver.physical_residual_version != "charge_balance_integrated_l2.v1"
         || descriptor.spin_solver.operator_version != resolved.operator_version
@@ -262,6 +269,16 @@ fn transport_boundary_attributes(
         .iter()
         .chain(&descriptor.spin_insulating_boundaries)
         .flat_map(|set| set.boundary_attributes.iter().copied())
-        .chain(descriptor.charge_dirichlet.iter().map(|(attribute, _)| *attribute))
-        .chain(descriptor.spin_dirichlet.iter().map(|(attribute, _)| *attribute))
+        .chain(
+            descriptor
+                .charge_dirichlet
+                .iter()
+                .map(|(attribute, _)| *attribute),
+        )
+        .chain(
+            descriptor
+                .spin_dirichlet
+                .iter()
+                .map(|(attribute, _)| *attribute),
+        )
 }

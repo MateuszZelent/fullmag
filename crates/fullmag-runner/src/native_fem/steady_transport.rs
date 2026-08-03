@@ -454,9 +454,9 @@ pub(crate) fn solve_native_fem_steady_transport(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::descriptor::materialize_native_fem_steady_transport_request;
     use super::provenance::transport_provenance;
+    use super::*;
     use fullmag_ir::{
         BackendTarget, ChargePotentialGaugeIR, ChargeSolverPolicyIR, ExecutionDevice,
         ExecutionMode, ExecutionPrecision, LinearTransportSolverPolicyIR,
@@ -587,12 +587,10 @@ mod tests {
                     element_mask: vec![true],
                 },
                 charge_insulating_boundaries: vec![],
-                spin_insulating_boundaries: vec![
-                    fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
-                        id: "default:spin_insulating".into(),
-                        boundary_attributes: vec![1],
-                    },
-                ],
+                spin_insulating_boundaries: vec![fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
+                    id: "default:spin_insulating".into(),
+                    boundary_attributes: vec![1],
+                }],
                 interfaces: vec![],
                 torque_target: None,
                 charge_conductivity_spm_per_element: vec![4.0],
@@ -768,7 +766,11 @@ mod tests {
             Ok(_) => panic!("quantity-scoped M1 publication must reject multiple modules"),
             Err(error) => error,
         };
-        assert!(error.message.contains("exactly one module"), "{}", error.message);
+        assert!(
+            error.message.contains("exactly one module"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
@@ -792,10 +794,19 @@ mod tests {
     #[test]
     fn resolved_descriptor_mesh_masks_and_boundary_attributes_fail_closed() {
         assert_descriptor_contradiction("charge mask must cover the native mesh", |plan| {
-            plan.fem_cpu_double.as_mut().unwrap().charge_domain.element_mask[0] = false;
+            plan.fem_cpu_double
+                .as_mut()
+                .unwrap()
+                .charge_domain
+                .element_mask[0] = false;
         });
         assert_descriptor_contradiction("spin mask must match the native mesh", |plan| {
-            plan.fem_cpu_double.as_mut().unwrap().spin_domain.element_mask.clear();
+            plan.fem_cpu_double
+                .as_mut()
+                .unwrap()
+                .spin_domain
+                .element_mask
+                .clear();
         });
         assert_descriptor_contradiction("conductivity must match the native mesh", |plan| {
             plan.fem_cpu_double
@@ -804,9 +815,12 @@ mod tests {
                 .charge_conductivity_spm_per_element
                 .push(4.0);
         });
-        assert_descriptor_contradiction("boundary attributes must exist on the native mesh", |plan| {
-            plan.fem_cpu_double.as_mut().unwrap().charge_dirichlet = vec![(99, 1.0)];
-        });
+        assert_descriptor_contradiction(
+            "boundary attributes must exist on the native mesh",
+            |plan| {
+                plan.fem_cpu_double.as_mut().unwrap().charge_dirichlet = vec![(99, 1.0)];
+            },
+        );
         assert_descriptor_contradiction("torque target must select native mesh elements", |plan| {
             let descriptor = plan.fem_cpu_double.as_mut().unwrap();
             descriptor.torque_target = Some(fullmag_ir::ResolvedFemTorqueTargetIR {
@@ -923,7 +937,13 @@ mod tests {
         assert_eq!(fields[3].component_count, 9);
         assert_eq!(fields[3].component_order, "row_major_Q_ia");
         assert!(fields.iter().all(|field| field.location == "node"));
-        assert_eq!(fields.iter().map(|field| field.revision).collect::<Vec<_>>(), [1, 2, 3, 4, 5]);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.revision)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5]
+        );
         assert!(fields
             .iter()
             .all(|field| field.scope == "transport_module:spin:full_solve_domain"));

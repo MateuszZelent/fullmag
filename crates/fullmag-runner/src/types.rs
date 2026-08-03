@@ -473,6 +473,14 @@ pub struct StepStats {
     #[serde(default)]
     pub demag_hypre_timed_solve_count: u64,
     #[serde(default)]
+    pub demag_potential_order: i32,
+    #[serde(default)]
+    pub demag_potential_true_dof_count: u64,
+    #[serde(default)]
+    pub demag_variational_energy_joules: f64,
+    #[serde(default)]
+    pub demag_recovered_field_energy_joules: f64,
+    #[serde(default)]
     pub demag_solver_setup_reused: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_solver: Option<String>,
@@ -796,6 +804,10 @@ impl Default for StepStats {
             demag_hypre_wait_out_enqueue_wall_time_ns: 0,
             demag_hypre_event_wait_count: 0,
             demag_hypre_timed_solve_count: 0,
+            demag_potential_order: 0,
+            demag_potential_true_dof_count: 0,
+            demag_variational_energy_joules: 0.0,
+            demag_recovered_field_energy_joules: 0.0,
             demag_solver_setup_reused: false,
             demag_solver: None,
             demag_preconditioner: None,
@@ -2619,6 +2631,14 @@ pub struct FemPoissonDemagProvenance {
     pub boundary_condition: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub robin_beta: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub potential_order: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub potential_true_dof_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variational_energy_joules: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovered_field_energy_joules: Option<f64>,
 }
 
 /// Records which engine and device produced a run.
@@ -3145,7 +3165,7 @@ mod tests {
         normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
         reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
         FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
-        LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
+        FemPoissonDemagProvenance, LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
         ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate, TimestepBackend,
         TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
         TimestepValidationState,
@@ -3752,5 +3772,40 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("both legacy and v2 topology"));
+    }
+
+    #[test]
+    fn demag_diagnostics_default_when_deserializing_old_json() {
+        let mut step_json = serde_json::to_value(StepStats::default()).unwrap();
+        let step_object = step_json.as_object_mut().unwrap();
+        for field in [
+            "demag_potential_order",
+            "demag_potential_true_dof_count",
+            "demag_variational_energy_joules",
+            "demag_recovered_field_energy_joules",
+        ] {
+            step_object.remove(field);
+        }
+        let step: StepStats = serde_json::from_value(step_json).unwrap();
+        assert_eq!(step.demag_potential_order, 0);
+        assert_eq!(step.demag_potential_true_dof_count, 0);
+        assert_eq!(step.demag_variational_energy_joules, 0.0);
+        assert_eq!(step.demag_recovered_field_energy_joules, 0.0);
+
+        let provenance: FemPoissonDemagProvenance = serde_json::from_value(serde_json::json!({
+            "linear_solver": "CG",
+            "preconditioner": "AMG",
+            "rtol": 1.0e-8,
+            "max_iterations": 500,
+            "actual_iterations": 13,
+            "final_residual": 4.0e-9,
+            "boundary_condition": "robin",
+            "robin_beta": 2.5
+        }))
+        .unwrap();
+        assert_eq!(provenance.potential_order, None);
+        assert_eq!(provenance.potential_true_dof_count, None);
+        assert_eq!(provenance.variational_energy_joules, None);
+        assert_eq!(provenance.recovered_field_energy_joules, None);
     }
 }

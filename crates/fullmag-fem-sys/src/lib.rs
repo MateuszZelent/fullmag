@@ -813,6 +813,10 @@ pub struct fullmag_fem_step_stats {
     pub demag_hypre_wait_out_enqueue_wall_time_ns: u64,
     pub demag_hypre_event_wait_count: u64,
     pub demag_hypre_timed_solve_count: u64,
+    pub demag_potential_order: i32,
+    pub demag_potential_true_dof_count: u64,
+    pub demag_variational_energy_joules: f64,
+    pub demag_recovered_field_energy_joules: f64,
 }
 
 pub const FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION: u32 = 1;
@@ -2071,6 +2075,27 @@ mod tests {
             layout.step_stats_demag_hypre_timed_solve_count_offset as usize,
             std::mem::offset_of!(fullmag_fem_step_stats, demag_hypre_timed_solve_count)
         );
+        let former_tail_offset =
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_hypre_timed_solve_count);
+        assert_eq!(former_tail_offset, 528);
+        assert!(
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_potential_order)
+                > former_tail_offset
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_potential_true_dof_count)
+                > former_tail_offset
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_variational_energy_joules)
+                > former_tail_offset
+        );
+        assert!(
+            std::mem::offset_of!(
+                fullmag_fem_step_stats,
+                demag_recovered_field_energy_joules
+            ) > former_tail_offset
+        );
     }
 
     /// Verify plan desc contains the use_consistent_mass field (FND-013).
@@ -2993,6 +3018,10 @@ mod tests {
         assert_eq!(stats.demag_amg_strength_threshold_is_set, 0);
         assert_eq!(stats.demag_amg_max_levels, 0);
         assert_eq!(stats.demag_amg_max_levels_is_set, 0);
+        assert_eq!(stats.demag_potential_order, 0);
+        assert_eq!(stats.demag_potential_true_dof_count, 0);
+        assert_eq!(stats.demag_variational_energy_joules, 0.0);
+        assert_eq!(stats.demag_recovered_field_energy_joules, 0.0);
     }
 
     #[test]

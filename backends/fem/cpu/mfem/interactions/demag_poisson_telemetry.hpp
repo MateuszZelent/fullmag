@@ -37,6 +37,10 @@ struct DemagPoissonCallProfile {
     uint64_t energy_wall_time_ns = 0;
     int linear_iterations = 0;
     double linear_residual = 0.0;
+    int potential_order = 0;
+    uint64_t potential_true_dof_count = 0;
+    double variational_energy_joules = 0.0;
+    double recovered_field_energy_joules = 0.0;
 };
 
 /*

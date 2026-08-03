@@ -143,14 +143,27 @@ int copy_demag_phi_observable_f64(
         error = "demag scalar-potential output length mismatch";
         return FULLMAG_FEM_ERR_INVALID;
     }
-    if (potential->Size() != static_cast<int>(expected_len)) {
-        error = "demag scalar-potential size mismatch: expected " +
-                std::to_string(expected_len) + " but field has " +
-                std::to_string(potential->Size()) + " values";
-        return FULLMAG_FEM_ERR_INVALID;
+    if (potential->Size() == static_cast<int>(expected_len)) {
+        const double *source = audited_host_read(*potential);
+        std::memcpy(out, source, static_cast<size_t>(sizeof(double) * out_len));
+    } else {
+        // demag_phi is a mesh-vertex observable.  The nonperiodic production
+        // solve may use a P2 scalar-potential space with edge DOFs, so export
+        // its values at the P1 state/mesh vertices instead of leaking the
+        // solver's true-DOF layout through the snapshot ABI.
+        mfem::Vector nodal_values;
+        potential->GetNodalValues(nodal_values);
+        if (nodal_values.Size() != static_cast<int>(expected_len)) {
+            error = "demag scalar-potential nodal projection size mismatch: expected " +
+                    std::to_string(expected_len) + " but projection has " +
+                    std::to_string(nodal_values.Size()) + " values";
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        std::memcpy(
+            out,
+            nodal_values.Read(),
+            static_cast<size_t>(sizeof(double) * out_len));
     }
-    const double *source = audited_host_read(*potential);
-    std::memcpy(out, source, static_cast<size_t>(sizeof(double) * out_len));
     record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * out_len);
     return FULLMAG_FEM_OK;
 }
