@@ -93,10 +93,10 @@ export function useAnalysisFrequencyData(
     enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "modal-spectrum",
   });
   const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
-    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
-    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
     enabled: loadFrequency && !surfaceMismatch && frequencyDomainRoute.primaryChart === "response-sweep",
@@ -129,6 +129,7 @@ export function useAnalysisFrequencyData(
   );
 
   const frequencyDomainSeries = useMemo<ChartSeries[]>(() => {
+    if (surfaceMismatch) return [];
     switch (frequencyDomainRoute.primaryChart) {
       case "dispersion":
         return frequencyDomainChartSeriesForAnalysisPlots(
@@ -152,6 +153,7 @@ export function useAnalysisFrequencyData(
     frequencyDomainRoute.primaryChart,
     frequencyDomainResponseModel,
     frequencyDomainSpectrumModel,
+    surfaceMismatch,
   ]);
 
   const frequencyDomainResourceStatus =

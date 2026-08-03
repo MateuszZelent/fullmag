@@ -19,6 +19,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const activeSurface = useAnalysisWorkspaceSelector((state) => state.activeSurface);
   const selectedDatasetRef = useAnalysisWorkspaceSelector((state) => state.selectedDatasetRef);
   const comparisonDatasetRef = useAnalysisWorkspaceSelector((state) => state.comparisonDatasetRef);
+  const hasChartState = useAnalysisWorkspaceSelector((state) => state.hasChartState);
+  const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
+  const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId);
   const preferences = useAnalysisViewPreferencesHydration();
   const applied = useRef(false);
   useEffect(() => {
@@ -41,6 +44,17 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     [activeSurface, selectedDatasetRef],
   );
   const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
+  useEffect(() => {
+    if (!selectedDatasetRef || !dataset.visibleTable || hasChartState) return;
+    const xAxisId = dataset.visibleTable.columns[0]?.column_id ?? "x";
+    const defaultSeriesIds = dataset.visibleTable.columns.slice(1).map(
+      (column) => `data.table:${dataset.visibleTable!.tableId}:${xAxisId}:${column.column_id}`,
+    );
+    analysisWorkspaceStore.setChartState(
+      xAxisId,
+      descriptor ? descriptor.selectedSeriesIds : defaultSeriesIds,
+    );
+  }, [dataset.visibleTable, descriptor, hasChartState, selectedDatasetRef]);
   return {
     activeSurface,
     datasetRefs: dataset.tableList.data?.tables.map((table) => table.table_id) ?? [],
@@ -58,12 +72,12 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     comparisonVisibleRevision: comparisonDataset.visibleRevision,
     selectedStageId,
     surfaceProvenance: {
-      dispersion: dynamicStructureFactor.data ? "dynamic-structure-factor" : undefined,
+      dispersion: dynamicStructureFactor.data ? `${dynamicStructureFactor.data.artifact_ref} · revision ${dynamicStructureFactor.data.schema_version}` : undefined,
       hysteresis: selectedStageId ? `hysteresis · ${selectedStageId}` : undefined,
-      spectrum: gamma.data ? "spin-wave-gamma" : undefined,
+      spectrum: gamma.data ? `spin-wave-gamma · revision ${gamma.data.schema_version}` : undefined,
     },
     selectedPoint,
-    selectedSeriesIds: descriptor?.selectedSeriesIds ?? [],
+    selectedSeriesIds,
     range: descriptor?.range ? { fromValue: descriptor.range.fromSI, toValue: descriptor.range.toSI } : null,
     setActiveSurface: (surface: typeof activeSurface) => {
       preferences.setActiveSurface(surface);
@@ -76,6 +90,17 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setComparisonDatasetRef: (datasetRef: string | null) => analysisWorkspaceStore.setComparisonDatasetRef(datasetRef),
     onPointSelect: (point: AnalysisChartCursorPoint) => {
       setSelectedPoint(point);
+      if (activeSurface === "frequency-response" || activeSurface === "eigenmodes") {
+        const mapped = frequencyDomainSelectionFromPoint({
+          dispersionModel: frequency.frequencyDomainDispersionModel,
+          point,
+          responseModel: frequency.frequencyDomainResponseModel,
+          routeMode: frequency.frequencyDomainRoute.mode,
+          spectrumModel: frequency.frequencyDomainSpectrumModel,
+        });
+        kernel.selection.set(mapped, "analysis-plots");
+        return;
+      }
       const nodeId = `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
       kernel.selection.set({
         kind: "analysis.chart-point",
@@ -97,13 +122,14 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       }, "analysis-plots");
     },
     onRangeChange: (range: ChartValueRange) => preferences.setDescriptorPreference(descriptorId, { range: { fromSI: range.fromValue, toSI: range.toValue } }),
-    onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => preferences.setDescriptorPreference(descriptorId, { selectedSeriesIds }),
+    onSelectedSeriesIdsChange: (nextSelectedSeriesIds: string[]) => { preferences.setDescriptorPreference(descriptorId, { selectedSeriesIds: nextSelectedSeriesIds }); analysisWorkspaceStore.setChartState(dataset.visibleTable?.columns[0]?.column_id ?? "x", nextSelectedSeriesIds); },
     spinWaveGamma: gamma.data ?? null,
     spinWaveGammaStatus: gamma.status,
     table: dataset.visibleTable,
     tableStatus: dataset.rows.status,
     tableUnsupportedReason: dataset.unsupportedReason,
     visibleDatasetRevision: dataset.visibleRevision,
+    xAxisId,
   };
 }
 

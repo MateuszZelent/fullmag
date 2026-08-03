@@ -8,5 +8,5 @@ export { AnalysisPlotsView } from "./AnalysisPlotsView";
 
 export default function AnalysisPlotsModule({ kernel }: ModuleProps) {
   const controller = useAnalysisPlotsController(kernel);
-  return <AnalysisPlotsView kernel={kernel} {...controller} onDatasetRefChange={controller.setSelectedDatasetRef} onSurfaceChange={controller.setActiveSurface} />;
+  return <AnalysisPlotsView kernel={kernel} {...controller} onComparisonDatasetRefChange={controller.setComparisonDatasetRef} onDatasetRefChange={controller.setSelectedDatasetRef} onSurfaceChange={controller.setActiveSurface} />;
 }

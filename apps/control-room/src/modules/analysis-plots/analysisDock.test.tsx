@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resetAnalysisPlotsWorkspaceForTests } from "@/kernel/workspace/analysisPlotsWorkspace";
+import { analysisWorkspaceStore, resetAnalysisWorkspaceForTests } from "@/kernel/workspace/analysisWorkspace";
 import {
   quickChartWorkspaceStore,
   resetQuickChartWorkspaceForTests,
@@ -10,7 +10,7 @@ import {
 import { analysisPlotsManifest } from "./manifest";
 
 afterEach(() => {
-  resetAnalysisPlotsWorkspaceForTests();
+  resetAnalysisWorkspaceForTests();
   resetQuickChartWorkspaceForTests();
 });
 
@@ -38,10 +38,12 @@ describe("pinned Quick Chart ownership", () => {
       selection: { set },
     };
 
+    analysisWorkspaceStore.setSelectedDatasetRef("table:run-7:stage-2:table-4");
+    analysisWorkspaceStore.setChartState("step", ["data.table:table:run-7:stage-2:table-4:step:mx"]);
     expect(command?.isEnabled?.(context as never)).toBe(true);
     expect(command?.run(context as never)).toEqual({ status: "completed" });
     expect(quickChartWorkspaceStore.getSnapshot().pinned).toEqual(
-      expect.objectContaining({ chartId: "default", tableId: "default" }),
+      expect.objectContaining({ chartId: "dynamics:table:run-7:stage-2:table-4", tableId: "table:run-7:stage-2:table-4", xAxisId: "step", yAxisIds: ["mx"] }),
     );
     expect(emit).toHaveBeenCalledWith("explorer:tab-requested", {
       source: "analysis-plots",
@@ -52,6 +54,19 @@ describe("pinned Quick Chart ownership", () => {
       "analysis-plots",
     );
     expect(setFocusedSlot).toHaveBeenCalledWith("panel-right");
+  });
+
+  it("refuses Quick Pin without an explicit Analysis dataset", () => {
+    const command = analysisPlotsManifest.contributes?.commands?.find((candidate) => candidate.id === "analysis-plots.quick-chart.open");
+    expect(command?.run({ layout: { get: () => ({ activeViewportMainModuleId: "viewport-3d" }) } } as never)).toEqual({ status: "failed", message: "Select a published Analysis dataset first." });
+  });
+
+  it("exports the explicit source chart identity", () => {
+    analysisWorkspaceStore.setSelectedDatasetRef("table:run-7:stage-2:table-4");
+    const emit = vi.fn();
+    const command = analysisPlotsManifest.contributes?.commands?.find((candidate) => candidate.id === "analysis-plots.export.csv");
+    expect(command?.run({ bus: { emit } } as never)).toEqual({ status: "completed" });
+    expect(emit).toHaveBeenCalledWith("analysis-plots:export-requested", { chartId: "dynamics:table:run-7:stage-2:table-4", format: "csv", source: "analysis-plots" });
   });
 
   it("does not expose Quick Chart as a footer tab", () => {

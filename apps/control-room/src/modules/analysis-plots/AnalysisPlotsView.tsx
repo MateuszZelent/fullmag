@@ -9,7 +9,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { buildScalarChartSeries } from "./chartTableModel";
 import { AnalysisFrequencySurface } from "./components/AnalysisFrequencySurface";
-import { AnalysisEnergySurface } from "./components/AnalysisEnergySurface";
 import { AnalysisSurfaceTabs } from "./components/AnalysisSurfaceTabs";
 import { AnalysisTableSurface } from "./components/AnalysisTableSurface";
 import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
@@ -20,9 +19,8 @@ import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartValueRange } from "./chartTableModel";
 
-type LegacySurface = "overview" | "energy" | "convergence" | "frequency";
 type AnalysisPlotsViewInput = {
-  activeSurface?: AnalysisSurface | LegacySurface;
+  activeSurface: AnalysisSurface;
   comparisonDatasetRef?: string | null;
   comparisonTable?: ChartTableWindow | null;
   comparisonVisibleRevision?: string | number | null;
@@ -41,7 +39,10 @@ type AnalysisPlotsViewInput = {
   onRangeChange?: (range: ChartValueRange) => void;
   onSelectedSeriesIdsChange?: (seriesIds: string[]) => void;
   onSurfaceChange?: (surface: AnalysisSurface) => void;
+  range?: ChartValueRange | null;
   selectedDatasetRef?: string | null;
+  selectedPoint?: AnalysisChartCursorPoint | null;
+  selectedSeriesIds?: readonly string[];
   selectedStageId?: string | null;
   surfaceProvenance?: Partial<Record<AnalysisSurface, string>>;
   spinWaveGamma?: Parameters<typeof SpinWaveGammaView>[0]["resource"];
@@ -49,19 +50,18 @@ type AnalysisPlotsViewInput = {
   table?: ChartTableWindow | null;
   tableStatus?: string;
   tableUnsupportedReason?: string | null;
-  [legacyProp: string]: unknown;
+  xAxisId?: string | null;
 };
 
 export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
-  const { activeSurface = "dynamics", comparisonDatasetRef = null, comparisonTable = null, comparisonVisibleRevision = null, datasetRefs = [], dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainProvenance = null, frequencyDomainSeries = [], frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onComparisonDatasetRefChange = () => undefined, onSurfaceChange = () => undefined, selectedDatasetRef = null, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = {}, table = null, tableStatus = "idle", tableUnsupportedReason = null } = props;
-  const legacy = props as { visibleTable?: ChartTableWindow | null; tableRowsStatus?: string; selectedSeriesIds?: readonly string[]; selectedPoint?: Parameters<typeof AnalysisTableSurface>[0]["selectedPoint"]; range?: Parameters<typeof AnalysisTableSurface>[0]["range"]; solverEnergySeries?: readonly ChartSeries[]; solverEnergyStatus?: string };
+  const { activeSurface, comparisonDatasetRef = null, comparisonTable = null, comparisonVisibleRevision = null, datasetRefs = [], dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainProvenance = null, frequencyDomainSeries = [], frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onComparisonDatasetRefChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = [], selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = {}, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
   const onPointSelect = props.onPointSelect ?? ignorePointSelection;
   const onRangeChange = props.onRangeChange ?? ignoreRangeSelection;
   const onSelectedSeriesIdsChange = props.onSelectedSeriesIdsChange ?? ignoreSeriesSelection;
-  const resolvedTable = table ?? legacy.visibleTable ?? null;
-  const resolvedDatasetRef = selectedDatasetRef ?? (legacy.visibleTable ? legacy.visibleTable.tableId : null);
-  const resolvedTableStatus = tableStatus === "idle" ? legacy.tableRowsStatus ?? tableStatus : tableStatus;
-  const surface: AnalysisSurface = activeSurface === "overview" || activeSurface === "convergence" ? "dynamics" : activeSurface === "energy" ? "spectrum" : activeSurface === "frequency" ? "frequency-response" : activeSurface;
+  const resolvedTable = table;
+  const resolvedDatasetRef = selectedDatasetRef;
+  const resolvedTableStatus = tableStatus;
+  const surface = activeSurface;
   const chartSeries = useMemo(() => {
     const rows = tableRowsLike(resolvedTable);
     return rows && resolvedTable ? buildScalarChartSeries(rows, {
@@ -72,7 +72,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
       yAxisIds: resolvedTable.columns.slice(1).map((column) => column.column_id),
     }) : [];
   }, [resolvedTable, resolvedTableStatus]);
-  const xAxisId = resolvedTable?.columns[0]?.column_id ?? "x";
+  const xAxisId = selectedXAxisId ?? resolvedTable?.columns[0]?.column_id ?? "x";
   const comparisonSeries = useMemo(() => {
     const rows = tableRowsLike(comparisonTable);
     return rows && comparisonTable ? buildScalarChartSeries(rows, {
@@ -102,14 +102,12 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
           <SelectContent>{datasetRefs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent>
         </Select>
       </header>
-      {surface === "dynamics" ? (datasetPrompt ?? <AnalysisTableSurface chartSeries={chartSeries} kernel={kernel} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={legacy.range ?? null} selectedPoint={legacy.selectedPoint ?? null} selectedSeriesIds={legacy.selectedSeriesIds ?? chartSeries.map((series) => series.id)} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} />) : null}
+      {surface === "dynamics" ? (datasetPrompt ?? <AnalysisTableSurface chartSeries={chartSeries} kernel={kernel} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} />) : null}
       {surface === "spectrum" ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
       {surface === "dispersion" ? <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
-      {surface === "frequency-response" || surface === "eigenmodes" ? <AnalysisFrequencySurface kernel={kernel} onPointSelect={onPointSelect} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} selectedPoint={legacy.selectedPoint ?? null} selectedSeriesIds={legacy.selectedSeriesIds ?? frequencyDomainSeries.map((series) => series.id)} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
+      {surface === "frequency-response" || surface === "eigenmodes" ? <AnalysisFrequencySurface kernel={kernel} onPointSelect={onPointSelect} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
       {surface === "hysteresis" ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
-      {surface === "comparison" ? (!resolvedDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a published dataset before comparison.</div> : !comparisonDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a second published dataset compatible with {resolvedDatasetRef} to compare series.<Select value="" onValueChange={(value) => onComparisonDatasetRefChange(value || null)}><SelectTrigger aria-label="Comparison dataset"><SelectValue placeholder="Select second dataset" /></SelectTrigger><SelectContent>{datasetRefs.filter((ref) => ref !== resolvedDatasetRef).map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></div> : <div className="fm-analysis-plots__comparison" role="status"><strong>Compatible series</strong><span>{resolvedDatasetRef} · revision {resolvedTable?.revision ?? "unknown"}</span><span>{comparisonDatasetRef} · revision {comparisonVisibleRevision ?? comparisonTable?.revision ?? "unknown"}</span>{compatibleSeries.length === 0 ? <span>No compatible quantity and unit series are published by both datasets.</span> : <span>{compatibleSeries.map((series) => `${series.quantity} (${series.unit})`).join(", ")}</span>}</div>) : null}
-      {activeSurface === "overview" && frequencyDomainSeries.length > 0 ? <AnalysisFrequencySurface kernel={kernel} onPointSelect={onPointSelect} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} selectedPoint={legacy.selectedPoint ?? null} selectedSeriesIds={legacy.selectedSeriesIds ?? frequencyDomainSeries.map((series) => series.id)} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
-      {activeSurface === "energy" && legacy.solverEnergySeries ? <AnalysisEnergySurface kernel={kernel} onPointSelect={onPointSelect} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} selectedSeriesIds={legacy.selectedSeriesIds ?? legacy.solverEnergySeries.map((series) => series.id)} series={legacy.solverEnergySeries} status={legacy.solverEnergyStatus ?? "idle"} /> : null}
+      {surface === "comparison" ? (!resolvedDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a published dataset before comparison.</div> : !comparisonDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a second published dataset compatible with {resolvedDatasetRef} to compare series.<Select value="" onValueChange={(value) => onComparisonDatasetRefChange(value || null)}><SelectTrigger aria-label="Comparison dataset"><SelectValue placeholder="Select second dataset" /></SelectTrigger><SelectContent>{datasetRefs.filter((ref) => ref !== resolvedDatasetRef).map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></div> : <div className="fm-analysis-plots__comparison"><strong>Compatible series</strong><span>{resolvedDatasetRef} · revision {resolvedTable?.revision ?? "unknown"}</span><span>{comparisonDatasetRef} · revision {comparisonVisibleRevision ?? comparisonTable?.revision ?? "unknown"}</span>{compatibleSeries.length === 0 ? <div role="status">No compatible quantity and unit series are published by both datasets.</div> : <div className="fm-analysis-plots__comparison-panes"><AnalysisTableSurface chartSeries={compatibleSeries} kernel={kernel} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={resolvedTableStatus} table={resolvedTable} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(compatibleSeries, xAxisId)} /><AnalysisTableSurface chartSeries={comparisonSeries.filter((right) => compatibleSeries.some((left) => left.quantity === right.quantity && left.unit === right.unit))} kernel={kernel} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status="ready" table={comparisonTable} xAxisId={comparisonTable?.columns[0]?.column_id ?? "x"} xAxisLabel={formatXAxisLabel(comparisonSeries, comparisonTable?.columns[0]?.column_id ?? "x")} /></div>}</div>) : null}
     </section>
   </div>;
 }

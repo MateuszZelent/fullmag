@@ -1,6 +1,5 @@
 import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
-import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { analysisWorkspaceStore } from "@/kernel/workspace/analysisWorkspace";
 import { quickChartWorkspaceStore } from "@/kernel/workspace/quickChartWorkspace";
 import {
@@ -31,19 +30,18 @@ export const analysisPlotsManifest: ModuleManifest = {
         scope: "workspace",
         isEnabled: (context: CommandContext) =>
           context.layout?.get().activeViewportMainModuleId === "viewport-3d" &&
-          analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds.some(isTableChartSeriesId),
+          analysisWorkspaceStore.getSnapshot().selectedSeriesIds.some(isTableChartSeriesId),
         run: (context: CommandContext) => {
-          const chart = analysisPlotsWorkspaceStore.getSnapshot();
           const analysis = analysisWorkspaceStore.getSnapshot();
-          const tableId = analysis.selectedDatasetRef;
+          const tableId = analysis.sourceTableId;
           if (!tableId) return { status: "failed", message: "Select a published Analysis dataset first." };
-          const chartId = `${analysis.activeSurface}:${tableId}`;
+          const chartId = analysis.sourceChartId ?? `${analysis.activeSurface}:${tableId}`;
           const nodeId = `results:quick-charts:${chartId}`;
           quickChartWorkspaceStore.pin({
             chartId,
             tableId,
-            xAxisId: chart.xAxisId,
-            yAxisIds: chart.selectedSeriesIds
+            xAxisId: analysis.xAxisId ?? "x",
+            yAxisIds: analysis.selectedSeriesIds
               .filter(isTableChartSeriesId)
               .map(tableColumnIdFromSeriesId),
           });
@@ -62,8 +60,8 @@ export const analysisPlotsManifest: ModuleManifest = {
               nodeId,
               tableId,
               type: "quick-chart",
-              xAxisId: chart.xAxisId,
-              yAxisIds: chart.selectedSeriesIds
+              xAxisId: analysis.xAxisId ?? "x",
+              yAxisIds: analysis.selectedSeriesIds
                 .filter(isTableChartSeriesId)
                 .map(tableColumnIdFromSeriesId),
             },
@@ -79,11 +77,8 @@ export const analysisPlotsManifest: ModuleManifest = {
         category: "Analysis",
         scope: "selection" as const,
         run: (context: CommandContext) => {
-          const ref = context.selection?.get().ref;
-          const chartId =
-            ref?.type === "analysis-chart" || ref?.type === "analysis-chart-point"
-              ? ref.chartId
-              : "default";
+          const chartId = analysisWorkspaceStore.getSnapshot().sourceChartId;
+          if (!chartId) return { status: "failed" as const, message: "Select an Analysis dataset first." };
           context.bus?.emit("analysis-plots:export-requested", {
             chartId,
             format,

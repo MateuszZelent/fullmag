@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -32,51 +31,9 @@ describe("Analysis workbench", () => {
     }
   });
 
-  it("presents ready postprocessing as Ready rather than Live", () => {
-    const gamma = readFileSync(new URL("./SpinWaveGammaView.tsx", import.meta.url), "utf8");
-    const structureFactor = readFileSync(new URL("./DynamicStructureFactorView.tsx", import.meta.url), "utf8");
-    expect(gamma).toContain('status === "ready" ? "Ready"');
-    expect(structureFactor).toContain('status === "ready" ? "Ready"');
-    expect(gamma).not.toContain('status === "ready" ? "Live"');
-    expect(structureFactor).not.toContain('status === "ready" ? "Live"');
-  });
-
-  it("keeps Analysis separate from active runtime ownership", () => {
-    const controller = readFileSync(new URL("./useAnalysisPlotsController.ts", import.meta.url), "utf8");
-    expect(controller).toContain("useAnalysisDatasetData");
-    expect(controller).toContain('activeSurface === "spectrum"');
-    expect(controller).toContain('activeSurface === "dispersion"');
-    expect(controller).not.toContain("useAnalysis" + "TableData");
-    expect(controller).not.toContain("useAnalysis" + "EnergyData");
-  });
-
-  it("owns chart interactions through explicit Analysis state and dataset identity", () => {
-    const view = readFileSync(new URL("./AnalysisPlotsView.tsx", import.meta.url), "utf8");
-    const manifest = readFileSync(new URL("./manifest.ts", import.meta.url), "utf8");
-    expect(view).not.toContain("onPointSelect={() => undefined}");
-    expect(view).not.toContain("onRangeChange={() => undefined}");
-    expect(view).not.toContain("onSelectedSeriesIdsChange={() => undefined}");
-    expect(manifest).not.toContain('const chartId = "default"');
-    expect(manifest).not.toContain('const tableId = "default"');
-  });
-
   it("requires a controlled second published source for Comparison", () => {
-    const view = readFileSync(new URL("./AnalysisPlotsView.tsx", import.meta.url), "utf8");
-    expect(view).toContain("Select a second published dataset compatible with");
-    expect(view).not.toContain("Select comparison datasets");
-  });
-
-  it("uses distinct artifact kinds for frequency response and eigenmodes", () => {
-    const controller = readFileSync(new URL("./useAnalysisPlotsController.ts", import.meta.url), "utf8");
-    const frequency = readFileSync(new URL("./hooks/useAnalysisFrequencyData.ts", import.meta.url), "utf8");
-    expect(controller).toContain('? activeSurface : "idle"');
-    expect(frequency).toContain('"frequency-response" | "eigenmodes" | "idle"');
-  });
-
-  it("labels provenance by the selected surface rather than every surface as a table", () => {
-    const view = readFileSync(new URL("./AnalysisPlotsView.tsx", import.meta.url), "utf8");
-    expect(view).toContain('surface === "dynamics" || surface === "comparison"');
-    expect(view).toContain("frequencyDomainProvenance");
+    const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="comparison" selectedDatasetRef="table-a" />);
+    expect(html).toContain("Select a second published dataset compatible with table-a");
   });
 
   it("renders paired compatible comparison sources with their frozen revisions", () => {

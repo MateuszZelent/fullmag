@@ -1193,7 +1193,6 @@ describe("AnalysisPlotsView", () => {
         onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
         selectedDatasetRef="default"
@@ -1219,7 +1218,6 @@ describe("AnalysisPlotsView", () => {
         onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
         selectedDatasetRef="default"
@@ -1236,7 +1234,7 @@ describe("AnalysisPlotsView", () => {
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="overview"
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1256,16 +1254,12 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain response sweep"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1300,16 +1294,12 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1352,16 +1342,12 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1402,10 +1388,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain modal spectrum"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Eigen frequency",
@@ -1420,10 +1404,8 @@ describe("AnalysisPlotsView", () => {
           unit: "GHz",
           xUnit: "mode index",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1462,10 +1444,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Eigen frequency",
@@ -1480,10 +1460,8 @@ describe("AnalysisPlotsView", () => {
           unit: "GHz",
           xUnit: "mode index",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1518,10 +1496,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain dispersion"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Branch acoustic",
@@ -1542,10 +1518,8 @@ describe("AnalysisPlotsView", () => {
           unit: "GHz",
           xUnit: "rad/m",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1578,10 +1552,8 @@ describe("AnalysisPlotsView", () => {
         ]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "Amplitude",
@@ -1596,10 +1568,8 @@ describe("AnalysisPlotsView", () => {
           unit: "a.u.",
           xUnit: "GHz",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1620,16 +1590,12 @@ describe("AnalysisPlotsView", () => {
         frequencyDomainStatus="stale"
         frequencyDomainTitle="Frequency-domain modal spectrum"
         frequencyDomainUnavailableReason="spectrum artifact is missing"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1648,16 +1614,12 @@ describe("AnalysisPlotsView", () => {
         frequencyDomainSeries={[]}
         frequencyDomainStatus="loading"
         frequencyDomainTitle="Frequency-domain dispersion"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1676,16 +1638,12 @@ describe("AnalysisPlotsView", () => {
         frequencyDomainStatus="error"
         frequencyDomainTitle="Frequency-domain response map"
         frequencyDomainUnavailableReason="response-map chart adapter is not available yet"
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="idle"
-        visibleTable={null}
+        tableStatus="idle"
+        table={null}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -1996,13 +1954,11 @@ describe("AnalysisPlotsView", () => {
         onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={{ fromValue: 10, toValue: 20 }}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -2015,17 +1971,16 @@ describe("AnalysisPlotsView", () => {
   it("renders compact chart status for axes, sample counts, and zoom state", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -2042,11 +1997,11 @@ describe("AnalysisPlotsView", () => {
   it("renders selected chart cursor point in compact status", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "mx",
@@ -2061,10 +2016,9 @@ describe("AnalysisPlotsView", () => {
           unit: "1",
           xUnit: "1",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -2079,11 +2033,11 @@ describe("AnalysisPlotsView", () => {
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
         selectedDatasetRef="default"
@@ -2100,17 +2054,16 @@ describe("AnalysisPlotsView", () => {
   it("renders a series legend with units and latest values from visible rows", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -2129,17 +2082,16 @@ describe("AnalysisPlotsView", () => {
   it("renders an empty selected-series state without restoring chart data", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(table)}
         xAxisId="step"
         selectedSeriesIds={[]}
       />,
@@ -2156,11 +2108,11 @@ describe("AnalysisPlotsView", () => {
     };
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={{
           label: "mx",
@@ -2175,10 +2127,9 @@ describe("AnalysisPlotsView", () => {
           unit: "1",
           xUnit: "1",
         }}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(normalizedTable)}
+        selectedDatasetRef="default"
+        tableStatus="ready"
+        table={chartWindow(normalizedTable)}
         xAxisId="step"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
@@ -2191,7 +2142,7 @@ describe("AnalysisPlotsView", () => {
     expect(html).not.toContain("m1");
   });
 
-  it("renders solver energy history as a separate chart source when available", () => {
+  it("keeps solver energy adaptation independent of the Analysis dataset view", () => {
     const solverEnergySeries = buildSolverEnergyHistoryChartSeries({
       returned_rows: 2,
       revision: 2,
@@ -2220,31 +2171,11 @@ describe("AnalysisPlotsView", () => {
       total_rows: 2,
     });
 
-    const html = renderToStaticMarkup(
-      <AnalysisPlotsView
-        kernel={mockKernel}
-        onClearRange={() => undefined}
-        onPointSelect={() => undefined}
-        onRangeChange={() => undefined}
-        onSeriesSelect={() => undefined}
-        range={null}
-        selectedPoint={null}
-        activeSurface="energy"
-        solverEnergySeries={solverEnergySeries}
-        solverEnergyStatus="ready"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
-        xAxisId="step"
-        selectedSeriesIds={["data.table:default:step:mx"]}
-      />,
+    expect(solverEnergySeries).toHaveLength(6);
+    expect(solverEnergySeries.map((series) => series.label)).toEqual(
+      expect.arrayContaining(["E exchange", "E total"]),
     );
-
-    expect(html).toContain("Energy history");
-    expect(html).toContain("6 series");
-    expect(html).toContain('aria-label="Energy series"');
-    expect(html).toContain("E exchange");
-    expect(html).toContain("E total");
-    expect(html).toContain("time [s]");
+    expect(solverEnergySeries[0]?.xUnit).toBe("s");
   });
 
   it("builds visible-range table queries when chart zoom is active", () => {
