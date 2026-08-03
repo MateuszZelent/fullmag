@@ -4,6 +4,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import {
   ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY,
   createDefaultAnalysisViewPreferences,
+  parseAnalysisViewPreferences,
   parseStoredAnalysisViewPreferences,
   serializeAnalysisViewPreferences,
   type AnalysisDescriptorPreference,
@@ -28,10 +29,19 @@ function hydrate(): void {
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   hydrate();
-  return () => listeners.delete(listener);
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY) return;
+    snapshot = { isHydrated: true, preferences: parseStoredAnalysisViewPreferences(event.newValue) };
+    listeners.forEach((subscriber) => subscriber());
+  };
+  if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(listener);
+    if (typeof window !== "undefined") window.removeEventListener("storage", onStorage);
+  };
 }
 function update(mutator: (current: AnalysisViewPreferencesV2) => AnalysisViewPreferencesV2): void {
-  const preferences = mutator(snapshot.preferences);
+  const preferences = parseAnalysisViewPreferences(mutator(snapshot.preferences));
   snapshot = { isHydrated: hydrated, preferences };
   const serialized = serializeAnalysisViewPreferences(preferences);
   try { if (serialized) storage()?.setItem(ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY, serialized); } catch { /* browser persistence is best effort */ }

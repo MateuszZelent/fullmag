@@ -1185,55 +1185,52 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders chart and axis column controls in the analysis surface", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance: table:run-7:stage-2:table-4"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
+        onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
         onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="ready"
-        visibleTable={chartWindow(table)}
-        xAxisId="step"
+        selectedDatasetRef="default"
+        table={chartWindow(table)}
+        tableStatus="ready"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).toContain("Analysis overview");
-    expect(html).toContain("2 rows / 2 columns");
+    expect(html).toContain("Magnetization dynamics");
+    expect(html).toContain("2 rows");
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain("mx");
   });
 
   it("prefers semantic table unsupported status over a ready raw refresh", () => {
-    expect(renderExplicitAnalysisSurface("dispersion")).toContain("Dataset provenance: table:run-7:stage-2:table-4"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
+        onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
         onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsRefresh={{ error: null, revision: 2, status: "ready" }}
-        tableRowsStatus="unsupported"
-        tableRowsUnsupportedReason="The active runtime does not publish scalar table samples."
-        visibleTable={chartWindow(table)}
-        xAxisId="step"
+        selectedDatasetRef="default"
+        table={chartWindow(table)}
+        tableStatus="unsupported"
+        tableUnsupportedReason="The selected dataset does not publish scalar table samples."
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );
 
-    expect(html).toContain("The active runtime does not publish scalar table samples.");
+    expect(html).toContain("The selected dataset does not publish scalar table samples.");
   });
 
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
@@ -1281,9 +1278,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders FMR workflow context for modal spectrum charts", () => {
-    expect(renderExplicitAnalysisSurface("eigenmodes")).toContain("Eigenmodes"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="eigenmodes"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1333,9 +1330,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders FMR workflow context for driven response charts", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Frequency Response"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1383,9 +1380,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders selected frequency-domain point context for inspector follow-up", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1443,9 +1440,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders selected FMR modal point context as a 3D overlay workflow", () => {
-    expect(renderExplicitAnalysisSurface("eigenmodes")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="eigenmodes"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1496,10 +1493,10 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("FMR mode inspector and 3D overlay controls");
   });
 
-  it("renders selected dispersion high-symmetry labels from chart points", () => {
-    expect(renderExplicitAnalysisSurface("dispersion")).toContain("Dataset provenance"); return;
+  it("renders the DSF dispersion surface instead of modal-point labels", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dispersion"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1554,18 +1551,14 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain("dispersion point");
-    expect(html).toContain("k-label");
-    expect(html).toContain("G");
-    expect(html).toContain("Linewidth");
-    expect(html).toContain("2.8 MHz");
-    expect(html).toContain("Dispersion inspector");
+    expect(html).toContain("Dynamic structure factor S(k,f)");
+    expect(html).toContain("bounded heatmap");
   });
 
   it("renders selected FMR response point context as a response-field overlay workflow", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1618,9 +1611,10 @@ describe("AnalysisPlotsView", () => {
     );
   });
 
-  it("hides uncomputed frequency-domain results instead of rendering a stale placeholder subchart", () => {
+  it("shows the explicit unavailable artifact state for an uncomputed frequency response", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="stale"
@@ -1641,15 +1635,15 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).not.toContain("Frequency-domain modal spectrum");
-    expect(html).not.toContain("spectrum artifact is missing");
+    expect(html).toContain("Frequency-domain modal spectrum");
+    expect(html).toContain("spectrum artifact is missing");
     expect(html).not.toContain("Frequency-domain series legend");
   });
 
   it("renders frequency-domain loading state while artifact resources resolve", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Frequency Response"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="loading"
@@ -1674,9 +1668,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders explicit response-map unavailable state when the mode is selected", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Frequency Response"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="frequency-response"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="error"
@@ -1734,7 +1728,6 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps frequency-domain chart clicks to frequency-domain selections", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("table:run-7:stage-2:table-4"); return;
     const responseModel = buildFrequencyResponseChartModel(
       {
         artifact_path: "response/magnetic_response_sweep.v2.json",
@@ -1808,7 +1801,6 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps modal spectrum ECharts clicks to eigen mode selections", () => {
-    expect(renderExplicitAnalysisSurface("eigenmodes")).toContain("table:run-7:stage-2:table-4"); return;
     const spectrumModel = buildEigenSpectrumChartModel({
       artifact_path: "eigen/spectrum.v2.json",
       payload: {
@@ -1854,13 +1846,14 @@ describe("AnalysisPlotsView", () => {
         "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
       objectId: null,
       ref: {
+        artifactPath: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
         calculationMode: "free_modes",
         fieldId: "analysis:eigen:sample-0000:mode-0001",
         kind: "results.eigen.mode",
         modeIndex: 1,
         nodeId:
           "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
-        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        resourceRef: analysisFieldVectorResourceKey("analysis:eigen:sample-0000:mode-0001"),
         sampleIndex: 0,
         type: "frequency-domain",
       },
@@ -1868,7 +1861,6 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps dispersion ECharts clicks to dispersion point selections", () => {
-    expect(renderExplicitAnalysisSurface("dispersion")).toContain("table:run-7:stage-2:table-4"); return;
     const dispersionModel = buildEigenDispersionChartModel({
       status: "ready",
       text: [
@@ -1904,6 +1896,7 @@ describe("AnalysisPlotsView", () => {
         "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
       objectId: null,
       ref: {
+        artifactPath: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
         branchId: "acoustic",
         calculationMode: "dispersion_modal",
         fieldId: "analysis:eigen:sample-0004:mode-0005",
@@ -1997,8 +1990,10 @@ describe("AnalysisPlotsView", () => {
   it("renders active zoom range with a clear action", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="dynamics"
+        datasetRefs={["default"]}
         kernel={mockKernel}
-        onClearRange={() => undefined}
+        onDatasetRefChange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
         onSeriesSelect={() => undefined}
@@ -2082,7 +2077,6 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
-    expect(renderExplicitAnalysisSurface("frequency-response")).toContain("Dataset provenance"); return;
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -2092,11 +2086,9 @@ describe("AnalysisPlotsView", () => {
         onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
-        solverEnergySeries={[]}
-        solverEnergyStatus="idle"
-        tableRowsStatus="loading"
-        visibleTable={null}
-        xAxisId="step"
+        selectedDatasetRef="default"
+        table={null}
+        tableStatus="loading"
         selectedSeriesIds={["data.table:default:step:mx"]}
       />,
     );

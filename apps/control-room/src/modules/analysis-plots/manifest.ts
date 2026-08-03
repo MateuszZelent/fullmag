@@ -1,6 +1,7 @@
 import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
+import { analysisWorkspaceStore } from "@/kernel/workspace/analysisWorkspace";
 import { quickChartWorkspaceStore } from "@/kernel/workspace/quickChartWorkspace";
 import {
   isTableChartSeriesId,
@@ -33,8 +34,10 @@ export const analysisPlotsManifest: ModuleManifest = {
           analysisPlotsWorkspaceStore.getSnapshot().selectedSeriesIds.some(isTableChartSeriesId),
         run: (context: CommandContext) => {
           const chart = analysisPlotsWorkspaceStore.getSnapshot();
-          const chartId = "default";
-          const tableId = "default";
+          const analysis = analysisWorkspaceStore.getSnapshot();
+          const tableId = analysis.selectedDatasetRef;
+          if (!tableId) return { status: "failed", message: "Select a published Analysis dataset first." };
+          const chartId = `${analysis.activeSurface}:${tableId}`;
           const nodeId = `results:quick-charts:${chartId}`;
           quickChartWorkspaceStore.pin({
             chartId,
