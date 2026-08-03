@@ -1,7 +1,11 @@
 # Frontend v2 - Migration Strategy
 
 **Status:** Proposed architecture
-**Date:** 2026-05-11
+**Date:** 2026-05-11; phase marker updated 2026-08-03
+
+**Current phase:** Phase 6 — modules/parity. `apps/control-room` is implementing
+and qualifying 2D, charts, console, and results workflows. `apps/legacy_web`
+remains reference-only. This marker does not declare cutover, freeze, or removal.
 
 ## 1. Approach
 

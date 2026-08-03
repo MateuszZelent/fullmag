@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { DATA_TABLE_ROWS_PATH } from "@/kernel/api/apiPaths";
+
 import { buildScalarTableSeries } from "./scalarTableChart";
 
 describe("buildScalarTableSeries", () => {
@@ -25,7 +27,7 @@ describe("buildScalarTableSeries", () => {
       quantity: "mx",
       source: {
         kind: "data.table.rows",
-        resourceKey: "/v2/sessions/current/data/tables/stage%3A1/rows",
+        resourceKey: DATA_TABLE_ROWS_PATH.replace("{table_id}", encodeURIComponent("stage:1")),
         tableId: "stage:1",
       },
       status: "ready",

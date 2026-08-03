@@ -246,6 +246,12 @@ function legacyDescriptor(raw: unknown): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * Compatibility owner: Live Charts preference hydration.
+ * Removal gate: remove this legacy Analysis preference reader after one released
+ * preference schema version has written fm:live-chart-preferences:v1 and browser
+ * migration tests prove no old live identity remains.
+ */
 function legacyMagnetizationSelection(descriptor: Record<string, unknown>): string[] | null {
   const candidate = Array.isArray(descriptor.selectedSeriesIds)
     ? descriptor.selectedSeriesIds

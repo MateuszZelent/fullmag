@@ -135,7 +135,7 @@ export function AnalysisFrequencySurface({
   ].filter(Boolean);
   const workbenchSubtitle = workbenchParts.join(" · ");
 
-  // Cursor footer spans (mirrors AnalysisStatusPill content for backward compat)
+  // Cursor footer keeps the selected scientific point visible outside the canvas.
   const footerContent = selectedPointSummary ? (
     <div
       aria-label="Selected frequency-domain point"

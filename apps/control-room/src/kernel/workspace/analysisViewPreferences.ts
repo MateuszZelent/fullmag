@@ -77,6 +77,10 @@ export function serializeAnalysisViewPreferences(value: unknown): string | null 
 
 function parseDescriptor(raw: unknown): AnalysisDescriptorPreference | null {
   if (!isRecord(raw) || !isRecord(raw.displayUnits) || !(raw.range === null || isRecord(raw.range))) return null;
+  // Compatibility owner: Analysis view preference parser.
+  // Removal gate: remove comparisonSelectedSeriesKeys after one released
+  // analysis-view-preferences:v2 writer uses selectedSeriesIds and migration tests
+  // prove no stored descriptor still depends on the old field.
   const legacyComparisonKeys = Array.isArray(raw.comparisonSelectedSeriesKeys)
     ? raw.comparisonSelectedSeriesKeys.filter(validSeriesId).filter((value, index, all) => all.indexOf(value) === index).slice(0, MAX_SERIES)
     : undefined;

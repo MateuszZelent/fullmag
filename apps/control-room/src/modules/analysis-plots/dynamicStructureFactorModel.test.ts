@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH } from "@/kernel/api/apiPaths";
+
 import { dynamicStructureFactorCells, dynamicStructureFactorFrequencyCut, dynamicStructureFactorWavevectorCut } from "./dynamicStructureFactorModel";
 
 describe("dynamicStructureFactorModel", () => {
@@ -73,7 +75,7 @@ describe("dynamicStructureFactorModel", () => {
       dataRevision: null,
       id: "finite-k-frequency-cut-response",
       points: [{ rowIndex: 0, x: 0, y: 2 }, { rowIndex: 1, x: 5e9, y: 4 }],
-      source: { kind: "analysis.spin_wave", resourceKey: "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1", tableId: "dynamic-structure-factor" },
+      source: { kind: "analysis.spin_wave", resourceKey: ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH, tableId: "dynamic-structure-factor" },
       status: "ready",
       unit: "1",
       xUnit: "Hz",

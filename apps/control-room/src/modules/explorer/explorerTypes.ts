@@ -310,7 +310,12 @@ export interface ExplorerNode {
   selectedSeriesIds?: readonly string[];
   tableId?: string;
   xAxisId?: string;
-  /** One-version read compatibility; new Explorer nodes write selectedSeriesIds. */
+  /**
+   * Compatibility owner: Quick Chart Explorer descriptor parser.
+   * Removal gate: remove yAxisIds after one released Control Room version writes
+   * only selectedSeriesIds and migration tests prove no persisted or Explorer
+   * descriptor still depends on yAxisIds.
+   */
   yAxisIds?: readonly string[];
   sampleIndex?: number;
   stageId?: string;

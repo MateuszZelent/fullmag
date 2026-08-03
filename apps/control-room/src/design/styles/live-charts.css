@@ -24,7 +24,7 @@
 
 .fm-live-charts__empty {
   align-items: center;
-  color: var(--fm-secondary);
+  color: var(--fm-text-secondary);
   display: flex;
   justify-content: center;
   min-height: 12rem;

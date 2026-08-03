@@ -70,6 +70,10 @@ export function parsePinnedQuickChart(value: unknown): PinnedQuickChart | null {
   const xAxisId = parseId(value.xAxisId);
   if (!chartId || !tableId || !xAxisId) return null;
   const prefix = `data.table:${tableId}:${xAxisId}:`;
+  // Compatibility owner: Quick Chart descriptor parser.
+  // Removal gate: remove yAxisIds after one released Control Room version writes
+  // only selectedSeriesIds and migration tests prove no persisted or Explorer
+  // descriptor still depends on yAxisIds.
   const selectedSource = Array.isArray(value.selectedSeriesIds)
     ? value.selectedSeriesIds.slice(0, MAX_SERIES)
     : Array.isArray(value.yAxisIds)
