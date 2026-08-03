@@ -496,6 +496,8 @@ def validate_qualification(
         "schema": "fullmag.fem.demag_mesh_airbox_convergence.v2",
         "status": "fail" if failures else "pass",
         "qualification_status": "no_go",
+        "validation_state": "box_trend_regression",
+        "promotion_policy": "supplemental_only_never_analytic_qualification",
         "measured_repeat_count": repeat_count,
         "mesh_matrix": {
             "status": "pass",

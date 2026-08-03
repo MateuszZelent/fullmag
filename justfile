@@ -3501,6 +3501,21 @@ verify-fem-demag-mesh-airbox-convergence:
           --repeat "$FULLMAG_BENCH_REPEAT" \
           --output "$report_dir/qualification-summary.json"'
 
+# This is deliberately fail-closed until the managed runtime can emit the
+# prescribed-uniform single-evaluation matrix declared by the suite.  The
+# legacy relaxed-box recipe above remains supplemental trend regression only.
+verify-fem-demag-analytic-qualification artifact=".fullmag/reports/fem-demag-analytic-qualification/analytic-qualification.v1.json":
+    just ensure-managed-fem-runtime
+    just verify-fem-demag-poisson-contract-focused
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 -m pytest -q -s tests/fem_demag_validation/test_acceptance.py scripts/test_validate_fem_demag_analytic_qualification.py scripts/test_validate_fem_demag_mesh_airbox_convergence.py; \
+        python3 scripts/validate_fem_demag_analytic_qualification.py \
+          --suite examples/assets/fem_demag_analytic_qualification_suite_v1.json \
+          --artifact "{{artifact}}" \
+          --output .fullmag/reports/fem-demag-analytic-qualification/summary.v1.json'
+
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \
     else ./scripts/ci-resource-first-gates.sh --strict; fi
