@@ -31,4 +31,20 @@ describe("idle performance audit script", () => {
     expect(auditScript).toContain("scanFieldVectorDebugStatistics");
     expect(auditScript).toContain("setInterval(");
   });
+
+  it("audits chart and Quick Chart sources for zero idle polling and paired one-shot frames", () => {
+    const auditScript = readFileSync(auditScriptUrl, "utf8");
+
+    expect(auditScript).toContain("analysis-plots");
+    expect(auditScript).toContain("live-charts");
+    expect(auditScript).toContain("shared/analysis-charts");
+    expect(auditScript).toContain("QuickChartResourceView.tsx");
+    expect(auditScript).toContain("auditChartIdleContracts");
+    expect(auditScript).toContain("allowsChartDemandFrameOneShots");
+    expect(auditScript).toContain("EChartsCanvasSurface.tsx");
+    expect(auditScript).toContain("cancelAnimationFrame(frame)");
+    expect(auditScript).toContain("ResizeObserver");
+    expect(auditScript).toContain("setInterval(");
+    expect(auditScript).toContain("refreshInterval");
+  });
 });

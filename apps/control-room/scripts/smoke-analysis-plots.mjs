@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+
 const apiBase = (
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -14,6 +17,13 @@ const maxRowsBinRequests = nonNegativeNumericEnv(
   0,
 );
 const useFixture = process.env.CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE === "1";
+const liveRefreshObserveMs = numericEnv(
+  "ANALYSIS_LIVE_REFRESH_OBSERVE_MS",
+  3_000,
+);
+const acceptanceDirectory =
+  process.env.CONTROL_ROOM_ACCEPTANCE_DIR ??
+  path.resolve(".fullmag/reports/live-charts-analysis-acceptance/latest");
 
 const ANALYSIS_SURFACES = [
   "Dynamics", "Spectrum", "Frequency Response", "Eigenmodes", "Dispersion", "Hysteresis", "Comparison",
@@ -34,6 +44,7 @@ async function main() {
   const errors = [];
   const failedResponses = [];
   const rowsBinRequests = [];
+  const analysisPlotRequests = [];
 
   await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
@@ -74,6 +85,13 @@ async function main() {
   });
   page.on("request", (request) => {
     const path = currentSessionPath(request.url());
+    if (
+      path &&
+      (path.startsWith("/v2/sessions/current/data/tables") ||
+        path.startsWith("/v2/sessions/current/analysis/"))
+    ) {
+      analysisPlotRequests.push({ path, timestamp: Date.now() });
+    }
     if (path && ROWS_BIN_PATTERN.test(path)) {
       rowsBinRequests.push({ path, timestamp: Date.now() });
     }
@@ -95,6 +113,14 @@ async function main() {
     await verifyAnalysisInspectorSummary(page, selectedDatasetRef);
     await verifyLocalSeriesSelection(page, rowsBinRequests);
     await verifyLocalRangeSelection(page, rowsBinRequests);
+    const explicitDatasetRequestBaseline = analysisPlotRequests.length;
+    await verifyNoImplicitLiveRefresh(
+      page,
+      analysisPlotRequests,
+      explicitDatasetRequestBaseline,
+    );
+    await assertNoVisibleResourceErrors(page, errors);
+    const screenshots = await captureAnalysisAcceptanceScreenshots(page, errors);
 
     rowsBinRequests.length = 0;
     await page.waitForTimeout(observeMs);
@@ -127,6 +153,8 @@ async function main() {
         failedResponses: failedResponses.length,
         rowsBinRequests: rowsBinRequests.length,
         rowsBinRequestBudget: maxRowsBinRequests,
+        resourceFamilyCounts: countResourceFamilies(analysisPlotRequests),
+        screenshots,
         workspaceUrl,
       })}`,
     );
@@ -134,6 +162,92 @@ async function main() {
   } finally {
     await browser.close();
   }
+}
+
+async function verifyNoImplicitLiveRefresh(
+  page,
+  analysisPlotRequests,
+  explicitDatasetRequestBaseline,
+) {
+  await page.waitForTimeout(liveRefreshObserveMs);
+  const implicitRequests = analysisPlotRequests.slice(explicitDatasetRequestBaseline);
+  if (implicitRequests.length > 0) {
+    throw new Error(
+      `Analysis implicitly refreshed an explicitly selected dataset: ${JSON.stringify(implicitRequests)}`,
+    );
+  }
+  const provenance = await page
+    .locator(".fm-analysis-plots__header")
+    .getByText(/^Dataset provenance:/)
+    .innerText();
+  if (!/Dataset provenance: .+revision\s+\d+/.test(provenance)) {
+    throw new Error(`Analysis did not retain frozen dataset provenance: ${provenance}`);
+  }
+}
+
+async function assertNoVisibleResourceErrors(page, errors) {
+  if (errors.length > 0) {
+    throw new Error(`Browser page errors before screenshot capture: ${errors.join(" | ")}`);
+  }
+  const errorNotifications = page.locator(
+    '.fm-notifications__toast[data-kind="error"], .fm-toast[data-variant="error"]',
+  );
+  const visibleErrors = [];
+  for (let index = 0; index < await errorNotifications.count(); index += 1) {
+    const notification = errorNotifications.nth(index);
+    if (await notification.isVisible()) visibleErrors.push(await notification.innerText());
+  }
+  if (visibleErrors.length > 0) {
+    throw new Error(
+      `Visible resource error notification before screenshot capture: ${visibleErrors.join(" | ")}`,
+    );
+  }
+}
+
+async function captureAnalysisAcceptanceScreenshots(page, errors) {
+  mkdirSync(acceptanceDirectory, { recursive: true });
+  const screenshots = [];
+  for (const [theme, filename] of [
+    ["dark", "analysis-mocha.png"],
+    ["light", "analysis-latte.png"],
+  ]) {
+    await page.evaluate((theme) => {
+      document.documentElement.dataset.theme = theme;
+    }, theme);
+    await page.waitForTimeout(100);
+    await assertNoVisibleResourceErrors(page, errors);
+    const target = path.join(acceptanceDirectory, filename);
+    await page.screenshot({ path: target });
+    screenshots.push(target);
+  }
+  await page.evaluate(() => {
+    document.body.style.zoom = "200%";
+  });
+  await assertNoVisibleResourceErrors(page, errors);
+  const zoomTarget = path.join(acceptanceDirectory, "analysis-zoom-200.png");
+  await page.screenshot({ fullPage: true, path: zoomTarget });
+  screenshots.push(zoomTarget);
+  await page.evaluate(() => {
+    document.body.style.zoom = "";
+  });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await assertNoVisibleResourceErrors(page, errors);
+  const reducedTarget = path.join(
+    acceptanceDirectory,
+    "analysis-reduced-motion.png",
+  );
+  await page.screenshot({ path: reducedTarget });
+  screenshots.push(reducedTarget);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  return screenshots;
+}
+
+function countResourceFamilies(requests) {
+  return requests.reduce((counts, request) => {
+    const family = request.path.includes("/data/tables") ? "data.tables" : "analysis";
+    counts[family] = (counts[family] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 async function openAnalysisPlots(page) {
@@ -535,6 +649,15 @@ async function installAnalysisDatasetFixtureRoutes(page) {
       await route.fulfill({ body: "", headers: cors, status: 204 });
       return;
     }
+    if (url.pathname === "/v2/sessions/current/status") {
+      await route.fulfill({
+        body: JSON.stringify(analysisStatusFixture()),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
     if (url.pathname === "/v2/sessions/current/data/tables") {
       await route.fulfill({
         body: JSON.stringify({ revision, tables: [table] }),
@@ -574,13 +697,80 @@ async function installAnalysisDatasetFixtureRoutes(page) {
       });
       return;
     }
-    await route.fulfill({
-      body: JSON.stringify({ error: "fixture resource not published" }),
-      contentType: "application/json",
-      headers: cors,
-      status: 404,
-    });
+    await fulfillMissingFixtureResource(route, cors);
   });
+}
+
+function analysisStatusFixture() {
+  return {
+    api_contract_version: "1.0.0",
+    capabilities: {
+      algorithms_available: [],
+      binary_fields: false,
+      cell_fields: false,
+      eigen_modes: false,
+      explicit_topology: false,
+      gpu_telemetry: false,
+      node_fields: false,
+      preview_2d: false,
+      preview_3d: false,
+      scalar_history: true,
+      structured_grid: false,
+    },
+    display: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+      max_points: 120000,
+      slice_layer: 0,
+      slice_mode: "xy",
+      vector_density: 2,
+      vector_glyphs: false,
+      view_mode: "3d",
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    domain: { cell_count: 0, discretization: "unknown", generation_id: 0 },
+    energies: {},
+    metrics: { steps_per_second: null, total_steps: 0, uptime_seconds: 0 },
+    resources: {
+      artifact_revision: 0,
+      artifacts_revision: 0,
+      command_completion_revision: 0,
+      commands_revision: 0,
+      display_revision: 0,
+      domain_generation_id: 0,
+      engine_log_revision: 0,
+      field_catalog_revision: 0,
+      field_revision: 0,
+      fields_revision: 0,
+      mesh_build_revision: 0,
+      mesh_revision: 0,
+      scalars_revision: 17,
+      scene_revision: 0,
+      slice_revision: 0,
+      stages_revision: 0,
+      topology_revision: 0,
+      visualization_state_revision: 0,
+      workspace_revision: 0,
+    },
+    run: null,
+    runtime_bundle_version: "analysis-plots-fixture",
+    session: {
+      created_at: "0",
+      name: "analysis-plots-fixture",
+      session_id: "analysis-plots-fixture",
+      workspace_root: "/tmp/fullmag-analysis-plots-fixture",
+    },
+    solver: { state: "idle" },
+  };
+}
+
+async function fulfillMissingFixtureResource(route, headers) {
+  await route.fulfill({ body: "", headers, status: 204 });
 }
 
 function makeRowsFixture(columns, rowCount, revision) {

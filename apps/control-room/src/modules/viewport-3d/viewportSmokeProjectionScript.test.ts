@@ -6,6 +6,7 @@ import {
   MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
   MODEL_SYNCS_PATH,
+  SESSION_EVENTS_WS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 
@@ -63,6 +64,17 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("await waitForCanvasClipBox(page)");
     expect(smokeScript).toContain("readCanvasClipBox(page)");
     expect(smokeScript).not.toContain("canvas.evaluate");
+  });
+
+  it("rechecks the final WebGL context and drawing buffer after every smoke flow", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("assertFinalViewportWebGLState");
+    expect(smokeScript).toContain("isContextLost");
+    expect(smokeScript).toContain("contextLost: context?.isContextLost() ?? true");
+    expect(smokeScript).toContain("3D viewport WebGL context is lost after");
+    expect(smokeScript).toContain("3D viewport final drawing buffer is empty after");
+    expect(smokeScript).toContain("finalWebGL");
   });
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
@@ -171,6 +183,13 @@ describe("viewport smoke projection round-trip", () => {
       "if (!cameraOnlySmoke && isModelSceneUrl(response.url()) && status < 400)",
     );
     expect(smokeScript).toContain("window.__FULLMAG_CONFIG__");
+    expect(smokeScript).toContain(
+      `text.includes("${SESSION_EVENTS_WS_PATH}")`,
+    );
+    expect(smokeScript).toContain('text.includes("net::ERR_INVALID_HTTP_RESPONSE")');
+    expect(smokeScript).toContain(
+      `allowMissingSession &&\n    text.includes("${SESSION_EVENTS_WS_PATH}")`,
+    );
   });
 
   it("can verify hysteresis replay routes snapshots through the field data plane", () => {
@@ -303,7 +322,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("committedSceneWithObject ??");
     expect(smokeScript).toContain("model/scene fallback refetch after UI object commit");
     expect(smokeScript).not.toContain(
-      "GET /v2/sessions/current/model/scene refetch after UI object commit",
+      `GET ${MODEL_SCENE_PATH} refetch after UI object commit`,
     );
   });
 
@@ -372,7 +391,7 @@ describe("viewport smoke projection round-trip", () => {
 
     expect(smokeScript).toContain("sceneSequenceBeforeExternalCommit");
     expect(smokeScript).toContain(
-      "GET /v2/sessions/current/model/scene refetch after websocket invalidation",
+      `GET ${MODEL_SCENE_PATH} refetch after websocket invalidation`,
     );
     expect(smokeScript).not.toContain(
       "record.timestamp >= realtimeSceneChange.timestamp",

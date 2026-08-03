@@ -12,6 +12,8 @@ function completeProof() {
     recordedAt: "2026-07-26T00:00:00.000Z",
     build: {
       commit: "2054cdde572f73f10b3a28239b2d6064dfb3fdb7",
+      diffFingerprint: "sha256:clean",
+      dirty: false,
       mode: "production",
     },
     browser: {
@@ -40,8 +42,9 @@ function completeProof() {
     transport: {
       requests: 1,
       payloadBytes: 4096,
-      cacheHits: 0,
-      cacheMisses: 1,
+      cacheHits: null,
+      cacheMeasurement: "NOT_MEASURED",
+      cacheMisses: null,
       cancelledRequests: 0,
     },
     chart: {
@@ -94,8 +97,14 @@ describe("ChartPerformanceProof", () => {
     ["transport.payloadBytes", (proof: ReturnType<typeof completeProof>) => {
       delete (proof.transport as Partial<typeof proof.transport>).payloadBytes;
     }],
-    ["transport.cacheHits", (proof: ReturnType<typeof completeProof>) => {
-      delete (proof.transport as Partial<typeof proof.transport>).cacheHits;
+    ["transport.cacheMeasurement", (proof: ReturnType<typeof completeProof>) => {
+      delete (proof.transport as Partial<typeof proof.transport>).cacheMeasurement;
+    }],
+    ["build.diffFingerprint", (proof: ReturnType<typeof completeProof>) => {
+      delete (proof.build as Partial<typeof proof.build>).diffFingerprint;
+    }],
+    ["build.dirty", (proof: ReturnType<typeof completeProof>) => {
+      delete (proof.build as Partial<typeof proof.build>).dirty;
     }],
     ["chart.modelBuilds", (proof: ReturnType<typeof completeProof>) => {
       delete (proof.chart as Partial<typeof proof.chart>).modelBuilds;
@@ -132,6 +141,16 @@ describe("ChartPerformanceProof", () => {
     );
   });
 
+  it("rejects synthetic cache hit and miss counts", () => {
+    const proof = completeProof();
+    proof.transport.cacheHits = 0 as never;
+    proof.transport.cacheMisses = 1 as never;
+
+    expect(() => assertChartPerformanceProof(proof)).toThrow(
+      "transport.cacheMeasurement",
+    );
+  });
+
   it("requires separate cold and warm scenario records", () => {
     const cold = completeProof();
     const warm = completeProof();
@@ -140,5 +159,30 @@ describe("ChartPerformanceProof", () => {
 
     expect(assertChartPerformanceProof(cold).scenario.phase).toBe("cold");
     expect(assertChartPerformanceProof(warm).scenario.phase).toBe("warm");
+  });
+
+  it("requires an abort proof to identify a newer visible revision without stale values", () => {
+    const proof = completeProof();
+    proof.scenario.sessionAbort = true;
+    Object.assign(proof.cancellation, {
+      adoptedAfterAbort: false,
+      completed: true,
+      latestRevision: 18,
+      requested: true,
+      sourceRevision: 17,
+      staleRevisionVisible: false,
+      staleValuesAdopted: false,
+    });
+    const abortCancellation = proof.cancellation as typeof proof.cancellation & {
+      latestRevision: number;
+      staleValuesAdopted: boolean;
+    };
+
+    expect(() => assertChartPerformanceProof(proof)).not.toThrow();
+
+    abortCancellation.staleValuesAdopted = true;
+    expect(() => assertChartPerformanceProof(proof)).toThrow(
+      "cancellation.staleValuesAdopted",
+    );
   });
 });

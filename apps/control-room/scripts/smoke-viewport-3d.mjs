@@ -232,11 +232,15 @@ try {
   await canvas.waitFor({ state: "visible", timeout: 15_000 });
   await waitForCanvasClipBox(page);
 
-  const { drawingBuffer, hasContext } = await readCanvasContextState(page);
+  const { contextLost, drawingBuffer, hasContext } =
+    await readCanvasContextState(page);
   const pixelSample = await sampleCanvasComposite(page);
 
   if (!hasContext) {
     throw new Error("3D viewport canvas has no WebGL context.");
+  }
+  if (contextLost) {
+    throw new Error("3D viewport WebGL context is lost at startup.");
   }
   if (drawingBuffer.width <= 0 || drawingBuffer.height <= 0) {
     throw new Error(
@@ -262,7 +266,12 @@ try {
     );
   }
   if (hysteresisReplayOnly) {
+    const finalWebGL = await assertFinalViewportWebGLState(
+      page,
+      "hysteresis replay",
+    );
     logViewport3DPerformancePhases(viewport3DPerformancePhases);
+    console.log(`Viewport 3D final WebGL: ${JSON.stringify(finalWebGL)}.`);
     console.log(`Viewport 3D smoke passed at ${url}.`);
   } else {
     if (!skipCameraGestureSmoke) {
@@ -271,7 +280,12 @@ try {
       );
     }
     if (cameraOnlySmoke) {
+      const finalWebGL = await assertFinalViewportWebGLState(
+        page,
+        "camera gestures",
+      );
       logViewport3DPerformancePhases(viewport3DPerformancePhases);
+      console.log(`Viewport 3D final WebGL: ${JSON.stringify(finalWebGL)}.`);
       console.log(`Viewport 3D camera smoke passed at ${url}.`);
     } else {
       if (!regionOnlyObjectId) {
@@ -311,8 +325,13 @@ try {
         "viewport-3d-smoke",
         { scope: "all" },
       );
+      const finalWebGL = await assertFinalViewportWebGLState(
+        page,
+        "complete viewport smoke",
+      );
       logViewport3DPerformancePhases(viewport3DPerformancePhases);
       logComputePerformanceProbe(computeMetrics);
+      console.log(`Viewport 3D final WebGL: ${JSON.stringify(finalWebGL)}.`);
       console.log(`Viewport 3D smoke passed at ${url}.`);
     }
   }
@@ -773,12 +792,14 @@ async function readCanvasContextState(page) {
     const node = document.querySelector(selector);
     if (!(node instanceof HTMLCanvasElement)) {
       return {
+        contextLost: true,
         drawingBuffer: { height: 0, width: 0 },
         hasContext: false,
       };
     }
     const context = node.getContext("webgl2") ?? node.getContext("webgl");
     return {
+      contextLost: context?.isContextLost() ?? true,
       drawingBuffer: {
         height: context?.drawingBufferHeight ?? 0,
         width: context?.drawingBufferWidth ?? 0,
@@ -786,6 +807,26 @@ async function readCanvasContextState(page) {
       hasContext: Boolean(context),
     };
   }, VIEWPORT_3D_CANVAS_SELECTOR);
+}
+
+async function assertFinalViewportWebGLState(page, phase) {
+  const finalWebGL = await readCanvasContextState(page);
+  if (!finalWebGL.hasContext) {
+    throw new Error(`3D viewport has no WebGL context after ${phase}.`);
+  }
+  if (finalWebGL.contextLost) {
+    throw new Error(`3D viewport WebGL context is lost after ${phase}.`);
+  }
+  if (
+    finalWebGL.drawingBuffer.width <= 0 ||
+    finalWebGL.drawingBuffer.height <= 0
+  ) {
+    throw new Error(
+      `3D viewport final drawing buffer is empty after ${phase}: ` +
+        `${finalWebGL.drawingBuffer.width}x${finalWebGL.drawingBuffer.height}.`,
+    );
+  }
+  return finalWebGL;
 }
 
 async function waitForCanvasClipBox(page) {
@@ -2338,6 +2379,14 @@ function isIgnorableConsoleError(text) {
   }
 
   if (allowMissingSession && text.includes("net::ERR_CONNECTION_REFUSED")) {
+    return true;
+  }
+
+  if (
+    allowMissingSession &&
+    text.includes("/v2/sessions/current/events/ws") &&
+    text.includes("net::ERR_INVALID_HTTP_RESPONSE")
+  ) {
     return true;
   }
 
