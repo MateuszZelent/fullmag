@@ -101,7 +101,7 @@ cleanup_failed_export() {
     rm -f -- "${source_provenance_json}" || true
   fi
   if [ "${source_snapshot_owned:-0}" = "1" ] &&
-     is_canonical_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT:-}"; then
+     is_materialized_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT:-}"; then
     chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
     rm -rf -- "${SOURCE_SNAPSHOT_ROOT}" || true
   fi
@@ -618,6 +618,11 @@ FDM_LIB="$(latest_native_lib_dir "*fullmag-fdm-sys*/out/native-build/backends/fd
 echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 copy_native_library_group "$FEM_LIB" libfullmag_fem
 copy_native_library_group "$FDM_LIB" libfullmag_fdm
+copy_shared_library_dependency_closure ${runtime_root}/bin/fullmag-fem-gpu-bin
+copy_shared_library_dependency_closure ${runtime_root}/bin/fullmag-api
+copy_shared_library_dependency_closure ${runtime_root}/_fullmag_core.so
+copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fem.so.0
+copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fdm.so.0
 validate_nvtx_artifact() {
   local artifact="$1"
   shift

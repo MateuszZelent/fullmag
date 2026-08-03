@@ -470,6 +470,19 @@ def test_export_script_resolves_petsc_and_slepc_library_names_from_pkg_config() 
     assert "'" not in resolver
 
 
+def test_export_bundles_application_and_native_library_dependency_closures() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    for artifact in (
+        "${runtime_root}/bin/fullmag-fem-gpu-bin",
+        "${runtime_root}/bin/fullmag-api",
+        "${runtime_root}/_fullmag_core.so",
+        "${runtime_root}/lib/libfullmag_fem.so.0",
+        "${runtime_root}/lib/libfullmag_fdm.so.0",
+    ):
+        assert f"copy_shared_library_dependency_closure {artifact}" in script
+
+
 def test_export_script_refreshes_identity_before_configured_release_clean() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     identity_clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
@@ -1106,6 +1119,59 @@ def test_failed_nested_bootstrap_verify_cleans_owned_snapshot_without_relaunch(
     ]
     assert not snapshot.exists()
     assert not identity.exists()
+
+
+def test_failed_export_cleans_owned_materialized_source_cache(tmp_path: Path) -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    def bash_function(name: str) -> str:
+        start = exporter.index(f"{name}() {{")
+        end = exporter.index("\n}\n", start) + len("\n}")
+        return exporter[start:end]
+
+    snapshot = tmp_path / "source-cache.test"
+    snapshot.mkdir()
+    functions = "\n".join(
+        bash_function(name)
+        for name in (
+            "is_canonical_source_snapshot_path",
+            "is_materialized_source_snapshot_path",
+            "cleanup_failed_export",
+        )
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                f'FULLMAG_CONTAINER_TARGET_DIR={str(tmp_path)!r}\n'
+                f'SOURCE_SNAPSHOT_ROOT={str(snapshot)!r}\n'
+                'source_snapshot_owned=1\n'
+                'source_snapshot_materialize_root=""\n'
+                'source_identity_owned=0\n'
+                'source_identity_file=""\n'
+                'source_provenance_owned=0\n'
+                'source_provenance_json=""\n'
+                'docker_build_ref=""\n'
+                'docker_build_ref_marker=""\n'
+                'persistent_staging_archive=""\n'
+                'persistent_validation_root=""\n'
+                'STAGING_ROOT=""\n'
+                f"{functions}\n"
+                'trap cleanup_failed_export EXIT\n'
+                'exit 19\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 19, result.stderr + result.stdout
+    assert not snapshot.exists()
 
 
 def test_source_bootstrap_launches_once_only_when_both_handoff_vars_are_absent() -> None:
