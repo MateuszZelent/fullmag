@@ -96,6 +96,14 @@ struct GpuDemagPoissonWorkspace {
     bool ready = false;
 };
 
+// Builds P1-state/P2-potential operators for nonperiodic Poisson demag and
+// retains the node-class-reduced P1/P1 operator for the periodic path.
+bool build_mixed_demag_operators(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error);
+
+// Compatibility entrypoint used by existing GPU lifecycle callers.
 bool build_p1_demag_operators(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,

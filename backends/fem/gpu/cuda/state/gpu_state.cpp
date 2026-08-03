@@ -70,6 +70,8 @@ void reset_metadata(FemGpuState &state)
     state.relaxation.state_generation = 0;
     state.relaxation.nonlinear_cg_direction_valid = false;
     state.relaxation.accepted_evaluation = {};
+    state.demag_poisson.scalar_dof_count = 0;
+    state.demag_poisson.full_scalar_dof_count = 0;
     state.demag_poisson.hybrid_stage_m_xyz.clear();
     state.demag_poisson.hybrid_demag_xyz.clear();
     state.demag_poisson.hybrid_demag_energy_joules = 0.0;
@@ -441,6 +443,8 @@ bool gpu_state_initialize(
     state.residency.host_state = FemGpuSyncState::HostClean;
     state.residency.device_state = FemGpuSyncState::HostStale;
     state.rk.fsal_valid = false;
+    state.demag_poisson.scalar_dof_count = allocate_demag_workspace ? node_count : 0;
+    state.demag_poisson.full_scalar_dof_count = allocate_demag_workspace ? node_count : 0;
 
     if (!allocate_device || node_count == 0) {
         return true;
@@ -455,7 +459,14 @@ bool gpu_state_initialize(
     uint64_t device_bytes = 0;
     if (!gpu_magnetization_allocate(state.magnetization, node_count, device_bytes, error) ||
         !gpu_field_buffers_allocate(state.fields, node_count, device_bytes, error) ||
-        !gpu_rk_workspace_allocate(state.rk, node_count, state.lifecycle.stage_count, device_bytes, error) ||
+        !gpu_rk_workspace_allocate(
+            state.rk,
+            node_count,
+            state.demag_poisson.scalar_dof_count,
+            state.demag_poisson.full_scalar_dof_count,
+            state.lifecycle.stage_count,
+            device_bytes,
+            error) ||
         !gpu_relaxation_state_allocate(state.relaxation, node_count, device_bytes, error) ||
         !gpu_local_interaction_workspace_allocate(state.local_interactions, node_count, device_bytes, error) ||
         !gpu_magnetoelastic_allocate(state.magnetoelastic, node_count, device_bytes, error) ||
@@ -477,9 +488,21 @@ bool gpu_state_initialize(
     }
 
     if (allocate_demag_workspace &&
-        (!gpu_device_allocate_double(state.demag_poisson.poisson_rhs, node_count, device_bytes, error) ||
-            !gpu_device_allocate_double(state.demag_poisson.poisson_solution, node_count, device_bytes, error) ||
-            !gpu_device_allocate_double(state.demag_poisson.poisson_solution_full, node_count, device_bytes, error) ||
+        (!gpu_device_allocate_double(
+                state.demag_poisson.poisson_rhs,
+                state.demag_poisson.scalar_dof_count,
+                device_bytes,
+                error) ||
+            !gpu_device_allocate_double(
+                state.demag_poisson.poisson_solution,
+                state.demag_poisson.scalar_dof_count,
+                device_bytes,
+                error) ||
+            !gpu_device_allocate_double(
+                state.demag_poisson.poisson_solution_full,
+                state.demag_poisson.full_scalar_dof_count,
+                device_bytes,
+                error) ||
             !gpu_device_allocate_component(state.demag_poisson.poisson_gradient, node_count, device_bytes, error))) {
         gpu_state_destroy(state);
         return false;
@@ -502,6 +525,74 @@ bool gpu_state_initialize(
     (void)audit;
     error = "FemGpuState device allocation requested but fullmag_fem was built without CUDA runtime support";
     gpu_state_destroy(state);
+    return false;
+#endif
+}
+
+bool gpu_state_resize_demag_poisson_scalars(
+    FemGpuState &state,
+    uint64_t scalar_dof_count,
+    uint64_t full_scalar_dof_count,
+    std::string &error)
+{
+    if (!state.lifecycle.allocated) {
+        error = "FemGpuState Poisson scalar resize requires allocated device state";
+        return false;
+    }
+    if (scalar_dof_count == 0 || full_scalar_dof_count == 0 ||
+        scalar_dof_count > full_scalar_dof_count) {
+        error = "FemGpuState Poisson scalar resize received invalid DOF counts";
+        return false;
+    }
+    auto &demag = state.demag_poisson;
+    if (demag.scalar_dof_count == scalar_dof_count &&
+        demag.full_scalar_dof_count == full_scalar_dof_count) {
+        return true;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    double *rhs = nullptr;
+    double *solution = nullptr;
+    double *solution_full = nullptr;
+    double *transaction_solution = nullptr;
+    double *transaction_solution_full = nullptr;
+    uint64_t replacement_bytes = 0;
+    if (!gpu_device_allocate_double(rhs, scalar_dof_count, replacement_bytes, error) ||
+        !gpu_device_allocate_double(solution, scalar_dof_count, replacement_bytes, error) ||
+        !gpu_device_allocate_double(solution_full, full_scalar_dof_count, replacement_bytes, error) ||
+        !gpu_device_allocate_double(transaction_solution, scalar_dof_count, replacement_bytes, error) ||
+        !gpu_device_allocate_double(
+            transaction_solution_full,
+            full_scalar_dof_count,
+            replacement_bytes,
+            error)) {
+        gpu_device_free_double(rhs);
+        gpu_device_free_double(solution);
+        gpu_device_free_double(solution_full);
+        gpu_device_free_double(transaction_solution);
+        gpu_device_free_double(transaction_solution_full);
+        return false;
+    }
+
+    const uint64_t previous_bytes = sizeof(double) *
+        (3u * demag.scalar_dof_count + 2u * demag.full_scalar_dof_count);
+    gpu_device_free_double(demag.poisson_rhs);
+    gpu_device_free_double(demag.poisson_solution);
+    gpu_device_free_double(demag.poisson_solution_full);
+    gpu_device_free_double(state.rk.transaction_poisson_solution);
+    gpu_device_free_double(state.rk.transaction_poisson_solution_full);
+    demag.poisson_rhs = rhs;
+    demag.poisson_solution = solution;
+    demag.poisson_solution_full = solution_full;
+    state.rk.transaction_poisson_solution = transaction_solution;
+    state.rk.transaction_poisson_solution_full = transaction_solution_full;
+    demag.scalar_dof_count = scalar_dof_count;
+    demag.full_scalar_dof_count = full_scalar_dof_count;
+    state.lifecycle.device_bytes =
+        state.lifecycle.device_bytes - previous_bytes + replacement_bytes;
+    return true;
+#else
+    error = "FemGpuState Poisson scalar resize requires CUDA runtime support";
     return false;
 #endif
 }

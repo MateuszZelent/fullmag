@@ -733,6 +733,7 @@ RecoveryResult recover_p1_potential(
     ctx.mesh.magnetic_element_mask = magnetic_elements;
     ctx.mesh.magnetic_node_mask = magnetic_nodes;
     ctx.mfem_context.mesh = mesh.get();
+    ctx.mfem_context.fes = &fes;
     ctx.integration_weights.mfem_lumped_mass.assign(source.n_nodes, 1.0);
 
     mfem::GridFunction potential_grid(&fes);
@@ -860,6 +861,7 @@ RecoveryResult recover_manufactured_on_mesh(mfem::Mesh &mesh, int recover_thread
     mfem::FiniteElementSpace fes(&mesh, &fec);
     fullmag::fem::Context ctx{};
     ctx.mfem_context.mesh = &mesh;
+    ctx.mfem_context.fes = &fes;
     ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
     ctx.cpu_threads.effective_omp_threads = recover_threads;
     ctx.integration_weights.mfem_lumped_mass.assign(ctx.mesh.n_nodes, 1.0);

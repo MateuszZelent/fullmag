@@ -1,0 +1,64 @@
+{
+  "document": {"path": "docs/physics/0431-fem-demag-mixed-order-potential.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented", "reason": "Nonperiodic Poisson-Robin P2 is implemented and passes the managed SP4 fixed-mesh energy gate; ST4 trajectory qualification remains separate."},
+    {"solver": "FEM", "device": "GPU", "status": "documented", "reason": "Nonperiodic P2 device operators are implemented and compiled; executed-device scientific qualification is pending."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses a Newell tensor convolution and serves only as the cross-discretization oracle."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM GPU does not use the FEM mixed-order potential realization."}
+  ],
+  "equations": [
+    {"id": "fem-demag-p1-p2-weak-form", "symbols": ["D", "OmegaM", "u", "v", "beta", "Ms", "m"], "sources": ["poisson-lifecycle", "poisson-boundary", "poisson-rhs"]},
+    {"id": "fem-demag-p1-p2-system", "symbols": ["K2", "C2", "uvec", "B21", "mvec", "bvec", "beta"], "sources": ["poisson-lifecycle", "poisson-boundary", "poisson-rhs"]},
+    {"id": "fem-demag-p1-p2-recovery", "symbols": ["WM", "h", "G21", "uvec", "c"], "sources": ["poisson-recovery"]},
+    {"id": "fem-demag-p1-p2-energy", "symbols": ["Ed", "mu0", "bvec", "uvec"], "sources": ["poisson-solve", "poisson-energy"]},
+    {"id": "fem-demag-p1-p2-energy-field", "symbols": ["Ed", "mu0", "OmegaM", "Ms", "m", "Hd"], "sources": ["poisson-energy", "poisson-recovery"]}
+  ],
+  "symbols": [
+    {"id": "OmegaM", "latex": "\\Omega_m", "meaning": "magnetic domain", "si_unit": "\\mathrm{m^3}"},
+    {"id": "D", "latex": "D", "meaning": "shared magnetic-plus-air domain", "si_unit": "\\mathrm{m^3}"},
+    {"id": "u", "latex": "u_h", "meaning": "magnetic scalar potential", "si_unit": "\\mathrm A"},
+    {"id": "v", "latex": "v_h", "meaning": "scalar-potential test function", "si_unit": "1"},
+    {"id": "beta", "latex": "\\beta", "meaning": "Robin far-field coefficient", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "m", "latex": "\\mathbf m_h", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "K2", "latex": "\\mathbf K_2", "meaning": "P2 Laplace stiffness matrix", "si_unit": "\\mathrm m"},
+    {"id": "C2", "latex": "\\mathbf C_2", "meaning": "P2 outer-boundary mass matrix", "si_unit": "\\mathrm{m^2}"},
+    {"id": "uvec", "latex": "\\mathbf u", "meaning": "vector of P2 potential coefficients", "si_unit": "\\mathrm A"},
+    {"id": "B21", "latex": "\\mathbf B_{21}", "meaning": "P1-magnetization to P2-potential coupling", "si_unit": "\\mathrm{A\\,m}"},
+    {"id": "mvec", "latex": "\\mathbf m", "meaning": "vector of P1 reduced-magnetization coefficients", "si_unit": "1"},
+    {"id": "bvec", "latex": "\\mathbf b", "meaning": "scalar-potential right-hand side", "si_unit": "\\mathrm{A\\,m}"},
+    {"id": "WM", "latex": "\\mathbf W_M", "meaning": "certified magnetic mass weighting", "si_unit": "\\mathrm{m^3}"},
+    {"id": "h", "latex": "\\mathbf h_c", "meaning": "P1 coefficients of demag-field component $c$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "G21", "latex": "\\mathbf G_{21,c}", "meaning": "geometric gradient coupling for component $c$", "si_unit": "\\mathrm{m^2}"},
+    {"id": "c", "latex": "c", "meaning": "Cartesian component index", "si_unit": "1"},
+    {"id": "Ed", "latex": "E_{\\mathrm{demag},h}", "meaning": "discrete demagnetization energy", "si_unit": "\\mathrm J"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "Hd", "latex": "\\mathbf H_{\\mathrm{demag},h}", "meaning": "recovered demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"}
+  ],
+  "sources": [
+    {"id": "poisson-lifecycle", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_lifecycle.cpp", "symbol": "context_initialize_poisson", "responsibility": "Construct the scalar potential space and Poisson operator."},
+    {"id": "poisson-boundary", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "initialize_demag_poisson_boundary_operator", "responsibility": "Apply Dirichlet or Robin outer-boundary policy."},
+    {"id": "poisson-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "MagnetizationCoefficient", "responsibility": "Evaluate the magnetic source during scalar RHS assembly."},
+    {"id": "poisson-recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Recover physical and visual demag fields from the scalar potential."},
+    {"id": "poisson-energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Evaluate the independent physical field-energy form."},
+    {"id": "poisson-solve", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp", "symbol": "context_compute_demag_poisson", "responsibility": "Orchestrate RHS, solve, recovery, energy, and telemetry."},
+    {"id": "gpu-operators", "path": "backends/fem/gpu/cuda/demag_poisson/operators.hpp", "symbol": "build_p1_demag_operators", "responsibility": "Build and upload device RHS and recovery operators."},
+    {"id": "gpu-stage", "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp", "symbol": "compute_device_demag_for_device_stage", "responsibility": "Execute the device-resident demag stage."},
+    {"id": "mesh-perimeter", "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py", "symbol": "_build_perimeter_refinement_fields", "responsibility": "Build edge and corner refinement fields."},
+    {"id": "sp4-scenario", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Author the public SP4 FEM relaxation workflow."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "StudyBuilder.demag.realization", "type": "str | None", "default": "resolved default", "si_unit": "1", "validation": "planner-supported demag realization", "meaning": "requested numerical demag family", "backend_support": "FEM CPU/GPU by capability", "problem_ir": "interactions[].kind"},
+      {"python": "StudyBuilder.fem_demag_solver.solver", "type": "str", "default": "CG", "si_unit": "1", "validation": "`CG` or `GMRES`", "meaning": "linear solver", "backend_support": "FEM CPU/GPU", "problem_ir": "resolved FEM demag solver policy"},
+      {"python": "StudyBuilder.fem_demag_solver.preconditioner", "type": "str", "default": "AMG", "si_unit": "1", "validation": "`AMG`, `JACOBI`, or `NONE`", "meaning": "linear preconditioner", "backend_support": "FEM CPU/GPU", "problem_ir": "resolved FEM demag solver policy"},
+      {"python": "StudyBuilder.fem_demag_solver.rtol", "type": "float", "default": "backend policy", "si_unit": "1", "validation": "finite and positive", "meaning": "relative linear residual target", "backend_support": "FEM CPU/GPU", "problem_ir": "resolved FEM demag solver policy"},
+      {"python": "StudyBuilder.fem_demag_solver.max_iterations", "type": "int", "default": "backend policy", "si_unit": "1", "validation": "positive integer", "meaning": "linear iteration cap", "backend_support": "FEM CPU/GPU", "problem_ir": "resolved FEM demag solver policy"},
+      {"python": "GeometryMeshHandle.thin_film.order", "type": "int", "default": "1", "si_unit": "1", "validation": "exactly `1` for the physical state in this contract", "meaning": "magnetization and physical-field order", "backend_support": "FEM CPU/GPU", "problem_ir": "mesh_workflow.per_geometry[].order"},
+      {"python": "GeometryMeshHandle.thin_film.edge_maximum_element_size", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "finite positive and no larger than bulk maximum", "meaning": "magnetic edge size target", "backend_support": "FEM meshing", "problem_ir": "mesh_workflow.per_geometry[].edge_hmax"},
+      {"python": "GeometryMeshHandle.thin_film.edge_thickness", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "finite positive and paired with edge target", "meaning": "edge refinement width", "backend_support": "FEM meshing", "problem_ir": "mesh_workflow.per_geometry[].edge_thickness"},
+      {"python": "GeometryMeshHandle.thin_film.corner_maximum_element_size", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "finite positive and no larger than edge target", "meaning": "magnetic corner size target", "backend_support": "FEM meshing", "problem_ir": "mesh_workflow.per_geometry[].corner_hmax"},
+      {"python": "GeometryMeshHandle.thin_film.corner_extent", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "finite positive and paired with corner target", "meaning": "corner refinement extent", "backend_support": "FEM meshing", "problem_ir": "mesh_workflow.per_geometry[].corner_extent"}
+    ]
+  }
+}

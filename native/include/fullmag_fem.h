@@ -735,6 +735,11 @@ typedef struct {
     uint64_t demag_hypre_wait_out_enqueue_wall_time_ns;
     uint64_t demag_hypre_event_wait_count;
     uint64_t demag_hypre_timed_solve_count;
+    /* Resolved Poisson demag provenance; energies are in J. */
+    int32_t demag_potential_order;
+    uint64_t demag_potential_true_dof_count;
+    double demag_variational_energy_joules;
+    double demag_recovered_field_energy_joules;
 } fullmag_fem_step_stats;
 
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u

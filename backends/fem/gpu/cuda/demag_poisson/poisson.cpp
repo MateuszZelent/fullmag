@@ -57,6 +57,16 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     if (!build_p1_demag_operators(ctx, *workspace, error)) {
         return false;
     }
+    auto *potential_fes = static_cast<mfem::FiniteElementSpace *>(
+        ctx.poisson_demag.potential_fes);
+    if (potential_fes == nullptr ||
+        !gpu_state_resize_demag_poisson_scalars(
+            ctx.gpu_state.device,
+            workspace->rhs.rows,
+            static_cast<uint64_t>(potential_fes->GetTrueVSize()),
+            error)) {
+        return false;
+    }
 
     uint64_t device_bytes = 0;
     if (!upload_demag_poisson_operators(*workspace, device_bytes, error)) {
@@ -65,11 +75,14 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     workspace->device_bytes = device_bytes;
 
     if (!cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_rhs, 0,
-                static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
+                static_cast<size_t>(ctx.gpu_state.device.demag_poisson.scalar_dof_count) * sizeof(double)),
             "cudaMemset demag poisson_rhs", error) ||
         !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_solution, 0,
-                static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
-            "cudaMemset demag poisson_solution", error)) {
+                static_cast<size_t>(ctx.gpu_state.device.demag_poisson.scalar_dof_count) * sizeof(double)),
+            "cudaMemset demag poisson_solution", error) ||
+        !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_solution_full, 0,
+                static_cast<size_t>(ctx.gpu_state.device.demag_poisson.full_scalar_dof_count) * sizeof(double)),
+            "cudaMemset demag poisson_solution_full", error)) {
         destroy_demag_poisson_operators(*workspace);
         return false;
     }

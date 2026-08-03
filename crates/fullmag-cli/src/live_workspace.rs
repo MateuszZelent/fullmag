@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -261,9 +261,11 @@ impl LocalLiveWorkspace {
     }
 
     pub fn replace(&self, next: LocalLiveWorkspaceState) {
+        let scalar_candidate = scalar_candidate_from_workspace_state(&next);
         if let Ok(mut state) = self.state.lock() {
             *state = next;
         }
+        self.publisher.enqueue_scalar_candidate(scalar_candidate);
         self.publish_snapshot();
     }
 
@@ -271,9 +273,12 @@ impl LocalLiveWorkspace {
     where
         F: FnOnce(&mut LocalLiveWorkspaceState),
     {
+        let mut scalar_candidate = None;
         if let Ok(mut state) = self.state.lock() {
             mutate(&mut state);
+            scalar_candidate = scalar_candidate_from_workspace_state(&state);
         }
+        self.publisher.enqueue_scalar_candidate(scalar_candidate);
         self.publisher.request_publish();
     }
 
@@ -282,11 +287,14 @@ impl LocalLiveWorkspace {
         F: FnOnce(&mut LocalLiveWorkspaceState),
     {
         let build_start = Instant::now();
+        let mut scalar_candidate = None;
         if let Ok(mut state) = self.state.lock() {
             mutate(&mut state);
+            scalar_candidate = scalar_candidate_from_workspace_state(&state);
         }
         let mutate_wall_time_ns = elapsed_ns(build_start);
         let enqueue_start = Instant::now();
+        self.publisher.enqueue_scalar_candidate(scalar_candidate);
         self.publisher.request_publish();
         LiveWorkspaceUpdateTimings {
             live_state_build_wall_time_ns: mutate_wall_time_ns,
@@ -535,6 +543,41 @@ impl LocalLiveWorkspace {
     pub fn set_publish_fast_mode(&self, enabled: bool) {
         self.publisher.set_fast_mode(enabled);
     }
+}
+
+fn scalar_candidate_from_workspace_state(
+    state: &LocalLiveWorkspaceState,
+) -> Option<(ScalarSequenceKey, CurrentLiveScalarRow, bool)> {
+    let finished = state.live_state.latest_step.finished
+        || state.live_state.status == "completed"
+        || state.run.status == "completed"
+        || state.session.status == "completed";
+    let stage_index = state
+        .stage_execution
+        .as_ref()
+        .and_then(|execution| execution.active_stage_index);
+    let stage_id = stage_index.and_then(|index| {
+        state
+            .stage_execution
+            .as_ref()
+            .and_then(|execution| execution.stages.get(index))
+            .and_then(|stage| stage.stage_id.clone())
+    });
+    state
+        .latest_scalar_row
+        .clone()
+        .filter(|row| row.step == state.live_state.latest_step.step)
+        .map(|row| {
+            (
+                ScalarSequenceKey {
+                    run_id: state.run.run_id.clone(),
+                    stage_index,
+                    stage_id,
+                },
+                row,
+                finished,
+            )
+        })
 }
 
 pub(crate) fn transition_preparation(
@@ -1116,14 +1159,51 @@ pub(crate) struct CurrentLivePublisher {
     #[cfg(test)]
     sending: Arc<AtomicBool>,
     fast_mode: Arc<AtomicBool>,
+    pending_scalar_rows: Arc<Mutex<PendingScalarRows>>,
     #[cfg(test)]
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
-    #[cfg(test)]
     scalar_gate: Arc<Mutex<LiveTelemetryPublishGate>>,
     diagnostics: Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
     last_request_at: Arc<Mutex<Option<Instant>>>,
     state_source: Arc<Mutex<Option<Arc<Mutex<LocalLiveWorkspaceState>>>>>,
     wake_tx: mpsc::SyncSender<()>,
+}
+
+#[derive(Debug, Default)]
+struct PendingScalarRows {
+    rows: VecDeque<CurrentLiveScalarRow>,
+    latest_sequence: Option<ScalarSequenceKey>,
+    latest_seen_step: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScalarSequenceKey {
+    run_id: String,
+    stage_index: Option<usize>,
+    stage_id: Option<String>,
+}
+
+impl PendingScalarRows {
+    fn enqueue_if_new(
+        &mut self,
+        sequence: ScalarSequenceKey,
+        row: CurrentLiveScalarRow,
+        finished: bool,
+        gate: &mut LiveTelemetryPublishGate,
+    ) {
+        if self.latest_sequence.as_ref() != Some(&sequence) {
+            self.latest_sequence = Some(sequence);
+            self.latest_seen_step = None;
+        }
+        if self.latest_seen_step.is_some_and(|step| row.step <= step) {
+            return;
+        }
+        self.latest_seen_step = Some(row.step);
+        if gate.should_publish_scalar(row.step, finished) {
+            gate.last_scalar_publish_at = Some(Instant::now());
+            self.rows.push_back(row);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1204,6 +1284,7 @@ impl CurrentLivePublisher {
         let pending = Arc::new(AtomicBool::new(false));
         let sending = Arc::new(AtomicBool::new(false));
         let fast_mode = Arc::new(AtomicBool::new(true));
+        let pending_scalar_rows = Arc::new(Mutex::new(PendingScalarRows::default()));
         let payload = Arc::new(Mutex::new(CurrentLiveSnapshotPayload::default()));
         let scalar_gate = Arc::new(Mutex::new(LiveTelemetryPublishGate::default()));
         let diagnostics = Arc::new(Mutex::new(
@@ -1214,6 +1295,7 @@ impl CurrentLivePublisher {
         let worker_pending = Arc::clone(&pending);
         let worker_sending = Arc::clone(&sending);
         let worker_fast_mode = Arc::clone(&fast_mode);
+        let worker_pending_scalar_rows = Arc::clone(&pending_scalar_rows);
         let worker_payload = Arc::clone(&payload);
         let worker_scalar_gate = Arc::clone(&scalar_gate);
         let worker_diagnostics = Arc::clone(&diagnostics);
@@ -1232,6 +1314,7 @@ impl CurrentLivePublisher {
                     worker_pending,
                     worker_sending,
                     worker_fast_mode,
+                    worker_pending_scalar_rows,
                     worker_payload,
                     worker_scalar_gate,
                     worker_diagnostics,
@@ -1251,9 +1334,9 @@ impl CurrentLivePublisher {
             #[cfg(test)]
             sending,
             fast_mode,
+            pending_scalar_rows,
             #[cfg(test)]
             payload,
-            #[cfg(test)]
             scalar_gate,
             diagnostics,
             last_request_at,
@@ -1306,6 +1389,21 @@ impl CurrentLivePublisher {
 
     pub fn set_fast_mode(&self, enabled: bool) {
         self.fast_mode.store(enabled, Ordering::Release);
+    }
+
+    fn enqueue_scalar_candidate(
+        &self,
+        candidate: Option<(ScalarSequenceKey, CurrentLiveScalarRow, bool)>,
+    ) {
+        let Some((sequence, row, finished)) = candidate else {
+            return;
+        };
+        let (Ok(mut pending), Ok(mut gate)) =
+            (self.pending_scalar_rows.lock(), self.scalar_gate.lock())
+        else {
+            return;
+        };
+        pending.enqueue_if_new(sequence, row, finished, &mut gate);
     }
 
     pub fn request_publish(&self) {
@@ -1727,6 +1825,111 @@ mod tests {
         assert_eq!(publish_count.load(std::sync::atomic::Ordering::Acquire), 1);
         assert_eq!(published_step.load(std::sync::atomic::Ordering::Acquire), 5);
         assert_eq!(publisher.diagnostics_snapshot().publish_count, 1);
+    }
+
+    #[test]
+    fn publisher_preserves_step_zero_and_one_while_prior_heavy_frame_is_in_flight() {
+        let heavy_started = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let release_heavy = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let first_heavy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let step_zero_attempts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (scalar_tx, scalar_rx) = std::sync::mpsc::channel();
+        let sink_heavy_started = std::sync::Arc::clone(&heavy_started);
+        let sink_release_heavy = std::sync::Arc::clone(&release_heavy);
+        let sink_first_heavy = std::sync::Arc::clone(&first_heavy);
+        let sink_step_zero_attempts = std::sync::Arc::clone(&step_zero_attempts);
+        let publisher = CurrentLivePublisher::spawn_with_test_sink(
+            "scalar-fifo-behind-heavy-frame-test",
+            move |_, payload| {
+                if let Some(row) = payload.latest_scalar_row.as_ref() {
+                    if row.step == 0
+                        && sink_step_zero_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                            == 0
+                    {
+                        return Err(anyhow::anyhow!("transient scalar failure"));
+                    }
+                    scalar_tx.send(row.step).expect("record scalar step");
+                } else if sink_first_heavy.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                    sink_heavy_started.wait();
+                    sink_release_heavy.wait();
+                }
+                Ok(())
+            },
+        );
+        let workspace = LocalLiveWorkspace::new(workspace_with_domain_mesh().snapshot(), publisher);
+
+        workspace.update(|state| {
+            state.live_state.latest_step.step = 7;
+        });
+        heavy_started.wait();
+
+        workspace.update(|state| {
+            state.latest_scalar_row = Some(scalar_row(0));
+        });
+        workspace.update(|state| {
+            state.latest_scalar_row = Some(scalar_row(1));
+        });
+        release_heavy.wait();
+
+        let published = [
+            scalar_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("step 0 scalar publish"),
+            scalar_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("step 1 scalar publish"),
+        ];
+        assert_eq!(published, [0, 1]);
+        assert_eq!(
+            step_zero_attempts.load(std::sync::atomic::Ordering::Acquire),
+            2
+        );
+    }
+
+    #[test]
+    fn pending_scalar_rows_accept_step_reset_for_a_new_stage() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let first_stage = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let second_stage = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("dynamic".to_string()),
+        };
+
+        pending.enqueue_if_new(first_stage, scalar_row(1), false, &mut gate);
+        pending.enqueue_if_new(second_stage, scalar_row(0), false, &mut gate);
+
+        assert_eq!(
+            pending.rows.iter().map(|row| row.step).collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn scalar_candidate_ignores_stale_row_during_stage_transition() {
+        let mut state = workspace_with_domain_mesh();
+        state.live_state.latest_step.step = 1;
+        state.latest_scalar_row = Some(scalar_row(1));
+        state.stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 2,
+            active_stage_index: Some(0),
+            ..CurrentLiveStageExecutionState::default()
+        });
+        assert!(scalar_candidate_from_workspace_state(&state).is_some());
+
+        state.live_state.latest_step.step = 0;
+        state.stage_execution.as_mut().unwrap().active_stage_index = Some(1);
+        assert!(scalar_candidate_from_workspace_state(&state).is_none());
+
+        state.latest_scalar_row = Some(scalar_row(0));
+        let (sequence, row, _) = scalar_candidate_from_workspace_state(&state).unwrap();
+        assert_eq!(sequence.stage_index, Some(1));
+        assert_eq!(row.step, 0);
     }
 
     #[test]
@@ -3341,6 +3544,7 @@ fn current_live_publisher_loop(
     pending: Arc<AtomicBool>,
     sending: Arc<AtomicBool>,
     fast_mode: Arc<AtomicBool>,
+    pending_scalar_rows: Arc<Mutex<PendingScalarRows>>,
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
     scalar_gate: Arc<Mutex<LiveTelemetryPublishGate>>,
     diagnostics: Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
@@ -3371,6 +3575,11 @@ fn current_live_publisher_loop(
                     std::thread::sleep(min_interval - elapsed);
                 }
             }
+            let scalar_publish_error =
+                publish_pending_scalar_rows(&session_id, &pending_scalar_rows, &delta_sink).err();
+            if scalar_publish_error.is_some() {
+                pending.store(true, Ordering::Release);
+            }
             build_pending_payload_from_workspace(
                 &state_source,
                 &payload,
@@ -3379,6 +3588,9 @@ fn current_live_publisher_loop(
             );
             let clone_start = Instant::now();
             let mut snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+            if scalar_publish_error.is_some() {
+                snapshot.latest_scalar_row = None;
+            }
             let clone_wall_time_ns = elapsed_ns(clone_start);
             let publish_lag_wall_time_ns = last_request_at
                 .lock()
@@ -3444,6 +3656,9 @@ fn current_live_publisher_loop(
                     );
                 }
             }
+            if let Some(error) = scalar_publish_error.as_ref() {
+                eprintln!("fullmag live scalar sync warning: {error:#}; retrying");
+            }
             if publish_result.succeeded() {
                 if let (Some((run_id, step)), Ok(mut values)) =
                     (published_endpoint(&snapshot), diagnostics.lock())
@@ -3461,9 +3676,14 @@ fn current_live_publisher_loop(
     }
 
     if pending.swap(false, Ordering::AcqRel) {
+        let scalar_publish_error =
+            publish_pending_scalar_rows(&session_id, &pending_scalar_rows, &delta_sink).err();
         build_pending_payload_from_workspace(&state_source, &payload, &scalar_gate, &diagnostics);
         let clone_start = Instant::now();
         let mut snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+        if scalar_publish_error.is_some() {
+            snapshot.latest_scalar_row = None;
+        }
         let clone_wall_time_ns = elapsed_ns(clone_start);
         let publish_lag_wall_time_ns = last_request_at
             .lock()
@@ -3522,6 +3742,38 @@ fn current_live_publisher_loop(
                 "fullmag final live snapshot diagnostics sync warning: {:#}",
                 error
             );
+        }
+        if let Some(error) = scalar_publish_error {
+            eprintln!("fullmag final live scalar sync warning: {error:#}");
+        }
+    }
+}
+
+fn publish_pending_scalar_rows(
+    session_id: &str,
+    pending_scalar_rows: &Arc<Mutex<PendingScalarRows>>,
+    delta_sink: &LivePublishSink,
+) -> Result<()> {
+    loop {
+        let row = pending_scalar_rows
+            .lock()
+            .ok()
+            .and_then(|pending| pending.rows.front().cloned());
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let step = row.step;
+        delta_sink(
+            session_id,
+            &CurrentLiveSnapshotPayload {
+                latest_scalar_row: Some(row),
+                ..CurrentLiveSnapshotPayload::default()
+            },
+        )?;
+        if let Ok(mut pending) = pending_scalar_rows.lock() {
+            if pending.rows.front().is_some_and(|row| row.step == step) {
+                pending.rows.pop_front();
+            }
         }
     }
 }

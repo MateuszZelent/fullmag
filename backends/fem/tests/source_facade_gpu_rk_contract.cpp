@@ -1866,7 +1866,9 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             operators.find("const uint32_t reduced_col = periodic_scalar_column(ctx, col);") !=
                 std::string::npos &&
-            operators.find("const uint32_t scalar_col = periodic_scalar_column(") !=
+            operators.find("const uint32_t scalar_col = periodic_node_class_reduction") !=
+                std::string::npos &&
+            operators.find("? periodic_scalar_column(ctx, potential_true_dofs[") !=
                 std::string::npos &&
             stage_compute.find("poisson_solution_for_recovery") ==
                 std::string::npos &&

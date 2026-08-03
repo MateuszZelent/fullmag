@@ -186,7 +186,7 @@ bool compute_device_demag_for_device_stage_impl(
         if (!cuda_ok(cudaMemsetAsync(
                 gpu.demag_poisson.poisson_solution,
                 0,
-                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double),
+                static_cast<size_t>(gpu.demag_poisson.scalar_dof_count) * sizeof(double),
                 stream),
                 "cudaMemsetAsync GPU Poisson demag initial solution", reason)) {
             return false;
@@ -296,7 +296,7 @@ bool compute_device_demag_for_device_stage_impl(
         if (!cuda_ok(cudaMemsetAsync(
                 gpu.demag_poisson.poisson_solution,
                 0,
-                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double),
+                static_cast<size_t>(gpu.demag_poisson.scalar_dof_count) * sizeof(double),
                 stream),
                 "cudaMemsetAsync rejected GPU Poisson demag candidate",
                 reason)) {

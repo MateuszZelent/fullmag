@@ -132,6 +132,18 @@ fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> 
 }
 
 #[cfg(feature = "fem-gpu")]
+fn copy_demag_diagnostics(
+    step_stats: &mut StepStats,
+    ffi_stats: &ffi::fullmag_fem_step_stats,
+) {
+    step_stats.demag_potential_order = ffi_stats.demag_potential_order;
+    step_stats.demag_potential_true_dof_count = ffi_stats.demag_potential_true_dof_count;
+    step_stats.demag_variational_energy_joules = ffi_stats.demag_variational_energy_joules;
+    step_stats.demag_recovered_field_energy_joules =
+        ffi_stats.demag_recovered_field_energy_joules;
+}
+
+#[cfg(feature = "fem-gpu")]
 fn solver_attempt_decision(value: u32) -> Result<&'static str, RunError> {
     match value {
         1 => Ok("accepted"),
@@ -2660,6 +2672,10 @@ impl NativeFemBackend {
             demag_amg_strength_threshold_is_set: 0,
             demag_amg_max_levels: 0,
             demag_amg_max_levels_is_set: 0,
+            demag_potential_order: 0,
+            demag_potential_true_dof_count: 0,
+            demag_variational_energy_joules: 0.0,
+            demag_recovered_field_energy_joules: 0.0,
         };
 
         let ffi_wall_start = std::time::Instant::now();
@@ -2780,6 +2796,7 @@ impl NativeFemBackend {
             fem_cpu_thread_cap_reason: stats.cpu_thread_cap_reason,
             ..StepStats::default()
         };
+        copy_demag_diagnostics(&mut step_stats, &stats);
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
@@ -3032,6 +3049,10 @@ impl NativeFemBackend {
             demag_amg_strength_threshold_is_set: 0,
             demag_amg_max_levels: 0,
             demag_amg_max_levels_is_set: 0,
+            demag_potential_order: 0,
+            demag_potential_true_dof_count: 0,
+            demag_variational_energy_joules: 0.0,
+            demag_recovered_field_energy_joules: 0.0,
         };
 
         let ffi_wall_start = std::time::Instant::now();
@@ -3155,6 +3176,7 @@ impl NativeFemBackend {
             fem_cpu_thread_cap_reason: stats.cpu_thread_cap_reason,
             ..StepStats::default()
         };
+        copy_demag_diagnostics(&mut step_stats, &stats);
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
@@ -3380,6 +3402,10 @@ impl NativeFemBackend {
             demag_amg_strength_threshold_is_set: 0,
             demag_amg_max_levels: 0,
             demag_amg_max_levels_is_set: 0,
+            demag_potential_order: 0,
+            demag_potential_true_dof_count: 0,
+            demag_variational_energy_joules: 0.0,
+            demag_recovered_field_energy_joules: 0.0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_snapshot_stats(self.handle, &mut stats) };
@@ -3467,6 +3493,7 @@ impl NativeFemBackend {
             fem_cpu_thread_cap_reason: stats.cpu_thread_cap_reason,
             ..StepStats::default()
         };
+        copy_demag_diagnostics(&mut step_stats, &stats);
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         step_stats.per_object_scalars =
@@ -4588,6 +4615,25 @@ fn last_global_error_or(fallback: &str) -> String {
 #[cfg(all(test, feature = "fem-gpu"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demag_diagnostics_mapping_preserves_each_ffi_field() {
+        let mut ffi_stats = unsafe {
+            std::mem::MaybeUninit::<ffi::fullmag_fem_step_stats>::zeroed().assume_init()
+        };
+        ffi_stats.demag_potential_order = 3;
+        ffi_stats.demag_potential_true_dof_count = 123_456;
+        ffi_stats.demag_variational_energy_joules = -7.25;
+        ffi_stats.demag_recovered_field_energy_joules = 9.5;
+        let mut step_stats = StepStats::default();
+
+        copy_demag_diagnostics(&mut step_stats, &ffi_stats);
+
+        assert_eq!(step_stats.demag_potential_order, 3);
+        assert_eq!(step_stats.demag_potential_true_dof_count, 123_456);
+        assert_eq!(step_stats.demag_variational_energy_joules, -7.25);
+        assert_eq!(step_stats.demag_recovered_field_energy_joules, 9.5);
+    }
 
     #[test]
     fn native_fem_nonfinite_torque_is_error() {

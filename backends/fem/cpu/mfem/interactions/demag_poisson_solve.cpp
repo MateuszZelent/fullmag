@@ -110,7 +110,8 @@ bool context_compute_demag_poisson(
                 demag_energy,
                 m_xyz,
                 &energy_wall_time_ns_pbc,
-                error)) {
+                error,
+                nullptr)) {
             return false;
         }
         const uint64_t recover_total_wall_time_ns_pbc = elapsed_ns(recover_wall_start_pbc);
@@ -190,7 +191,8 @@ bool context_compute_demag_poisson(
             demag_energy,
             m_xyz,
             &energy_wall_time_ns,
-            error)) {
+            error,
+            rhs)) {
         return false;
     }
     const uint64_t recover_total_wall_time_ns = elapsed_ns(recover_wall_start);

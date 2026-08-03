@@ -6239,7 +6239,7 @@ fn resolve_preview_field_every_n(
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let args = ScriptCli::parse_from(raw_args);
     if args.headless {
-        init_api_port_explicit(0)?;
+        init_headless_api_port()?;
     } else {
         init_api_port()?;
     }
