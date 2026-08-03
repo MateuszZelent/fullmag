@@ -1854,6 +1854,17 @@ async function verifyPendingRequestAbort(page, state) {
   if (fixtureTotalRows <= 0) {
     throw new Error("Abort proof requires a deterministic rows fixture.");
   }
+  // Normalize the current range first so the delayed request below always
+  // changes the rows resource identity, even after a short lifecycle run.
+  state.delayNext = false;
+  await page.evaluate(() => {
+    const dispatch = window.__FULLMAG_CHART_DIAGNOSTICS__?.dispatchDataZoom;
+    if (typeof dispatch !== "function") {
+      throw new Error("Chart range dispatcher is unavailable.");
+    }
+    dispatch(0, 100);
+  });
+  await page.waitForTimeout(1_750);
   state.abortObserved = false;
   state.delayNext = true;
   state.delayedRequest = null;
