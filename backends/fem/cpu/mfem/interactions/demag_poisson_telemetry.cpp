@@ -48,14 +48,35 @@ void fill_demag_poisson_solver_stats(
         stats.demag_linear_iterations =
             static_cast<uint32_t>(std::max(ctx.poisson_demag.last_iterations, 0));
         stats.demag_linear_residual = ctx.poisson_demag.last_residual;
-        return;
+    } else {
+        stats.demag_solve_count = 0;
+        stats.demag_linear_iterations = 0;
+        stats.demag_linear_residual = 0.0;
     }
 #else
     (void) ctx;
-#endif
     stats.demag_solve_count = 0;
     stats.demag_linear_iterations = 0;
     stats.demag_linear_residual = 0.0;
+#endif
+    stats.demag_potential_order = 0;
+    stats.demag_potential_true_dof_count = 0;
+    stats.demag_variational_energy_joules = 0.0;
+    stats.demag_recovered_field_energy_joules = 0.0;
+
+#if FULLMAG_HAS_MFEM_STACK
+    if (ctx.demag.enabled && ctx.poisson_demag.ready &&
+        (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
+         ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN)) {
+        stats.demag_potential_order = ctx.poisson_demag.potential_order;
+        stats.demag_potential_true_dof_count =
+            ctx.poisson_demag.potential_true_dof_count;
+        stats.demag_variational_energy_joules =
+            ctx.poisson_demag.last_variational_energy_joules;
+        stats.demag_recovered_field_energy_joules =
+            ctx.poisson_demag.last_recovered_field_energy_joules;
+    }
+#endif
 }
 
 const char *demag_poisson_linear_solver_name(fullmag_fem_linear_solver solver)
@@ -127,11 +148,11 @@ std::string demag_poisson_call_profile_line(const DemagPoissonCallProfile &profi
         profile.solve_wall_time_ns +
         profile.recover_wall_time_ns +
         profile.energy_wall_time_ns;
-    char buffer[384];
+    char buffer[640];
     std::snprintf(
         buffer,
         sizeof(buffer),
-        "[fullmag-fem] demag call: step=%llu call=%llu dt=%.3e assemble=%llums solve=%llums recover=%llums energy=%llums total=%llums lin_iters=%d residual=%.3e\n",
+        "[fullmag-fem] demag call: step=%llu call=%llu dt=%.3e assemble=%llums solve=%llums recover=%llums energy=%llums total=%llums lin_iters=%d residual=%.3e potential_order=%d potential_tdofs=%llu variational_energy_j=%.17e recovered_field_energy_j=%.17e\n",
         static_cast<unsigned long long>(profile.step),
         static_cast<unsigned long long>(profile.call),
         profile.dt_seconds,
@@ -141,7 +162,11 @@ std::string demag_poisson_call_profile_line(const DemagPoissonCallProfile &profi
         static_cast<unsigned long long>(profile.energy_wall_time_ns / 1000000ull),
         static_cast<unsigned long long>(total_wall_time_ns / 1000000ull),
         profile.linear_iterations,
-        profile.linear_residual);
+        profile.linear_residual,
+        profile.potential_order,
+        static_cast<unsigned long long>(profile.potential_true_dof_count),
+        profile.variational_energy_joules,
+        profile.recovered_field_energy_joules);
     return std::string(buffer);
 }
 
@@ -167,6 +192,13 @@ void log_demag_poisson_call_profile(
 #if FULLMAG_HAS_MFEM_STACK
     profile.linear_iterations = ctx.poisson_demag.last_iterations;
     profile.linear_residual = ctx.poisson_demag.last_residual;
+    profile.potential_order = ctx.poisson_demag.potential_order;
+    profile.potential_true_dof_count =
+        ctx.poisson_demag.potential_true_dof_count;
+    profile.variational_energy_joules =
+        ctx.poisson_demag.last_variational_energy_joules;
+    profile.recovered_field_energy_joules =
+        ctx.poisson_demag.last_recovered_field_energy_joules;
 #endif
     const std::string line = demag_poisson_call_profile_line(profile);
     std::fputs(line.c_str(), stderr);

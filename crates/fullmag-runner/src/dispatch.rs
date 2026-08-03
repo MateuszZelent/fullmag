@@ -5822,6 +5822,9 @@ pub(crate) fn fem_poisson_demag_provenance(
         _ => return None,
     };
     let policy = crate::native_fem::resolved_native_fem_demag_solver_policy(plan);
+    let resolved_diagnostics = stats.filter(|entry| {
+        entry.demag_potential_order > 0 && entry.demag_potential_true_dof_count > 0
+    });
 
     Some(FemPoissonDemagProvenance {
         linear_solver: policy.solver,
@@ -5840,6 +5843,21 @@ pub(crate) fn fem_poisson_demag_provenance(
             .air_box_config
             .as_ref()
             .and_then(|config| config.robin_beta_factor),
+        potential_order: resolved_diagnostics.map(|entry| entry.demag_potential_order),
+        potential_true_dof_count: resolved_diagnostics
+            .map(|entry| entry.demag_potential_true_dof_count),
+        variational_energy_joules: resolved_diagnostics.and_then(|entry| {
+            entry
+                .demag_variational_energy_joules
+                .is_finite()
+                .then_some(entry.demag_variational_energy_joules)
+        }),
+        recovered_field_energy_joules: resolved_diagnostics.and_then(|entry| {
+            entry
+                .demag_recovered_field_energy_joules
+                .is_finite()
+                .then_some(entry.demag_recovered_field_energy_joules)
+        }),
     })
 }
 
@@ -6712,6 +6730,10 @@ mod tests {
         let stats = StepStats {
             poisson_iterations: 13,
             poisson_final_residual: 4.0e-9,
+            demag_potential_order: 2,
+            demag_potential_true_dof_count: 321,
+            demag_variational_energy_joules: 1.25e-18,
+            demag_recovered_field_energy_joules: 1.24e-18,
             ..StepStats::default()
         };
 
@@ -6726,6 +6748,86 @@ mod tests {
         assert_eq!(provenance.final_residual, Some(4.0e-9));
         assert_eq!(provenance.boundary_condition, "robin");
         assert_eq!(provenance.robin_beta, Some(2.5));
+        assert_eq!(provenance.potential_order, Some(2));
+        assert_eq!(provenance.potential_true_dof_count, Some(321));
+        assert_eq!(provenance.variational_energy_joules, Some(1.25e-18));
+        assert_eq!(provenance.recovered_field_energy_joules, Some(1.24e-18));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_poisson_demag_provenance_preserves_periodic_p1_and_nonpositive_energies() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.fe_order = 2;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        let stats = StepStats {
+            demag_potential_order: 1,
+            demag_potential_true_dof_count: 77,
+            demag_variational_energy_joules: 0.0,
+            demag_recovered_field_energy_joules: -2.5e-19,
+            ..StepStats::default()
+        };
+
+        let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
+            .expect("periodic Poisson demag provenance should be present");
+
+        assert_eq!(provenance.potential_order, Some(1));
+        assert_eq!(provenance.potential_true_dof_count, Some(77));
+        assert_eq!(provenance.variational_energy_joules, Some(0.0));
+        assert_eq!(provenance.recovered_field_energy_joules, Some(-2.5e-19));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_poisson_demag_provenance_omits_unavailable_zero_diagnostics() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.fe_order = 2;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet);
+        let stats = StepStats {
+            demag_potential_order: 0,
+            demag_potential_true_dof_count: 0,
+            demag_variational_energy_joules: 1.0,
+            demag_recovered_field_energy_joules: -1.0,
+            ..StepStats::default()
+        };
+
+        let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
+            .expect("Dirichlet Poisson demag provenance should be present");
+
+        assert_eq!(provenance.potential_order, None);
+        assert_eq!(provenance.potential_true_dof_count, None);
+        assert_eq!(provenance.variational_energy_joules, None);
+        assert_eq!(provenance.recovered_field_energy_joules, None);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_poisson_demag_provenance_omits_nonfinite_energies() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let stats = StepStats {
+            demag_potential_order: 2,
+            demag_potential_true_dof_count: 321,
+            demag_variational_energy_joules: f64::NAN,
+            demag_recovered_field_energy_joules: f64::NEG_INFINITY,
+            ..StepStats::default()
+        };
+
+        let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
+            .expect("Poisson demag provenance should be present");
+
+        assert_eq!(provenance.potential_order, Some(2));
+        assert_eq!(provenance.potential_true_dof_count, Some(321));
+        assert_eq!(provenance.variational_energy_joules, None);
+        assert_eq!(provenance.recovered_field_energy_joules, None);
     }
 
     #[cfg(feature = "fem-gpu")]

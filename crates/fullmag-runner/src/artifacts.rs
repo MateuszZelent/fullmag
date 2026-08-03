@@ -4701,6 +4701,13 @@ mod tests {
                     reason: "native_fem_gpu_unavailable".to_string(),
                     message: "native FEM GPU unavailable in test".to_string(),
                 }),
+                fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                    potential_order: Some(2),
+                    potential_true_dof_count: Some(9876),
+                    variational_energy_joules: Some(0.0),
+                    recovered_field_energy_joules: Some(-3.5e-19),
+                    ..Default::default()
+                }),
                 ..ExecutionProvenance::default()
             },
         };
@@ -4717,6 +4724,11 @@ mod tests {
         assert_eq!(fallback["original_engine"], "fem_native_gpu");
         assert_eq!(fallback["fallback_engine"], "fem_cpu_native");
         assert_eq!(fallback["reason"], "native_fem_gpu_unavailable");
+        let demag = &metadata["execution_provenance"]["fem_poisson_demag"];
+        assert_eq!(demag["potential_order"], 2);
+        assert_eq!(demag["potential_true_dof_count"], 9876);
+        assert_eq!(demag["variational_energy_joules"], 0.0);
+        assert_eq!(demag["recovered_field_energy_joules"], -3.5e-19);
         assert!(
             metadata.get("sampling_resolution").is_none(),
             "explicit legacy runs must omit automatic sampling provenance"

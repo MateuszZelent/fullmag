@@ -2420,18 +2420,21 @@ impl ExchangeLlgProblem {
         let z_plus = sample(self.grid.index(x, y, zp));
         let [m0, m1, m2] = sample(flat);
 
-        let inv_2dx = 0.5 / self.cell_size.dx;
-        let inv_2dy = 0.5 / self.cell_size.dy;
-        let inv_2dz = 0.5 / self.cell_size.dz;
-        let dm0 = ux * (x_plus[0] - x_minus[0]) * inv_2dx
-            + uy * (y_plus[0] - y_minus[0]) * inv_2dy
-            + uz * (z_plus[0] - z_minus[0]) * inv_2dz;
-        let dm1 = ux * (x_plus[1] - x_minus[1]) * inv_2dx
-            + uy * (y_plus[1] - y_minus[1]) * inv_2dy
-            + uz * (z_plus[1] - z_minus[1]) * inv_2dz;
-        let dm2 = ux * (x_plus[2] - x_minus[2]) * inv_2dx
-            + uy * (y_plus[2] - y_minus[2]) * inv_2dy
-            + uz * (z_plus[2] - z_minus[2]) * inv_2dz;
+        // MuMax3's source prefactor already contains the factor 1/2. Its
+        // `deltax`/`deltay`/`deltaz` macros therefore use the unhalved
+        // neighbour difference divided by the cell size.
+        let inv_dx = 1.0 / self.cell_size.dx;
+        let inv_dy = 1.0 / self.cell_size.dy;
+        let inv_dz = 1.0 / self.cell_size.dz;
+        let dm0 = ux * (x_plus[0] - x_minus[0]) * inv_dx
+            + uy * (y_plus[0] - y_minus[0]) * inv_dy
+            + uz * (z_plus[0] - z_minus[0]) * inv_dz;
+        let dm1 = ux * (x_plus[1] - x_minus[1]) * inv_dx
+            + uy * (y_plus[1] - y_minus[1]) * inv_dy
+            + uz * (z_plus[1] - z_minus[1]) * inv_dz;
+        let dm2 = ux * (x_plus[2] - x_minus[2]) * inv_dx
+            + uy * (y_plus[2] - y_minus[2]) * inv_dy
+            + uz * (z_plus[2] - z_minus[2]) * inv_dz;
 
         let cx = m1 * dm2 - m2 * dm1;
         let cy = m2 * dm0 - m0 * dm2;
@@ -4684,9 +4687,9 @@ mod stt_tests {
             let xm = if flat == 0 { 0 } else { flat - 1 };
             let xp = if flat == 2 { 2 } else { flat + 1 };
             let v = [
-                b * 1.0e12 * (m[xp][0] - m[xm][0]) / 4.0,
-                b * 1.0e12 * (m[xp][1] - m[xm][1]) / 4.0,
-                b * 1.0e12 * (m[xp][2] - m[xm][2]) / 4.0,
+                b * 1.0e12 * (m[xp][0] - m[xm][0]) / 2.0,
+                b * 1.0e12 * (m[xp][1] - m[xm][1]) / 2.0,
+                b * 1.0e12 * (m[xp][2] - m[xm][2]) / 2.0,
             ];
             let [m0, m1, m2] = m[flat];
             let c = [

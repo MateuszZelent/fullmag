@@ -35,10 +35,11 @@ namespace fullmag::fem {
 struct DemagRecoveryWorkspace {
     struct Scratch {
         mfem::IsoparametricTransformation transformation;
-        mfem::Array<int> dofs;
+        mfem::Array<int> potential_dofs;
+        mfem::Array<int> state_dofs;
         mfem::Vector u_elem;
         mfem::DenseMatrix dshape;
-        mfem::Vector shape;
+        mfem::Vector state_shape;
     };
 
     explicit DemagRecoveryWorkspace(mfem::FiniteElementSpace *fes)
@@ -133,7 +134,8 @@ bool recover_demag_poisson_field(
     double &demag_energy,
     const std::vector<double> &m_xyz,
     uint64_t *energy_wall_time_ns,
-    std::string &error)
+    std::string &error,
+    const mfem::Vector *assembled_rhs)
 {
     auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
     auto *demag_recovery_workspace =
@@ -144,6 +146,12 @@ bool recover_demag_poisson_field(
         return false;
     }
     mfem::FiniteElementSpace *fes = demag_recovery_workspace->fes;
+    auto *state_fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_context.fes);
+    if (state_fes == nullptr ||
+        state_fes->GetNDofs() != static_cast<int>(ctx.mesh.n_nodes)) {
+        error = "Poisson demag recovery requires the base P1 magnetization FE space";
+        return false;
+    }
 
     const size_t node_count = static_cast<size_t>(ctx.mesh.n_nodes);
     const size_t field_len = node_count * 3u;
@@ -155,7 +163,8 @@ bool recover_demag_poisson_field(
         return false;
     }
 
-    std::atomic<bool> integration_weights_valid{true};
+    std::atomic<bool> jacobian_weights_valid{true};
+    std::atomic<bool> combined_weights_valid{true};
 
     auto accumulate_projection = [](std::vector<double> &field_accum,
                                     std::vector<double> &weight_accum,
@@ -190,53 +199,60 @@ bool recover_demag_poisson_field(
                                   std::vector<double> &visual_weight_accum,
                                   const mfem::GridFunction &gf_u,
                                   mfem::IsoparametricTransformation &transformation,
-                                  mfem::Array<int> &dofs,
+                                  mfem::Array<int> &potential_dofs,
+                                  mfem::Array<int> &state_dofs,
                                   mfem::Vector &u_elem,
                                   mfem::DenseMatrix &dshape,
-                                  mfem::Vector &shape,
+                                  mfem::Vector &state_shape,
                                   bool atomic_updates) {
-        const mfem::FiniteElement *fe = fes->GetFE(elem);
+        const mfem::FiniteElement *potential_fe = fes->GetFE(elem);
+        const mfem::FiniteElement *state_fe = state_fes->GetFE(elem);
         mesh->GetElementTransformation(elem, &transformation);
         mfem::ElementTransformation *T = &transformation;
         const bool magnetic_element = ctx.mesh.magnetic_element_mask.empty() ||
             ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] != 0u;
 
-        fes->GetElementDofs(elem, dofs);
-        const int local_ndof = dofs.Size();
-        u_elem.SetSize(local_ndof);
-        for (int i = 0; i < local_ndof; ++i) {
-            const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-            const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
+        fes->GetElementDofs(elem, potential_dofs);
+        state_fes->GetElementDofs(elem, state_dofs);
+        const int potential_ndof = potential_dofs.Size();
+        const int state_ndof = state_dofs.Size();
+        u_elem.SetSize(potential_ndof);
+        for (int i = 0; i < potential_ndof; ++i) {
+            const int gdof = potential_dofs[i] >= 0
+                ? potential_dofs[i] : -1 - potential_dofs[i];
+            const double sign = potential_dofs[i] >= 0 ? 1.0 : -1.0;
             u_elem(i) = sign * gf_u(gdof);
         }
 
         // P1 fast path: grad(u) is constant per element for linear tetrahedra.
         // One CalcPhysDShape call suffices; distribute equally to all 4 nodes
         // weighted by element volume / 4.
-        if (fe->GetOrder() == 1 &&
-            fe->GetGeomType() == mfem::Geometry::TETRAHEDRON) {
+        if (potential_fe->GetOrder() == 1 &&
+            potential_fe->GetGeomType() == mfem::Geometry::TETRAHEDRON) {
             const mfem::IntegrationPoint &ip0 =
-                mfem::Geometries.GetCenter(fe->GetGeomType());
+                mfem::Geometries.GetCenter(potential_fe->GetGeomType());
             T->SetIntPoint(&ip0);
-            const double elem_volume = T->Weight() / 6.0;
-            if (!std::isfinite(elem_volume) || elem_volume <= 0.0) {
-                integration_weights_valid.store(false, std::memory_order_relaxed);
+            const double jacobian_weight = T->Weight();
+            if (!std::isfinite(jacobian_weight) || jacobian_weight <= 0.0) {
+                jacobian_weights_valid.store(false, std::memory_order_relaxed);
                 return;
             }
+            const double elem_volume = jacobian_weight / 6.0;
 
-            dshape.SetSize(local_ndof, 3);
-            fe->CalcPhysDShape(*T, dshape);
+            dshape.SetSize(potential_ndof, 3);
+            potential_fe->CalcPhysDShape(*T, dshape);
 
             double grad_u[3] = {0.0, 0.0, 0.0};
-            for (int i = 0; i < local_ndof; ++i) {
+            for (int i = 0; i < potential_ndof; ++i) {
                 for (int d = 0; d < 3; ++d) {
                     grad_u[d] += u_elem(i) * dshape(i, d);
                 }
             }
 
-            const double node_weight = elem_volume / 4.0;
-            for (int i = 0; i < local_ndof; ++i) {
-                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
+            const double node_weight = elem_volume / static_cast<double>(state_ndof);
+            for (int i = 0; i < state_ndof; ++i) {
+                const int gdof = state_dofs[i] >= 0
+                    ? state_dofs[i] : -1 - state_dofs[i];
                 if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.mesh.n_nodes) {
                     continue;
                 }
@@ -270,35 +286,43 @@ bool recover_demag_poisson_field(
 
         // General path for higher-order elements: quadrature-based recovery.
         const mfem::IntegrationRule &ir =
-            mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
+            mfem::IntRules.Get(
+                potential_fe->GetGeomType(),
+                2 * potential_fe->GetOrder());
 
-        shape.SetSize(local_ndof);
-        dshape.SetSize(local_ndof, 3);
+        state_shape.SetSize(state_ndof);
+        dshape.SetSize(potential_ndof, 3);
         for (int q = 0; q < ir.GetNPoints(); ++q) {
             const mfem::IntegrationPoint &ip = ir.IntPoint(q);
             T->SetIntPoint(&ip);
-            const double w = ip.weight * T->Weight();
-            if (!std::isfinite(w) || w <= 0.0) {
-                integration_weights_valid.store(false, std::memory_order_relaxed);
+            const double jacobian_weight = T->Weight();
+            if (!std::isfinite(jacobian_weight) || jacobian_weight <= 0.0) {
+                jacobian_weights_valid.store(false, std::memory_order_relaxed);
+                return;
+            }
+            const double w = ip.weight * jacobian_weight;
+            if (!std::isfinite(w)) {
+                combined_weights_valid.store(false, std::memory_order_relaxed);
                 return;
             }
 
-            fe->CalcPhysDShape(*T, dshape);
+            potential_fe->CalcPhysDShape(*T, dshape);
 
             double grad_u[3] = {0.0, 0.0, 0.0};
-            for (int i = 0; i < local_ndof; ++i) {
+            for (int i = 0; i < potential_ndof; ++i) {
                 for (int d = 0; d < 3; ++d) {
                     grad_u[d] += u_elem(i) * dshape(i, d);
                 }
             }
 
-            fe->CalcShape(ip, shape);
-            for (int i = 0; i < local_ndof; ++i) {
-                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
+            state_fe->CalcShape(ip, state_shape);
+            for (int i = 0; i < state_ndof; ++i) {
+                const int gdof = state_dofs[i] >= 0
+                    ? state_dofs[i] : -1 - state_dofs[i];
                 if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.mesh.n_nodes) {
                     continue;
                 }
-                const double phi_w = shape(i) * w;
+                const double phi_w = state_shape(i) * w;
                 const size_t node = static_cast<size_t>(gdof);
                 const double hx = -grad_u[0] * phi_w;
                 const double hy = -grad_u[1] * phi_w;
@@ -370,31 +394,15 @@ bool recover_demag_poisson_field(
                     visual_node_weight,
                     gf_u,
                     scratch.transformation,
-                    scratch.dofs,
+                    scratch.potential_dofs,
+                    scratch.state_dofs,
                     scratch.u_elem,
                     scratch.dshape,
-                    scratch.shape,
+                    scratch.state_shape,
                     true);
             }
         }
 
-#pragma omp parallel for schedule(static) num_threads(recover_threads)
-        for (int node = 0; node < static_cast<int>(node_count); ++node) {
-            const size_t base = static_cast<size_t>(node) * 3u;
-            const double weight = node_weight[static_cast<size_t>(node)];
-            if (weight > 0.0) {
-                h_demag_xyz[base + 0] /= weight;
-                h_demag_xyz[base + 1] /= weight;
-                h_demag_xyz[base + 2] /= weight;
-            }
-            const double visual_weight =
-                visual_node_weight[static_cast<size_t>(node)];
-            if (visual_weight > 0.0) {
-                ctx.demag.h_visual_xyz[base + 0] /= visual_weight;
-                ctx.demag.h_visual_xyz[base + 1] /= visual_weight;
-                ctx.demag.h_visual_xyz[base + 2] /= visual_weight;
-            }
-        }
 #endif
     } else {
         auto &scratch = demag_recovery_workspace->serial_scratch;
@@ -407,40 +415,67 @@ bool recover_demag_poisson_field(
                 visual_node_weight,
                 gf_u,
                 scratch.transformation,
-                scratch.dofs,
+                scratch.potential_dofs,
+                scratch.state_dofs,
                 scratch.u_elem,
                 scratch.dshape,
-                scratch.shape,
+                scratch.state_shape,
                 false);
         }
 
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(recover_threads > 1 && static_cast<int>(node_count) >= 2048) num_threads(recover_threads)
-#endif
-        for (int node = 0; node < static_cast<int>(node_count); ++node) {
-            const double weight = node_weight[static_cast<size_t>(node)];
-            if (weight > 0.0) {
-                const size_t base = static_cast<size_t>(node) * 3u;
-                h_demag_xyz[base + 0] /= weight;
-                h_demag_xyz[base + 1] /= weight;
-                h_demag_xyz[base + 2] /= weight;
-            }
-            const double visual_weight =
-                visual_node_weight[static_cast<size_t>(node)];
-            if (visual_weight > 0.0) {
-                const size_t base = static_cast<size_t>(node) * 3u;
-                ctx.demag.h_visual_xyz[base + 0] /= visual_weight;
-                ctx.demag.h_visual_xyz[base + 1] /= visual_weight;
-                ctx.demag.h_visual_xyz[base + 2] /= visual_weight;
-            }
+    }
+
+    if (!jacobian_weights_valid.load(std::memory_order_relaxed)) {
+        h_demag_xyz.clear();
+        ctx.demag.h_visual_xyz.clear();
+        error = "Poisson demag recovery requires finite positive Jacobian weights";
+        return false;
+    }
+    if (!combined_weights_valid.load(std::memory_order_relaxed)) {
+        h_demag_xyz.clear();
+        ctx.demag.h_visual_xyz.clear();
+        error = "Poisson demag recovery requires finite combined quadrature weights";
+        return false;
+    }
+
+    for (size_t node = 0; node < node_count; ++node) {
+        const double visual_weight = visual_node_weight[node];
+        if (!std::isfinite(visual_weight) || visual_weight <= 0.0) {
+            h_demag_xyz.clear();
+            ctx.demag.h_visual_xyz.clear();
+            error = "Poisson demag recovery has invalid visual accumulated projection mass at state node " +
+                std::to_string(node);
+            return false;
+        }
+        const bool magnetic_node = ctx.mesh.magnetic_node_mask.empty() ||
+            ctx.mesh.magnetic_node_mask[node] != 0u;
+        const double magnetic_weight = node_weight[node];
+        if (magnetic_node &&
+            (!std::isfinite(magnetic_weight) || magnetic_weight <= 0.0)) {
+            h_demag_xyz.clear();
+            ctx.demag.h_visual_xyz.clear();
+            error = "Poisson demag recovery has invalid magnetic accumulated projection mass at state node " +
+                std::to_string(node);
+            return false;
         }
     }
 
-    if (!integration_weights_valid.load(std::memory_order_relaxed)) {
-        h_demag_xyz.clear();
-        ctx.demag.h_visual_xyz.clear();
-        error = "Poisson demag recovery requires finite positive certified integration weights";
-        return false;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(parallel_recover || (recover_threads > 1 && static_cast<int>(node_count) >= 2048)) num_threads(recover_threads)
+#endif
+    for (int node = 0; node < static_cast<int>(node_count); ++node) {
+        const size_t index = static_cast<size_t>(node);
+        const size_t base = index * 3u;
+        const double weight = node_weight[index];
+        if (weight > 0.0) {
+            h_demag_xyz[base + 0] /= weight;
+            h_demag_xyz[base + 1] /= weight;
+            h_demag_xyz[base + 2] /= weight;
+        }
+        const double visual_weight = visual_node_weight[index];
+        ctx.demag.h_visual_xyz[base + 0] /= visual_weight;
+        ctx.demag.h_visual_xyz[base + 1] /= visual_weight;
+        ctx.demag.h_visual_xyz[base + 2] /= visual_weight;
     }
 
     // The LLG/energy field contains only magnetic-element contributions and is
@@ -456,11 +491,26 @@ bool recover_demag_poisson_field(
     }
 
     const auto energy_wall_start = FemSteadyClock::now();
-    demag_energy = demag_poisson_energy_from_field(
+    const double recovered_field_energy = demag_poisson_energy_from_field(
         ctx,
         m_xyz,
         h_demag_xyz,
         recover_threads);
+    ctx.poisson_demag.last_recovered_field_energy_joules =
+        recovered_field_energy;
+    if (assembled_rhs != nullptr) {
+        demag_energy = demag_poisson_energy_from_rhs_potential(
+            *assembled_rhs,
+            potential);
+        if (!std::isfinite(demag_energy)) {
+            error = "Poisson demag variational energy requires matching finite RHS and potential vectors";
+            return false;
+        }
+        ctx.poisson_demag.last_variational_energy_joules = demag_energy;
+    } else {
+        demag_energy = recovered_field_energy;
+        ctx.poisson_demag.last_variational_energy_joules = demag_energy;
+    }
 
     // The physical demag functional is -mu0/2 integral M.H_demag.  For a
     // Robin solve H_demag already depends on (K + beta B)^-1, so this value

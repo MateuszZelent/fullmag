@@ -343,6 +343,48 @@ class PeriodicSpin:
 
 
 @dataclass(frozen=True, slots=True)
+class ReciprocalNonlinearSolverPolicy:
+    """Scaled Picard/GMRES policy for the steady reciprocal M2 block.
+
+    ``gmres_restart`` is the initial Krylov basis length.  The FDM reference
+    lane may grow it after a residual plateau while preserving the requested
+    maximum-iteration budget.  Its CPU reference realization may also use
+    multiplicative block-line sweeps and a neutral voltage cold start; these
+    are numerical policies and do not alter the reciprocal M2 equations.
+    """
+
+    gmres_restart: int = 40
+    max_picard_iterations: int = 4
+    relative_update_tolerance: float = 1.0e-9
+    eta_transport: float = 0.1
+
+    def __post_init__(self) -> None:
+        if self.gmres_restart <= 0:
+            raise ValueError("gmres_restart must be > 0")
+        if self.max_picard_iterations <= 0:
+            raise ValueError("max_picard_iterations must be > 0")
+        relative = require_finite(
+            self.relative_update_tolerance,
+            "relative_update_tolerance",
+        )
+        eta = require_finite(self.eta_transport, "eta_transport")
+        if relative <= 0.0:
+            raise ValueError("relative_update_tolerance must be > 0")
+        if not 0.0 < eta <= 1.0:
+            raise ValueError("eta_transport must be in (0, 1]")
+        object.__setattr__(self, "relative_update_tolerance", relative)
+        object.__setattr__(self, "eta_transport", eta)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "gmres_restart": self.gmres_restart,
+            "max_picard_iterations": self.max_picard_iterations,
+            "relative_update_tolerance": self.relative_update_tolerance,
+            "eta_transport": self.eta_transport,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class SpinSolverPolicy:
     engine: str = "auto"
     relative_tolerance: float = 1.0e-8
@@ -350,6 +392,7 @@ class SpinSolverPolicy:
     max_iterations: int = 500
     operator_version: str = "fv_spin_upwind_v1"
     default_external_boundary: str = "spin_insulating"
+    reciprocal_nonlinear: ReciprocalNonlinearSolverPolicy | None = None
 
     def __post_init__(self) -> None:
         require_non_empty(self.engine, "engine")
@@ -362,13 +405,16 @@ class SpinSolverPolicy:
             raise ValueError("invalid default_external_boundary")
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "engine": self.engine,
             "linear": {"relative_tolerance": self.relative_tolerance, "absolute_tolerance": self.absolute_tolerance, "max_iterations": self.max_iterations},
             "physical_residual_version": "transport_balance_integrated_l2.v1",
             "operator_version": self.operator_version,
             "default_external_boundary": self.default_external_boundary,
         }
+        if self.reciprocal_nonlinear is not None:
+            value["reciprocal_nonlinear"] = self.reciprocal_nonlinear.to_ir()
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,7 +458,10 @@ class SpinDriftDiffusion:
         object.__setattr__(self, "requested_execution", requested_execution or TransportExecution())
         object.__setattr__(self, "mode", mode)
 
-    def to_ir(self) -> dict[str, object]:
+    def to_ir(self, *, coupling: str | None = None) -> dict[str, object]:
+        resolved_coupling = coupling or "one_way"
+        if resolved_coupling not in {"one_way", "bidirectional"}:
+            raise ValueError("coupling must be 'one_way' or 'bidirectional'")
         return {
             "schema_version": "spin_transport.v1", "id": self.id,
             "current_source_id": self.current_source_id,
@@ -421,7 +470,11 @@ class SpinDriftDiffusion:
             "interfaces": [interface.to_ir() for interface in self.interfaces],
             "boundaries": [boundary.to_ir() for boundary in self.boundaries],
             "solver": self.solver.to_ir(), "requested_execution": self.requested_execution.to_ir(),
-            "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
+            "constitutive_version": (
+                "transport_constitutive.reciprocal.fullmag.v1"
+                if resolved_coupling == "bidirectional"
+                else "transport_constitutive.one_way.fullmag.v1"
+            ),
         }
 
 

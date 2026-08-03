@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-07-15
+- Last updated: 2026-08-03
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -414,6 +414,38 @@ nonsymmetric. Residual and charge/spin balance are independently recomputed.
 CUDA engines keep operators and state resident; FP64 parity and transfer audit
 precede separate FP32 high-contrast/thin-layer qualification.
 
+For the FDM M2 block, GMRES stopping is defined in the block-preconditioned
+dimensionless norm. If `b_p = P b`, the relative stopping scale is
+`max(abs_tol, rel_tol ||b_p||_2)` for a nonzero right-hand side; a zero
+right-hand side uses `abs_tol` directly. There is no arbitrary `max(||b_p||,1)`
+floor. Such a floor changes a relative tolerance into an unrelated absolute
+residual for thin, highly anisotropic cells (for example, a `100 nm x 100 nm x
+1 nm` stack), and can reject a physically converged N/F solve. The independently
+recomputed integrated electrode and angular-momentum balance gates remain
+mandatory after the linear solve.
+
+`gmres_restart` is the initial Krylov basis length, not a hard promise that a
+short basis will remain stable on every mesh. If a completed restart cycle still
+has a residual above `100 * max(abs_tol, rel_tol ||b_p||_2)`, the FDM reference
+solver doubles the basis up to the remaining iteration budget. This bounded
+adaptive restart preserves the low-memory policy for easy cases while avoiding
+false non-convergence of long-wavelength modes on refined, thin N/F stacks.
+Boundary flux evaluation reuses the cell gradients assembled for the operator;
+it must not recompute a full-grid gradient field once per boundary face.
+
+The FDM CPU reference lane uses a multiplicative block-line preconditioner on
+grids with at least two nontrivial axes. Each line factors a four-variable
+block-tridiagonal approximation (charge plus three spin-potential components)
+with diffusion, reaction, interface, and boundary diagonal terms. Consecutive
+line sweeps apply a residual correction; they do not replace the physical
+operator and deliberately omit tangential SHE skew terms and `G_i` from the
+approximation. One-dimensional grids retain the block-Jacobi fallback. A
+neutral paired-voltage cold start is used only when the mesh has at least two
+nontrivial axes; otherwise the zero state remains the safe fallback. The source
+map is `coupled_charge_spin.rs::initial_state_guess`,
+`coupled_charge_spin.rs::line_preconditioners`, and
+`coupled_block_linear.rs::BlockLinePreconditioner`.
+
 ### 3.2 FEM/MFEM weak-form contract
 
 Transparent interfaces may use conforming `H1`. Finite-resistance/mixing/SML
@@ -463,6 +495,26 @@ carry signed `theta_sh/P`, conductivities, lengths, and optional physical
 `spin_capacitance`. `DriftDiffusionSpinTorque` consumes a named solve and may
 not accept a private current or polarization shortcut.
 
+For the reciprocal M2 authoring contract, `CurrentTransport` accepts
+`coupling="bidirectional"` (or the resolved model name
+`model="magnetoresistive_poisson"`) only with a complete Ohmic charge solve.
+Every charge-material assignment must carry the base `sigma_Spm` plus finite,
+positive `sigma_parallel_Spm` and `sigma_perpendicular_Spm`, and finite
+`sigma_AHE_Spm`. The charge policy is the block operator
+`fdm_coupled_charge_spin_fv_block_gmres.v1`; its physical residual is
+`transport_balance_integrated_l2.v1`. `ReciprocalNonlinearSolverPolicy`
+provides positive `gmres_restart` and `max_picard_iterations`, positive
+`relative_update_tolerance`, and `0 < eta_transport <= 1`.
+
+`Problem` owns the source coupling and lowers the linked spin module to
+`transport_constitutive.reciprocal.fullmag.v1`; a spin module cannot override
+the source with an independent coupling. Reciprocal authoring is steady-only
+until a transient M2 contract is published. Python, SceneDocument, the
+resource-first Rust authoring schema, and the Control Room inspector preserve
+these fields. This is an authoring/reference contract: the UI advertises the
+M2 lane as `semantic_only`, and it must not be interpreted as a production
+FDM/FEM/GPU execution guarantee.
+
 ### 4.2 ProblemIR representation
 
 Typed IR includes `SpinTransportModuleIR`, charge/spin materials,
@@ -505,7 +557,11 @@ Resource-first API projects current transports, spin transports, interfaces,
 and torques from one revisioned SceneDocument; heavy tensors remain on the
 binary data plane. Dedicated Explorer/Inspector nodes author and inspect model,
 units, orientation, qualification, residual, and freshness. UI/Python export
-must satisfy normalized four-path round-trip equality.
+must satisfy normalized four-path round-trip equality. The current inspector
+round-trips M2 conductivity tensors and reciprocal nonlinear solver policy as
+typed fields; unknown or incomplete M2 records stay read-only/fail-closed, and
+the capability result remains `semantic_only` until the workload gates below
+are closed.
 
 The executable FEM M1 v1 slice is deliberately narrower than the general
 model: CPU, double precision, `execution_mode=strict`, conforming H1/P1,
@@ -567,9 +623,59 @@ stiff-limit convergence to steady M1/M2 are not established by the current M1
 reference slice. BORIS and published models remain planned comparisons after
 explicit unit/sign conversion, not primary proof.
 
+The current FDM CPU-double M2 reference slice has an executable six-case
+matrix (three N/F resolutions and two tolerances) with independent charge and
+spin residuals; its artifact and binary identity are recorded in the audit
+plan. The corresponding BORIS matrix is intentionally diagnostic only: after
+the explicit `Q_ia=Js_ia/MUB_E` normalization, potential profiles improve with
+refinement but `mu_s`, interface fluxes, and torque do not meet the comparison
+contract. This does not promote either solver to cross-backend validation.
+
+#### 5.2.1 BORIS residual units and scope
+
+The BORIS display contract is not dimensionally identical to the Fullmag field
+catalog. In `Transport_Spin_Display.cpp`, the native spin accumulation is
+`S [A/m]` and the displayed tensor `Js_ia` is `A/s`; the latter is an angular
+momentum-current representation, not a charge-equivalent current density. The
+adapter therefore uses
+
+```text
+V_s       = De S/(sigma MUB_E),
+mu_s      = 2 V_s,
+Q_ia      = Js_ia/MUB_E [A/m^2].
+```
+
+An independent residual must use one unit system consistently. In native BORIS
+variables, a homogeneous normal-metal interior obeys
+
+```text
+R_S,a = partial_i Js_ia + De S_a/lambda_sf^2 = 0,
+```
+
+where the direct-SHE contribution is already present in `Js`. The equivalent
+Fullmag form is
+
+```text
+R_Q,a = partial_i Q_ia + sigma mu_s,a/(2 lambda_sf^2) = 0.
+```
+
+Adding `partial_i Js_ia` to the Fullmag reaction term mixes `A/(m s)` and
+`A/(m^3)` and introduces a spurious factor `1/MUB_E`. A residual scale must
+also have divergence units (for example `max(|Js|/h, |De S|/lambda_sf^2)`),
+not the current magnitude `max(|Js|)`. A validator that violates either rule
+can report orders-of-magnitude false residuals even when BORIS' discrete
+Poisson equation is satisfied.
+
+The ferromagnetic BORIS equation is a separate scope: it adds transverse
+exchange/dephasing terms (`l_ex`, `l_ph`) and, when enabled, magnetization-drift,
+topological-Hall, or pumping sources. A normal-metal scalar residual must never
+be applied to an F mesh; an N/F comparison either evaluates those terms from an
+explicit material/magnetization manifest or marks the F residual unsupported.
+
 ### 5.3 Regression and quantitative gates
 
-Tests cover local FV residual, electrode balance, material jumps, normal
+Tests cover local FV residual, electrode balance, anisotropic N/F balance,
+material jumps, normal
 involution, tensor component order, missing gauge/conflicting BC, positivity,
 stage refresh, nonlinear rejection/rollback, checkpoint/restart, strict-GPU
 transfer audit, and full authoring/export/data-plane inspection. Starting

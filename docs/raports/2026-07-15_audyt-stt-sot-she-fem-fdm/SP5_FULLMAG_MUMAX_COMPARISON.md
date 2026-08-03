@@ -1,7 +1,7 @@
 # Standard Problem 5: reprodukcja Fullmag i porównanie z MuMax3
 
-**Data audytu:** 2026-08-02
-**Status:** reprodukcja źródła, wersjonowany operator MuMax3 Python → `ProblemIR` → FDM CPU/CUDA oraz świeży przebieg na RTX 4080 SUPER wykonane; trajektoria nie spełnia tolerancji MuMax3, więc kwalifikacja produkcyjna pozostaje otwarta.
+**Data audytu:** 2026-08-03
+**Status:** reprodukcja źródła, wersjonowany operator MuMax3 Python → `ProblemIR` → FDM CPU/CUDA oraz świeży przebieg na RTX 4080 SUPER wykonane; izolowana brama jednego kroku CPU↔CUDA przechodzi, ale pełna trajektoria nie spełnia tolerancji MuMax3, więc kwalifikacja produkcyjna pozostaje otwarta.
 **Źródło:** [`external_solvers/3/test/standardproblem5.mx3`](../../../external_solvers/3/test/standardproblem5.mx3)
 **Implementacja:** [`examples/mumax_standard_problem_5_fdm.py`](../../../examples/mumax_standard_problem_5_fdm.py)
 **Test kontraktu:** [`test_standard_problem_5_fdm.py`](../../../packages/fullmag-py/tests/test_standard_problem_5_fdm.py)
@@ -145,9 +145,10 @@ relaksacji `1e-6 T` dał `(-0.23433558, -0.09937255, 0.02290284)` oraz
 
 Ten wynik jest baseline'em starego `zhang_li.legacy_fullmag.v0`; nie jest
 wynikiem nowego operatora. MuMax3 `external_solvers/3/cuda/zhangli2.cu` używa
-centralnej różnicy `(m[i+1]-m[i-1])/(2*cell_size)`, podczas gdy legacy Fullmag
-używa pierwszego rzędu upwind. Nowy operator nie zmienia starej ścieżki i musi
-zostać zmierzony osobno po przebudowie runtime.
+różnicy `m[i+1]-m[i-1]` podzielonej przez `cell_size`, ponieważ współczynnik
+`MUB/(2*QE*GAMMA0)` zawiera już czynnik `1/2`. Legacy Fullmag używa pierwszego
+rzędu upwind. Nowy operator nie zmienia starej ścieżki i musi zostać zmierzony
+osobno po przebudowie runtime.
 
 ### 3.3. Wersjonowany operator i bramy implementacyjne
 
@@ -157,14 +158,23 @@ Dodano `zhang_li.mumax3.v1` / `zl_mumax3_central_v1`:
 - walidacja IR nie pozwala pomylić wariantu MuMax3 z FEM `zl_central_reference_v1`;
 - `FdmPlanIR` zachowuje formułę, operator, target i Landé dla provenance;
 - FDM CPU używa stałych `mu_B=9.2740091523e-24`, `e=1.60217646e-19`, centralnego
-  clamp/PBC stencilu i pojedynczej projekcji Gilberta;
+  clamp/PBC stencilu z niehalowaną różnicą źródłowego kernela oraz pojedynczej
+  projekcji Gilberta;
 - ABI native przenosi discriminator do FP64/FP32 CUDA, a stara ścieżka v0 ma
   zachowany prefaktor i stencil;
 - oracle jednego kroku oraz zgodność AoS/SoA przechodzą w `fullmag-engine`.
 
 To jest dowód implementacji operatora, nie dowód zgodności całego SP5. Wymagane
-są nowy managed CUDA build, porównanie CPU↔CUDA i ponowne uruchomienie całej
-trajektorii.
+są porównanie CPU↔CUDA na pełnej trajektorii i ponowne uruchomienie całej
+trajektorii. Izolowana brama operatora jest już zamknięta: zarządzana recepta
+`just verify-fdm-zhang-li-native-contract` zbudowała `fullmag_fdm` i
+`stt_pbc_contract`, a aktywny test
+`native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available`
+wykonał jeden krok FP64 Heun na zamaskowanym planie $3\times3\times1$ i
+zakończył się `1 passed`. Test używa
+`J=(1.4e11,-2e10,3e10) A/m²`, `P=0.62`, `beta=0.07`, wersji
+`zhang_li.mumax3.v1` / `zl_mumax3_central_v1`, a wymiana, demagnetyzacja i pole
+zewnętrzne są wyłączone, aby nie maskować operatora innymi różnicami.
 
 ### 3.4. Naprawa publikacji skalarów
 
@@ -210,14 +220,76 @@ i `max_steps=10000` wykonał się bez fallbacku (`execution_engine=cuda_fdm`,
 Maksymalny błąd komponentu to `1.1799858378e-1`, około 1180 razy ponad
 `1e-4`. `qualification.json` pozostaje `status=not_evaluated`. Jest to
 wykonany, device-resident wynik diagnostyczny; nie potwierdza on zgodności
-trajektorii. CPU pełnego przebiegu przerwano po kroku 550 relaksacji z powodu
-kosztu demagnetyzacji; CPU algebraic oracle i ścieżka planowania pozostają
-zielone, ale nie zastępują pełnego CPU trajectory gate.
+trajektorii. Wcześniejszą próbę pełnego przebiegu CPU przerwano po kroku 550
+relaksacji z powodu kosztu demagnetyzacji; CPU algebraic oracle i ścieżka
+planowania pozostają zielone, ale nie zastępują pełnego CPU trajectory gate.
+
+### 3.6. Korekta podwójnego czynnika 1/2 i świeży SP5 GPU
+
+Kontrola źródła `external_solvers/3/cuda/zhangli2.cu` wykazała, że
+`PREFACTOR=MUB/(2*QE*GAMMA0)` zawiera już czynnik `1/2`, natomiast makra
+`deltax/deltay/deltaz` używają niehalowanej różnicy sąsiadów podzielonej przez
+`cell_size`. Fullmag stosował wcześniej dodatkowe `0.5/cell_size` zarówno w
+CPU, jak i CUDA, więc torque był dwukrotnie za mały. Poprawiono CPU oraz FP32 i
+FP64 CUDA; wariant `zhang_li.legacy_fullmag.v0` pozostał niezmieniony. Zaktualizowano
+równanie w nocie fizycznej i źródłowy kontrakt `stt_pbc_contract`.
+
+Po korekcie zarządzana recepta
+`just verify-fdm-zhang-li-native-contract` zakończyła się:
+
+```text
+FDM Zhang-Li periodic-stencil contract: PASS
+test result: 1 passed; 0 failed; 0 ignored; 0 measured; 769 filtered out
+```
+
+Świeży zarządzany runtime i stałokrokowy SP5 GPU (`dt=1e-13 s`, `tolT=1e-6 T`,
+10000 accepted steps) zapisano w:
+
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed`
+
+Artefakt potwierdza `execution_engine=cuda_fdm`, FP64/cuFFT, RTX 4080 SUPER,
+compute capability 8.9 i `lossy_fallback_used=false`. Średnie końcowe są:
+
+| komponent | MuMax3 (świeży) | Fullmag MuMax3-v1 po korekcie | Δ Fullmag−MuMax3 |
+|---|---:|---:|---:|
+| $\bar m_x$ | `-0.2348836660385` | `-0.2346557117921` | `+2.2795424643e-4` |
+| $\bar m_y$ | `-0.0945328027010` | `-0.0945095717490` | `+2.3230951948e-5` |
+| $\bar m_z$ | `+0.0229619890451` | `+0.0229429608644` | `-1.9028180738e-5` |
+
+`max|Δ|=2.2795424643e-4`, a vector RMS of `1.3274648427e-4`. Korekta usuwa
+wcześniejszy błąd skali (składowe `x/y` nie są już połową referencji), lecz
+wynik nadal przekracza próg `1e-4`; `qualification.json` pozostaje
+`status=not_evaluated`.
+
+### 3.7. Pełna stałokrokowa parzystość CPU↔CUDA
+
+Przebieg CPU został następnie doprowadzony do końca z tym samym planem,
+`dt=1e-13 s` i horyzontem `1 ns` etapu `flat_run`. Artefakt znajduje się w:
+
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`
+
+Metadane potwierdzają `execution_engine=cpu_reference`, FP64, `rustfft`,
+`tensor_fft_newell` i `lossy_fallback_used=false`. Relaksacja oraz etap dynamiczny
+wykonały łącznie `12458` accepted steps; trace etapu `flat_run` zawiera `10000`
+wierszy. CPU i CUDA mają identyczne identyfikatory `step`, `time` i `dt` w całym
+trace. Końcowe pola (4096 wektorów) różnią się maksymalnie
+`6.9389e-16`, a vector RMS wynosi `1.1431e-16`; średnie końcowe są takie same
+do zaokrąglenia maszynowego. Dla fizycznych obserwabli trace maksymalna różnica
+wynosi `1.2875e-3` w `max_dm_dt` przy skali około `1e10 s^-1`; energie różnią
+się poniżej `1.6e-33`.
+
+To zamyka **fixed CPU↔CUDA trajectory parity** dla tego samego operatora i
+demagnetyzacji. Nie zamyka zgodności z MuMax3: CPU ma dokładnie ten sam wynik co
+GPU, a błąd względem świeżej referencji pozostaje
+`max|Δ|=2.2795e-4`, więc oba `qualification.json` zachowują
+`status=not_evaluated`.
 
 ## 4. Ocena fizyczna i numeryczna
 
 Potwierdzone:
 
+- zarządzany test jednego kroku CPU↔CUDA dla izolowanego operatora Zhang–Li
+  przechodzi z tolerancją względną `5e-8` i bezwzględną `1e-10`;
 - literalny rozmiar i topologia siatki są zgodne ze źródłem;
 - inicjalizacja vortex i parametry materiału są zachowane w `ProblemIR`;
 - `J`, `Pol`, `xi` są mapowane na signed CIP Zhang–Li (`current_density`,
@@ -246,14 +318,16 @@ demagnetyzacji.
 
 ## 5. Kryteria zamknięcia SP5
 
-1. Zakończyć CPU adaptive RK45 z `tolT=1e-6 T` i zapisać accepted-step
+1. Utrzymywać zieloną bramę jednego kroku CPU↔CUDA i rozszerzyć ją do accepted-step
+   parity na pełnej trajektorii.
+2. Zakończyć CPU adaptive RK45 z `tolT=1e-6 T` i zapisać accepted-step
    telemetry oraz `m_final`.
-2. Przeprowadzić sweep kroku i sprawdzić, czy różnica jest zbieżna do stałej.
-3. Porównać osobno stan relaksacji i operator Zhang–Li z niezależnym oracle.
-4. Zidentyfikować rozbieżność między centralnym v1 a trajektorią MuMax3
+3. Przeprowadzić sweep kroku i sprawdzić, czy różnica jest zbieżna do stałej.
+4. Porównać osobno stan relaksacji i operator Zhang–Li z niezależnym oracle.
+5. Zidentyfikować rozbieżność między centralnym v1 a trajektorią MuMax3
    (demag, relaksacja, kolejność aktualizacji lub prefaktor) na kontrolowanych
    testach, zanim zmieni się wzór produkcyjny.
-5. Dopiero po przejściu tych punktów oznaczyć FDM CPU/GPU jako `validated`;
+6. Dopiero po przejściu tych punktów oznaczyć FDM CPU/GPU jako `validated`;
    obecny GPU fixed-step pozostaje `diagnostic-unqualified`.
 
 ### 5.1. Korekta telemetryki accepted-step

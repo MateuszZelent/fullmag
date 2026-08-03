@@ -7,7 +7,7 @@
 **Dedykowany worktree:** `/tmp/fullmag-spin-transport`, `codex/spin-transport-m0-m3@ab2f686afe0aaa60d269966bd87388c0e59e14c6`  \
 **Merge-base:** `0612941f3b99137cbb171c183452368cc0f71029`; gałąź ma `109` własnych commitów i jest `271` commitów za aktualnym `master`  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-07-28  \
+**Ostatnia aktualizacja:** 2026-08-03  \
 **Raport źródłowy:** [README.md](./README.md)
 
 ---
@@ -140,6 +140,43 @@ schema za kompletne pokrycie parametrów. Przed promocją wymagany jest gate
    envelope) i wprowadzić generowany leaf-by-leaf parity gate.
 6. Zintegrować gałąź z aktualnym `master`, rozwiązać kolizje not i uruchomić
    wszystkie bramki ponownie na czystym indeksie oraz świeżych artefaktach.
+
+### 0.5. Reconciliacja wykonawcza po porównaniu z BORIS (2026-08-03)
+
+Ta sekcja jest nowsza niż snapshoty w tabeli 0.3 i opisuje stan bieżącego
+`master`; historycznych wyników nie nadpisujemy. Najważniejsza korekta
+interpretacyjna pozostaje bez zmian: BORIS jest obecnie szerszym wykonywalnym
+wzorcem SHE/iSHE, natomiast Fullmag M2 jest docelowym, jawnie reciprocal
+kontraktem fizycznym. Żaden z tych faktów nie oznacza ilościowej zgodności.
+
+| Zakres | Świeży dowód | Uczciwy status po tej iteracji |
+|---|---|---|
+| Dokumentacja SHE ↔ BORIS | `BORIS_FULLMAG_SHE_COMPARISON.md`, odczyt `STransport.h`, `Transport_Spin.cpp`, `TransportCUDA.cu`, managed `BorisLin` smoke i adapter `S -> V_s -> mu_s` | `source_visible` + ograniczony `diagnostic`; **brak parity** |
+| Python/IR/OpenAPI/UI execution request | usunięto nieobsługiwane `hybrid` z UI, modelu authoringu, Rust API i wygenerowanego OpenAPI; 25 testów Inspector oraz 68 testów `fullmag-authoring` przechodzi | drift `hybrid` zamknięty; pełny leaf-by-leaf parity nadal otwarty |
+| FDM prescribed SOT | `just verify-fdm-prescribed-sot-native-contract`: algebra, CUDA FP64/FP32 i `cargo +nightly check --features cuda` przechodzą | natywny contract gate `pass`; brak pełnej kwalifikacji produktu |
+| FDM dynamiczny Oersted | `just verify-fdm-oersted-native-contract`: stage-time, rollback, adaptive, FSAL, ABM3 i axis oracle przechodzą | natywny contract gate `pass`; nie jest to jeszcze ogólny current-solve/airbox gate |
+| FEM OE-T0/OE-F1/OE-F2 CPU | zarządzane `just verify-fem-oersted-oet0-cpu-contract`, `...oef1...`, `...oef2...` przechodzą; wszystkie zawierają current-view MPI n1/n2 i tetra/direct/vector-potential contracts | `reference_executable` dla operator-contract slice; airbox, RT0/KKT, MPI race/skalowanie i zbieżność nadal otwarte |
+| FEM OE TSan | instrumentation audit przechodzi, runtime kończy się `ThreadSanitizer: unexpected memory mapping` | blokada środowiskowa; **nie** dowód błędu fizyki |
+| M3 FDM CPU/double/strict | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m3-reference CARGO_INCREMENTAL=0 just verify-fdm-transient-spin-m3-reference`: `RC:0`; public subprocess resume, 15 komend Rust (26 przypadków testowych) i `11 passed` Python | `reference_executable` gate zamknięty dla jawnego seed/noise workloadu |
+| FEM STT | Po przebudowie zarządzanego obrazu (`just build target=fem-gpu-runtime`) katalog PETSc/SLEPc jest obecny; świeże `just verify-fem-stt-native-contract` buduje `fem_stt_contract` i przechodzi test ABI `versioned_stt_extension_is_append_only_after_legacy_plan_prefix` | `reference_executable` dla natywnego kontraktu/ABI; brak awansu GPU trajectory, pełnej integracji runtime i `validated` |
+| Cały pakiet Python | bieżący rerun: `1407 passed, 46 failed, 2 skipped, 69 warnings, 550 subtests`; porażki dotyczą istniejących benchmark/mesh/SP4 fixtures, nie nowego `hybrid` slice | repozytorium nie ma zielonego full-suite; nie wolno twierdzić o pełnej integracji |
+
+Naprawiono również receptę M3, która ignorowała `CARGO_TARGET_DIR` i szukała
+`target/debug/fullmag` w checkoutcie. Recepta używa teraz binarium i katalogu
+tymczasowego na `/tmp/fullmag-zfn2-build`, zgodnie z trwałym magazynem
+`/zfn2/mateuszz/git/fullmag`; jest to warunek odtwarzalności, a nie obejście
+solvera. Publiczny M3 workload ma jawny `ThermalNoise(seed=77)`: pozostawienie
+samego `Problem.temperature` słusznie wybiera system entropy i uniemożliwia
+byte-exact porównanie niezależnych procesów.
+
+Capability matrix, `validated_workloads` i status Fullmag M2
+`semantic_only` pozostają bez zmian. W szczególności coarse M2 nadal przechodzi
+do runtime, ale pełna macierz BORIS–Fullmag nie zbiega się na drobnych siatkach,
+a `mu_s`, `Q_ia`, flux i torque nie są jeszcze porównywalne ilościowo.
+Ocena celu pozostaje konserwatywnie **84% implementacji / 58% gotowości
+produkcyjnej**: zamknięte contract gates nie kompensują otwartych bram
+reciprocal parity, FEM STT, GPU/FEM cross-backend, pełnej macierzy i zielonego
+full-suite.
 
 ---
 
@@ -3711,11 +3748,11 @@ telemetryka zamyka defekt artefaktu, lecz nie zwiększa kwalifikacji fizycznej.
 ## 32.13. Zredukowana brama BORIS–Fullmag dla direct SHE (2026-08-02)
 
 Źródłowy audyt BORIS wykazał, że `external_solvers/BORIS` jest lokalnym
-snapshotem kodu (w `makefile` występuje `BVERSION := 380`), ale checkout nie
-zawiera zbudowanego `BorisLin`. Próba wykonania pełnego porównania binarnego
-nie może więc być przedstawiona jako dowód; środowisko nie ma również `nvcc`,
-którego wymaga linuxowy makefile BORIS. Nie zmieniono capability na podstawie
-samej obecności kodu CUDA.
+snapshotem kodu (w `makefile` występuje `BVERSION := 380`). W chwili zamykania
+tego historycznego reduced gate checkout nie zawierał zbudowanego `BorisLin`,
+więc wynik nie mógł być przedstawiony jako porównanie binarne; późniejszy
+patched-build smoke jest zapisany osobno w sekcji 32.20. Nie zmieniono
+capability na podstawie samej obecności kodu CUDA.
 
 ### 32.13.1. Oracle źródłowy
 
@@ -3746,8 +3783,9 @@ znormalizowany flux co BORIS.
 | SHA-256 źródeł BORIS | **zapisane w wyniku skryptu** | identyfikuje lokalny snapshot, nie release zewnętrzny |
 
 Brama zamknięta przez ten slice to wyłącznie
-`SHE-BORIS-REDUCED-1D-DIRECT`. Brama `SHE-BORIS-001` pozostaje otwarta: trzeba
-zbudować lub dostarczyć reprodukowalny executable BORIS, wykonać CPU/CUDA,
+`SHE-BORIS-REDUCED-1D-DIRECT`. Sekcja 32.20 dodaje ograniczony smoke
+wykonywalnego `BorisLin` z patched build copy, ale nie zastępuje reprodukowalnego
+wydania. Brama `SHE-BORIS-001` pozostaje otwarta: trzeba wykonać CPU/CUDA,
 ustawić osobno `iSHA=SHA`, porównać inverse SHE, profile materiałowe,
 interfejsy N/F/T oraz Fullmag FDM/FEM.
 
@@ -3900,3 +3938,1322 @@ Walidator `scripts/validate_mixed_p1_capability_contract.py` oraz 20 testów
 Brakujące bramy pozostają jawne: pełny FDM/FEM continuum benchmark, executable
 BORIS CPU/CUDA z `iSHA=SHA`, M2 inverse SHE/Onsager, interfejsy N/F/T mixing/SML,
 GPU FP64/device residency oraz browser/managed end-to-end proof.
+
+## 32.17. Trzyrozdzielczościowa zbieżność direct-SHE FDM/FEM (2026-08-02)
+
+Dodano i wykonano niezależną bramę h-refinement dla tego samego ograniczonego
+workloadu M1 direct-SHE. Test nie porównuje jeszcze FDM z FEM w sensie
+continuum ani z BORIS; sprawdza, czy każda referencyjna realizacja z osobna
+zbliża się do tego samego analitycznego profilu `sinh/cosh`, zachowując
+konserwację i residual solve'u.
+
+### 32.17.1. FDM CPU
+
+`analytical_direct_she_evaluation(nz)` współdzieli dokładnie ten sam workflow
+charge/spin dla `nz = 24, 48, 96`, z `nx = 3`, jawnym sześcioma ścianami BC,
+stałym `E_x`, `sigma`, `sigma_s`, `theta_SH` i `lambda_sf`. Dla każdej siatki
+test mierzy względny błąd L2 `mu_y(z)` wobec profilu analitycznego, sprawdza
+`J_x = sigma E_x`, residual spinowy oraz względny bilans spinowy. Wymagane są
+ściśle malejące błędy i co najmniej 25% redukcji między siatką najgrubszą a
+najdrobniejszą.
+
+Dowód:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/shelane-runner \
+cargo test -p fullmag-runner --lib fdm::cpu::spin_transport::tests
+18 passed, 0 failed
+```
+
+### 32.17.2. FEM CPU/native
+
+`direct_she_converges_on_three_mesh_resolutions()` w
+`backends/fem/tests/steady_transport_contract.cpp` wykonuje pełny H1/P1
+conforming solve dla `z = 16, 32, 64` elementów (z odpowiednią poprzeczną
+refinacją), kontroluje `J_x`, residual i jednocześnie oba niezerowe kanały
+wektora SHE (`Q_zy` oraz `Q_yz`). Węzłowy błąd wektorowego profilu
+analitycznego musi maleć na kolejnych siatkach, a najdrobniejsza siatka musi
+zmniejszyć błąd co najmniej o 20% względem najgrubszej.
+
+Weryfikacja została wykonana wyłącznie przez zarządzane recepty `just`:
+
+```text
+just verify-fem-steady-transport-cpu-only-contract
+repository contract: pass
+runtime/configuration audit: pass
+fem steady transport contract: PASS
+fem steady transport ABI contract: PASS
+
+just build target=fem-gpu-runtime
+just verify-fem-steady-transport-native-contract
+fem steady transport contract: PASS
+fem steady transport ABI contract: PASS
+critical remediation, planner, runner, API, quantity metadata and cargo check: PASS
+```
+
+Pierwsza próba pełnej recepty zatrzymała się na brakującym
+`boost/multiprecision/cpp_int.hpp` w nieaktualnym obrazie `fem-gpu`; obraz
+odświeżono przez `just build target=fem-gpu-runtime`, po czym cała brama
+zakończyła się kodem 0. Nie jest to zmiana tolerancji ani obejście solvera.
+
+### 32.17.3. Granica dowodu i aktualizacja oceny
+
+Zamknięto lokalną bramę zbieżności direct-SHE dla FDM CPU reference i FEM CPU
+conforming H1/P1 reference slice. Wspólny punkt continuum FDM↔FEM nie jest
+jeszcze policzony na jednej tabeli błędów, więc capability pozostaje
+`reference_executable`, a `validated_workloads` pozostaje puste. Nadal otwarte
+są executable BORIS CPU/CUDA z `iSHA=SHA`, inverse SHE/Onsager, heterogeniczne
+materiały, interfejsy N/F/T mixing/SML, GPU FP64/device residency oraz
+browser/managed end-to-end proof. Ocena pozostaje konserwatywnie **84%
+implementacji / 58% gotowości produkcyjnej**; sama zbieżność referencyjna nie
+awansuje kodu do produkcji.
+
+## 32.18. Domknięcie własności dokumentacji Python dla transportu (2026-08-02)
+
+Audyt po bramie FEM wykazał trzy rzeczywiste niespójności w publicznym
+kontrakcie dokumentacji, niezależne od solvera numerycznego:
+
+- `Problem.spin_transports` istniał w sygnaturze i loweringu, ale brakowało go
+  w tabeli `Problem` i w sąsiednim source-map;
+- workflow dokumentacji nie uruchamiał
+  `test_public_python_api_documentation.py`;
+- trzy strony objęte walidacją (`Problem`, `Problem IR` i spatial material
+  fields) nie miały kopiowalnych przykładów w komórkach `# %%`.
+
+Dodano wpis parametru z jednostką, walidacją, zakresem backendów i miejscem w
+`ProblemIR`, włączono test do `.github/workflows/documentation.yml` oraz
+uzupełniono przykłady stage-first/field-authoring. Wszystkie przykłady pozostają
+zgodne z zasadą, że publiczny użytkownik zaczyna od `fm.study(...)`, a nie od
+bezpośredniego konstruowania wewnętrznego `Problem`.
+
+Dowody:
+
+```text
+TMPDIR=/tmp/fullmag-py-tmp PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest -q \
+  packages/fullmag-py/tests/test_public_python_api_documentation.py \
+  scripts/test_validate_mixed_p1_capability_contract.py
+13 passed
+
+TMPDIR=/tmp/fullmag-py-tmp python3 -m pytest -q \
+  scripts/test_public_docs_information_architecture.py \
+  scripts/test_check_public_doc_examples.py \
+  scripts/test_workflow_node24_contract.py
+29 passed
+```
+
+Ta brama zamyka rozjazd dokumentacja/source-map/workflow dla publicznego
+parametru transportu. Nie dowodzi ona kompletności pełnej suity Python ani
+wykonalności wszystkich kombinacji backendu; nadal obowiązują otwarte bramy
+SP5, GPU/device proof, BORIS CPU/CUDA, inverse SHE, SML production i browser
+qualification wszystkich parametrów.
+
+## 32.19. Wykonawcza brama dynamicznego pola Oersteda i wszystkich RK FEM (2026-08-02)
+
+Po pierwszym uruchomieniu bramy wykryto błąd harnessu, a nie solvera: wszystkie
+24 przypadki zapisywały domyślne `fem_oersted_rk_time_convergence.zarr`, więc
+ostatni przebieg nadpisywał `metadata.json` używany przez walidator. Recepta
+`verify-fem-oersted-rk-time-convergence` została poprawiona tak, aby każdy
+przypadek dostawał własny katalog `cpu|gpu_<integrator>_dt<level>` i własny
+`--output-dir`. Nie zmieniono równań, tolerancji ani ścieżki wykonawczej.
+
+### 32.19.1. Dowód zarządzanego runtime i źródła
+
+Pełna recepta została wykonana przez zarządzany `just`/container FEM, z
+przypiętym obrazem zawierającym Boost/MFEM/CUDA. Eksport zakończył się poprawnym
+bundle'em schema-3 i dokładnym dopasowaniem archiwum:
+
+```text
+git_commit=6c52dd533b4a772c8541457a580e3c25b337f585
+source_snapshot_sha256=02312a29e9c6356f810e886adac46a49e8749a08189d991a2a4ef1e98c17fdd6
+worktree_state=dirty
+compute_capability=8.9
+HYPRE=3.1.0
+bundle=valid; bundle=exact-match; entry_count=3996
+```
+
+`dirty` wynika z obecnych, niepowiązanych z tym zadaniem plików MuMax3 w
+worktree; przebieg jest zatem dowodem wykonania kontrolowanego testu, lecz nie
+czystego artefaktu release. W logach GPU runtime jawnie podał
+`resolved_engine_id=fem_native_gpu`, RTX 4080 SUPER i `mfem_device=cuda`, ale
+również `demag_residency=none` oraz `host_source_of_truth` z zerowym rozmiarem
+buforów urządzenia. To potwierdza wejście na CUDA, nie zamyka bramy produkcyjnej
+device-residency/FP64.
+
+### 32.19.2. Wynik 24 przebiegów i zbieżności czasowej
+
+Wykonano wszystkie kombinacje:
+
+- CPU i GPU;
+- Heun, RK4, RK23 i RK45;
+- `dt`/liczba kroków: `(2.842170943040401e-14, 8)`,
+  `(1.4210854715202004e-14, 16)` oraz
+  `(7.105427357601002e-15, 32)` przy wspólnym czasie końcowym;
+- czasowo zmienne źródło `OerstedCylinder` z sinusoidalną zależnością od czasu,
+  przy zachowaniu tego samego problemu FEM H1/P1.
+
+Walidator `scripts/validate_fem_oersted_rk_time_convergence.py` zwrócił
+`status: pass` dla wszystkich ośmiu relacji urządzenie–integrator:
+
+```text
+CPU Heun  observed_order=2.012837999762397
+CPU RK4   observed_order=4.0232986137119084
+CPU RK23  observed_order=2.919542106247722
+CPU RK45  observed_order=6.641226145201781
+GPU Heun  observed_order=2.0128379997624646
+GPU RK4   observed_order=4.023298613736691
+GPU RK23  observed_order=2.9195421062591116
+GPU RK45  observed_order=6.641221661238818
+```
+
+Weryfikacja obejmuje 24 niezależne `metadata.json`; każdy zapis zachowuje
+żądany integrator (`heun`, `rk4`, `rk23`, `rk45`) i odpowiedni
+`fem_cpu_native`/`fem_native_gpu`. Dodatkowo wcześniejsza brama
+`just verify-fdm-oersted-native-contract` zakończyła się:
+
+```text
+PASS: CUDA Oersted stage-time, rollback, adaptive, FSAL, ABM3, and axis oracle contract
+```
+
+### 32.19.3. Wniosek i granice promocji
+
+Zamknięto bramę `FEM-TD-NUM-RK-001`: implementacja czasowo zmiennego pola
+Oersteda przechodzi wykonawczą weryfikację rzędu dla wszystkich wspieranych
+jawnych tablic RK na obu natywnych torach, a harness nie miesza już artefaktów
+między przypadkami. Jest to istotny dowód dynamicznego pola i integratorów,
+lecz nie dowód pełnej fizyki STT/SOT/SHE. Capability matrix pozostaje bez
+zmian: GPU i inverse/M2 nadal `semantic_only`, `validated_workloads` pozostaje
+puste, a status nie promuje się do produkcji z powodu dirty provenance,
+`host_source_of_truth`, braku executable BORIS parity, braku Onsager/inverse
+SHE, interfejsów N/F/T mixing/SML, wspólnego continuum FDM↔FEM i browserowego
+end-to-end dla wszystkich parametrów. Ocena pozostaje konserwatywnie
+**84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.20. Wykonawcza brama BORIS — build i reduced direct-SHE smoke (2026-08-02)
+
+W ramach `SHE-BORIS-001` wykonano pierwszy krok runtime, którego wcześniej
+brakowało: lokalny snapshot `external_solvers/BORIS` został zbudowany w
+zarządzanym obrazie CUDA, uruchomiono `BorisLin` przez NetSocks i odczytano
+obserwable transportu. Ciężki build pozostał na szybkim dysku
+`/zfn2/mateuszz/git/fullmag/boris-build`; nie zanieczyszczono checkoutu ani nie
+zmieniono ignorowanego snapshotu BORIS.
+
+### 32.20.1. Tożsamość i korekta buildowa
+
+```text
+source_manifest_sha256=8daa0a9b2ef414b95090f838ab72414fb6808909ea9bde50c4aabd2a11a717a2
+image=nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f
+configure=make configure arch=89 sprec=0 python=3.10 cuda=11.8
+compile=make compile -j8 && make install
+binary_sha256=5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997
+device=NVIDIA GeForce RTX 4080 SUPER, compute capability 8.9
+```
+
+CUDA 12.4 i CUDA 11.8 ujawniły ten sam brak overloadu
+`atomicAdd(size_t*, size_t)`. W kopii buildowej zastosowano wyłącznie
+kompatybilnościowy cast do 64-bitowego `unsigned long long` oraz rozszerzono
+istniejący adapter `unsigned long` do `sm_89`; źródło w
+`external_solvers/BORIS` pozostało bez zmian. Z tego powodu binarium jest
+artefaktem **patched build copy**, a nie kwalifikowanym binarium wydania BORIS.
+
+### 32.20.2. Wynik uruchomienia
+
+W jednorodnym przewodniku `10 x 2 x 2` dla `J_c=(10^{11},0,0) A/m^2`,
+`elC=5.8e7 S/m`, `De=0.01`, `lambda_sf=5 nm`, `SHA=0.10` wykonano tryb
+direct-only (`iSHA=0`):
+
+```text
+DIRECT_Jc  = [100000000000.0, 0.0, 0.0]
+DIRECT_S   = [0.0, 0.0, 0.0]
+DIRECT_Jsy = [0.0, 0.0, 289419.0]
+DIRECT_Jsz = [0.0, -289419.0, 0.0]
+```
+
+Kontrolny przebieg z `SHA=0` i `iSHA=0` zwrócił dokładnie zerowe `Jsy` i
+`Jsz`. Oba skrypty zakończyły kod użytkownika przed kontrolowanym timeoutem
+serwera (`Finished Python script`; kod procesu 143 pochodzi od zabicia
+pozostającego listenera). Smoke dowodzi wykonywalnej zależności direct-SHE od
+`SHA`, lecz nie dowodzi zgodności z Fullmag ani poprawnej skali quantity bez
+adaptera `S -> V_s -> mu_s`.
+
+### 32.20.3. Ujawniona pułapka API i granica bramy
+
+`Gi` i `Gmix` w BORIS są parametrami `DBL2`; ustawienie skalarnego `0.0`
+prowadzi w tej wersji do pustej listy komponentów i segfaultu w
+`MeshParamsBase::set_meshparam_value`. Poprawny zapis to `[0.0, 0.0]`. Jest to
+ustalenie interoperacyjności harnessu, nie poprawka równań Fullmag.
+
+`SHE-BORIS-001` pozostaje otwarte. Do zamknięcia pozostają: niepatchowane
+binarium albo wersjonowany release BORIS, reciprocal `iSHA=SHA` z niezerową
+akumulacją, inverse SHE, CPU↔CUDA parity, trzy siatki i sweep tolerancji,
+heterogeniczne N/F/T z `Gi/Gmix`, oraz ilościowe `V`/`S -> V_s`/`mu_s`/`Q_ia`
+z bilansami i residualami po stronie FDM/FEM. Capability matrix i
+`validated_workloads` nie zostały zmienione. Ocena celu pozostaje
+konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.21. FDM CPU M2 — wykonywalny manufactured benchmark iSHE/direct-SHE (2026-08-02)
+
+Zamknięto ograniczoną bramę wykonawczą dla wzajemnej konstytutywnej pary
+iSHE/direct-SHE na ścieżce FDM CPU double. Nie zmieniano równań ani kodu
+produkcyjnego: istniejący operator `fdm_charge_spin_block_gmres_v1` już
+realizował obie składowe, a nowe testy sprawdzają ich materializację od silnika
+do snapshotu runnera. Jest to dowód referencyjnego wycinka M2, a nie promocja
+całego inverse SHE do `validated`.
+
+### 32.21.1. Zamrożony przypadek fizyczno-numeryczny
+
+Przypadek ma cztery komórki wzdłuż `x`, `dx=dy=dz=1`, jednorodne
+`m=(0,0,1)`, bez reakcji spinowych i bez AHE/polaryzacji:
+
+```text
+sigma       = 2 S/m
+sigma_spin  = 4 S/m
+sigma_parallel = sigma_perpendicular = 2 S/m
+theta_SH    = 0.2
+V(x_min)=0 V, V(x_max)=1 V
+mu_s(x_min)=(0,0,0) V, mu_s(x_max)=(0,0,1) V
+```
+
+W konwencji pełnego `mu_s` używanej przez operator gradient manufactured state
+ma `E_x=-0.25 V/m` oraz `g_xz=-0.125 V/m`. Z tej samej macierzy
+konstytutywnej wynika w każdej komórce:
+
+```text
+J_c = (-0.5, 0.05, 0) A/m^2
+Q_xz = -0.5 A/m^2
+Q_yz =  0.1 A/m^2
+```
+
+Pozostałe składowe `Q_ia` są zerowe. Niezerowe `J_c,y` jest kanałem iSHE,
+a niezerowe `Q_yz` kanałem direct-SHE; znaki są sprawdzane względem
+`levi_civita` z `ReciprocalConstitutiveMaterial`, a nie względem niezależnych
+parametrów `SHA/iSHA`.
+
+### 32.21.2. Dowody i komendy
+
+Silnik sprawdza profil potencjałów w środkach komórek, pełne `J_c` i `Q_ia`,
+niezerowe kanały Hall oraz niezależne bilanse:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m2-ishe-red \
+  cargo test -p fullmag-engine --lib \
+  m2_manufactured_linear_state_materializes_reciprocal_ishe_and_direct_she
+test result: ok. 1 passed; 294 filtered out
+```
+
+Runner powtarza ten sam przypadek po przejściu przez
+`ResolvedFdmCoupledSpinTransportIR` i `FdmSpinTransportWorkflow::from_plan`, i sprawdza publikowane
+`potential_volts`, `current_density_apm2`, spłaszczony tensor `Q_ia`, wersje
+operatora oraz telemetryczne residual/balance gates:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m2-ishe-runner \
+  cargo test -p fullmag-runner --lib \
+  reciprocal_m2_runner_materializes_ishe_and_direct_she_channels
+test result: ok. 1 passed; 732 filtered out
+```
+
+Weryfikacja szersza zakończyła się `295 passed; 0 failed` dla całej biblioteki
+`fullmag-engine`. Cała biblioteka `fullmag-runner` dała `732 passed; 1 failed`;
+jedyna porażka to istniejący, niezwiązany z M2 test
+`initial_timestep_tests::adaptive_fdm_cuda_identity_fails_closed_until_controller_abi_is_complete`,
+który na tym checkoutcie obserwuje niekwalifikowaną tożsamość CUDA zamiast
+odrzucenia. Wszystkie cztery testy `reciprocal*` runnera, w tym nowy gate,
+przeszły.
+
+Oba targety są tymczasowymi widokami szybkiego magazynu
+`/zfn2/mateuszz/git/fullmag`; nie zapisano ciężkich artefaktów w checkoutcie.
+Weryfikowane symbole i właściciele to odpowiednio:
+
+| Warstwa | Właściciel | Zakres dowodu |
+|---|---|---|
+| konstytutywna | `crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs` | jedna macierz M2, antysymetryczne SHE/iSHE, nieujemna część symetryczna |
+| operator FDM CPU | `crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` | blokowy GMRES/Picard, pola i bilanse |
+| runner/IR | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | lowering deskryptora, stage evaluation i publikowany snapshot |
+| testy | `coupled_charge_spin_tests.rs` oraz moduł testowy runnera | oracle wartości i granica referencyjnego runtime |
+
+### 32.21.3. Zmiana capability matrix i granice
+
+`transport.spin.inverse_she.fullmag.v1` ma teraz:
+
+- `fdm_cpu_reference=reference_executable` wyłącznie dla powyższego,
+  jednorodnego, czterokomórkowego, liniowego benchmarku M2;
+- `fdm_gpu_production`, `fem_cpu_public` i `fem_gpu_public` nadal
+  `semantic_only`;
+- `validated_workloads=[]`, ponieważ nie wykonano jeszcze sweepu Onsagera,
+  nieliniowej zbieżności, heterogenicznych materiałów, interfejsów N/F/T,
+  porównania z BORIS inverse (`iSHA=SHA`), FEM/GPU ani testu produkcyjnego.
+
+Wiersz direct-SHE M1 pozostaje bez rozszerzenia; nowy przypadek jest osobnym
+wierszem inverse-SHE, aby nie mieszać one-way i reciprocal scope. Python/UI nie
+wymagały zmiany — wszystkie parametry potrzebne do tego przypadku były już w
+`ProblemIR`; zamknięto wyłącznie brak testu wykonawczego na granicy runnera.
+
+Ta brama nie zamyka `SHE-BORIS-001`, M2 nonlinear/interface product gate,
+FDM GPU device proof, FEM reciprocal assembly ani browserowego round-trip dla
+pełnego zestawu parametrów. Zbiorcza ocena pozostaje zatem konserwatywnie
+**84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.22. Naprawa driftu testu adaptive FDM CUDA identity (2026-08-02)
+
+Pełny test biblioteki runnera ujawnił niespójność kontraktu, nie błąd solvera.
+Commit `1a2abaf5` dodał kwalifikacyjny wiersz
+`explicit_adaptive_fdm_cuda_double` do rejestru i odpowiadającą gałąź w
+`resolve_timestep_execution_identity`. Stary test nadal oczekiwał błędu
+„no executable LLG timestep capability row”, więc nie odpowiadał już aktualnej
+polityce jawnego, lecz niezakwalifikowanego lane'u.
+
+Test został zmieniony tak, aby sprawdzał właściwą granicę fail-closed:
+
+- identity ma `qualification_id=explicit_adaptive_fdm_cuda_double`;
+- `validation_state=unvalidated`;
+- brak `qualification_artifact_sha256`, `runtime_source_inputs_sha256`,
+  `validated_scope`, daty i schematu walidatora;
+- nie ma żadnej promocji do `production_executable` ani `validated`.
+
+Dowód:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/runner-adaptive-identity \\
+  cargo test -p fullmag-runner --lib
+test result: ok. 733 passed; 0 failed
+```
+
+Zmiana obejmuje tylko test w
+`crates/fullmag-runner/src/lib.rs`; nie zmienia rejestru ani wykonania CUDA.
+Weryfikacja zamyka drift test–registry, ale nie kwalifikuje adaptive CUDA:
+brakuje nadal czystego artefaktu trajectory/trace, device residency, FP64
+parity i niezależnej naukowej tolerancji. Ogólna ocena pozostaje **84%
+implementacji / 58% gotowości produkcyjnej**.
+
+## 32.23. Pełna suita Python i naprawa smoke meshingu (2026-08-02)
+
+Pełna suita `packages/fullmag-py/tests` została uruchomiona z izolowanym
+`TMPDIR` i `PYTHONPATH=packages/fullmag-py/src`. Wynik bazowy:
+
+```text
+1403 passed, 47 failed, 2 skipped, 550 subtests passed
+```
+
+Nie traktuję tych 47 porażek jako jednego błędu fizyki. Klasyfikacja wskazuje
+kilka niezależnych rodzin driftu kontraktów: benchmark FEM oczekuje starszych
+statusów/legacy mesh i starego pola początkowego; testy GPU sprawdzają stare
+ścieżki własności modułów; persistence używa starej reprezentacji mesh; przykład
+periodic-antidot ma już jawnie zredukowany stage pipeline; dwa testy SP4 nie
+mają pakietu `tests.standard_problems` na tej ścieżce importu. Są to odrębne
+bramy i nie wolno ich zamazywać jedną zmianą testów.
+
+W tej iteracji naprawiono jeden rzeczywisty błąd właściciela źródłowego w
+`scripts/analysis/mesh_statistics_smoke.py`: smoke nadal wywoływał usunięty
+interfejs `MeshData(elements=..., boundary_faces=...)` i odczytywał usunięte
+klucze artefaktu `elements`. Konstrukcja korzysta teraz z jawnego adaptera
+`MeshData.from_legacy_tet4`, a artefakt schema-2 jest liczony przez
+`cell_types`. Dowód:
+
+```text
+TMPDIR=/tmp/fullmag-py-suite-20260802 \
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest -q packages/fullmag-py/tests/test_mesh_statistics_smoke.py
+4 passed
+```
+
+Naprawa nie promuje żadnego backendu ani nie zmienia fizyki transportu. Pełna
+suita Python pozostaje otwarta do osobnych, kontraktowo uzasadnionych poprawek;
+nie zmieniam przez to oceny SHE/BORIS ani capability matrix. Otwarte pozostają
+również wszystkie bramy wymienione w sekcji 32.22: GPU/device proof, OE-F1/OE-F2,
+SML produkcyjne, browser round-trip, `SHE-BORIS-001`, SP5 i cross-backend parity.
+
+## 32.24. Audyt źródła BORIS i powtórzenie reciprocal smoke (2026-08-02)
+
+Wykonano ponowne, linia-po-linii porównanie dokumentacji Fullmag SHE z
+implementacją `external_solvers/BORIS/Boris`. Porównanie obejmuje kolejność
+rozwiązywania, warunki brzegowe, interfejsy N/F/T, zmienne `S`/`V_s`, tensor
+`Q_ia`, rozdzielenie `SHA`/`iSHA`, kryteria SOR oraz ścieżkę CUDA. Wynik jest
+zgodny z raportem
+`docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/BORIS_FULLMAG_SHE_COMPARISON.md`:
+BORIS jest wykonywalnym wzorcem zakresu, Fullmag M2 pozostaje docelowym
+kontraktem reciprocal, ale nie ma podstaw do twierdzenia o parity.
+
+### 32.24.1. Dowód wykonywalny
+
+Na tym samym lokalnym, spatchowanym buildzie BORIS wykonano
+`scripts/boris_reciprocal_she_smoke.py` w obrazie
+`nvidia/cuda:11.8.0-devel-ubuntu22.04` z apt-owym Pythonem 3.10 i bibliotekami
+runtime. Snapshot builda zachowuje wcześniejszy manifest źródeł, digest obrazu
+i hash binarium opisane w sekcji 32.20. Skrypt ustawia jawnie
+`SHA=iSHA=0.10`, `De=0.01`, `l_sf=5 nm`, `elC=5.8e7 S/m` i
+`J_c=(1e11,0,0) A/m^2`, a następnie zapisuje `V`, `S`, `J_c`, `J_sy` i
+`J_sz` jako OVF.
+
+Powtórzenie dla filmu `1 um x 0.4 um x 1 nm` (10 x 4 x 2 komórek) dało:
+
+```text
+RECIPROCAL_SHA 0.1
+bottom_S  [0.0, 0.0, 0.0]
+center_S  [0.0, 0.0, 0.0]
+top_S     [0.0, 0.0, 0.0]
+bottom_Jsy  [0.0, 0.0, 289419.0]
+center_Jsy  [0.0, 0.0, 578838.0]
+top_Jsy     [0.0, 0.0, 289419.0]
+bottom_Jsz  [0.0, -289419.0, 0.0]
+center_Jsz  [0.0, -289419.0, 0.0]
+top_Jsz     [0.0, -289419.0, 0.0]
+```
+
+Jest to dowód, że patched executable uruchamia kanały direct-SHE i przy
+`iSHA=SHA` materializuje również obserwable inverse-SHE, lecz w jednorodnym,
+stałoprądowym workloadzie akumulacja `S` jest zerowa. Nie jest to benchmark
+reciprocal ilościowy: nie ma niezerowego `S`, profilu `V_s`, interfejsu `Gi/Gmix`
+ani bilansu N/F/T. Kod procesu kończy się kodem 143, ponieważ BORIS zostawia
+listener skryptowy po ukończeniu skryptu; log zawiera `Finished Python script`
+i wszystkie wartości przed kontrolowanym timeoutem listenera.
+
+### 32.24.2. Ustalenia fizyczne i granica
+
+Audyt kodu potwierdza, że BORIS:
+
+- najpierw relaksuje `V`, potem `S` przez osobne SOR (`STransport_Spin.cpp`);
+- używa direct-SHE w niejednorodnym warunku Neumanna
+  `grad_n S = epsilon(E) SHA elC MUB_E / De`;
+- używa inverse-SHE w warunku `V` proporcjonalnym do
+  `iSHA De curl(S)/(MUB_E elC)`;
+- ma osobne warunki kontaktowe `Gi/Gmix` i osobny torque interfejsowy;
+- ma CUDA kernel dla inverse-SHE, ale sama obecność kernela nie jest dowodem
+  CPU↔CUDA parity.
+
+Nie należy mapować `S` bezpośrednio na Fullmag `mu_s`: wymagany jest adapter
+`V_s=(De/elC)(e/muB)S`, a następnie ustalenie, czy porównywane `mu_s` jest
+pełnym rozszczepieniem kanałów. Próba uzyskania niezerowego `S` przez prosty,
+ręcznie utworzony N/F stack nie została zaliczona: inicjalizacja materiału i
+ścieżka GPU nie dały stabilnego, skończonego pola, więc wynik odrzucono jako
+diagnostykę harnessu, nie jako wynik fizyczny.
+
+`SHE-BORIS-001` pozostaje otwarte. Nadal wymagane są: stabilny N/F/T workload z
+niezerowym `S`, `Gi/Gmix`, inverse-SHE, niezależny residual i bilanse, trzy
+siatki oraz sweep tolerancji, BORIS CPU↔CUDA, Fullmag FDM/FEM/GPU i artefakt
+provenance z adapterem jednostek. Capability matrix pozostaje bez zmian, a
+ocena celu nadal wynosi konserwatywnie **84% implementacji / 58% gotowości
+produkcyjnej**.
+
+## 32.25. Domknięcie authoringu reciprocal M2 w Python/IR/SceneDocument/Control Room (2026-08-03)
+
+Ta iteracja zamyka brakujący kontrakt authoringu M2, ale nie promuje żadnego
+nowego lane'u wykonawczego do `production_executable` ani `validated`. Zmiana
+została wykonana przez pełny łańcuch źródła, a nie przez testowy wyjątek:
+
+| Warstwa | Zrealizowany kontrakt | Dowód / właściciel |
+|---|---|---|
+| Python DSL | `CurrentTransport` rozpoznaje `magnetoresistive_poisson` albo `coupling="bidirectional"`; wymagane są `sigma_parallel_Spm`, `sigma_perpendicular_Spm`, `sigma_AHE_Spm`, `block_gmres`, operator blokowy i residual transportowy | `packages/fullmag-py/src/fullmag/model/current_transport.py`, `world.py` |
+| Python spin | `ReciprocalNonlinearSolverPolicy` z walidacją restartu GMRES, limitu Picarda, tolerancji i `eta_transport`; sprzężenie źródłowe decyduje o wersji konstytutywnej | `packages/fullmag-py/src/fullmag/model/spin_transport.py`, `problem.py` |
+| Round-trip | pełny graf M2 przechodzi Python → ProblemIR → canonical script → SceneDocument → builder bez utraty tensora przewodności, coupling, BC, gauge, solvera ani polityki nonlinear | `runtime/script_builder.py`, `runtime/scene_document.py`, `test_current_transport.py`, `test_spin_drift_diffusion.py` |
+| Rust authoring | typy SceneDocument i walidacja odrzucają niepełny tensor, zły operator/residual, M2 poza steady oraz brak polityki nonlinear; one-way odrzuca pola reciprocal | `crates/fullmag-authoring/src/spin_transport.rs`, `validation.rs` |
+| API/OpenAPI | M2 jest jawnie `semantic_only`, ale `authoring_allowed=true`; wygenerowane schematy zawierają MRP, tensor conductance i `SceneReciprocalNonlinearSolverPolicy` | `crates/fullmag-api/src/router_v2/handlers/{model/authoring.rs,sessions/status.rs}`, `apps/control-room/src/kernel/api/generated/openapi-v2.*` |
+| Control Room | inspector zachowuje M2 tensor, reciprocal coupling i JSON polityki nonlinear; rozpoznanie niepełnego/nieznanego grafu jest fail-closed | `TransportAuthoringInspectorModel.ts`, `TransportAuthoringInspector.tsx`, `transportRecognition.ts` |
+
+Pierwsza regresja, która ujawniła lukę, była konkretna i została usunięta:
+
+```text
+TypeError: ChargeTransportMaterial.__init__() got unexpected keyword argument
+  'sigma_parallel_Spm'
+AttributeError: module 'fullmag' has no attribute
+  'ReciprocalNonlinearSolverPolicy'
+```
+
+### 32.25.1. Weryfikacja
+
+Wyniki wykonane po zmianie:
+
+```text
+PYTHONPATH=packages/fullmag-py/src TMPDIR=/tmp/fullmag-py-m2-regression \
+pytest -q \
+  packages/fullmag-py/tests/test_current_transport.py \
+  packages/fullmag-py/tests/test_spin_drift_diffusion.py \
+  packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py \
+  packages/fullmag-py/tests/test_public_python_api_documentation.py
+51 passed, 45 subtests passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/authoring-m2 \
+cargo test -p fullmag-authoring
+68 passed, 0 failed; doc tests 0 passed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/api-openapi-m2 \
+cargo test -p fullmag-api spin_authoring_
+3 passed, 0 failed; 737 filtered out
+
+pnpm --dir apps/control-room exec tsc --noEmit
+pnpm --dir apps/control-room exec vitest run \
+  src/modules/inspector/panels/TransportAuthoringInspectorModel.test.ts \
+  src/modules/inspector/panels/TransportAuthoringInspector.test.ts
+24 passed, 0 failed
+
+PYTHONPATH=packages/fullmag-py/src \
+TMPDIR=/tmp/fullmag-zfn2-build/python-targets/m2-suite-2 \
+pytest -q packages/fullmag-py/tests
+1406 passed, 46 failed, 3 skipped, 550 subtests passed
+```
+
+Pełna suita jest wynikiem diagnostycznym całego checkoutu, nie bramą M2:
+46 porażek grupuje istniejący drift benchmarków FEM, schematu mesh/persistence,
+GPU-RK, przykładu periodic-antidot i importu SP4. Żadna porażka nie wskazuje na
+nowy kod M2; zielone testy M2 są uruchamiane osobno z izolowanym `TMPDIR`.
+Ciężkie targety Cargo i tymczasowe artefakty testów kierowano do szybkiego
+magazynu `/zfn2/mateuszz/git/fullmag`; checkout nie został zapełniony buildami.
+
+### 32.25.2. Granica kwalifikacji po iteracji
+
+Capability matrix i status API pozostają konserwatywne:
+
+- M2 reciprocal authoring: `semantic_only`, `authoring_allowed=true`;
+- FDM CPU/GPU, FEM CPU/GPU i pełny runtime nonlinear: bez promocji;
+- `validated_workloads` pozostaje puste dla reciprocal SHE;
+- `SHE-BORIS-001` nadal wymaga stabilnego N/F/T przypadku z niezerowym `S`,
+  `Gi/Gmix`, adaptera `S ↔ V_s ↔ mu_s`, niezależnych residuali/bilansów,
+  trzech siatek, sweepu tolerancji i CPU↔CUDA;
+- nadal otwarte są interfejsy SML/mixing, FEM reciprocal assembly, GPU device
+  proof, cross-backend parity, pełny browserowy round-trip oraz produkcyjny
+  dynamiczny Oersted.
+
+Authoring M2 jest więc spójny w publicznym modelu i UI, lecz nie jest jeszcze
+wykonywalnym, ilościowo zwalidowanym solverem. Uczciwa ocena celu pozostaje
+**84% implementacji / 58% gotowości produkcyjnej**: wzrosła kompletność
+kontraktu authoringowego, ale nie zamknięto żadnej z dominujących bram fizyki,
+numeryki ani runtime'u.
+
+## 32.26. Zarządzany harness BORIS N/F i korekta specyfikacji (2026-08-03)
+
+Wykonano pierwszą rzeczywistą ścieżkę N/F na patched build copy BORIS. Jest to
+postęp harnessu i audytu, nie awans Fullmag do `validated`.
+
+### 32.26.1. Korekta modelu wymuszenia i siatki
+
+Pierwszy wariant scenariusza używał `setcurrentdensity` w N. Zgodnie z kodem
+BORIS (`Commands.cpp::CMD_SETCURRENTDENSITY`) ta komenda ustawia stałe `J_c` i
+ustawia globalne `disabled_transport_solver=true`. Wynik z zerowym `J_c`, `S`
+i torque w F nie był testem N/F i został odrzucony.
+
+Normatywny renderer `scripts/boris_nf_interface_smoke.py` używa teraz:
+
+- elektrod x i `setcurrent(I)`, gdzie
+  `I=J_target W_y(t_N+t_T+t_F)`;
+- jawnego `ferromagnet.ecellsize(cell)`, aby transportowe siatki N/F miały
+  ten sam layout i kroki OVF;
+- `SHA=iSHA` tylko na N; F ma `SHA`, `Gi` i `Gmix`, ponieważ BORIS nie
+  udostępnia F parametru `iSHA`;
+- próbek z najbliższej komórki tekstowego OVF, a nie z `getvalue` na
+  magnetycznej siatce F.
+
+Wniosek fizyczny: obecność direct-SHE w N po `setcurrentdensity` nie dowodzi
+sprzężenia kontaktowego, absorpcji spinowej ani interfacial torque.
+
+### 32.26.2. Wykonany artefakt i dowód runtime
+
+```text
+artifact=/zfn2/mateuszz/git/fullmag/boris-build/reports/runner-coarse-3
+schema=fullmag.boris_she_nf.v1
+source_manifest_file_sha256=ed1ca167fae571b8106b79ed86347de4a6509647db87716c8f6f1559c890cde6
+binary_sha256=5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997
+image=nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f
+python=3.10.12, device=cpu, launch=BorisLin -g -1
+workload=N/F, grid=4x2x2 per mesh, SHA=iSHA=0.10 on N
+exit=143 accepted only after BORIS_NF_STAGE_COMPLETE and field-completeness checks
+qualification=diagnostic
+```
+
+Artefakt zawiera `V`, `S`, `Jc`, `Jsx`, `Jsy`, `Jsz` w N i F oraz `Ts`/`Tsi`
+w F. Zarejestrowane wartości interfejsu `+z` N→F to:
+
+```text
+Jc_N,z=22.184125 A/m2, Jc_F,z=92.93605125 A/m2
+J_s,N,z=(-5.96e-4,-2.88983e5,-2.50e-3) A/m2
+J_s,F,z=(4.14985e1,1.00e-3,6.3953e-2) A/m2
+Tsi_plane*dz=(-2.54e-4,1.75365e4,-2.50e-3) A/m2 (diagnostic conversion)
+```
+
+`charge_closure=-70.75` i `spin_torque_closure=3.065e5` pozostają surowymi
+obserwablami. BORIS `Tsi` jest torque z efektywnego pola o jednostce `A/(m s)`;
+`Tsi*dz` nie jest jeszcze uzgodnionym z Fullmag arealnym fluxem bez jawnego
+mapowania `tsi_eff`/`gamma`. Nie wolno interpretować tego closure jako
+automatycznej porażki fizyki ani dopasowywać prefaktora po wyniku.
+
+`interior_cell_count=0` w coarse artefakcie (dwie komórki transportowe w osi z),
+więc zapisane `charge_scaled_l2=0` i `spin_scaled_l2=0` nie jest dowodem
+zbieżności PDE. Następna iteracja musi dodać grubszy profil w osi normalnej
+albo niezależny test residualu objętościowego.
+
+### 32.26.3. Status bram
+
+Zrealizowane są: renderer, parser OVF, adapter
+`mu_s=2 De S/(elC MUB_E)`, immutable runtime identity, artefakt v1 i managed
+N/F smoke. Otwarte pozostają: adapter Fullmag FDM M2 i porównanie ilościowe,
+trzy siatki/sweep tolerancji, CUDA parity, N/T/F, torque normalization,
+FEM reciprocal assembly oraz `SHE-BORIS-001`. Capability matrix i
+`validated_workloads` pozostają bez zmian. Ocena celu nie rośnie od samego
+smoke: **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.27. Adapter Fullmag FDM M2 i blokada physical-balance (2026-08-03)
+
+Ta iteracja implementuje brakujący element planu porównawczego BORIS–Fullmag:
+canonical builder Python → ProblemIR, runner FDM CPU `double/strict`, jawny
+artefakt `fullmag.fdm.spin_transport.accepted.v1` oraz porównanie per observable
+z kontrolą `Q_ia`, jednostek i orientacji. Nie jest to promocja capability.
+
+### 32.27.1. Kontrakt wejścia i korekta fizyki
+
+Builder `scripts/run_fullmag_m2_nf_reference.py` ma wspólny z BORIS:
+
+- N pod F w osi `+z`, `4×2×2 + 2` komórek, `cell=(1e-7,1e-7,1e-9) m`;
+- `sigma=5.8e7 S/m`, `De=0.01 m²/s`, `lambda_sf=5 nm`, `J_c=1e11 A/m²`;
+- reciprocal `SHA=iSHA=0.10`, `Gi=5e14 S/m²`, `Gmix=(1.5e15,0) S/m²`;
+- po korekcie zgodności z rendererem BORIS: `P_F=0.4`, `SHA_F=0.10`, bez
+  nieudokumentowanych bulk `lambda_J/lambda_phi`;
+- operator `fdm_coupled_charge_spin_fv_block_gmres.v1`, residual i solver
+  telemetry zapisane w request/provenance.
+
+Adapter `scripts/compare_boris_fullmag_she_nf.py` normalizuje BORIS
+`S→V_s→mu_s`, zachowuje kolejność `row_major_Q_ia` i liczy osobno `V`, `mu_s`,
+`J_c`, wszystkie dziewięć `Q_ia`, absorbowany flux oraz residuale. Torque nie
+jest porównywany przy różnicy jednostek: BORIS `Tsi` (`A/(m s)`) i Fullmag
+Gilbert source (`1/s`) są oznaczane jako `incomparable` do czasu jawnej
+reconciliacji `tsi_eff/gamma`.
+
+### 32.27.2. Wykonanie i dowód blokady
+
+Launcher `.fullmag/local/bin/fullmag` został zbudowany przez repozytoryjne
+`just` w trybie `cuda-fem-gpu`; kompilacja i dane pozostały pod
+`/zfn2/mateuszz/git/fullmag`. Runner przeprowadził rzeczywisty start i zapisał
+pełne logi w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-nf-coarse-run19
+```
+
+Wynik jest `not_run`, bez częściowego artefaktu:
+
+```text
+Step 0: coupled charge-spin solve: M2 physical balance gate rejected
+without committing state: charge=7.139977e-6, spin=5.450726e-8
+```
+
+To jest prawidłowe zachowanie fail-closed. Błąd występuje po wejściu do
+wykonywalnego M2 i przed commit, więc nie wolno traktować go jako zerowych pól
+ani jako parity failure. Jednocześnie ujawnia lukę numeryczną: obecny solver
+wiąże physical-balance gate z tolerancją liniową, a cienka komórka ma silnie
+anizotropowe skale. Należy albo uzasadnić niezależny próg bilansu, albo poprawić
+skalowanie/assembly; nie wolno po prostu zwiększać tolerancji i publikować
+wyniku.
+
+### 32.27.3. Status planu
+
+Zamknięte: Task 4 (normalizacja/metryki), Task 5.1–5.5 (builder, fail-closed
+runner i testy) oraz Task 6.1–6.5 (macierz trzech siatek, dwóch tolerancji,
+walidacja monotoniczności i receptura `just verify-boris-fullmag-she-nf`).
+Task 5/6 nie miały jeszcze pozytywnego runtime evidence; pozostawała
+brama otwarta do czasu przejścia physical balance. Testy focused harnessu:
+
+```text
+31 passed (N/F, adapter, Fullmag reference and matrix contracts)
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile ...  # pass
+git diff --check                                             # pass
+```
+
+Nie zmieniono capability matrix ani `validated_workloads`. Zidentyfikowana
+przyczyna została naprawiona w solverze i pokryta testem regresyjnym; przed
+ponownym uruchomieniem managed runnera status nadal jest `not_run`, więc ocena
+pozostaje konserwatywnie **84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.28. Korekta skalowania GMRES dla cienkiej siatki M2 (2026-08-03)
+
+Blokada z sekcji 32.27 była błędem kryterium numerycznego, a nie powodem do
+poluzowania physical-balance gate. `CoupledChargeSpinSolver` wyznacza normę
+prawej strony po block-Jacobi preconditionerze, czyli w normie bezwymiarowej.
+Kod stosował jednak `max(||P b||_2, 1)`. Dla stosu `100 nm × 100 nm × 1 nm`
+zamieniało to żądaną tolerancję względną w zbyt luźną tolerancję absolutną i
+pozostawiało bilans elektrod/spinu na poziomie `10^-7`–`10^-6`.
+
+Poprawka w
+`crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` używa
+rzeczywistej normy `||P b||_2`; dla dokładnie zerowego RHS stosuje wyłącznie
+`absolute_tolerance`. Nie zmieniono progu physical balance, równań, znaków,
+jednostek ani publicznego ProblemIR. Nota `docs/physics/0970-...` zamraża tę
+definicję skalowania jako część kontraktu M2.
+
+Dowód regresyjny:
+
+```text
+RED: m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance
+     charge=1.608465e-7, spin=2.345993e-7 (stary floor, rel_tol=1e-9)
+GREEN: ten sam test po korekcie
+22/22 coupled_charge_spin tests passed
+```
+
+Test obejmuje rzeczywisty układ N/F z `SHA=iSHA=0.1`, `P_F=0.4`, `Gi/Gmix`,
+reakcją spin-flip, orientacją `+z`, komórką `1e-7,1e-7,1e-9 m` i torque
+targets po stronie F. To jest naprawa lokalnego kryterium zbieżności; nie jest
+jeszcze dowodem parity z BORIS ani kwalifikacji GPU/FEM.
+
+Następna brama: przebudować launcher przez `just`, wykonać sześć tuplek
+macierzy BORIS–Fullmag, zapisać artefakty z nową tożsamością binarium i
+sprawdzić monotoniczną zbieżność. Dopiero wtedy wolno zaktualizować status
+`not_run`/`diagnostic_match`; capability matrix pozostaje bez zmian.
+
+## 32.29. Świeży coarse run i wynik pierwszej macierzy (2026-08-03)
+
+Po korekcie z sekcji 32.28 przebudowano launcher przez repozytoryjny `just`
+z zachowaniem artefaktów poza checkoutem. Tożsamość uruchomienia Fullmag jest
+zamrożona w `runtime_identity`:
+
+```text
+commit=813332079e01838f976acee521326b643dce7aaa (dirty working tree)
+native_sha256=284c14c86212cc918c1ad1770d70049e1918b3271fb0d8545d08f865f65e627b
+launcher_sha256=27d7c5ebb3bd1aa47391fc9bc6313d052a6e2b42f05e8cf5f183a84b12ea1843
+```
+
+Świeży workload N/F `4×2×2+2`, `FDM/CPU/double/strict`, został zaakceptowany
+przez runtime i zapisał pełny artefakt:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-nf-coarse-run22/
+transport/fullmag_m2_nf_reference.json
+```
+
+W telemetry zapisano `scaled_charge_residual=6.423463949700895e-15`,
+`scaled_spin_residual=3.691253818811614e-15`, bilans ładunku
+`3.5205103056502695e-11` i bilans spinu `2.371483382809825e-12`. Runtime
+zwrócił osiem obserwacji interfejsu (po jednej na komórkę płaszczyzny); adapter
+nie wybiera jednej komórki, tylko publikuje średnią jawną wraz z
+`interface_observation_count=8` i zachowuje sumę torque komórkowego osobno.
+
+Porównanie z managed BORIS (`boris-nf-runtime`, binary SHA-256
+`5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997`, obraz
+`nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`)
+ma status **`incomparable`**, a nie `diagnostic_match`. Usunięto wyłącznie
+dozwoloną różnicę stałej cechy potencjału (`Fullmag + -3.4482757355128163e-4 V`)
+i zapisano translację początku siatki `Fullmag-BORIS=(0,0,-2e-9) m`. Po tej
+normalizacji potencjał ma maksymalny błąd względny `3.098487032667977e-4`,
+ale `mu_s`, `Q_ia`, absorbowany flux i prąd poprzeczny różnią się na poziomie
+rzędu jedności. Torque pozostaje jawnie nieporównywalny: BORIS publikuje
+`Tsi [A/(m s)]`, a Fullmag źródło Gilberta `[1/s]`; nie wolno przemnożyć go
+przez arbitralne `gamma` po obejrzeniu wykresu.
+
+Pierwsza pełna macierz sześciu przypadków
+(`10×4×2+2`, `20×8×4+4`, `40×16×8+8` × `1e-8`, `1e-10`) została uruchomiona
+w kontenerze `boris-nf-runtime` i zapisana w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-boris-she-nf-matrix-run24/matrix.json
+```
+
+Macierz prawidłowo zakończyła się fail-closed, ale nie jest jeszcze wspólną
+macierzą solverów: cztery pierwsze Fullmag przypadki odrzucił komunikat
+`M2 block GMRES did not converge in 500 iterations`, a dwa najdrobniejsze
+przypadki przekroczyły limit 300 s. BORIS artefakty są zachowane, lecz bez
+drugiego solvera nie wolno liczyć metryk ani twierdzić o zbieżności między
+solverami. Diagnostyczny test tej samej średniej siatki z limitem 2000
+iteracji zakończył się poprawnie, co wskazuje na osobną granicę limitu
+iteracji w harnessie, nie na zgodność fizyczną; limit referencyjny musi zostać
+zweryfikowany na całej macierzy przed zmianą statusu.
+
+Kontrolna próba drobnej siatki z limitem 2000 nie zbiegała również po tym
+zwiększeniu i zakończyła się `M2 block GMRES did not converge in 2000
+iterations` w artefakcie
+`/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-fine-max2000-run1`.
+Wynik wyklucza interpretację, że sama zmiana limitu 500→2000 zamyka bramę;
+potrzebna jest poprawa/kwalifikacja strategii preconditionera lub rozdzielczości
+referencyjnej, z zachowaniem fail-closed physical-balance gate.
+
+Wniosek bramy: lokalna korekta skalowania i coarse execution są potwierdzone,
+lecz `SHE-BORIS-001`, reciprocal parity, torque normalization, CPU↔CUDA,
+FEM/FDM oraz `validated_workloads` pozostają otwarte. Capability matrix nie
+zmienia się, a ocena pozostaje konserwatywnie **84% implementacji / 58%
+gotowości produkcyjnej**.
+
+## 32.30. Aktualizacja bram UI, M3 i Oersted/SOT (2026-08-03)
+
+### 32.30.1. Zgodność publicznego execution request
+
+Audyt porównawczy wykazał, że Control Room dopuszczał wartości
+`requested_execution.discretization=hybrid` i `execution_mode=hybrid`, mimo że
+Python DSL, `ProblemIR` i planner nie miały takiej realizacji. Był to błąd
+kontraktu, nie brak capability solvera. Wartość usunięto z modelu authoringu,
+Rust API, UI selectów i wygenerowanego OpenAPI; ścieżka dynamiczna kończy się
+jawnie błędem „Transport hybrid execution is not supported...”, zamiast
+wyemitować obiekt, którego runtime nie potrafi wykonać.
+
+Dowód: `TransportAuthoringInspectorModel` + komponent Inspector — `25 passed`,
+`openapiV2GeneratedContract`/`generationIdContract` — `6 passed`,
+`fullmag-authoring` — `68 passed`. To zamyka konkretny drift, ale nie zastępuje
+planowanego leaf-by-leaf round-trip wszystkich parametrów SHE/STT/SOT.
+
+### 32.30.2. M3: seed termiczny i artefakty na szybkim dysku
+
+Pierwszy uruchomiony M3 po naprawie ścieżki binarium ujawnił rzeczywistą
+niedeterministyczność: `Problem.temperature=300 K` bez `ThermalNoise.seed`
+wybiera system entropy, więc dwa niezależne procesy generowały różne
+`spin_current_tensor_apm2`. Nie zmieniono RNG ani nie poluzowano porównania;
+workload publiczny deklaruje teraz `fm.ThermalNoise(temperature=300.0,
+seed=77)`. Recepta rozwiązuje binarium jako
+`${CARGO_TARGET_DIR:-target}/debug/fullmag` i ustawia `TMPDIR` na
+`/tmp/fullmag-zfn2-build/m3-pytest`.
+
+Świeży wynik:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m3-reference \
+CARGO_INCREMENTAL=0 just verify-fdm-transient-spin-m3-reference
+RC:0
+M3 public canonical authoring, planner/runner, and subprocess resume: PASS
+12 transient_spin + 14 one-case runner/API/plan/CLI identity tests: PASS
+test_spin_drift_diffusion.py: 11 passed
+```
+
+To jest referencyjny CPU/double/strict gate dla jawnie stochastycznego
+workloadu. Nie jest to dowód jakości GPU, FEM, długiego czasu ani zgodności z
+BORIS.
+
+### 32.30.3. Natywne SOT i Oersted oraz blokady FEM
+
+`just verify-fdm-prescribed-sot-native-contract` przechodzi: algebra SOT,
+CUDA FP64/FP32 i managed `cargo +nightly check --features cuda` są zielone.
+`just verify-fdm-oersted-native-contract` przechodzi dla stage-time,
+rollbacku, adaptive, FSAL, ABM3 i osiowego oracle. Są to contract gates
+realizacji operatora; nie awansują ogólnego current-solve/airbox ani pełnej
+kwalifikacji GPU.
+
+Normalne zarządzane bramy FEM OE-T0/OE-F1/OE-F2 przechodzą aktualne kontrakty
+current-view, tetra/direct i vector-potential. TSan zatrzymuje się wyłącznie na
+`ThreadSanitizer: unexpected memory mapping` (blokada środowiskowa). Wcześniejszy
+brak PETSc/SLEPc w lokalnym obrazie FEM został usunięty przez zarządzaną
+przebudowę `just build target=fem-gpu-runtime`; ponowione
+`just verify-fem-stt-native-contract` zakończyło się powodzeniem: natywny
+`fem_stt_contract` został zbudowany, a test append-only ABI przeszedł. Ten wynik
+zamyka tylko kontrakt referencyjny STT, nie pełną ścieżkę GPU, trajektorię STT,
+cross-backend ani kwalifikację produkcyjną.
+
+### 32.30.4. Granica porównania z BORIS
+
+Porównanie z `external_solvers/BORIS/Boris` jest wykonane na poziomie źródeł,
+kontraktu i ograniczonego executable smoke. BORIS rozwiązuje sekwencyjnie `V`
+i `S`, ma jawne `SHA`/`iSHA`, `Gi/Gmix` oraz CUDA kernel; Fullmag M2 używa
+`mu_s`, jednego reciprocal bloku i block-GMRES. Adapter `S -> V_s -> mu_s`
+oraz korekta `mu_s` jako pełnego rozszczepienia są zapisane w
+`BORIS_FULLMAG_SHE_COMPARISON.md`.
+
+Aktualny managed N/F coarse run ma poprawne residuale Fullmag, ale porównanie
+jest `incomparable`: po dopuszczalnym gauge shift potencjału profil `V` ma
+`3.098487032667977e-4` błędu względnego, natomiast `mu_s`, `Q_ia`, flux i
+torque różnią się na poziomie rzędu jedności lub mają różne jednostki.
+Macierz sześciu siatek nie zamknęła GMRES dla drobnych przypadków. Wniosek
+fizyczny pozostaje więc rozdzielony: BORIS jest obecnie lepszym wykonywalnym
+wzorcem zakresu, Fullmag M2 lepszym docelowym kontraktem, ale żaden wynik nie
+uprawnia do deklaracji parity ani do awansu `validated_workloads`.
+
+## 32.31. Korekta kosztu operatora i adaptacyjnego GMRES M2 (2026-08-03)
+
+*Adnotacja:* poniższy zapis jest historycznym snapshotem sprzed korekty osi
+`z`; aktualny, zweryfikowany status znajduje się w sekcji 32.32.
+
+Ponowna diagnoza bieżącego solvera rozdzieliła blokadę wydajności od blokady
+zbieżności. `boundary_flux` przeliczał wcześniej pełne `cell_gradients` dla
+każdej ściany brzegowej, co dawało koszt zależny od liczby ścian razy całej
+objętości przy każdej aplikacji operatora. Przekazanie gradientów obliczonych
+raz przez `residual_flat` nie zmienia dyskretyzacji ani znaków fluxu, ale usuwa
+ten sztuczny czynnik kosztu. Dodano też fail-closed diagnostykę końcowego
+residuum GMRES oraz adaptacyjny restart: `gmres_restart` pozostaje początkową
+małą bazą, a po cyklu z residuum większym niż `100 * tol` baza jest podwajana do
+pozostałego limitu.
+
+Zamrożone dowody:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m2-final-verify \
+CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib fdm::cpu::transport
+70 passed
+
+PYTHONPATH=packages/fullmag-py/src \
+TMPDIR=/tmp/fullmag-zfn2-build/m2-python-tests \
+python3 -m pytest -q scripts/test_run_fullmag_m2_nf_reference.py \
+  scripts/test_compare_boris_fullmag_she_nf.py
+14 passed
+```
+
+Referencyjny harness FDM ustawia teraz `REFERENCE_MAX_LINEAR_ITERATIONS=2000`.
+Pełny sweep samego Fullmag zapisano w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-m2-fullmag-matrix-20260803/fullmag_only_matrix.json
+```
+
+Coarse (`10x4x2+2`) i medium (`20x8x4+4`) przechodzą dla tolerancji `1e-8` i
+`1e-10`, z niezależnie zapisanymi residualami charge/spin. Fine (`40x16x8+8`)
+pozostaje fail-closed: przy 2000 iteracjach kończy się residuum około
+`5.02e-8`, a tolerancja liniowa wynosi `2.13e-12` lub mniej. Próba budżetu
+4000 oraz ręcznego `gmres_restart=800` nie daje akceptowalnego czasu; potrzebny
+jest dalszy preconditioner wielopoziomowy/line-relaxation. To nie jest dowód
+błędu fizyki ani parity z BORIS.
+
+Aktualizuję więc granicę statusu, nie capability matrix: M2 FDM CPU ma
+`reference_executable` dla zamkniętego zakresu coarse/medium tego harnessu,
+natomiast fine, BORIS executable parity, FEM/GPU, CPU↔CUDA i
+`validated_workloads` pozostają otwarte. Ocena celu pozostaje konserwatywnie
+**84% implementacji / 58% gotowości produkcyjnej**.
+
+## 32.32. Domknięcie pełnego operatora 3D, line-relaxation i macierzy BORIS (2026-08-03)
+
+### 32.32.1. Korekta regresji osiowej i preconditionera
+
+Kontrola po poprzedniej iteracji wykazała, że świeżo dodana pętla operatora
+mogła ominąć oś `z`. Taki wynik byłby numerycznie pozornie zbieżny, lecz
+fizycznie usuwałby dyfuzję, SHE/iSHE i warunki brzegowe w trzecim kierunku.
+Finalny operator utrzymuje pętlę `coupled_charge_spin.rs::residual_flat` dla osi
+`0..3`, a `line_preconditioners` obejmuje każdą niebanalną oś, w tym
+linię przechodzącą przez interfejs N/F. Preconditioner pozostaje wyłącznie
+przybliżeniem: pełny operator nadal zawiera wszystkie składniki konstytutywne,
+a pominięcie tangencjalnego SHE i `G_i` dotyczy tylko faktoryzacji linii.
+
+Dowód regresji po poprawce:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m2-z-axis-fix \
+CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib fdm::cpu::transport -- --nocapture
+73 passed; 0 failed
+```
+
+W szczególności test `m2_refined_anisotropic_bar_converges_with_declared_linear_budget`
+przechodzi dla siatki `20×8×8`, `gmres_restart=8` i budżetu 200 iteracji;
+wcześniejsza wersja z pominiętą osią `z` nie jest dowodem i została odrzucona.
+
+### 32.32.2. Pełna macierz Fullmag CPU/double
+
+Świeże binarium referencyjne ma SHA-256
+`38a2db19d3bf49535f1555c17f06ea6e9641aa3aeeebf8adfc61b580bb42ead0`.
+Sześć uruchomień (trzy rozdzielczości `10×4×2+2`, `20×8×4+4`,
+`40×16×8+8`; tolerancje `1e-8` i `1e-10`) zakończyło się `pass` w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+fullmag-m2-current-zfix-fullmatrix-20260803/fullmag_only_matrix.json
+```
+
+Największa siatka ma residuale `charge=6.337917271934871e-13` i
+`spin=1.3243111363198238e-12` dla `1e-8`, oraz odpowiednio
+`1.054259089651925e-14` i `2.652500450302329e-14` dla `1e-10`.
+To zamyka referencyjny CPU/double zakres M2 tego harnessu, nie awansuje GPU,
+FEM ani `validated_workloads`.
+
+### 32.32.3. Wykonywalne porównanie z BORIS
+
+Pełna macierz BORIS–Fullmag uruchomiła wszystkie sześć tuple w zarządzanym
+`boris-nf-runtime` i jest zapisana w:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+fullmag-boris-she-nf-matrix-zfix-20260803/matrix.json
+```
+
+To jest kompletna macierz wykonawcza, lecz walidator prawidłowo pozostawił ją
+`diagnostic`/`incomparable`. Torque nie jest porównywany: BORIS `Tsi` ma
+`A/(m s)`, a Fullmag publikuje źródło Gilberta `[1/s]`, bez arbitralnego
+przelicznika `gamma`. Adapter normalizuje jawny czynnik BORIS
+`MUB_E=mu_B/e` przez `Q_ia=Js_ia/MUB_E`; po tej konwersji maksymalny błąd
+potencjału maleje z około `1.431e-4` (coarse) do `2.110e-5` (fine), lecz
+`mu_s`, `Q_ia`, absorbowany flux i charge-current nadal mają błędy rzędu
+jedności. To jest negatywny, reprodukowalny test zgodności kontraktów, nie
+parity ani kwalifikacja Fullmag względem BORIS.
+
+BORIS provenance pozostaje jawne: binary SHA-256
+`5bbb6ff240860b34a425eab33cde7a4fe1ecb598cb394d32397e6272e6185997`, source
+snapshot `8daa0a9b2ef414b95090f838ab72414fb6808909ea9bde50c4aabd2a11a717a2`,
+managed image `nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`.
+Jednorazowy launcher bez zamontowanego `libnvidia-ml.so.1` kończył się
+`exit=127`; użycie trwałego, zarządzanego kontenera rozwiązało problem
+środowiskowy bez zmiany solvera. Ta różnica jest zachowana w logach i nie jest
+ukrywana jako wynik fizyczny.
+
+### 32.32.4. Zaktualizowana granica celu
+
+Po tej iteracji M2 FDM CPU ma zamknięty, wykonywalny i testowany zakres
+coarse/medium/fine dla referencyjnego workloadu Fullmag. Nadal otwarte są:
+BORIS parity (w tym mapping `G_i/Gmix`), torque normalization, FEM/GPU,
+CPU↔CUDA, pełny leaf-by-leaf Python/UI round-trip, skin-effect/MQS zakres,
+FEM Oersted RT0/KKT, M3 fizyczny `C_s` oraz zielony full-suite. Capability
+matrix pozostaje bez zmian (`direct/inverse SHE` nie otrzymują
+`validated_workloads`). Konserwatywna ocena celu rośnie do **86% implementacji /
+60% gotowości produkcyjnej**; wzrost dotyczy dowodu referencyjnego CPU, nie
+deklaracji produkcyjnej całego programu.
+
+## 32.33. Izolowana brama CPU↔CUDA dla MuMax3 Zhang–Li (2026-08-03)
+
+### 32.33.1. Zakres korekty
+
+Po synchronizacji `FdmPlanIR` nowe pola provenance Zhang–Li nie były obecne w
+trzech istniejących fixture'ach inline testów CUDA. Dodanie `..Default::default()`
+uzupełnia wyłącznie pola nieistotne dla tych fixture'ów i usuwa błąd kompilacji;
+nie zmienia operatora ani jego znaków. Osobny test parzystości został umieszczony
+w aktywnym inline `#[cfg(test)] mod tests` w
+`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`. Wcześniejszy osierocony
+`native/tests.rs` nie jest modułem kompilowanym i nie stanowi dowodu wykonania.
+
+### 32.33.2. Zarządzany dowód wykonawczy
+
+Recepta:
+
+```text
+just verify-fdm-zhang-li-native-contract
+```
+
+wykonała w kontenerze `fem-gpu` konfigurację i budowę natywnego CUDA
+`fullmag_fdm`, zbudowała i uruchomiła `stt_pbc_contract`, a następnie uruchomiła
+aktywny test:
+
+```text
+fdm::gpu::cuda::native::tests::native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available
+test result: 1 passed; 0 failed
+```
+
+Test jest świadomie izolowany: FP64 Heun, stały krok `2.5e-13 s`, maskowany plan
+FDM `3×3×1`, `J=(1.4e11,-2.0e10,3.0e10) A/m²`, `P=0.62`, `beta=0.07`,
+`g=2.0`, `formula_version=zhang_li.mumax3.v1` i
+`operator_version=zl_mumax3_central_v1`. Wymiana, demagnetyzacja i pole
+zewnętrzne są wyłączone, aby porównanie obejmowało wyłącznie wspólny operator
+Zhang–Li oraz aktualizację jednego kroku. Akceptacja wymaga tolerancji
+względnej `5e-8` i bezwzględnej `1e-10` dla całego pola wektorowego.
+
+### 32.33.3. Granica kwalifikacji
+
+Brama zamyka niskopoziomowy kontrakt CPU↔CUDA dla operatora MuMax3 Zhang–Li.
+Nie jest to kwalifikacja pełnego SP5: nadal brakuje pełnej trajektorii CPU/GPU,
+adaptive accepted-step parity, sweepu `dt`/siatki, niezależnej zbieżności stanu
+relaksacji i demagnetyzacji, kontroli kolejności aktualizacji, porównania z
+BORIS, FEM/GPU, pełnego round-trip Python/UI, skin-effect/MQS, FEM Oersted
+RT0/KKT, fizycznego M3 `C_s` oraz zielonego full-suite. Ocena pozostaje
+**86% implementacji / 60% gotowości produkcyjnej**; ten wynik nie zmienia
+capability matrix ani statusu `validated_workloads`.
+
+## 32.34. Korekta prefaktora MuMax3 Zhang–Li w CPU/CUDA (2026-08-03)
+
+### 32.34.1. Zidentyfikowany błąd fizyczno-numeryczny
+
+Porównanie z rzeczywistym źródłem `external_solvers/3/cuda/zhangli2.cu`
+wykazało, że wcześniejsza realizacja MuMax3 stosowała czynnik `1/2` dwa razy.
+Źródłowy kernel definiuje
+
+```text
+PREFACTOR = MUB/(2*QE*GAMMA0)
+deltax(m) = m[hclampx(i+1)] - m[lclampx(i-1)]
+```
+
+czyli różnica sąsiadów jest dzielona tylko przez `cell_size`; współczynnik
+`1/2` należy już do `PREFACTOR`. Fullmag używał `0.5/cell_size` przy tym samym
+prefaktorze `P*mu_B/(2*e*M_s*(1+beta^2))`, przez co źródło Zhang–Li było
+dwukrotnie za małe. W historycznym przebiegu SP5 objawiało się to składowymi
+`x/y` nowego operatora bliskimi połowie referencji MuMax3. Test CPU↔CUDA nie
+wykrywał błędu, ponieważ obie ścieżki współdzieliły tę samą błędną skalę.
+
+### 32.34.2. Implementacja i test-first evidence
+
+Korekta została wykonana w:
+
+- `crates/fullmag-engine/src/fdm/cpu/fields.rs`,
+- `backends/fdm/gpu/cuda/integrators/llg_fp64.cu`,
+- `backends/fdm/gpu/cuda/integrators/llg_fp32.cu`.
+
+Wariant `zhang_li.legacy_fullmag.v0` pozostał bez zmian. Równanie w
+`docs/physics/0990-mumax-standard-problem-5-fdm-validation.md` i opis baseline'u
+w `SP5_FULLMAG_MUMAX_COMPARISON.md` zostały ujednolicone ze źródłem MuMax3.
+
+Najpierw uruchomiono czerwony test po zmianie oczekiwanego prefaktora:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/zhangli-factor-red \
+CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib \
+  mumax3_zhang_li -- --nocapture
+0 passed; 1 failed
+```
+
+Po zmianie operatora ten sam test przeszedł:
+
+```text
+running 1 test
+test fdm::cpu::fields::stt_tests::mumax3_zhang_li_uses_central_clamped_stencil_and_source_prefactor ... ok
+test result: ok. 1 passed; 0 failed; 300 filtered out
+```
+
+To jest dowód korekty wzoru i CPU oracle, nie jeszcze dowód pełnej trajektorii.
+
+### 32.34.3. Bramy wymagane przed wykonaniem (stan wejściowy)
+
+Plan tej iteracji obejmował ponowne wykonanie zarządzanej recepty
+`just verify-fdm-zhang-li-native-contract`, ponieważ wcześniejsza brama
+CPU↔CUDA była zielona dla błędnego, wspólnego prefaktora. Wymagał także
+przebudowy zarządzanego runtime, świeżego stałokrokowego SP5 GPU oraz pełnego
+artefaktu `metadata.json`, `m_final.json`, `scalars.csv`, trace solvera i
+różnicy względem referencji MuMax3
+`(-0.23488366603851318, -0.09453280270099640, 0.022961989045143127)`.
+Dopiero po sprawdzeniu zbieżności relaksacji, demagnetyzacji, kolejności
+aktualizacji i sweepu `dt`/siatki można rozważyć awans z `reference_executable`;
+ta korekta sama nie zmienia `capability-matrix-v0.json` ani statusu
+`validated_workloads`.
+
+### 32.34.4. Świeża brama CUDA i przebieg SP5 po korekcie
+
+Po aktualizacji kontraktu źródłowego wykonano ponownie zarządzaną receptę:
+
+```text
+just verify-fdm-zhang-li-native-contract
+FDM Zhang-Li periodic-stencil contract: PASS
+native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available
+test result: 1 passed; 0 failed; 0 ignored; 0 measured; 769 filtered out
+```
+
+Następnie `just ensure-managed-fem-runtime` wyeksportowało i zweryfikowało
+schema-3 runtime z `execution_engine=cuda_fdm`, FP64/cuFFT i compute capability
+8.9. Stałokrokowy przebieg SP5 (`dt=1e-13 s`, `tolT=1e-6 T`, 10000 accepted
+steps) jest zapisany w:
+
+```text
+/zfn2/mateuszz/git/fullmag/runs/
+mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed
+```
+
+Końcowa średnia pola z `m_final.json` wynosi
+`(-0.23465571179208225, -0.09450957174904828, 0.02294296086440478)`. Względem
+referencji MuMax3
+`(-0.23488366603851318, -0.09453280270099640, 0.022961989045143127)` daje to
+różnice `(2.2795424643e-4, 2.3230951948e-5, -1.9028180738e-5)`,
+`max|Δ|=2.2795424643e-4` i RMS `1.3274648427e-4`. Składowe `x/y` nie są już
+dwukrotnie za małe; pozostaje rozbieżność większa niż docelowa tolerancja
+`1e-4`, dlatego `qualification.json` zachowuje `status=not_evaluated`.
+Artefakt potwierdza `lossy_fallback_used=false`, `device_name=NVIDIA GeForce
+RTX 4080 SUPER`, `precision=double`, `integrator=heun` i stałą politykę czasu.
+Identyczny przebieg CPU zakończył się osobno; wynik parytetu zapisano poniżej i
+nie włącza on automatycznie statusu kwalifikacji.
+
+### 32.34.5. Magazyn build/runtime
+
+Pierwszy eksport po kompilacji zakończył się przed publikacją przez
+`No space left on device` przy kopiowaniu `libcublas` na
+`/mnt/fullmag-zfn2-native`. Audyt wykazał 28 nieużywanych snapshotów źródeł
+(`source-cache.*`, około 5,3 GB) pozostawionych przez wcześniejsze eksporty w
+tym samym task-specific runtime. Usunięto wyłącznie te stare snapshoty,
+pozostawiając aktualny `source-cache.6900d651…`, Cargo target, raporty oraz
+warianty runtime. Wolne miejsce wzrosło z 1,2 GB do 7,6 GB, a powtórzony
+`ensure-managed-fem-runtime` zakończył się poprawną walidacją schema-3. Ten
+przypadek potwierdza, że ciężkie buildy pozostają na szybkim dysku
+`/zfn2/mateuszz/git/fullmag`/jego ext4 mount view; zwykły workspace nie jest
+magazynem artefaktów.
+
+### 32.34.6. Zamknięcie stałokrokowej bramy CPU↔CUDA
+
+CPU wykonano z tym samym planem, `dt=1e-13 s`, progiem relaksacji `tolT=1e-6 T`
+i horyzontem `1 ns` etapu `flat_run`. Artefakt:
+
+```text
+/zfn2/mateuszz/git/fullmag/runs/
+mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu
+```
+
+Metadane mają `execution_engine=cpu_reference`, `precision=double`,
+`fft_backend=rustfft`, `demag_operator_kind=tensor_fft_newell` oraz
+`lossy_fallback_used=false`. Łącznie wykonano `12458` accepted steps (relaksacja
+plus `10000` kroków dynamicznych); `solver/accepted_steps.v1.json` zawiera
+`10000` rekordów etapu dynamicznego. CPU i CUDA mają identyczne `step`, `time`
+i `dt` w każdym rekordzie. Końcowe pola 4096-komórkowe różnią się maksymalnie
+`6.9388939039e-16`, RMS `1.1431120734e-16`; średnie są identyczne do
+zaokrąglenia maszynowego. W fizycznych obserwablach trace maksymalna różnica
+wynosi `1.2874603271e-3` dla `max_dm_dt` przy skali około `1e10 s^-1`, a
+różnice energii są poniżej `1.6e-33`.
+
+Ta brama zamyka fixed-step CPU↔CUDA trajectory parity dla operatora
+`zhang_li.mumax3.v1` i tego samego operatora demagnetyzacji. Nie zamyka
+zgodności z MuMax3: oba backendy mają wspólny wynik
+`(-0.2346557117920822,-0.0945095717490483,0.0229429608644048)`, lecz względem
+referencji MuMax3 pozostaje `max|Δ|=2.2795424643e-4`, więc oba artefakty mają
+`qualification.json.status=not_evaluated`. Pozostają nadal: zbieżność kroku i
+siatki, niezależna relaksacja, adaptive CPU/GPU, BORIS/SHE, FEM/GPU, pełny
+round-trip Python/UI, skin-effect/MQS, FEM Oersted RT0/KKT, fizyczne M3
+`C_s` oraz `validated_workloads`.
+
+## 32.35. Korekta walidacji residualu BORIS N/F (2026-08-03)
+
+### 32.35.1. Root cause
+
+Powtórzenie BORIS N/F na średniej siatce z limitem `5000` iteracji nadal dawało
+`spin_scaled_l2≈2.47e11`. Ponieważ zwiększenie limitu nie zmieniło rzędu
+wyniku, wykonano audyt jednostek i źródeł zamiast kolejnego strojenia SOR.
+`Transport_Spin_Display.cpp` publikuje `S [A/m]` oraz `Js [A/s]`, podczas gdy
+Fullmag `Q_ia=Js_ia/MUB_E` ma `A/m²`. Stary walidator dodawał dywergencję
+`Js` do reakcji zapisanej w jednostkach `Q`, a dzielił przez `max(|Js|,1)`
+zamiast przez skalę dywergencji. Dodatkowo stosował normal-metalowy człon
+`lambda_sf` do F, pomijając `l_ex`, `l_ph` i ograniczenia stałego workloadu.
+
+Normatywny zapis korekty trafił do
+`docs/physics/0970-spin-hall-drift-diffusion-transport.md` §5.2.1 oraz do
+porównania BORIS/Fullmag §7.7. W native BORIS variables sprawdzane jest:
+
+```text
+R_S = div(Js) + De*S/lambda_sf^2                    (N),
+R_S = div(Js) + De*(S/lambda_sf^2 + (S×m)/l_ex^2
+                    + m×(S×m)/l_ph^2)              (F, constant m),
+scale = max(|J|/h, |De*S|/reaction_length^2, 1).
+```
+
+Źródła topological-Hall, charge/spin pumping oraz `E·grad(m)` nie są ukryte:
+F branch jest jawnie ograniczony do manifestu z jednorodnym materiałem i
+stałym `m`; dla ogólnego F potrzebny jest osobny manifest źródeł.
+
+### 32.35.2. Test-first i implementacja
+
+Dodano testy `scripts/test_verify_boris_nf_interface.py` dla native `S` residualu
+oraz dla exchange/dephasing F. Zaktualizowano `NfCaseConfig`/manifest o
+`l_ex_m`, `l_ph_m`, `P` i mapowanie Python BORIS `l_phi`; CLI runner przyjmuje
+`--transport-tolerance` i `--transport-max-iterations`. Testy:
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=scripts \
+python3 -m pytest -s -q \
+  scripts/test_boris_nf_interface_smoke.py \
+  scripts/test_run_boris_nf_interface.py \
+  scripts/test_verify_boris_nf_interface.py
+19 passed; 0 failed
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=packages/fullmag-py/src:scripts \
+python3 -m pytest -s -q \
+  scripts/test_compare_boris_fullmag_she_nf.py \
+  scripts/test_boris_fullmag_she_nf_matrix.py
+12 passed; 0 failed
+```
+
+### 32.35.3. Managed evidence after correction
+
+Nowy artefakt CPU/double z trwałego `boris-nf-runtime`:
+
+```text
+/zfn2/mateuszz/git/fullmag/boris-build/reports/
+runner-fine-5000-native/summary.json
+```
+
+Konfiguracja: `20×8×4 + 4`, `tol=1e-8`, `5000` iteracji, `SHA=iSHA=0.1`,
+`Gi=5e14 S/m²`, `Gmix=(1.5e15,0)`, `l_sf=5 nm`, `l_ex=2 nm`, `l_phi=4 nm`,
+`m=(1,0,0)`. Residuale z `216` komórek wewnętrznych na materiał:
+
+```text
+normal:       charge=5.147004968391239e-13  spin=3.806146941508527e-3
+ferromagnet:  charge=3.978584955133736e-12  spin=9.615227124935865e-10
+```
+
+Porównanie do Fullmag fine jest w
+`runner-fine-5000-native/comparison.json`; nadal ma `status=incomparable` i
+max-relative-error: potential `5.393051572602266e-5`, `mu_s`
+`1.8919613718899064`, `Q_ia` `1.9999958674595317`, absorbed flux
+`1.000123101888642`, charge `1.2906273307379117`. Torque pozostaje jawnie
+nieporównywalny (`BORIS Tsi A/(m s)` vs Fullmag `[1/s]`). Korekta zamyka tylko
+niezależny test jednostek/residualu; nie daje parity ani awansu capability.
+
+### 32.35.4. Status bramy i ocena celu
+
+`SHE-BORIS-001`, mapowanie `G_i/Gmix`, N/T/F, BORIS CPU↔CUDA, Fullmag
+CPU↔CUDA, FEM/GPU, cross-backend common-limit, torque normalization,
+`validated_workloads`, skin-effect/MQS, FEM Oersted RT0/KKT, fizyczny M3 `C_s`
+i pełny Python/UI round-trip pozostają otwarte. Zapisany zakres poprawia
+wiarygodność diagnostyki BORIS, ale nie zwiększa oceny produkcyjnej: nadal
+**86% implementacji / 60% gotowości produkcyjnej**.

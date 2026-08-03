@@ -92,6 +92,8 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
     }
     op.Finalize();
     ctx.poisson_demag.poisson_bc_op = &op;
+    ctx.gpu_state.device.demag_poisson.scalar_dof_count = 8;
+    ctx.gpu_state.device.demag_poisson.full_scalar_dof_count = 8;
     check(cudaMalloc(
               reinterpret_cast<void **>(&ctx.gpu_state.device.demag_poisson.poisson_rhs),
               8 * sizeof(double)) == cudaSuccess,

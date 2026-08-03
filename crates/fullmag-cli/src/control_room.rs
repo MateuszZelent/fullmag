@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -89,10 +89,78 @@ pub(crate) fn init_api_port() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("API port already resolved"))
 }
 
+fn resolve_headless_api_port_with(
+    raw: Option<&OsStr>,
+    compatible: impl Fn(u16) -> bool,
+) -> Result<u16> {
+    let Some(raw) = raw else {
+        return Ok(0);
+    };
+    let raw = raw.to_string_lossy();
+    let port = raw
+        .trim()
+        .parse::<u16>()
+        .with_context(|| format!("FULLMAG_API_PORT must be a valid u16 port, got '{raw}'"))?;
+    if port == 0 {
+        return Ok(0);
+    }
+    if !compatible(port) {
+        bail!("headless FULLMAG_API_PORT={port} must already serve a compatible fullmag-api");
+    }
+    Ok(port)
+}
+
+pub(crate) fn init_headless_api_port() -> Result<()> {
+    let port = resolve_headless_api_port_with(
+        std::env::var_os("FULLMAG_API_PORT").as_deref(),
+        api_bridge_is_ready,
+    )?;
+    init_api_port_explicit(port)
+}
+
 pub(crate) fn init_api_port_explicit(port: u16) -> Result<()> {
     RESOLVED_API_PORT
         .set(port)
         .map_err(|_| anyhow::anyhow!("API port already resolved"))
+}
+
+#[cfg(test)]
+mod headless_api_port_tests {
+    use std::ffi::OsStr;
+
+    use super::resolve_headless_api_port_with;
+
+    #[test]
+    fn absent_headless_api_port_stays_disabled() {
+        assert_eq!(resolve_headless_api_port_with(None, |_| false).unwrap(), 0);
+    }
+
+    #[test]
+    fn explicit_zero_headless_api_port_stays_disabled() {
+        assert_eq!(
+            resolve_headless_api_port_with(Some(OsStr::new("0")), |_| false).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn explicit_nonzero_headless_api_port_requires_compatible_api() {
+        assert_eq!(
+            resolve_headless_api_port_with(Some(OsStr::new("18233")), |port| port == 18233)
+                .unwrap(),
+            18233
+        );
+        let error =
+            resolve_headless_api_port_with(Some(OsStr::new("18233")), |_| false).unwrap_err();
+        assert!(error.to_string().contains("compatible fullmag-api"));
+    }
+
+    #[test]
+    fn malformed_headless_api_port_fails_closed() {
+        let error =
+            resolve_headless_api_port_with(Some(OsStr::new("invalid")), |_| true).unwrap_err();
+        assert!(error.to_string().contains("valid u16 port"));
+    }
 }
 
 trait GuardedProcess {
@@ -1161,12 +1229,26 @@ fn payload_routes_to_current_live_session_frame(payload: &CurrentLiveSnapshotPay
         || payload.run.is_some()
 }
 
-pub(crate) fn sync_current_live_delta(
+fn sync_current_live_delta_with<ScalarSync, SessionSync, RuntimeSync, FieldSync>(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
-) -> Result<()> {
+    mut scalar_sync: ScalarSync,
+    mut session_sync: SessionSync,
+    mut runtime_sync: RuntimeSync,
+    mut field_sync: FieldSync,
+) -> Result<()>
+where
+    ScalarSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+    SessionSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+    RuntimeSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+    FieldSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+{
+    if payload.latest_scalar_row.is_some() {
+        scalar_sync(session_id, payload)?;
+    }
+
     if payload_routes_to_current_live_session_frame(payload) {
-        sync_current_live_session_frame(session_id, payload)?;
+        session_sync(session_id, payload)?;
     }
 
     if payload.live_state.is_some()
@@ -1174,28 +1256,76 @@ pub(crate) fn sync_current_live_delta(
         || payload.solver_profile.is_some()
         || payload.fem_mesh.is_some()
     {
-        sync_current_live_runtime_frame(session_id, payload)?;
-    }
-
-    if payload.latest_scalar_row.is_some() {
-        sync_current_live_scalar_frame(session_id, payload)?;
+        runtime_sync(session_id, payload)?;
     }
 
     if payload.latest_fields.is_some()
         || payload.preview_fields.is_some()
         || payload.clear_preview_cache
     {
-        sync_current_live_field_frame(session_id, payload)?;
+        field_sync(session_id, payload)?;
     }
 
     Ok(())
 }
 
+pub(crate) fn sync_current_live_delta(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    sync_current_live_delta_with(
+        session_id,
+        payload,
+        sync_current_live_scalar_frame,
+        sync_current_live_session_frame,
+        sync_current_live_runtime_frame,
+        sync_current_live_field_frame,
+    )
+}
+
 #[cfg(test)]
 mod live_delta_routing_tests {
-    use super::payload_routes_to_current_live_session_frame;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use super::{payload_routes_to_current_live_session_frame, sync_current_live_delta_with};
     use crate::simulation_preparation::SimulationPreparationState;
-    use crate::types::CurrentLiveSnapshotPayload;
+    use crate::types::{CurrentLiveScalarRow, CurrentLiveSnapshotPayload};
+
+    fn payload_with_scalar_session_and_runtime() -> CurrentLiveSnapshotPayload {
+        CurrentLiveSnapshotPayload {
+            session_status: Some("running".to_string()),
+            latest_scalar_row: Some(CurrentLiveScalarRow {
+                step: 1,
+                time: 0.0,
+                solver_dt: 0.0,
+                error_estimate: None,
+                max_error: None,
+                dt_suggested: None,
+                rejected_attempts: 0,
+                pseudo_time_s: None,
+                active_runtime_s: None,
+                mx: 1.0,
+                my: 0.0,
+                mz: 0.0,
+                e_ex: 0.0,
+                e_demag: 1.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 1.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                per_object_scalars: HashMap::new(),
+                table_expressions: Vec::new(),
+            }),
+            engine_log: Some(Vec::new()),
+            ..CurrentLiveSnapshotPayload::default()
+        }
+    }
 
     #[test]
     fn preparation_only_delta_routes_to_session_frame() {
@@ -1208,6 +1338,63 @@ mod live_delta_routing_tests {
         };
 
         assert!(payload_routes_to_current_live_session_frame(&payload));
+    }
+
+    #[test]
+    fn scalar_frame_precedes_heavy_frames() {
+        let payload = payload_with_scalar_session_and_runtime();
+        let calls = RefCell::new(Vec::new());
+        sync_current_live_delta_with(
+            "session-1",
+            &payload,
+            |_, _| {
+                calls.borrow_mut().push("scalar");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("session");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("runtime");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("field");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls.borrow()[..3], ["scalar", "session", "runtime"]);
+    }
+
+    #[test]
+    fn scalar_failure_stops_before_heavy_frames() {
+        let payload = payload_with_scalar_session_and_runtime();
+        let calls = RefCell::new(Vec::new());
+        let error = sync_current_live_delta_with(
+            "session-1",
+            &payload,
+            |_, _| {
+                calls.borrow_mut().push("scalar");
+                Err(anyhow::anyhow!("scalar failed"))
+            },
+            |_, _| {
+                calls.borrow_mut().push("session");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("runtime");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("field");
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(*calls.borrow(), ["scalar"]);
+        assert!(error.to_string().contains("scalar failed"));
     }
 }
 

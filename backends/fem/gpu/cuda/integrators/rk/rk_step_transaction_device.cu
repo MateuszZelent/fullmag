@@ -149,10 +149,12 @@ uint64_t transaction_payload_bytes(const Context &ctx)
     uint64_t bytes = saturating_mul(
         saturating_mul(node_count, 13u * 3u), sizeof(double));
     if (gpu.demag_poisson.poisson_solution != nullptr) {
-        bytes = saturating_add(bytes, saturating_mul(node_count, sizeof(double)));
+        bytes = saturating_add(bytes, saturating_mul(
+            gpu.demag_poisson.scalar_dof_count, sizeof(double)));
     }
     if (gpu.demag_poisson.poisson_solution_full != nullptr) {
-        bytes = saturating_add(bytes, saturating_mul(node_count, sizeof(double)));
+        bytes = saturating_add(bytes, saturating_mul(
+            gpu.demag_poisson.full_scalar_dof_count, sizeof(double)));
     }
     return bytes;
 }
@@ -277,18 +279,23 @@ bool copy_published_device_state(
         return false;
     }
 
-    auto copy_optional_scalar = [&](double *live, double *backup, const char *label) {
+    auto copy_optional_scalar = [&] (
+        double *live,
+        double *backup,
+        uint64_t scalar_count,
+        const char *label) {
         if (live == nullptr) {
             return true;
         }
         return restore
-            ? copy_scalar(backup, live, count, stream, label, error)
-            : copy_scalar(live, backup, count, stream, label, error);
+            ? copy_scalar(backup, live, scalar_count, stream, label, error)
+            : copy_scalar(live, backup, scalar_count, stream, label, error);
     };
     if (gpu.demag_poisson.poisson_solution != nullptr &&
         !copy_optional_scalar(
             gpu.demag_poisson.poisson_solution,
             rk.transaction_poisson_solution,
+            gpu.demag_poisson.scalar_dof_count,
             "GPU RK transaction Poisson solution copy")) {
         return false;
     }
@@ -296,6 +303,7 @@ bool copy_published_device_state(
         !copy_optional_scalar(
             gpu.demag_poisson.poisson_solution_full,
             rk.transaction_poisson_solution_full,
+            gpu.demag_poisson.full_scalar_dof_count,
             "GPU RK transaction full Poisson solution copy")) {
         return false;
     }

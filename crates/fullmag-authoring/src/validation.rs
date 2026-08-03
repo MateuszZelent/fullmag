@@ -4,7 +4,8 @@ use crate::{
     SceneChargePotentialGauge, SceneDocument, SceneOerstedField, SceneOerstedTimeDependence,
     ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef, SceneSpinBoundary,
     SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSpinTransportMode,
-    SceneSurfaceRef, SceneTimeEnvelope, SlonczewskiFormulaVersion, StudyPipelineDocument,
+    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling, SlonczewskiFormulaVersion,
+    StudyPipelineDocument,
     StudyPipelineNode,
 };
 use fullmag_ir::{
@@ -728,6 +729,7 @@ fn validate_spin_authoring(
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let mut transport_ids = BTreeSet::new();
+    let mut transport_contracts = BTreeMap::new();
     for (index, transport) in scene.current_transports.iter().enumerate() {
         let transport = transport.known().ok_or_else(|| {
             SceneDocumentValidationError::new(format!(
@@ -741,6 +743,10 @@ fn validate_spin_authoring(
                 transport.name
             )));
         }
+        transport_contracts.insert(
+            transport.name.clone(),
+            (transport.model, transport.coupling),
+        );
     }
 
     let mut spin_transport_ids = BTreeSet::new();
@@ -763,6 +769,45 @@ fn validate_spin_authoring(
             &transport_ids,
             &format!("spin_transports[{index}].current_source_id"),
         )?;
+        let (source_model, source_coupling) = transport_contracts
+            .get(&module.current_source_id)
+            .copied()
+            .expect("current source reference validated above");
+        let reciprocal = source_model == CurrentTransportModel::MagnetoresistivePoisson
+            || source_coupling == SceneTransportCoupling::Bidirectional;
+        if reciprocal {
+            if module.mode != SceneSpinTransportMode::Steady
+                || module.constitutive_version != "transport_constitutive.reciprocal.fullmag.v1"
+                || module.solver.operator_version != "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}] reciprocal M2 requires steady mode, reciprocal constitutive_version, and fdm_coupled_charge_spin_fv_block_gmres.v1"
+                )));
+            }
+            let nonlinear = module.solver.reciprocal_nonlinear.as_ref().ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}] reciprocal M2 requires reciprocal_nonlinear solver policy"
+                ))
+            })?;
+            if nonlinear.gmres_restart == 0
+                || nonlinear.max_picard_iterations == 0
+                || !nonlinear.relative_update_tolerance.is_finite()
+                || nonlinear.relative_update_tolerance <= 0.0
+                || !nonlinear.eta_transport.is_finite()
+                || nonlinear.eta_transport <= 0.0
+                || nonlinear.eta_transport > 1.0
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_transports[{index}].solver.reciprocal_nonlinear has invalid GMRES/Picard/tolerance parameters"
+                )));
+            }
+        } else if module.solver.reciprocal_nonlinear.is_some()
+            || module.constitutive_version == "transport_constitutive.reciprocal.fullmag.v1"
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "spin_transports[{index}] reciprocal_nonlinear/reciprocal constitutive_version requires bidirectional current transport"
+            )));
+        }
         if module.domain.is_empty() || module.materials.len() != module.domain.len() {
             return Err(SceneDocumentValidationError::new(format!(
                 "spin_transports[{index}] requires exactly one material assignment per domain region"
@@ -1232,6 +1277,22 @@ fn validate_current_transport(
             }
             validate_scene_charge_contract(index, transport, object_ids)?;
         }
+        CurrentTransportModel::MagnetoresistivePoisson => {
+            if transport.coupling != SceneTransportCoupling::Bidirectional {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] magnetoresistive_poisson requires coupling=bidirectional"
+                )));
+            }
+            if transport.current_density.is_some()
+                || transport.solve_region.is_some()
+                || transport.conductivity_s_per_m.is_some()
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] magnetoresistive_poisson does not accept legacy current or solve fields"
+                )));
+            }
+            validate_scene_charge_contract(index, transport, object_ids)?;
+        }
     }
     Ok(())
 }
@@ -1285,6 +1346,44 @@ fn validate_scene_charge_contract(
             assignment.material.sigma_spm,
             &format!("{prefix}.materials[{material_index}].material.sigma_Spm"),
         )?;
+        let anisotropic = [
+            assignment.material.sigma_parallel_spm,
+            assignment.material.sigma_perpendicular_spm,
+            assignment.material.sigma_ahe_spm,
+        ];
+        let reciprocal = transport.coupling == SceneTransportCoupling::Bidirectional
+            || transport.model == CurrentTransportModel::MagnetoresistivePoisson;
+        if reciprocal {
+            match anisotropic {
+                [Some(parallel), Some(perpendicular), Some(ahe)] => {
+                    positive(
+                        parallel,
+                        &format!(
+                            "{prefix}.materials[{material_index}].material.sigma_parallel_Spm"
+                        ),
+                    )?;
+                    positive(
+                        perpendicular,
+                        &format!(
+                            "{prefix}.materials[{material_index}].material.sigma_perpendicular_Spm"
+                        ),
+                    )?;
+                    finite(
+                        ahe,
+                        &format!("{prefix}.materials[{material_index}].material.sigma_AHE_Spm"),
+                    )?;
+                }
+                _ => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{prefix}.materials[{material_index}] magnetoresistive_poisson requires sigma_parallel_Spm, sigma_perpendicular_Spm, and sigma_AHE_Spm"
+                    )));
+                }
+            }
+        } else if anisotropic.iter().any(Option::is_some) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.materials[{material_index}] anisotropic conductivity is valid only for magnetoresistive_poisson"
+            )));
+        }
     }
     if assigned != domain {
         return Err(SceneDocumentValidationError::new(format!(
@@ -1356,9 +1455,22 @@ fn validate_scene_charge_contract(
         _ => {}
     }
     let solver = transport.solver.as_ref().expect("checked above");
-    if solver.engine != "cg"
-        || solver.operator_version != "fv_charge_harmonic_v1"
-        || solver.physical_residual_version != "charge_balance_integrated_l2.v1"
+    let reciprocal = transport.coupling == SceneTransportCoupling::Bidirectional
+        || transport.model == CurrentTransportModel::MagnetoresistivePoisson;
+    let expected_engine = if reciprocal { "block_gmres" } else { "cg" };
+    let expected_operator = if reciprocal {
+        "fdm_coupled_charge_spin_fv_block_gmres.v1"
+    } else {
+        "fv_charge_harmonic_v1"
+    };
+    let expected_residual = if reciprocal {
+        "transport_balance_integrated_l2.v1"
+    } else {
+        "charge_balance_integrated_l2.v1"
+    };
+    if solver.engine != expected_engine
+        || solver.operator_version != expected_operator
+        || solver.physical_residual_version != expected_residual
     {
         return Err(SceneDocumentValidationError::new(format!(
             "{prefix}.solver carries an unsupported charge engine/version"
@@ -2564,6 +2676,82 @@ mod tests {
         .unwrap();
 
         validate_scene_document(&scene).expect("complete graph must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_reciprocal_m2_transport_graph() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "magnetoresistive_poisson",
+            "coupling": "bidirectional",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {
+                    "sigma_Spm": 5.0e6,
+                    "sigma_parallel_Spm": 5.1e6,
+                    "sigma_perpendicular_Spm": 4.9e6,
+                    "sigma_AHE_Spm": 1.0e5
+                }
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "dirichlet_reference",
+            "solver": {
+                "engine": "block_gmres",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "transport_balance_integrated_l2.v1",
+                "operator_version": "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            }
+        }]))
+        .unwrap();
+        scene.spin_transports = serde_json::from_value(serde_json::json!([{
+            "schema_version": "spin_transport.v1",
+            "id": "spin",
+            "current_source_id": "charge",
+            "mode": "steady",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {
+                    "sigma_s_Spm": 5.0e6,
+                    "polarization_p": 0.4,
+                    "theta_sh": 0.1,
+                    "lambda_sf_m": 5.0e-9,
+                    "lambda_j_m": "disabled",
+                    "lambda_phi_m": "disabled"
+                }
+            }],
+            "solver": {
+                "engine": "gmres",
+                "linear": {"relative_tolerance": 1.0e-8, "absolute_tolerance": 0.0, "max_iterations": 500},
+                "physical_residual_version": "transport_balance_integrated_l2.v1",
+                "operator_version": "fdm_coupled_charge_spin_fv_block_gmres.v1",
+                "default_external_boundary": "spin_insulating",
+                "reciprocal_nonlinear": {
+                    "gmres_restart": 40,
+                    "max_picard_iterations": 4,
+                    "relative_update_tolerance": 1.0e-9,
+                    "eta_transport": 0.25
+                }
+            },
+            "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+            "constitutive_version": "transport_constitutive.reciprocal.fullmag.v1"
+        }])).unwrap();
+
+        validate_scene_document(&scene).expect("complete M2 graph must validate");
+        if let SceneSpinTransport::Known(module) = &mut scene.spin_transports[0] {
+            module.solver.reciprocal_nonlinear = None;
+        }
+        let error =
+            validate_scene_document(&scene).expect_err("M2 without nonlinear policy must fail");
+        assert!(error.message.contains("reciprocal_nonlinear"), "{error}");
     }
 
     #[test]

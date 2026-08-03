@@ -1072,6 +1072,18 @@ def _current_module_name_map(
     return {module.name: module for module in current_modules}
 
 
+def _spin_transport_modules_ir(problem: "Problem") -> list[dict[str, object]]:
+    """Lower spin transport with the coupling owned by its charge source."""
+
+    current_modules_by_name = _current_module_name_map(problem.current_modules)
+    lowered: list[dict[str, object]] = []
+    for module in problem.spin_transports:
+        source = current_modules_by_name.get(module.current_source_id)
+        coupling = source.coupling if isinstance(source, CurrentTransport) else None
+        lowered.append(module.to_ir(coupling=coupling))
+    return lowered
+
+
 def _legacy_spatial_envelope(profile: dict[str, object] | None):
     payload = profile or {"kind": "uniform"}
     kind = str(payload.get("kind") or "").strip().lower()
@@ -1434,6 +1446,27 @@ class Problem:
                 raise ValueError(
                     f"spin transport current_source_id={module.current_source_id!r} must reference a CurrentTransport"
                 )
+            if source_module.coupling == "bidirectional":
+                if module.mode != "steady":
+                    raise ValueError(
+                        "bidirectional charge-spin transport currently requires mode='steady'"
+                    )
+                if module.solver.reciprocal_nonlinear is None:
+                    raise ValueError(
+                        "bidirectional charge-spin transport requires reciprocal_nonlinear solver policy"
+                    )
+                if (
+                    module.solver.operator_version
+                    != "fdm_coupled_charge_spin_fv_block_gmres.v1"
+                ):
+                    raise ValueError(
+                        "bidirectional charge-spin transport requires operator_version="
+                        "'fdm_coupled_charge_spin_fv_block_gmres.v1'"
+                    )
+            elif module.solver.reciprocal_nonlinear is not None:
+                raise ValueError(
+                    "reciprocal_nonlinear solver policy requires a bidirectional CurrentTransport source"
+                )
         if self.excitation_analysis is not None:
             source_module = current_modules_by_name.get(self.excitation_analysis.source)
             if source_module is None:
@@ -1628,7 +1661,7 @@ class Problem:
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
-            "spin_transport_modules": [module.to_ir() for module in self.spin_transports],
+            "spin_transport_modules": _spin_transport_modules_ir(self),
             "excitation_analysis": self.excitation_analysis.to_ir()
             if self.excitation_analysis is not None
             else None,

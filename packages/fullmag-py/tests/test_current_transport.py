@@ -8,8 +8,15 @@ from tempfile import TemporaryDirectory
 
 import fullmag as fm
 from fullmag.runtime.loader import load_problem_from_script
-from fullmag.runtime.scene_document import build_scene_document_from_builder
-from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+from fullmag.runtime.scene_document import (
+    build_builder_from_scene_document,
+    build_scene_document_from_builder,
+)
+from fullmag.runtime.script_builder import (
+    _render_current_modules,
+    export_builder_draft,
+    rewrite_loaded_problem_script,
+)
 
 
 def _base_problem(**kwargs) -> fm.Problem:
@@ -31,6 +38,36 @@ def _base_problem(**kwargs) -> fm.Problem:
 
 
 class CurrentTransportTests(unittest.TestCase):
+    def _bidirectional_transport(self) -> fm.CurrentTransport:
+        conductor = fm.RegionRef("layer")
+        x_min = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
+        x_max = fm.SurfaceRef("layer", "x_max", (1.0, 0.0, 0.0))
+        material = fm.ChargeTransportMaterial(
+            sigma_Spm=5.8e7,
+            sigma_parallel_Spm=5.9e7,
+            sigma_perpendicular_Spm=5.7e7,
+            sigma_AHE_Spm=1.2e5,
+        )
+        return fm.CurrentTransport(
+            name="m2-charge",
+            model="ohmic_poisson",
+            coupling="bidirectional",
+            domain=[conductor],
+            materials=[fm.ChargeTransportMaterialAssignment(conductor, material)],
+            boundaries=[
+                fm.VoltageElectrode("ground", [x_min], potential_V=0.0),
+                fm.VoltageElectrode("drive", [x_max], potential_V=0.1),
+            ],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(
+                engine="block_gmres",
+                relative_tolerance=1.0e-11,
+                absolute_tolerance=1.0e-14,
+                max_iterations=200,
+                operator_version="fdm_coupled_charge_spin_fv_block_gmres.v1",
+            ),
+        )
+
     def test_ohmic_poisson_serializes_complete_charge_contract(self) -> None:
         conductor = fm.RegionRef("layer")
         x_min = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
@@ -68,6 +105,27 @@ class CurrentTransportTests(unittest.TestCase):
                 solve_region="layer",
                 conductivity_s_per_m=5.8e7,
             )
+
+    def test_bidirectional_contract_round_trips_through_script_and_scene(self) -> None:
+        transport = self._bidirectional_transport()
+        problem = _base_problem(current_modules=[transport])
+        rendered = _render_current_modules(problem, overrides={}, surface="flat")
+        self.assertIn("sigma_parallel_Spm", rendered[1])
+        self.assertIn("fdm_coupled_charge_spin_fv_block_gmres.v1", rendered[1])
+
+        fm.reset()
+        rebuilt = eval(rendered[1], {"fm": fm})
+        self.assertIsInstance(rebuilt, fm.CurrentTransport)
+        self.assertEqual(rebuilt.to_ir(), transport.to_ir())
+
+        entry = transport.to_ir()
+        scene = build_scene_document_from_builder(
+            {"revision": 2, "geometries": [], "current_modules": [entry]}
+        )
+        self.assertEqual(scene["current_transports"], [entry])
+        self.assertEqual(
+            build_builder_from_scene_document(scene)["current_modules"], [entry]
+        )
 
     def test_prescribed_density_serializes_to_ir(self) -> None:
         transport = fm.CurrentTransport(

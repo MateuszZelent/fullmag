@@ -39,6 +39,10 @@ struct PoissonDemagRuntimeState {
     mfem::BilinearForm *poisson_bilinear = nullptr;
     mfem::SparseMatrix *poisson_matrix = nullptr;
     mfem::SparseMatrix *poisson_bc_op = nullptr;
+    int potential_order = 0;
+    uint64_t potential_true_dof_count = 0;
+    double last_variational_energy_joules = 0.0;
+    double last_recovered_field_energy_joules = 0.0;
 
     PoissonRhsWorkspace *rhs_workspace = nullptr;
     mfem::LinearForm *rhs_form = nullptr;

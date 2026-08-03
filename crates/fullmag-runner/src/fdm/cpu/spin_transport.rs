@@ -3398,15 +3398,13 @@ mod tests {
         assert_eq!(workflow.accepted().unwrap().revision, 1);
     }
 
-    #[test]
-    fn analytical_direct_she_film_materializes_signed_profile_and_flux() {
-        let nz = 48usize;
+    fn analytical_direct_she_evaluation(nz: usize) -> (FdmPlanIR, FdmSpinTransportEvaluation) {
         let nx = 3usize;
-        let thickness_m = 4.0;
-        let lambda_sf_m = 1.1;
-        let sigma_spm = 5.0;
-        let sigma_s_spm = 4.0;
-        let theta_sh = 0.2;
+        let thickness_m: f64 = 4.0;
+        let lambda_sf_m: f64 = 1.1;
+        let sigma_spm: f64 = 5.0;
+        let sigma_s_spm: f64 = 4.0;
+        let theta_sh: f64 = 0.2;
         let cell_count = nx * nz;
         let mut plan = plan();
         plan.grid.cells = [nx as u32, 1, nz as u32];
@@ -3495,6 +3493,20 @@ mod tests {
         let evaluation = workflow
             .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
             .expect("direct-SHE stage solve");
+        (plan, evaluation)
+    }
+
+    #[test]
+    fn analytical_direct_she_film_materializes_signed_profile_and_flux() {
+        let nz = 48usize;
+        let nx = 3usize;
+        let thickness_m: f64 = 4.0;
+        let lambda_sf_m: f64 = 1.1;
+        let sigma_spm: f64 = 5.0;
+        let sigma_s_spm: f64 = 4.0;
+        let theta_sh: f64 = 0.2;
+        let cell_count = nx * nz;
+        let (plan, evaluation) = analytical_direct_she_evaluation(nz);
         let module = &evaluation.modules[0];
         let amplitude = 2.0 * theta_sh * sigma_spm * 1.0 * lambda_sf_m
             / (sigma_s_spm * (0.5 * thickness_m / lambda_sf_m).cosh());
@@ -3515,6 +3527,61 @@ mod tests {
         );
         assert_eq!(module.spin_operator_version, "fv_spin_upwind_v1");
         assert_eq!(module.spin_current_tensor_apm2.len(), cell_count);
+        assert_eq!(plan.grid.cells, [nx as u32, 1, nz as u32]);
+    }
+
+    #[test]
+    fn analytical_direct_she_film_converges_on_three_z_resolutions() {
+        let nx = 3usize;
+        let thickness_m: f64 = 4.0;
+        let lambda_sf_m: f64 = 1.1;
+        let sigma_spm: f64 = 5.0;
+        let sigma_s_spm: f64 = 4.0;
+        let theta_sh: f64 = 0.2;
+        let amplitude = 2.0 * theta_sh * sigma_spm * lambda_sf_m
+            / (sigma_s_spm * (0.5 * thickness_m / lambda_sf_m).cosh());
+        let mut relative_errors = Vec::new();
+        let mut residuals = Vec::new();
+        let mut balance_closures = Vec::new();
+
+        for nz in [24usize, 48, 96] {
+            let (plan, evaluation) = analytical_direct_she_evaluation(nz);
+            let module = &evaluation.modules[0];
+            let dz = thickness_m / nz as f64;
+            let mut error_squared = 0.0;
+            let mut reference_squared = 0.0;
+            for z in 0..nz {
+                let cell = 1 + nx * z;
+                let coordinate = (z as f64 + 0.5) * dz - 0.5 * thickness_m;
+                let exact = amplitude * (coordinate / lambda_sf_m).sinh();
+                let error = module.spin_potential_volts[cell][1] - exact;
+                error_squared += error * error;
+                reference_squared += exact * exact;
+                assert!((module.current_density_apm2[cell][0] - sigma_spm).abs() < 1.0e-10);
+            }
+            relative_errors.push((error_squared / reference_squared).sqrt());
+            residuals.push(module.telemetry.spin_scaled_residual);
+            balance_closures.push(module.telemetry.spin_relative_balance_closure);
+            assert_eq!(plan.grid.cells, [nx as u32, 1, nz as u32]);
+        }
+
+        assert!(
+            relative_errors[1] < relative_errors[0]
+                && relative_errors[2] < relative_errors[1],
+            "direct-SHE profile error must decrease with z refinement: {relative_errors:?}"
+        );
+        assert!(
+            relative_errors[2] < 0.75 * relative_errors[0],
+            "three-grid direct-SHE refinement is too weak: {relative_errors:?}"
+        );
+        assert!(
+            residuals.iter().all(|value| *value < 1.0e-10),
+            "all refined solves must satisfy the residual gate: {residuals:?}"
+        );
+        assert!(
+            balance_closures.iter().all(|value| *value < 1.0e-10),
+            "all refined solves must satisfy the spin balance gate: {balance_closures:?}"
+        );
     }
 
     #[test]
@@ -3556,6 +3623,102 @@ mod tests {
         );
         assert!(module.telemetry.nonlinear_iterations.is_some());
         assert_eq!(module.telemetry.transport_outer_error_ratio, Some(0.0));
+    }
+
+    #[test]
+    fn reciprocal_m2_runner_materializes_ishe_and_direct_she_channels() {
+        let mut plan = reciprocal_plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let descriptor = resolved
+            .fdm_cpu_double_reciprocal
+            .as_mut()
+            .expect("reciprocal descriptor fixture");
+        for material in &mut descriptor.reciprocal_materials {
+            material.theta_sh = 0.2;
+        }
+        for boundary in &mut descriptor.spin_boundaries {
+            boundary.condition = match boundary.face {
+                StructuredBoundaryFaceIR::XMin => {
+                    ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
+                        value_v: [0.0, 0.0, 0.0],
+                    }
+                }
+                StructuredBoundaryFaceIR::XMax => {
+                    ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
+                        value_v: [0.0, 0.0, 1.0],
+                    }
+                }
+                _ => ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            };
+        }
+
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("reciprocal workflow construction")
+            .expect("spin workflow");
+        let evaluation = workflow
+            .evaluate_stage(&plan.initial_magnetization, 0.0)
+            .expect("reciprocal M2 stage solve");
+        let module = &evaluation.modules[0];
+        let expected = ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 2.0,
+            sigma_spin_s_per_m: 4.0,
+            sigma_parallel_s_per_m: 2.0,
+            sigma_perpendicular_s_per_m: 2.0,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: 0.0,
+            spin_hall_angle: 0.2,
+        }
+        .evaluate(
+            [-0.25, 0.0, 0.0],
+            [[0.0, 0.0, -0.125], [0.0; 3], [0.0; 3]],
+            [0.0, 0.0, 1.0],
+        )
+        .expect("manufactured reciprocal response");
+
+        for cell in 0..4 {
+            let expected_potential = (cell as f64 + 0.5) / 4.0;
+            assert!((module.potential_volts[cell] - expected_potential).abs() < 1.0e-10);
+            assert!((module.spin_potential_volts[cell][2] - expected_potential).abs() < 1.0e-10);
+            assert!(module.spin_potential_volts[cell][0].abs() < 1.0e-10);
+            assert!(module.spin_potential_volts[cell][1].abs() < 1.0e-10);
+            for component in 0..3 {
+                assert!(
+                    (module.current_density_apm2[cell][component]
+                        - expected.charge_current_density_a_per_m2[component])
+                        .abs()
+                        < 1.0e-10,
+                    "cell {cell} charge component {component}: {:?} != {:?}",
+                    module.current_density_apm2[cell],
+                    expected.charge_current_density_a_per_m2
+                );
+            }
+            let tensor = module.spin_current_tensor_apm2[cell];
+            for (index, expected_value) in expected
+                .spin_current_density_a_per_m2
+                .iter()
+                .flatten()
+                .enumerate()
+            {
+                assert!(
+                    (tensor[index] - expected_value).abs() < 1.0e-10,
+                    "cell {cell} spin tensor component {index}: {tensor:?}"
+                );
+            }
+        }
+        assert!(module.current_density_apm2[0][1] > 0.0);
+        assert!(module.spin_current_tensor_apm2[0][5] > 0.0);
+        assert!(module.telemetry.scaled_charge_residual.unwrap() <= 1.0e-9);
+        assert!(module.telemetry.spin_scaled_residual <= 1.0e-9);
+        assert!(module.telemetry.charge_balance_relative.unwrap() <= 1.0e-9);
+        assert!(module.telemetry.spin_balance_relative.unwrap() <= 1.0e-9);
+        assert_eq!(
+            module.constitutive_version,
+            "transport_constitutive.reciprocal.fullmag.v1"
+        );
+        assert_eq!(
+            module.spin_operator_version,
+            "fdm_coupled_charge_spin_fv_block_gmres.v1"
+        );
     }
 
     #[test]

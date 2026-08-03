@@ -2,6 +2,7 @@ use crate::fdm::shared::types::{EngineError, Result};
 
 pub(super) type Vector3 = [f64; 3];
 pub(super) type Matrix3 = [[f64; 3]; 3];
+pub(super) type Block4 = [[f64; 4]; 4];
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct LocalInverseBlock {
@@ -26,6 +27,103 @@ impl BlockDiagonalPreconditioner {
             ];
             let solved = matrix_vector(block.inverse_spin, spin);
             result[4 * cell + 1..4 * cell + 4].copy_from_slice(&solved);
+        }
+        result
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct BlockLineSystem {
+    pub indices: Vec<usize>,
+    pub diagonal: Vec<Block4>,
+    pub lower: Vec<Block4>,
+    pub upper: Vec<Block4>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FactoredBlockLine {
+    indices: Vec<usize>,
+    diagonal_inverse: Vec<Block4>,
+    lower_multiplier: Vec<Block4>,
+    upper: Vec<Block4>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct BlockLinePreconditioner {
+    lines: Vec<FactoredBlockLine>,
+}
+
+impl BlockLinePreconditioner {
+    pub fn new(systems: Vec<BlockLineSystem>) -> Result<Self> {
+        let mut lines = Vec::with_capacity(systems.len());
+        for system in systems {
+            let length = system.indices.len();
+            if length == 0 || system.diagonal.len() != length {
+                return Err(EngineError::new(
+                    "M2 line preconditioner has an invalid diagonal layout",
+                ));
+            }
+            if system.lower.len() + 1 != length || system.upper.len() + 1 != length {
+                return Err(EngineError::new(
+                    "M2 line preconditioner has an invalid off-diagonal layout",
+                ));
+            }
+            let mut diagonal_inverse = Vec::with_capacity(length);
+            let mut lower_multiplier = Vec::with_capacity(length.saturating_sub(1));
+            let first_inverse = inverse4(system.diagonal[0]).ok_or_else(|| {
+                EngineError::new("M2 line preconditioner has a singular first block")
+            })?;
+            diagonal_inverse.push(first_inverse);
+            for index in 1..length {
+                let multiplier = multiply4(system.lower[index - 1], diagonal_inverse[index - 1]);
+                let schur = subtract4(
+                    system.diagonal[index],
+                    multiply4(multiplier, system.upper[index - 1]),
+                );
+                let inverse = inverse4(schur).ok_or_else(|| {
+                    EngineError::new("M2 line preconditioner has a singular Schur block")
+                })?;
+                lower_multiplier.push(multiplier);
+                diagonal_inverse.push(inverse);
+            }
+            lines.push(FactoredBlockLine {
+                indices: system.indices,
+                diagonal_inverse,
+                lower_multiplier,
+                upper: system.upper,
+            });
+        }
+        Ok(Self { lines })
+    }
+
+    pub fn apply(&self, values: &[f64]) -> Vec<f64> {
+        let mut result = vec![0.0; values.len()];
+        for line in &self.lines {
+            let length = line.indices.len();
+            let mut right_hand_side = Vec::with_capacity(length);
+            for &cell in &line.indices {
+                right_hand_side.push(read_block4(values, cell));
+            }
+            for index in 1..length {
+                let correction =
+                    multiply_vector4(line.lower_multiplier[index - 1], right_hand_side[index - 1]);
+                right_hand_side[index] = subtract_vector4(right_hand_side[index], correction);
+            }
+            let mut solution = vec![[0.0; 4]; length];
+            solution[length - 1] = multiply_vector4(
+                line.diagonal_inverse[length - 1],
+                right_hand_side[length - 1],
+            );
+            for index in (0..length.saturating_sub(1)).rev() {
+                let coupling = multiply_vector4(line.upper[index], solution[index + 1]);
+                solution[index] = multiply_vector4(
+                    line.diagonal_inverse[index],
+                    subtract_vector4(right_hand_side[index], coupling),
+                );
+            }
+            for (index, &cell) in line.indices.iter().enumerate() {
+                write_block4(&mut result, cell, solution[index]);
+            }
         }
         result
     }
@@ -93,6 +191,97 @@ pub(super) fn inverse3(matrix: Matrix3) -> Option<Matrix3> {
     ])
 }
 
+fn inverse4(matrix: Block4) -> Option<Block4> {
+    let mut augmented = [[0.0; 8]; 4];
+    for row in 0..4 {
+        augmented[row][..4].copy_from_slice(&matrix[row]);
+        augmented[row][4 + row] = 1.0;
+    }
+    for column in 0..4 {
+        let pivot = (column..4).max_by(|&left, &right| {
+            augmented[left][column]
+                .abs()
+                .total_cmp(&augmented[right][column].abs())
+        })?;
+        if augmented[pivot][column].abs() <= 1.0e-300 {
+            return None;
+        }
+        augmented.swap(column, pivot);
+        let pivot_value = augmented[column][column];
+        for value in &mut augmented[column] {
+            *value /= pivot_value;
+        }
+        for row in 0..4 {
+            if row == column {
+                continue;
+            }
+            let factor = augmented[row][column];
+            for entry in 0..8 {
+                augmented[row][entry] -= factor * augmented[column][entry];
+            }
+        }
+    }
+    let mut inverse = [[0.0; 4]; 4];
+    for row in 0..4 {
+        inverse[row].copy_from_slice(&augmented[row][4..]);
+    }
+    Some(inverse)
+}
+
+fn multiply4(left: Block4, right: Block4) -> Block4 {
+    let mut result = [[0.0; 4]; 4];
+    for row in 0..4 {
+        for column in 0..4 {
+            result[row][column] = (0..4)
+                .map(|index| left[row][index] * right[index][column])
+                .sum();
+        }
+    }
+    result
+}
+
+fn subtract4(left: Block4, right: Block4) -> Block4 {
+    let mut result = [[0.0; 4]; 4];
+    for row in 0..4 {
+        for column in 0..4 {
+            result[row][column] = left[row][column] - right[row][column];
+        }
+    }
+    result
+}
+
+fn multiply_vector4(matrix: Block4, vector: [f64; 4]) -> [f64; 4] {
+    let mut result = [0.0; 4];
+    for row in 0..4 {
+        result[row] = (0..4)
+            .map(|column| matrix[row][column] * vector[column])
+            .sum();
+    }
+    result
+}
+
+fn subtract_vector4(left: [f64; 4], right: [f64; 4]) -> [f64; 4] {
+    [
+        left[0] - right[0],
+        left[1] - right[1],
+        left[2] - right[2],
+        left[3] - right[3],
+    ]
+}
+
+fn read_block4(values: &[f64], cell: usize) -> [f64; 4] {
+    [
+        values[4 * cell],
+        values[4 * cell + 1],
+        values[4 * cell + 2],
+        values[4 * cell + 3],
+    ]
+}
+
+fn write_block4(values: &mut [f64], cell: usize, block: [f64; 4]) {
+    values[4 * cell..4 * cell + 4].copy_from_slice(&block);
+}
+
 pub(super) fn relative_vector_update(new: &[Vector3], old: &[Vector3]) -> f64 {
     let delta = new
         .iter()
@@ -133,6 +322,8 @@ where
 {
     let mut solution = vec![0.0; rhs.len()];
     let mut iterations = 0;
+    let mut effective_restart = restart;
+    let mut previous_cycle_residual = None;
     loop {
         let applied = apply(&solution)?;
         let residual: Vec<f64> = rhs.iter().zip(applied).map(|(b, a)| b - a).collect();
@@ -142,10 +333,23 @@ where
         }
         if iterations >= max_iterations {
             return Err(EngineError::new(format!(
-                "M2 block GMRES did not converge in {iterations} iterations"
+                "M2 block GMRES did not converge in {iterations} iterations (residual {beta:.6e}, tolerance {tolerance:.6e})"
             )));
         }
-        let dimension = restart.min(max_iterations - iterations);
+        if previous_cycle_residual.is_some() && beta > 100.0 * tolerance {
+            // A short restarted basis can stagnate on the long-wavelength modes
+            // of the coupled charge/spin diffusion operator.  Grow the basis
+            // while the residual is still materially above the requested
+            // tolerance; this preserves the authored restart as the low-memory
+            // starting point while remaining robust for refined meshes and
+            // strong reciprocal SHE coupling.
+            effective_restart = effective_restart
+                .saturating_mul(2)
+                .min(max_iterations - iterations)
+                .max(1);
+        }
+        previous_cycle_residual = Some(beta);
+        let dimension = effective_restart.min(max_iterations - iterations);
         let mut basis = Vec::with_capacity(dimension + 1);
         basis.push(
             residual
@@ -241,4 +445,54 @@ fn dot3(left: Vector3, right: Vector3) -> f64 {
 
 fn dot_slice(left: &[f64], right: &[f64]) -> f64 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{norm, restarted_gmres, BlockLinePreconditioner, BlockLineSystem};
+
+    #[test]
+    fn gmres_grows_restart_after_a_krylov_plateau() {
+        let diagonal: Vec<f64> = (0..24).map(|index| 10.0_f64.powi(index / 3)).collect();
+        let rhs = vec![1.0; diagonal.len()];
+        let (solution, iterations) = restarted_gmres(&rhs, 2, 64, 1.0e-12, |value| {
+            Ok(value
+                .iter()
+                .zip(&diagonal)
+                .map(|(entry, diagonal)| entry * diagonal)
+                .collect())
+        })
+        .expect("adaptive restarted GMRES should solve the diagonal system");
+        let residual: Vec<f64> = rhs
+            .iter()
+            .zip(&solution)
+            .zip(&diagonal)
+            .map(|((right, value), diagonal)| right - value * diagonal)
+            .collect();
+        assert!(norm(&residual) <= 1.0e-12);
+        assert!(iterations <= 64);
+    }
+
+    #[test]
+    fn block_line_preconditioner_solves_a_nonsymmetric_two_cell_system() {
+        let mut diagonal = [[0.0; 4]; 4];
+        for index in 0..4 {
+            diagonal[index][index] = 4.0;
+        }
+        let mut coupling = [[0.0; 4]; 4];
+        for index in 0..4 {
+            coupling[index][index] = -1.0;
+        }
+        let preconditioner = BlockLinePreconditioner::new(vec![BlockLineSystem {
+            indices: vec![0, 1],
+            diagonal: vec![diagonal, diagonal],
+            lower: vec![coupling],
+            upper: vec![coupling],
+        }])
+        .expect("two-cell block line must factor");
+        let result = preconditioner.apply(&[1.0; 8]);
+        for value in result {
+            assert!((value - 1.0 / 3.0).abs() < 1.0e-12);
+        }
+    }
 }

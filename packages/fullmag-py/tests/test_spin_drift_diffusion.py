@@ -217,11 +217,112 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
     def test_current_transport_is_single_coupling_owner(self) -> None:
         source = self.complete_charge_transport()
         self.assertEqual(source.to_ir()["coupling"], "one_way")
-        with self.assertRaisesRegex(ValueError, "M1"):
+        with self.assertRaisesRegex(ValueError, "complete charge contract"):
             fm.CurrentTransport(
                 name="charge",
                 model="ohmic_poisson",
                 coupling="bidirectional",
+            )
+
+    def test_bidirectional_m2_charge_and_spin_solver_parameters_round_trip(self) -> None:
+        charge = fm.CurrentTransport(
+            name="m2-charge",
+            model="ohmic_poisson",
+            coupling="bidirectional",
+            domain=[self.nm, self.fm],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    self.nm,
+                    fm.ChargeTransportMaterial(
+                        5.0e6,
+                        sigma_parallel_Spm=5.2e6,
+                        sigma_perpendicular_Spm=4.8e6,
+                        sigma_AHE_Spm=0.1e6,
+                    ),
+                ),
+                fm.ChargeTransportMaterialAssignment(
+                    self.fm,
+                    fm.ChargeTransportMaterial(
+                        3.0e6,
+                        sigma_parallel_Spm=3.1e6,
+                        sigma_perpendicular_Spm=2.9e6,
+                        sigma_AHE_Spm=0.05e6,
+                    ),
+                ),
+            ],
+            boundaries=[fm.VoltageElectrode("ground", [self.top], potential_V=0.0)],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(
+                engine="block_gmres",
+                operator_version="fdm_coupled_charge_spin_fv_block_gmres.v1",
+            ),
+        )
+        nonlinear = fm.ReciprocalNonlinearSolverPolicy(
+            gmres_restart=40,
+            max_picard_iterations=4,
+            relative_update_tolerance=1.0e-9,
+            eta_transport=0.25,
+        )
+        spin = fm.SpinDriftDiffusion(
+            id="m2-spin",
+            current_source_id="m2-charge",
+            domain=[self.nm, self.fm],
+            materials=[
+                fm.SpinTransportMaterialAssignment(
+                    self.nm,
+                    fm.SpinTransportMaterial(5.0e6, 0.0, 0.12, 1.5e-9),
+                ),
+                fm.SpinTransportMaterialAssignment(
+                    self.fm,
+                    fm.SpinTransportMaterial(
+                        3.0e6,
+                        0.45,
+                        0.0,
+                        4.0e-9,
+                        lambda_j_m=1.0e-9,
+                        lambda_phi_m=0.8e-9,
+                    ),
+                ),
+            ],
+            solver=fm.SpinSolverPolicy(
+                operator_version="fdm_coupled_charge_spin_fv_block_gmres.v1",
+                reciprocal_nonlinear=nonlinear,
+            ),
+        )
+        self.assertEqual(charge.to_ir()["coupling"], "bidirectional")
+        self.assertEqual(
+            charge.to_ir()["materials"][0]["material"]["sigma_parallel_Spm"],
+            5.2e6,
+        )
+        self.assertEqual(
+            spin.to_ir()["solver"]["reciprocal_nonlinear"]["eta_transport"],
+            0.25,
+        )
+
+        geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="stack")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        magnet = fm.Ferromagnet(name="stack", geometry=geometry, material=material)
+        problem = fm.Problem(
+            name="m2-python",
+            magnets=[magnet],
+            energy=[fm.Exchange()],
+            study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
+            current_modules=[charge],
+            spin_transports=[spin],
+        )
+        problem_ir = problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(
+            problem_ir["spin_transport_modules"][0]["constitutive_version"],
+            "transport_constitutive.reciprocal.fullmag.v1",
+        )
+
+    def test_reciprocal_nonlinear_policy_rejects_invalid_eta(self) -> None:
+        with self.assertRaisesRegex(ValueError, "eta_transport"):
+            fm.ReciprocalNonlinearSolverPolicy(
+                gmres_restart=40,
+                max_picard_iterations=4,
+                relative_update_tolerance=1.0e-9,
+                eta_transport=1.5,
             )
 
     def test_problem_lowers_spin_solve_and_torque_as_separate_top_level_records(self) -> None:

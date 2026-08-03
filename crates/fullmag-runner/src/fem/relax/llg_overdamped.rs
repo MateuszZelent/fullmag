@@ -38,7 +38,7 @@ use crate::types::{FieldSnapshot, LiveStepConsumer, RunError, StepAction, StepSt
 #[cfg(feature = "fem-gpu")]
 use super::preview::FemPreviewHandoff;
 #[cfg(feature = "fem-gpu")]
-use super::scalars::ensure_fem_object_scalars;
+use super::scalars::{ensure_fem_object_scalars, publish_initial_scalar_without_field_snapshot};
 
 fn convergence_controller_policy() -> RelaxationControllerPolicyProvenance {
     RelaxationControllerPolicyProvenance {
@@ -205,6 +205,18 @@ pub(crate) fn execute_llg_overdamped(
         crate::schedules::OUTPUT_TIME_TOLERANCE,
     );
 
+    if let Some(action) = publish_initial_scalar_without_field_snapshot(
+        live.as_deref_mut(),
+        &current_stats,
+        fem_mesh_generation_id,
+    ) {
+        match action {
+            StepAction::Continue => {}
+            StepAction::Stop => cancelled = true,
+            StepAction::Pause => paused = true,
+        }
+    }
+
     let until_label = if until_seconds.is_finite() {
         format!("{until_seconds:.4e}")
     } else {
@@ -231,7 +243,7 @@ pub(crate) fn execute_llg_overdamped(
         !dt_is_fixed,
     );
 
-    while current_time < until_seconds {
+    while !cancelled && !paused && current_time < until_seconds {
         if live
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot)

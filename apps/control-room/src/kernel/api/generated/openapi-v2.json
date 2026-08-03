@@ -2550,7 +2550,8 @@
       "CurrentTransportModel": {
         "enum": [
           "prescribed_density",
-          "ohmic_poisson"
+          "ohmic_poisson",
+          "magnetoresistive_poisson"
         ],
         "type": "string"
       },
@@ -16972,9 +16973,30 @@
       },
       "SceneChargeTransportMaterial": {
         "properties": {
+          "sigma_AHE_Spm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "sigma_Spm": {
             "format": "double",
             "type": "number"
+          },
+          "sigma_parallel_Spm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sigma_perpendicular_Spm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -18333,6 +18355,35 @@
           }
         ]
       },
+      "SceneReciprocalNonlinearSolverPolicy": {
+        "properties": {
+          "eta_transport": {
+            "format": "double",
+            "type": "number"
+          },
+          "gmres_restart": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_picard_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relative_update_tolerance": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "gmres_restart",
+          "max_picard_iterations",
+          "relative_update_tolerance",
+          "eta_transport"
+        ],
+        "type": "object"
+      },
       "SceneRegionConflictPolicy": {
         "enum": [
           "error",
@@ -19008,6 +19059,16 @@
           },
           "physical_residual_version": {
             "type": "string"
+          },
+          "reciprocal_nonlinear": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneReciprocalNonlinearSolverPolicy"
+              }
+            ]
           }
         },
         "required": [
@@ -19407,16 +19468,14 @@
         "enum": [
           "fdm",
           "fem",
-          "auto",
-          "hybrid"
+          "auto"
         ],
         "type": "string"
       },
       "SceneTransportExecutionMode": {
         "enum": [
           "strict",
-          "extended",
-          "hybrid"
+          "extended"
         ],
         "type": "string"
       },

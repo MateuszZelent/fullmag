@@ -79,7 +79,7 @@ def build_synthetic_tet_mesh(element_count: int) -> MeshData:
         element_volume=volumes.tolist(),
         element_tags=list(range(1, element_count + 1)),
     )
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=flat_nodes,
         elements=elements,
         element_markers=markers,
@@ -110,7 +110,7 @@ def run_case(case: str, *, element_count: int | None = None) -> dict[str, Any]:
         artifact_path = Path(str(topology_artifact["path"]))
         artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
         artifact_node_count = len(artifact_payload["nodes"])
-        artifact_element_count = len(artifact_payload["elements"])
+        artifact_element_count = len(artifact_payload["cell_types"])
         topology_artifact_byte_size = int(topology_artifact["byte_size"])
         topology_artifact_kind = str(topology_artifact["kind"])
     topology_artifact_seconds = time.perf_counter() - artifact_started

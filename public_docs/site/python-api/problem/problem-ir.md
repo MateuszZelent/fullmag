@@ -34,6 +34,17 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 ## Python API
 No constructor parameters are owned by this conceptual page.
 
+### Authoring-to-IR inspection
+
+```python
+# %% Inspect the canonical IR produced by a loaded Problem
+import fullmag as fm
+
+loaded = fm.load_problem_from_script("examples/mumax_standard_problem_5_fdm.py")
+problem_ir = loaded.stages[0].problem.to_ir()
+assert problem_ir["magnets"]
+```
+
 
 (python-api-problem-problem-ir-problem-ir)=
 <!-- (problem-ir)= -->

@@ -53,6 +53,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Problem.geometry_asset_cache` | `mapping` | `{}` | $1$ | Internal deterministic geometry-asset cache used during lowering; `geometry_assets`. | Internal deterministic geometry-asset cache used during lowering; `geometry_assets`. | FEM/FDM CPU/GPU; planner checks combinations | `geometry_assets` |
 | `Problem.spin_torque` | `legacy torque or None` | `None` | $1$ | Legacy single-torque compatibility input; normalized into torque modules. | Legacy single-torque compatibility input; normalized into torque modules. | FEM/FDM CPU/GPU; planner checks combinations | `study.spin_torques` |
 | `Problem.spin_torques` | `sequence` | `()` | $1$ | Canonical spin-torque modules; serialized into study/runtime contracts. | Canonical spin-torque modules; serialized into study/runtime contracts. | FEM/FDM CPU/GPU; planner checks combinations | `study.spin_torques` |
+| `Problem.spin_transports` | `sequence` | `()` | $1$ | Canonical steady spin drift-diffusion modules; validated against torque `solve_id` references and serialized into transport runtime contracts. | Canonical steady spin drift-diffusion modules carrying charge/spin material, boundary, solver, and reciprocal-coupling intent. | FDM/FEM CPU reference slices; planner rejects unsupported GPU, interface, and reciprocal combinations | `spin_transport_modules` |
 | `Problem.temperature` | `float \| None` | `None` | $\mathrm{K}$ | Optional non-negative thermal temperature; thermal metadata and term consistency are validated. | Optional non-negative thermal temperature; thermal metadata and term consistency are validated. | FEM/FDM CPU/GPU; planner checks combinations | `temperature` |
 | `Problem.elastic_materials` | `sequence` | `()` | $1$ | Elastic constitutive materials; `elastic_materials`. | Elastic constitutive materials; `elastic_materials`. | FEM/FDM CPU/GPU; planner checks combinations | `elastic_materials` |
 | `Problem.elastic_bodies` | `sequence` | `()` | $1$ | Elastic body assignments; `elastic_bodies`. | Elastic body assignments; `elastic_bodies`. | FEM/FDM CPU/GPU; planner checks combinations | `elastic_bodies` |
@@ -60,6 +61,26 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Problem.mechanical_bcs` | `sequence` | `()` | $1$ | Mechanical boundary conditions; `mechanical_bcs`. | Mechanical boundary conditions; `mechanical_bcs`. | FEM/FDM CPU/GPU; planner checks combinations | `mechanical_bcs` |
 | `Problem.mechanical_loads` | `sequence` | `()` | $1$ | Mechanical loads; `mechanical_loads`. | Mechanical loads; `mechanical_loads`. | FEM/FDM CPU/GPU; planner checks combinations | `mechanical_loads` |
 | `Problem.pbc` | FdmPbc, three booleans, or None | `None` | $1$ | Requested periodic axes; canonical PBC section and backend capability checks. | Requested periodic axes; canonical PBC section and backend capability checks. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.pbc` |
+
+### Canonical stage-first authoring
+
+```python
+# %% Author the canonical Problem through the stage-first study API
+import fullmag as fm
+
+study = fm.study("problem_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.cell(2e-9, 2e-9, 5e-9)
+study.exchange()
+film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+film.Ms = 8.0e5
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1e-9)
+```
 
 
 (python-api-problem-problem-problem-ir)=

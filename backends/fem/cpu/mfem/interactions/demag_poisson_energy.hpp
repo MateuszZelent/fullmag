@@ -4,6 +4,10 @@
 
 #include <vector>
 
+namespace mfem {
+class Vector;
+}
+
 namespace fullmag::fem {
 
 struct Context;
@@ -32,6 +36,21 @@ double demag_poisson_cached_energy_from_field(
     const std::vector<double> &m_xyz,
     const std::vector<double> &h_demag_xyz,
     int energy_threads = 1);
+
+#if FULLMAG_HAS_MFEM_STACK
+/*
+ * Authoritative variational energy of a solved scalar-potential system:
+ *
+ *   E_d = mu0/2 b(m)^T u.
+ *
+ * Unlike a postprocessed nodal-field quadrature, this pairing preserves the
+ * exact discrete P1-state/P2-potential functional represented by the assembled
+ * RHS and solved potential.
+ */
+double demag_poisson_energy_from_rhs_potential(
+    const mfem::Vector &rhs,
+    const mfem::Vector &potential);
+#endif
 
 /*
  * Direct polarized Poisson-demag increment between two endpoint fields:

@@ -108,18 +108,20 @@ __global__ void llg_rhs_fp32_kernel(
             const int yp = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
             const int zm = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
             const int zp = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
-            const float inv_2dx = 0.5f / static_cast<float>(stt.dx);
-            const float inv_2dy = 0.5f / static_cast<float>(stt.dy);
-            const float inv_2dz = 0.5f / static_cast<float>(stt.dz);
-            dmx_u = ux * (mx[xp] - mx[xm]) * inv_2dx
-                  + uy * (mx[yp] - mx[ym]) * inv_2dy
-                  + uz * (mx[zp] - mx[zm]) * inv_2dz;
-            dmy_u = ux * (my[xp] - my[xm]) * inv_2dx
-                  + uy * (my[yp] - my[ym]) * inv_2dy
-                  + uz * (my[zp] - my[zm]) * inv_2dz;
-            dmz_u = ux * (mz[xp] - mz[xm]) * inv_2dx
-                  + uy * (mz[yp] - mz[ym]) * inv_2dy
-                  + uz * (mz[zp] - mz[zm]) * inv_2dz;
+            // The MuMax3 source prefactor contains the factor 1/2; its
+            // central stencil uses the unhalved neighbour difference.
+            const float inv_dx = 1.0f / static_cast<float>(stt.dx);
+            const float inv_dy = 1.0f / static_cast<float>(stt.dy);
+            const float inv_dz = 1.0f / static_cast<float>(stt.dz);
+            dmx_u = ux * (mx[xp] - mx[xm]) * inv_dx
+                  + uy * (mx[yp] - mx[ym]) * inv_dy
+                  + uz * (mx[zp] - mx[zm]) * inv_dz;
+            dmy_u = ux * (my[xp] - my[xm]) * inv_dx
+                  + uy * (my[yp] - my[ym]) * inv_dy
+                  + uz * (my[zp] - my[zm]) * inv_dz;
+            dmz_u = ux * (mz[xp] - mz[xm]) * inv_dx
+                  + uy * (mz[yp] - mz[ym]) * inv_dy
+                  + uz * (mz[zp] - mz[zm]) * inv_dz;
         } else {
         
         // x-derivative

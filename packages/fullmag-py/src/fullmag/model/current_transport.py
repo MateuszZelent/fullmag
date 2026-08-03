@@ -13,19 +13,66 @@ from fullmag._validation import (
 from fullmag.model.spin_torque import RegionRef
 from fullmag.model.spin_transport import SurfaceRef
 
-CURRENT_TRANSPORT_MODELS = {"prescribed_density", "ohmic_poisson"}
+CURRENT_TRANSPORT_MODELS = {
+    "prescribed_density",
+    "ohmic_poisson",
+    "magnetoresistive_poisson",
+}
 CURRENT_TRANSPORT_COUPLINGS = {"one_way", "bidirectional"}
 
 
 @dataclass(frozen=True, slots=True)
 class ChargeTransportMaterial:
     sigma_Spm: float
+    sigma_parallel_Spm: float | None = None
+    sigma_perpendicular_Spm: float | None = None
+    sigma_AHE_Spm: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sigma_Spm", require_positive(self.sigma_Spm, "sigma_Spm"))
+        anisotropic = (
+            self.sigma_parallel_Spm,
+            self.sigma_perpendicular_Spm,
+            self.sigma_AHE_Spm,
+        )
+        if any(value is not None for value in anisotropic) and not all(
+            value is not None for value in anisotropic
+        ):
+            raise ValueError(
+                "sigma_parallel_Spm, sigma_perpendicular_Spm, and sigma_AHE_Spm "
+                "must be authored together"
+            )
+        if self.sigma_parallel_Spm is not None:
+            object.__setattr__(
+                self,
+                "sigma_parallel_Spm",
+                require_positive(self.sigma_parallel_Spm, "sigma_parallel_Spm"),
+            )
+            object.__setattr__(
+                self,
+                "sigma_perpendicular_Spm",
+                require_positive(
+                    self.sigma_perpendicular_Spm,
+                    "sigma_perpendicular_Spm",
+                ),
+            )
+            object.__setattr__(
+                self,
+                "sigma_AHE_Spm",
+                require_finite(self.sigma_AHE_Spm, "sigma_AHE_Spm"),
+            )
 
     def to_ir(self) -> dict[str, float]:
-        return {"sigma_Spm": self.sigma_Spm}
+        value: dict[str, float] = {"sigma_Spm": self.sigma_Spm}
+        if self.sigma_parallel_Spm is not None:
+            value.update(
+                {
+                    "sigma_parallel_Spm": self.sigma_parallel_Spm,
+                    "sigma_perpendicular_Spm": self.sigma_perpendicular_Spm,
+                    "sigma_AHE_Spm": self.sigma_AHE_Spm,
+                }
+            )
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,18 +187,43 @@ class ChargeSolverPolicy:
     operator_version: str = "fv_charge_harmonic_v1"
 
     def __post_init__(self) -> None:
-        if require_non_empty(self.engine, "engine") != "cg":
-            raise ValueError("M1 charge engine must be 'cg'")
+        engine = require_non_empty(self.engine, "engine")
+        if engine not in {"cg", "block_gmres"}:
+            raise ValueError("charge engine must be 'cg' or 'block_gmres'")
         relative = require_finite(self.relative_tolerance, "relative_tolerance")
         absolute = require_finite(self.absolute_tolerance, "absolute_tolerance")
         if relative <= 0.0 or absolute < 0.0:
             raise ValueError("charge solver requires relative_tolerance > 0 and absolute_tolerance >= 0")
+        expected_operator = (
+            "fv_charge_harmonic_v1"
+            if engine == "cg"
+            else "fdm_coupled_charge_spin_fv_block_gmres.v1"
+        )
+        if self.operator_version != expected_operator:
+            raise ValueError(
+                f"charge solver engine '{engine}' requires operator_version='{expected_operator}'"
+            )
+        object.__setattr__(self, "engine", engine)
         object.__setattr__(self, "relative_tolerance", relative)
         object.__setattr__(self, "absolute_tolerance", absolute)
         object.__setattr__(self, "max_iterations", require_positive_int(self.max_iterations, "max_iterations"))
-        if self.physical_residual_version != "charge_balance_integrated_l2.v1":
-            raise ValueError("unsupported charge physical_residual_version")
-        if self.operator_version != "fv_charge_harmonic_v1":
+        expected_residual = (
+            "charge_balance_integrated_l2.v1"
+            if engine == "cg"
+            else "transport_balance_integrated_l2.v1"
+        )
+        physical_residual = self.physical_residual_version
+        # Keep the one-way default source-compatible while resolving the
+        # reciprocal block to its transport-balance residual contract.
+        if engine == "block_gmres" and physical_residual == "charge_balance_integrated_l2.v1":
+            physical_residual = expected_residual
+        if physical_residual != expected_residual:
+            raise ValueError("unsupported charge physical_residual_version for engine")
+        object.__setattr__(self, "physical_residual_version", physical_residual)
+        if self.operator_version not in {
+            "fv_charge_harmonic_v1",
+            "fdm_coupled_charge_spin_fv_block_gmres.v1",
+        }:
             raise ValueError("unsupported charge operator_version")
 
     def to_ir(self) -> dict[str, object]:
@@ -174,8 +246,9 @@ class CurrentTransport:
     Current executable subset:
     - ``model="prescribed_density"`` on the public FDM path
 
-    Semantic-only placeholder:
-    - ``model="ohmic_poisson"``
+    Authoring/reference contract (backend qualification remains explicit):
+    - ``model="ohmic_poisson"`` with ``coupling="bidirectional"`` lowers to
+      ``magnetoresistive_poisson`` and requires the reciprocal M2 parameters.
     """
 
     name: str
@@ -205,7 +278,9 @@ class CurrentTransport:
         gauge: ChargePotentialGauge | None = None,
         solver: ChargeSolverPolicy | None = None,
     ) -> None:
-        normalized_model = require_non_empty(model, "model").lower()
+        raw_model = require_non_empty(model, "model").lower()
+        resolved_magnetoresistive_model = raw_model == "magnetoresistive_poisson"
+        normalized_model = "ohmic_poisson" if resolved_magnetoresistive_model else raw_model
         if normalized_model not in CURRENT_TRANSPORT_MODELS:
             raise ValueError(
                 f"model must be one of {sorted(CURRENT_TRANSPORT_MODELS)}, got {model!r}"
@@ -236,8 +311,14 @@ class CurrentTransport:
         normalized_coupling = require_non_empty(coupling, "coupling").lower()
         if normalized_coupling not in CURRENT_TRANSPORT_COUPLINGS:
             raise ValueError(f"coupling must be one of {sorted(CURRENT_TRANSPORT_COUPLINGS)}")
-        if normalized_coupling != "one_way":
-            raise ValueError("M1 CurrentTransport supports coupling='one_way' only")
+        if resolved_magnetoresistive_model and normalized_coupling != "bidirectional":
+            raise ValueError(
+                "model='magnetoresistive_poisson' requires coupling='bidirectional'"
+            )
+        if normalized_coupling == "bidirectional" and normalized_model != "ohmic_poisson":
+            raise ValueError(
+                "bidirectional current transport requires model='ohmic_poisson'"
+            )
         object.__setattr__(self, "coupling", normalized_coupling)
         object.__setattr__(
             self,
@@ -277,11 +358,40 @@ class CurrentTransport:
                 "legacy solve_region/conductivity_s_per_m cannot be mixed with the complete charge contract"
             )
 
+        if normalized_coupling == "bidirectional":
+            if any(
+                assignment.material.sigma_parallel_Spm is None
+                or assignment.material.sigma_perpendicular_Spm is None
+                or assignment.material.sigma_AHE_Spm is None
+                for assignment in normalized_materials
+            ):
+                raise ValueError(
+                    "bidirectional current transport requires sigma_parallel_Spm, "
+                    "sigma_perpendicular_Spm, and sigma_AHE_Spm for every material"
+                )
+            if solver is None or solver.engine != "block_gmres":
+                raise ValueError(
+                    "bidirectional current transport requires a block_gmres ChargeSolverPolicy"
+                )
+        elif any(
+            assignment.material.sigma_parallel_Spm is not None
+            or assignment.material.sigma_perpendicular_Spm is not None
+            or assignment.material.sigma_AHE_Spm is not None
+            for assignment in normalized_materials
+        ):
+            raise ValueError(
+                "anisotropic conductivity is valid only for bidirectional current transport"
+            )
+
     def to_ir(self) -> dict[str, object]:
         ir: dict[str, object] = {
             "kind": "current_transport",
             "name": self.name,
-            "model": self.model,
+            "model": (
+                "magnetoresistive_poisson"
+                if self.coupling == "bidirectional"
+                else self.model
+            ),
         }
         if self.current_density is not None:
             ir["current_density"] = list(self.current_density)

@@ -89,27 +89,70 @@ function isSpinSolver(value: unknown, constitutiveVersion: unknown): boolean {
     "linear",
     "operator_version",
     "physical_residual_version",
+    "reciprocal_nonlinear",
   ]) || !isLinearSolver(value.linear)) return false;
   const expectedOperator = constitutiveVersion === "transport_constitutive.one_way.fullmag.v1"
     ? "fv_spin_upwind_v1"
     : constitutiveVersion === "transport_constitutive.reciprocal.fullmag.v1"
       ? "fdm_coupled_charge_spin_fv_block_gmres.v1"
       : null;
+  const nonlinear = value.reciprocal_nonlinear;
+  const validNonlinear = nonlinear === undefined
+    || (isObject(nonlinear)
+      && hasOnlyKeys(nonlinear, [
+        "eta_transport",
+        "gmres_restart",
+        "max_picard_iterations",
+        "relative_update_tolerance",
+      ])
+      && typeof nonlinear.gmres_restart === "number"
+      && Number.isInteger(nonlinear.gmres_restart)
+      && nonlinear.gmres_restart > 0
+      && typeof nonlinear.max_picard_iterations === "number"
+      && Number.isInteger(nonlinear.max_picard_iterations)
+      && nonlinear.max_picard_iterations > 0
+      && isFiniteNumber(nonlinear.relative_update_tolerance)
+      && nonlinear.relative_update_tolerance > 0
+      && isFiniteNumber(nonlinear.eta_transport)
+      && nonlinear.eta_transport > 0
+      && nonlinear.eta_transport <= 1);
   return expectedOperator !== null
     && (value.engine === "auto" || value.engine === "gmres")
     && value.operator_version === expectedOperator
     && value.physical_residual_version === "transport_balance_integrated_l2.v1"
     && (value.default_external_boundary === "spin_insulating"
-      || value.default_external_boundary === "reject_unassigned");
+      || value.default_external_boundary === "reject_unassigned")
+    && validNonlinear
+    && (constitutiveVersion === "transport_constitutive.reciprocal.fullmag.v1"
+      ? nonlinear !== undefined
+      : nonlinear === undefined);
 }
 
-function isChargeMaterialAssignment(value: unknown): boolean {
+function isChargeMaterialAssignment(value: unknown, reciprocal: boolean): boolean {
   if (!isObject(value) || !hasOnlyKeys(value, ["material", "region"]) || !isObject(value.material)) {
     return false;
   }
-  return hasOnlyKeys(value.material, ["sigma_Spm"])
-    && isFiniteNumber(value.material.sigma_Spm)
-    && isRegionRef(value.region);
+  const materialKeys = [
+    "sigma_Spm",
+    "sigma_parallel_Spm",
+    "sigma_perpendicular_Spm",
+    "sigma_AHE_Spm",
+  ] as const;
+  if (!hasOnlyKeys(value.material, materialKeys) || !isFiniteNumber(value.material.sigma_Spm)) {
+    return false;
+  }
+  const hasTensor = [
+    value.material.sigma_parallel_Spm,
+    value.material.sigma_perpendicular_Spm,
+    value.material.sigma_AHE_Spm,
+  ].some((item) => item !== undefined && item !== null);
+  const completeTensor = isFiniteNumber(value.material.sigma_parallel_Spm)
+    && value.material.sigma_parallel_Spm > 0
+    && isFiniteNumber(value.material.sigma_perpendicular_Spm)
+    && value.material.sigma_perpendicular_Spm > 0
+    && isFiniteNumber(value.material.sigma_AHE_Spm);
+  return isRegionRef(value.region)
+    && (reciprocal ? completeTensor : !hasTensor);
 }
 
 function isChargeBoundary(value: unknown): boolean {
@@ -239,8 +282,8 @@ function isRequestedExecution(value: unknown): boolean {
   return isObject(value)
     && hasOnlyKeys(value, ["device", "discretization", "execution_mode", "precision"])
     && ["auto", "cpu", "gpu"].includes(value.device as string)
-    && ["auto", "fdm", "fem", "hybrid"].includes(value.discretization as string)
-    && ["extended", "hybrid", "strict"].includes(value.execution_mode as string)
+    && ["auto", "fdm", "fem"].includes(value.discretization as string)
+    && ["extended", "strict"].includes(value.execution_mode as string)
     && ["double", "single"].includes(value.precision as string);
 }
 
@@ -260,7 +303,7 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
     "solver",
   ])) return false;
   return value.kind === "current_transport"
-    && ["ohmic_poisson", "prescribed_density"].includes(value.model as string)
+    && ["ohmic_poisson", "magnetoresistive_poisson", "prescribed_density"].includes(value.model as string)
     && transportIdentity("current_transport", value) !== null
     && (value.boundaries === undefined || isArrayOf(value.boundaries, isChargeBoundary))
     && (value.conductivity_s_per_m === undefined
@@ -273,7 +316,14 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
       || value.gauge === null
       || value.gauge === "dirichlet_reference"
       || value.gauge === "zero_mean")
-    && (value.materials === undefined || isArrayOf(value.materials, isChargeMaterialAssignment))
+    && (value.model !== "magnetoresistive_poisson" || value.coupling === "bidirectional")
+    && (value.materials === undefined || isArrayOf(
+      value.materials,
+      (item) => isChargeMaterialAssignment(
+        item,
+        value.model === "magnetoresistive_poisson" || value.coupling === "bidirectional",
+      ),
+    ))
     && (value.solve_region === undefined || value.solve_region === null || typeof value.solve_region === "string")
     && (value.solver === undefined || value.solver === null || isChargeSolver(value.solver, value.coupling));
 }

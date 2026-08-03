@@ -227,6 +227,16 @@
         "problem_ir": "study.spin_torques"
       },
       {
+        "python": "Problem.spin_transports",
+        "type": "sequence",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "Canonical steady spin drift-diffusion modules; validated against torque `solve_id` references and serialized into transport runtime contracts.",
+        "meaning": "Canonical steady spin drift-diffusion modules carrying charge/spin material, boundary, solver, and reciprocal-coupling intent.",
+        "backend_support": "FDM/FEM CPU reference slices; planner rejects unsupported GPU, interface, and reciprocal combinations",
+        "problem_ir": "spin_transport_modules"
+      },
+      {
         "python": "Problem.temperature",
         "type": "float | None",
         "default": "None",

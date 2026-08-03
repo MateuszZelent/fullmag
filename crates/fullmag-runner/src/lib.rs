@@ -1342,17 +1342,25 @@ mod initial_timestep_tests {
     }
 
     #[test]
-    fn adaptive_fdm_cuda_identity_fails_closed_until_controller_abi_is_complete() {
-        let error = resolve_timestep_policy(
+    fn adaptive_fdm_cuda_identity_is_explicit_but_unvalidated_until_controller_artifact() {
+        let policy = resolve_timestep_policy(
             Some(fullmag_ir::IntegratorChoice::Rk45),
             None,
             Some(&adaptive(None)),
             TimestepExecutionLane::fdm_cuda(fullmag_ir::ExecutionPrecision::Double),
         )
-        .expect_err("adaptive CUDA must not acquire executable provenance");
-        assert!(error
-            .message
-            .contains("no executable LLG timestep capability row"));
+        .expect("adaptive CUDA identity row is explicit");
+        let identity = policy.execution_identity;
+        assert_eq!(
+            identity.qualification_id,
+            LlgTimestepQualificationId::ExplicitAdaptiveFdmCudaDouble
+        );
+        assert_eq!(identity.validation_state, TimestepValidationState::Unvalidated);
+        assert!(identity.qualification_artifact_sha256.is_none());
+        assert!(identity.runtime_source_inputs_sha256.is_none());
+        assert!(identity.validated_scope.is_none());
+        assert!(identity.qualification_validated_at.is_none());
+        assert!(identity.qualification_validator_schema.is_none());
     }
 
     #[test]

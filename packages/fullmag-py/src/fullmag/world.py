@@ -54,7 +54,13 @@ from fullmag.model.antenna import (
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
-from fullmag.model.current_transport import CurrentTransport
+from fullmag.model.current_transport import (
+    ChargeBoundary,
+    ChargePotentialGauge,
+    ChargeSolverPolicy,
+    ChargeTransportMaterialAssignment,
+    CurrentTransport,
+)
 from fullmag.model.energy import (
     BulkDMI,
     Constant,
@@ -75,6 +81,7 @@ from fullmag.model.spin_torque import (
     SpinOrbitTorque,
     SpinTorqueModule,
     ZhangLiSTT,
+    RegionRef,
 )
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
@@ -5257,6 +5264,12 @@ class StudyBuilder:
         current_density: Sequence[float] | None = None,
         solve_region: str | None = None,
         conductivity_s_per_m: float | None = None,
+        coupling: str = "one_way",
+        domain: Sequence[RegionRef] = (),
+        materials: Sequence[ChargeTransportMaterialAssignment] = (),
+        boundaries: Sequence[ChargeBoundary] = (),
+        gauge: ChargePotentialGauge | None = None,
+        solver: ChargeSolverPolicy | None = None,
     ) -> CurrentTransport:
         return current_transport(
             name=name,
@@ -5264,6 +5277,12 @@ class StudyBuilder:
             current_density=current_density,
             solve_region=solve_region,
             conductivity_s_per_m=conductivity_s_per_m,
+            coupling=coupling,
+            domain=domain,
+            materials=materials,
+            boundaries=boundaries,
+            gauge=gauge,
+            solver=solver,
         )
 
     def spin_torque(self, module: SpinTorqueModule) -> SpinTorqueModule:
@@ -7365,6 +7384,12 @@ def current_transport(
     current_density: Sequence[float] | None = None,
     solve_region: str | None = None,
     conductivity_s_per_m: float | None = None,
+    coupling: str = "one_way",
+    domain: Sequence[RegionRef] = (),
+    materials: Sequence[ChargeTransportMaterialAssignment] = (),
+    boundaries: Sequence[ChargeBoundary] = (),
+    gauge: ChargePotentialGauge | None = None,
+    solver: ChargeSolverPolicy | None = None,
 ) -> CurrentTransport:
     module = CurrentTransport(
         name=name,
@@ -7372,6 +7397,12 @@ def current_transport(
         current_density=current_density,
         solve_region=solve_region,
         conductivity_s_per_m=conductivity_s_per_m,
+        coupling=coupling,
+        domain=domain,
+        materials=materials,
+        boundaries=boundaries,
+        gauge=gauge,
+        solver=solver,
     )
     _state._current_modules.append(module)
     return module

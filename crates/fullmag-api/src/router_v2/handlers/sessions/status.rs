@@ -244,7 +244,11 @@ pub(crate) fn build_live_status(
                 authoring_allowed: true,
                 reason: "M1 steady one-way authoring is available; execution qualification remains workload-scoped.".into(),
             },
-            m2_reciprocal: blocked_transport_capability("Reciprocal transport remains an M2 authoring capability."),
+            m2_reciprocal: crate::schemas::status::TransportAuthoringCapability {
+                status: "semantic_only".into(),
+                authoring_allowed: true,
+                reason: "M2 reciprocal authoring is available; executable qualification remains workload-scoped.".into(),
+            },
             m3_transient: blocked_transport_capability("Transient transport remains an M3 authoring capability."),
             gpu: blocked_transport_capability("Transport GPU authoring is unavailable until lane qualification is published."),
             single_precision: blocked_transport_capability("Transport single precision is unavailable until precision qualification is published."),

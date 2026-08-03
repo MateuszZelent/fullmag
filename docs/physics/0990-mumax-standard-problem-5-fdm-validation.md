@@ -1,8 +1,8 @@
 # MuMax3 Standard Problem 5 as a Fullmag FDM validation contract
 
-- Status: frozen source-to-IR reproduction; fresh MuMax3/Fullmag CUDA trajectory is executed but not qualified
+- Status: frozen source-to-IR reproduction; isolated CPU↔CUDA MuMax3-operator step is qualified, but the fresh full trajectory is not
 - Owners: Fullmag FDM validation
-- Last updated: 2026-08-02
+- Last updated: 2026-08-03
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -267,12 +267,14 @@ This is the source-compatible realization of
 :label: sp5-zhang-li-mumax3
 b=\frac{P\mu_B}{2eM_s(1+\beta^2)},\qquad
 \mathbf v_i=b\sum_{a\in\{x,y,z\}}J_a
-\frac{\mathbf m_{i+\hat a}-\mathbf m_{i-\hat a}}{2\Delta a},
+\frac{\mathbf m_{i+\hat a}-\mathbf m_{i-\hat a}}{\Delta a},
 ```
 
 where each neighbour is clamped at an open boundary and wrapped on a periodic
-axis, exactly as MuMax3's `hclamp*`/`lclamp*` stencil. The direct RHS uses the
-single Gilbert projection
+axis, exactly as MuMax3's `hclamp*`/`lclamp*` stencil. The factor $1/2$ is
+already part of $b$; applying another central-difference factor would halve
+the source torque and is not the `addzhanglitorque2` kernel. The direct RHS uses
+the single Gilbert projection
 
 ```{math}
 :label: sp5-zhang-li-mumax3-rhs
@@ -308,6 +310,19 @@ RTX 4080 SUPER, compute capability 8.9, CUDA driver 13010, runtime 12060, and
 cuFFT. That trajectory fails the MuMax3 tolerance, so `qualification.json`
 correctly remains `status=not_evaluated`.
 
+The isolated operator gate is executable on the managed CUDA lane. The recipe
+`just verify-fdm-zhang-li-native-contract` builds the native FDM library and
+runs
+`fdm::gpu::cuda::native::tests::native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available`.
+The FP64 Heun step uses a masked $3\times3\times1$ plan, all three signed
+current components, and explicit `zhang_li.mumax3.v1` /
+`zl_mumax3_central_v1`. Exchange, demagnetization, and external field are
+disabled deliberately so the assertion isolates Zhang--Li. CPU reference and
+native CUDA agree under relative tolerance $5\times10^{-8}$ and absolute
+tolerance $10^{-10}$ (`1 passed`). This is a one-step operator/integrator gate
+only; it does not qualify relaxation, demagnetization, or the $1\,\mathrm{ns}$
+SP5 trajectory.
+
 ### 6.3 FEM
 
 No FEM SP5 reproduction is claimed. A FEM comparison would require an explicit
@@ -342,6 +357,10 @@ and lowered by `StudyBuilder`/`StudyStagesBuilder` into per-stage `ProblemIR`.
 formula-version fields. The regression test checks the geometry, stage-local
 damping, vortex preset, exact torque IR, and one-nanosecond horizon.
 
+The native CUDA one-step parity test is kept in the active inline CUDA test
+module in `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`; the historical
+orphan `native/tests.rs` file is not runtime evidence.
+
 No native FEM or GPU code is inferred from the Python presence. Source-visible,
 compiled, executed-device, parity, and scientific qualification statuses remain
 separate evidence levels.
@@ -361,20 +380,41 @@ The focused source-to-IR test passes. A fresh MuMax3 `v3.11.2` execution on the
 RTX 4080 SUPER returned
 $(\bar m_x,\bar m_y,\bar m_z)=(-0.23488366603851318,
 -0.09453280270099640,0.022961989045143127)$, within the source golden
-tolerance. The fresh Fullmag managed CUDA fixed-step run with `dt=1e-13 s` and
-relaxation threshold `1e-6 T` returned
-$(\bar m_x,\bar m_y,\bar m_z)=(-0.11688508225706223,
--0.04824011468041604,0.025794111784514084)$.
-The maximum component error is $1.1799858378\times10^{-1}$, about 1180 times
-the external tolerance, so the executed result remains diagnostic and not
-validated. The scalar row agrees with the volume mean to below `3e-17`.
-The CPU full trajectory was started but stopped during relaxation because the
-open-boundary demagnetization reference lane is too expensive for this gate;
-the one-step oracle does not substitute for that run.
+tolerance. The fresh Fullmag managed CUDA fixed-step run with `dt=1e-13 s`,
+`tolT=1e-6 T`, and the corrected source prefactor returned
+$(\bar m_x,\bar m_y,\bar m_z)=(-0.23465571179208225,
+-0.09450957174904828,0.02294296086440478)$.
+The component differences from the fresh MuMax3 run are
+$(2.2795424643\times10^{-4},2.3230951948\times10^{-5},
+-1.9028180738\times10^{-5})$, with vector RMS
+$1.3274648427\times10^{-4}$. This is a substantial correction of the prior
+factor-of-two error, but the maximum component still exceeds the external
+$1\times10^{-4}$ tolerance; the executed result remains diagnostic and not
+validated. The artifact records `execution_engine=cuda_fdm`, FP64/cuFFT,
+`lossy_fallback_used=false`, and the scalar row agrees with the volume mean to
+below `3\times10^{-17}`. The one-step oracle does not substitute for the full
+trajectory comparison below.
+
+The corresponding CPU fixed-step artifact is now complete at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`.
+It contains the same `10000` accepted dynamic steps (plus the preceding
+relaxation stage, `12458` total accepted steps), uses
+`execution_engine=cpu_reference`, `rustfft`, and `lossy_fallback_used=false`.
+The CPU and CUDA final fields agree to `6.94e-16` maximum component error and
+`1.14e-16` vector RMS; their accepted-step traces have identical `step`,
+`time`, and `dt` identities. Physical trace quantities agree to machine
+precision apart from backend reduction round-off (maximum observed difference
+`1.29e-3` in `max_dm_dt`, on a scale of `1e10 s^-1`). This closes the fixed
+CPU↔CUDA trajectory parity gate, but both artifacts remain
+`qualification.json.status=not_evaluated` because the MuMax3 error is still
+above `1e-4` in the maximum mean component.
 
 The required final matrix is: CPU adaptive RK45 at the source horizon; fixed
 step refinement; independent equilibrium convergence; GPU adaptive capability
 identity and device-resident parity; then (only then) an FDM/FEM comparison.
+The isolated CPU↔CUDA MuMax3-operator step and the fixed-step trajectory parity
+are green, but neither substitutes for the remaining scientific qualification
+requirements.
 
 (limitations)=
 ## 9. Limitations and deferred work
@@ -391,6 +431,8 @@ identity and device-resident parity; then (only then) an FDM/FEM comparison.
    published equation.
 5. Add a FEM realization only after its own mesh, demag, and cross-backend
    convergence gates.
+6. Keep the one-step CPU↔CUDA gate green while extending it to an accepted-step
+   trajectory and a device-resident parity matrix.
 
 (scientific-bibliography)=
 ## 10. Scientific bibliography
@@ -423,4 +465,5 @@ identity and device-resident parity; then (only then) an FDM/FEM comparison.
 | `sp5-mumax3-zhangli` | `external_solvers/3/cuda/zhangli2.cu` | `addzhanglitorque2` | external MuMax3 central clamped/PBC stencil and constants |
 | `sp5-cpu-mumax3` | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `zhang_li_mumax3_torque_at_with` | FDM CPU MuMax3 operator |
 | `sp5-cuda-mumax3` | `backends/fdm/gpu/cuda/integrators/llg_fp64.cu` | `zhang_li_neighbor_index` | native CUDA central/PBC neighbour realization |
+| `sp5-cuda-cpu-parity-test` | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available` | managed FP64 one-step CPU↔CUDA operator gate |
 | `sp5-ir-mumax3` | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | execution provenance fields for formula/operator/target/Landé |

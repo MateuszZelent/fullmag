@@ -69,6 +69,12 @@ bool gpu_state_initialize(
     TransferAudit &audit,
     std::string &error);
 
+bool gpu_state_resize_demag_poisson_scalars(
+    FemGpuState &state,
+    uint64_t scalar_dof_count,
+    uint64_t full_scalar_dof_count,
+    std::string &error);
+
 bool gpu_state_upload_magnetization_aos(
     FemGpuState &state,
     const double *m_xyz,
