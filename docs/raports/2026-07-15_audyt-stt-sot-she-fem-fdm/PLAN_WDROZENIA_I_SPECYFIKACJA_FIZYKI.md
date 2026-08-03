@@ -5396,11 +5396,16 @@ po jej naprawie podano w §32.38. Ocena szerokiego celu pozostawała
 
 ### 32.38.1. Synchronizacja i zakres zmiany
 
-`git pull --ff-only origin master` nie pobrał nowych zmian: `HEAD` oraz
-`origin/master` są równe `762aeffbfd7dce60791fc93533bee4ba1d117265`. Zmiana
-robocza dotyczy wyłącznie błędu alokacji 256-bajtowego bufora scalar
-readback w CUDA; nie zmienia równania Poissona, warunku Robin, HYPRE,
-energii ani kryteriów zbieżności.
+W chwili wykonania pulla `HEAD` oraz `origin/master` były równe
+`762aeffbfd7dce60791fc93533bee4ba1d117265`, więc nie było czego
+fast-forwardować. Następnie lokalny proces integracyjny dopisał na `master`
+merge `a983a61fa` oraz niniejszą zmianę `34cf6a9da`; dlatego bieżący stan ma
+`HEAD=34cf6a9da0769e55225217e2737d1d52a5cb39fa`,
+`origin/master=762aeffbfd7dce60791fc93533bee4ba1d117265` i
+`git rev-list --left-right --count HEAD...origin/master = 54 0`.
+Nie wykonano push. Zmiana robocza dotyczy wyłącznie błędu alokacji 256-bajtowego
+bufora scalar readback w CUDA; nie zmienia równania Poissona, warunku Robin,
+HYPRE, energii ani kryteriów zbieżności.
 
 W `reduction_workspace_memory.cpp` pinned host staging pozostaje ścieżką
 podstawową. Tylko `cudaErrorMemoryAllocation` przełącza 32-slotowy bufor
