@@ -13,19 +13,19 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "reference_executable",
-      "reason": "Managed CUDA one-step FP64 CPU↔GPU, target-mask, and current-reversal contract passes; full RK trajectory, multi-grid, and cross-backend qualification remain open."
+      "reason": "Managed CUDA one-step and bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask, and current-reversal contracts pass; full integrator-family, multi-grid, and cross-backend qualification remain open."
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "Canonical signed-current reference lane and an independent eight-step fixed-step trajectory oracle exist; current-scaling and cross-backend qualification remain open."
+      "reason": "Canonical signed-current reference lane, independent eight-step fixed-step trajectory oracle, and bounded isolated 0.5x/1x/2x current-increment scaling contract exist; nonlinear current-sweep and cross-backend qualification remain open."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "production_executable",
-      "reason": "Managed CUDA FP64 parity passes for one-step and eight-step fixed trajectories; FP32 envelope, current-scaling, and full qualification remain open."
+      "reason": "Managed CUDA FP64 parity passes for one-step and eight-step fixed trajectories plus a bounded isolated 0.5x/1x/2x current-increment scaling contract; FP32 envelope, nonlinear current sweep, and full qualification remain open."
     }
   ],
   "equations": [
@@ -73,6 +73,8 @@
     {"id": "python-slonczewski", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class SlonczewskiSTT", "responsibility": "Expose physics-first current, polarization, target, normal, and thickness inputs."},
     {"id": "cuda-slonczewski-contract", "path": "backends/fem/tests/cuda_slonczewski_contract.cpp", "symbol": "main", "responsibility": "Managed one-step CPU↔GPU and independent SI oracle contract."},
     {"id": "fdm-cuda-slonczewski-trajectory", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Managed eight-step FP64 FDM CUDA trajectory parity against independent CPU reference prefixes."},
+    {"id": "fdm-cuda-slonczewski-current-scaling", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available", "responsibility": "Managed isolated FP64 0.5x/1x/2x signed-current increment-scaling contract."},
+    {"id": "fem-cuda-slonczewski-trajectory", "path": "crates/fullmag-runner/src/native_fem.rs", "symbol": "native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available", "responsibility": "Managed eight-step FP64 FEM CPU↔GPU Heun trajectory parity with canonical descriptor and target mask."},
     {"id": "stt-source-contract", "path": "backends/fem/tests/stt_contract.cpp", "symbol": "main", "responsibility": "Source ownership and descriptor-completeness contract."}
   ],
   "public_api": {

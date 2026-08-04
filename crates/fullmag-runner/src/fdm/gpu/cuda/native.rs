@@ -3248,6 +3248,101 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM canonical Slonczewski current-scaling test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut base_plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        base_plan.enable_exchange = false;
+        base_plan.external_field = None;
+        base_plan.fixed_timestep = Some(1.0e-15);
+
+        let mut baseline_backend = NativeFdmBackend::create(&base_plan)
+            .expect("native fdm baseline create");
+        baseline_backend
+            .step(base_plan.fixed_timestep.expect("fixed timestep"))
+            .expect("native fdm baseline step");
+        let baseline = baseline_backend
+            .copy_m(base_plan.initial_magnetization.len())
+            .expect("copy baseline m");
+
+        let run_at_scale = |scale: f64| {
+            let mut plan = base_plan.clone();
+            plan.current_density = Some([1.4e11 * scale, 0.0, 0.0]);
+            plan.stt_degree = Some(0.62);
+            plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+            plan.stt_lambda = Some(1.8);
+            plan.stt_epsilon_prime = Some(0.03);
+            plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+            plan.slonczewski_stack_normal = Some([2.0, 0.0, 0.0]);
+            plan.slonczewski_active_mask = plan.active_mask.clone();
+
+            let mut backend = NativeFdmBackend::create(&plan).expect("native fdm scaled create");
+            backend
+                .step(plan.fixed_timestep.expect("fixed timestep"))
+                .expect("native fdm scaled step");
+            backend
+                .copy_m(plan.initial_magnetization.len())
+                .expect("copy scaled m")
+        };
+
+        let half = run_at_scale(0.5);
+        let unit = run_at_scale(1.0);
+        let double = run_at_scale(2.0);
+        let active_mask = base_plan.active_mask.as_ref().expect("active mask");
+
+        for index in 0..baseline.len() {
+            if !active_mask[index] {
+                assert_eq!(
+                    half[index], baseline[index],
+                    "inactive half-current leak at {index}"
+                );
+                assert_eq!(
+                    unit[index], baseline[index],
+                    "inactive unit-current leak at {index}"
+                );
+                assert_eq!(
+                    double[index], baseline[index],
+                    "inactive double-current leak at {index}"
+                );
+                continue;
+            }
+
+            let increment_norm = |state: &[f64; 3]| {
+                state
+                    .iter()
+                    .zip(baseline[index].iter())
+                    .map(|(value, reference)| (value - reference).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+            };
+            let half_norm = increment_norm(&half[index]);
+            let unit_norm = increment_norm(&unit[index]);
+            let double_norm = increment_norm(&double[index]);
+            assert!(
+                unit_norm > 1.0e-10,
+                "current-scaling response is numerically zero at active cell {index}: {unit_norm:.6e}"
+            );
+
+            let half_error = (unit_norm - 2.0 * half_norm).abs();
+            let double_error = (double_norm - 4.0 * half_norm).abs();
+            let scale = unit_norm.max(double_norm).max(1.0e-30);
+            assert!(
+                half_error <= 2.0e-4 * scale,
+                "0.5x/1x current scaling mismatch at active cell {index}: half={half_norm:.9e} unit={unit_norm:.9e} error={half_error:.3e}"
+            );
+            assert!(
+                double_error <= 4.0e-4 * scale,
+                "1x/2x current scaling mismatch at active cell {index}: half={half_norm:.9e} double={double_norm:.9e} error={double_error:.3e}"
+            );
+        }
+    }
+
+    #[test]
     fn native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available()
     {
         if !is_cuda_available() {

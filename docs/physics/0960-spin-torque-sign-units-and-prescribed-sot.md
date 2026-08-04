@@ -314,12 +314,26 @@ qualification. Before this descriptor was present, a requested
 `slonczewski.fullmag.v2` CUDA execution failed before native construction; it
 must never reuse the legacy current norm, fixed-layer sign, or global-only
 mask.
+The managed FEM-GPU lane now also passes a bounded eight-step fixed-step Heun
+trajectory against the FEM CPU reference for the same canonical descriptor and
+target mask. The workload keeps exchange enabled because that is a prerequisite
+of the device-resident GPU RK lane, while demag and external field are disabled;
+the result is temporal CPU↔GPU parity for this FP64 workload, not qualification
+of the full integrator family, multi-grid convergence, long-time stability,
+cross-backend continuum agreement, or production status.
 The managed FDM-CUDA lane additionally has a bounded eight-step fixed-step
 trajectory contract: after every accepted Heun step, the complete magnetization
 is compared with an independently executed CPU reference prefix using the same
 canonical descriptor and target mask. This is a temporal parity gate for one
 small double-precision workload, not a current-scaling, grid-convergence,
 FP32, FEM, or cross-backend qualification.
+It also has a bounded one-step current-scaling contract in the isolated
+zero-field response: with the same canonical descriptor and target mask, the
+norm of the magnetization increment is checked at `0.5`, `1`, and `2` times
+the signed stack-normal current. The test uses `dt=1e-15 s` so the Heun
+increment is in the linear-response envelope; it is evidence for the CUDA
+descriptor's `J_c\cdot n_stack` scaling, not a nonlinear large-current or
+long-time qualification.
 Likewise, an FDM request for `slonczewski_interface_flux.v1` fails in planning;
 FDM may not replace the oriented interface functional with the homogenized
 bulk `1/t_F` source.
@@ -532,6 +546,8 @@ hidden change to `alpha`.
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
 | `backends/fem/tests/cuda_slonczewski_contract.cpp` | `main` | Managed one-step CPU↔GPU numeric contract |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA trajectory parity against CPU reference prefixes |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated 0.5×/1×/2× signed-current increment-scaling contract |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available` | Managed eight-step FP64 FEM CPU↔GPU Heun trajectory parity with canonical descriptor and target mask |
 | `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
 
 ```{math}
