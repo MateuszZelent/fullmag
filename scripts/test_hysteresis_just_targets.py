@@ -53,6 +53,13 @@ def test_makefile_default_cargo_target_is_worktree_scoped() -> None:
     assert "FULLMAG_CARGO_TARGET_DIR ?= /tmp/fullmag-zfn2-build/cargo-targets/fullmag-cli\n" not in makefile
 
 
+def test_fullmag_fdm_build_skips_unneeded_fem_gpu_probe() -> None:
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert 'if [ "$backend" = "fdm" ]; then' in justfile
+    assert "FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag" in justfile
+
+
 def test_waveguide_headless_smoke_targets_use_managed_runtime_directly() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
 

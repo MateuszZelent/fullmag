@@ -3730,8 +3730,10 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
       else \
-        if [ "$force" = "true" ]; then just build fullmag; \
-        elif [ "$build" = "true" ]; then just build fullmag; \
+        if [ "$force" = "true" ]; then \
+          if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
+        elif [ "$build" = "true" ]; then \
+          if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
         elif [ ! -x "{{local_bin}}/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
         bin="{{local_bin}}/fullmag"; path_prefix="{{local_bin}}:$PATH"; \
       fi; \
