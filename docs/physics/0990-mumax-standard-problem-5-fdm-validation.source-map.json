@@ -1,7 +1,7 @@
 {
   "document": {"path": "docs/physics/0990-mumax-standard-problem-5-fdm-validation.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "reference-executable-bounded", "reason": "A managed CPU-double FEM counterpart executes a shared-domain SP5 mesh and 1 ps Zhang--Li probe; full relaxation, 1 ns trajectory, and h/dt convergence remain open."},
+    {"solver": "FEM", "device": "CPU", "status": "reference-executable-bounded", "reason": "A managed CPU-double FEM counterpart executes a full 1 ns SP5 trajectory on hmax=12 nm and a first hmax=8 nm refinement; hmax=6 nm relaxation does not meet the 1e-6 T stop, and controlled h/dt convergence plus release-clean provenance remain open."},
     {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "The FEM fixture is CPU-only for canonical zhang_li.fullmag.v1; no FEM GPU SP5 execution or qualification exists."},
     {"solver": "FDM", "device": "CPU", "status": "reference-executable", "reason": "The Python/IR path is executable; the full adaptive trajectory and scalar artifact gate remain open."},
     {"solver": "FDM", "device": "GPU", "status": "diagnostic-unqualified", "reason": "Only fixed-step CUDA diagnostics exist; adaptive capability identity and parity are open."}
@@ -54,9 +54,11 @@
     {"id": "sp5-cuda-mumax3", "path": "backends/fdm/gpu/cuda/integrators/llg_fp64.cu", "symbol": "zhang_li_neighbor_index", "responsibility": "Execute the versioned MuMax3 central stencil in native CUDA FP64/FP32 kernels."},
     {"id": "sp5-cuda-cpu-parity-test", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available", "responsibility": "Execute the managed FP64 one-step CPU↔CUDA operator parity gate."},
     {"id": "sp5-ir-mumax3", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Carry formula, operator, target, and Landé provenance through FdmPlanIR."},
-    {"id": "sp5-fem-fixture", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class ZhangLiSTT", "responsibility": "Provide the canonical Zhang--Li class used by the FEM counterpart fixture."},
+    {"id": "sp5-fem-fixture", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Provide the stage-first study builder invoked by the shared-domain FEM SP5 fixture."},
     {"id": "sp5-fem-demag-runtime", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp", "symbol": "context_compute_demag_poisson", "responsibility": "Execute the FEM Poisson--Robin demagnetization realization and volume-weighted observables."},
-    {"id": "sp5-fem-zhangli-provenance", "path": "crates/fullmag-runner/src/artifacts.rs", "symbol": "fem_spin_torque_provenance", "responsibility": "Record resolved FEM CPU engine and versioned Zhang--Li provenance."}
+    {"id": "sp5-fem-zhangli-provenance", "path": "crates/fullmag-runner/src/artifacts.rs", "symbol": "fem_spin_torque_provenance", "responsibility": "Record resolved FEM CPU engine and versioned Zhang--Li provenance."},
+    {"id": "sp5-comparison-script", "path": "scripts/compare_sp5_scalar_runs.py", "symbol": "compare", "responsibility": "Compare matched-time FEM/FDM scalar endpoints while keeping the result diagnostic until field and convergence gates are supplied."},
+    {"id": "sp5-field-comparison-script", "path": "scripts/compare_sp5_field_states.py", "symbol": "compare", "responsibility": "Compare matched-time FEM and FDM magnetization fields using diagnostic tet4 cell-center sampling on the FDM grid."}
   ],
   "public_api": {"parameters": [
     {"python": "study.engine", "type": "str", "default": "required", "si_unit": "1", "validation": "`fdm` for this contract", "meaning": "requested solver family", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_selection.backend"},

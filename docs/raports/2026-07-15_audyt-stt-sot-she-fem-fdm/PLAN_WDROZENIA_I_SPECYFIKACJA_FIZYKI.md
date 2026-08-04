@@ -6972,3 +6972,159 @@ i kontrolowanego `dt`, (4) porównania pól i `avg(m)` w tych samych czasach,
 FEM GPU. Do czasu wykonania tych bram status pozostaje **FEM SP5:
 reference-executable/bounded diagnostic; FDM SP5: diagnostic-unqualified;
 FDM↔FEM equivalence: not established**.
+
+## 32.66. Pełny FEM SP5 i kontrolowany refinement po pytaniu o porównanie z FDM (2026-08-04)
+
+### 32.66.1. Zakres, źródło i granica reprodukowalności
+
+Po wykonaniu bramy z §32.65 FEM nie jest już reprezentowany wyłącznie przez
+probe. Wykonano pełny etap `relax` oraz dynamiczny etap Zhang--Li dla
+`examples/mumax_standard_problem_5_fem.py`, przy zachowaniu geometrii i
+parametrów fizycznych `external_solvers/3/test/standardproblem5.mx3`:
+`100 nm x 100 nm x 10 nm`, `M_s=800 kA/m`, `A_ex=13 pJ/m`, `alpha=0.1`, vortex
+`(circulation=+1, core_polarity=+1)`, `J_c=(10^12,0,0) A/m^2`, `xi=0.05`.
+FEM używa jawnie `zhang_li.fullmag.v1` / `zl_central_reference_v1`; FDM
+pozostaje przy `zhang_li.mumax3.v1` / `zl_mumax3_central_v1`. Nie ma ukrytego
+fallbacku z FEM na FDM ani odwrotnie.
+
+Uruchomienie korzystało z zarządzanego runtime FEM z manifestem schema 3,
+zbudowanym z commit `394c046d8`, lecz z `worktree_state=dirty`. Wszystkie
+wyniki poniżej są więc dowodem wykonywalności i diagnostyki bieżącego drzewa,
+nie artefaktem release-clean ani awansem `validated_workloads`.
+
+### 32.66.2. Pełny przebieg FEM CPU, hmax=12 nm
+
+Artefakt:
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-full-20260804-cpu-h12-bb-r12`.
+
+| wielkość | wynik |
+|---|---:|
+| body `hmax / hmin` | `12 / 6 nm` |
+| airbox `hmax` | `40 nm` |
+| siatka | `1961` tetraedrów, `382` węzły |
+| demag | Poisson--Robin, CG+AMG, `rtol=1e-12` |
+| relaksacja | projected-gradient-BB, `39` iteracji |
+| końcowy torque relaksacji | `9.030367599247804e-7 T` |
+| dynamika | adaptive RK45, `1028` zaakceptowanych kroków |
+| horyzont | `t=1 ns` |
+| `avg(m)` | `(0.06571195970862106, -0.07068185866088325, -0.001918570717269359)` |
+| `E_ex` | `2.457573497099033e-18 J` |
+| `E_demag` | `5.962245456383275e-19 J` |
+| `E_total` | `3.053798042737360e-18 J` |
+| końcowy `max_torque_T` | `3.283768393400342e-2 T` |
+
+Jest to pierwszy pełny FEM SP5 do tego samego czasu fizycznego co FDM. Nie
+oznacza jeszcze zgodności, ponieważ stan po relaksacji i dyskretyzacje nie są
+wspólne.
+
+### 32.66.3. Refinement FEM i blocker relaksacji
+
+Pierwszy refinement wykonano w
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-h8-pgbb-20260804` (`hmax=8 nm`,
+`hmin=3 nm`, airbox `hmax=30 nm`): `10595` tetraedrów, `1822` węzły, `78`
+iteracji PG-BB do `4.904881453193072e-7 T`. Przy diagnostycznym horyzoncie
+`1 ps` końcowy `avg(m)` wyniósł
+`(0.04073733843953036, -0.009595994833123806, 0.01187191608956891)`.
+
+Poziom nominalny `hmax=6 nm`, `hmin=2.5 nm`, airbox `hmax=25 nm` nie domknął
+bramy stopu. PG-BB oscylował w okolicy `1.3e-1 T` po `169` iteracjach w
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-h6-pgbb-20260804` i został przerwany.
+Alternatywny nonlinear-CG w
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-h6-ncg-20260804` był stabilniejszy,
+ale po budżecie `300` iteracji kończył z `1.194160313517469e-5 T`, a więc
+również nie osiągnął wymaganego `1e-6 T`. Ten wynik jest bounded
+non-convergence, nie negatywną oceną fizyki FEM.
+
+Wniosek numeryczny: h12 i h8 są wykonywalne, lecz nie stanowią jeszcze
+trzypoziomowej zbieżności. Do kwalifikacji trzeba rozdzielić wpływ siatki,
+airboxu, tolerancji Poissona i algorytmu minimizacji oraz powtórzyć dynamikę
+na wspólnej osi czasu po uzyskaniu stanu spełniającego ten sam torque gate.
+
+### 32.66.4. Jawne porównanie z FDM przy t=1 ns
+
+FDM CPU artefakt referencyjny:
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`.
+Skrypt `scripts/compare_sp5_scalar_runs.py` porównał ostatnie wiersze
+`scalars.csv` przy identycznym `t=1 ns`. FDM kończył z
+`(-0.2346557117920822, -0.09450957174904828, 0.02294296086440476)`, a FEM z
+`(0.06571195970862106, -0.07068185866088325, -0.001918570717269359)`. Różnica
+FEM minus FDM to
+`(0.30036767150070326, 0.02382771308816503, -0.02486153158167412)`,
+`||Delta avg(m)||_2 = 0.30233523404716306`. Pełny JSON jest zapisany jako
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-scalar-comparison-1ns-h12.json`.
+
+Status tego porównania jest **diagnostic / equivalence_established=false**.
+Zgodny czas końcowy usuwa wcześniejszy błąd porównania `1 ps` z `1 ns`, ale nie
+usuwa różnic: FEM ma P1 i Poisson--Robin, FDM ma siatkę kartezjańską i swój
+otwartobrzegowy operator demaga, a operatory Zhang--Li są jawnie różnymi
+wersjami. Sam skalar `avg(m)` nie zastępuje porównania pola, wspólnego stanu
+relaksacji i testu zbieżności `h/dt`.
+
+### 32.66.5. Bramy po tym przebiegu
+
+- FEM SP5 ma obecnie status **reference-executable / bounded diagnostic**:
+  pełny CPU do `1 ns` działa, lecz h6 nie spełnia stopu, a runtime jest dirty.
+- FDM SP5 pozostaje **diagnostic-unqualified** względem zewnętrznego golden
+  tolerance; jego CPU i CUDA fixed-step mają wewnętrzną parytetową bramę, ale
+  maksymalna różnica względem świeżego MuMax3 przekracza `1e-4`.
+- FEM GPU, wspólny matched-field comparison, trzy poziomy h, kontrola dt,
+  niezależny audyt znaku/skali operatorów i release-clean rerun pozostają
+  otwarte.
+- Ocena szerokiego celu pozostaje konserwatywnie **86% implementacji / 60%
+  gotowości produkcyjnej**. Wykonanie FEM podniosło kompletność dowodu
+  wykonawczego, ale nie jest podstawą do awansu produkcyjnego ani do twierdzenia
+  o równoważności z FDM.
+
+## 32.67. Porównanie pola FEM–FDM dla SP5 (2026-08-04)
+
+### 32.67.1. Operator i zakres
+
+Żeby odpowiedzieć na pytanie, czy rozbieżność FEM–FDM występuje tylko w
+redukcji `avg(m)`, wykonano dodatkową kontrolę pola dla pełnych snapshotów z
+§32.66. FEM zapisuje wartości węzłowe P1 na siatce tet4, a FDM zapisuje
+wartości komórkowe na siatce `32 x 32 x 4`. Skrypt
+`scripts/compare_sp5_field_states.py` odtwarza mesh FEM z
+`metadata.json`, a następnie próbuje każdy środek komórki FDM w wybranych
+tetraedrach. Wartość jest liczona z barycentrycznych funkcji kształtu P1;
+centra poza domeną magnetyczną są maskowane, a centra leżące na wspólnej ścianie
+są uśredniane. Operator ma identyfikator
+`tet4_cartesian_center_barycentric_v1` i jawnie nie jest utożsamiany z
+objętościowym ograniczeniem `prism6` używanym w kwalifikacji SP4.
+
+### 32.67.2. Wynik przy wspólnym czasie
+
+Porównano artefakty:
+
+- FEM: `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-full-20260804-cpu-h12-bb-r12/m_final.json`, `t=1 ns`;
+- FDM: `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu/m_final.json`, `t=1 ns`;
+- raport: `/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-field-comparison-1ns-h12.json`.
+
+Pokrycie próbkowania wyniosło `4096/4096` komórek (`valid_fraction=1.0`),
+więc brak pokrycia nie zaniża metryk. Dla różnicy wektorowej FEM minus FDM
+otrzymano:
+
+| metryka | wynik |
+|---|---:|
+| RMS | `0.49796257925222454` |
+| p99 | `1.679783779553503` |
+| maksimum | `1.9122155987326996` |
+| cosine similarity | `0.8741985937637287` |
+| MAE komponentu `x/y/z` | `0.3003844047055704 / 0.1546600505115151 / 0.05170302467898508` |
+
+Średnia z próbkowanego pola FEM wyniosła
+`(0.06568520395227473, -0.07064260442076248, -0.0019159783748134006)`;
+średnia FDM wyniosła `(-0.23465571179208225, -0.09450957174904828,
+0.02294296086440476)`. Zatem wcześniejsza różnica skalarna nie jest artefaktem
+samej redukcji — występuje także w polu przestrzennym.
+
+### 32.67.3. Granica kwalifikacji
+
+Wynik pozostaje **diagnostic / equivalence_established=false**. Obecny
+operator jest próbkowaniem punktowym, nie zachowującym całki objętościowej;
+FEM i FDM mają różne stany po relaksacji, operator Zhang–Li, operator demaga i
+reprezentację przestrzenną. Do zamknięcia porównania potrzebne są: (a)
+objętościowo zachowawcze ograniczenie tet4/prism6, (b) wspólny stan
+równowagowy lub niezależna kontrola tego wpływu, (c) co najmniej trzy poziomy
+`h` i kontrola `dt`, (d) audyt znaku i skali operatora oraz (e) rerun z
+release-clean managed runtime. Samo pole FEM nie może awansować
+`validated_workloads`.

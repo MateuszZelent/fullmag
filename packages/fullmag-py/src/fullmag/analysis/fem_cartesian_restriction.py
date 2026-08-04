@@ -412,3 +412,129 @@ def restrict_fem_magnetization(
         dataset="m",
         metadata=metadata,
     )
+
+
+def _tet4_barycentric_coordinates(point: np.ndarray, tetrahedron: np.ndarray) -> np.ndarray:
+    """Return affine P1 barycentric coordinates for one tetrahedron point."""
+
+    origin = tetrahedron[0]
+    matrix = (tetrahedron[1:] - origin).T
+    scale = max(float(np.max(np.linalg.norm(matrix, axis=0))), np.finfo(np.float64).tiny)
+    determinant = float(np.linalg.det(matrix))
+    if abs(determinant) <= np.finfo(np.float64).eps * scale**3:
+        raise MagnetizationComparisonError("magnetic tet4 cell is degenerate")
+    tail = np.linalg.solve(matrix, point - origin)
+    return np.asarray((1.0 - float(np.sum(tail)), *tail), dtype=np.float64)
+
+
+def sample_fem_tet4_cartesian_centers(
+    mesh: Any,
+    nodal_values: np.ndarray,
+    grid: CartesianGrid,
+    *,
+    magnetic_markers: tuple[int, ...] = (1,),
+    barycentric_tolerance: float = 1.0e-10,
+    time_s: float = 0.0,
+) -> StructuredMagnetization:
+    """Sample a linear ``tet4`` FEM field at Cartesian cell centers.
+
+    This is an explicitly diagnostic comparison operator.  It evaluates the
+    exact affine P1 field at each FDM cell center; it does not claim the
+    volume-integrated ``prism6`` restriction used by the SP4 qualification
+    path.  Cells outside all selected magnetic tetrahedra are masked.  A
+    continuous FEM field can be covered by more than one tetrahedron on a
+    shared face; their values are averaged to avoid topology-order dependence.
+    """
+
+    if not np.isfinite(barycentric_tolerance) or barycentric_tolerance < 0.0:
+        raise ValueError("barycentric_tolerance must be finite and non-negative")
+    if not np.isfinite(time_s):
+        raise ValueError("time_s must be finite")
+    markers = tuple(int(marker) for marker in magnetic_markers)
+    if not markers:
+        raise ValueError("magnetic_markers must not be empty")
+    values = np.asanyarray(nodal_values, dtype=np.float64)
+    if values.ndim != 2 or values.shape != (int(mesh.n_nodes), 3):
+        raise MagnetizationComparisonError(
+            "FEM magnetization must have shape (mesh.n_nodes, component)"
+        )
+    if not np.all(np.isfinite(values)):
+        raise MagnetizationComparisonError("FEM magnetization contains non-finite values")
+
+    magnetic_cells = np.flatnonzero(np.isin(mesh.element_markers, markers))
+    if magnetic_cells.size == 0:
+        raise MagnetizationComparisonError(
+            "mesh contains no magnetic cells for the requested markers"
+        )
+    if any(str(mesh.cell_types[index]) != "tet4" for index in magnetic_cells):
+        raise MagnetizationComparisonError(
+            "tet4 center sampling supports only magnetic tet4 cells"
+        )
+
+    nx, ny, nz = grid.shape_zyx[2], grid.shape_zyx[1], grid.shape_zyx[0]
+    dx, dy, dz = grid.cell_size_xyz
+    x_centers = grid.bounds_min_xyz[0] + (np.arange(nx, dtype=np.float64) + 0.5) * dx
+    y_centers = grid.bounds_min_xyz[1] + (np.arange(ny, dtype=np.float64) + 0.5) * dy
+    z_centers = grid.bounds_min_xyz[2] + (np.arange(nz, dtype=np.float64) + 0.5) * dz
+    sampled = np.zeros((grid.voxel_count, 3), dtype=np.float64)
+    sample_count = np.zeros(grid.voxel_count, dtype=np.int32)
+
+    for cell_index in magnetic_cells:
+        node_ids = np.asarray(mesh.cell_node_ids(int(cell_index)), dtype=np.int64)
+        if node_ids.shape != (4,) or np.any(node_ids < 0) or np.any(node_ids >= mesh.n_nodes):
+            raise MagnetizationComparisonError("magnetic tet4 connectivity is invalid")
+        tetrahedron = np.asarray(mesh.nodes[node_ids], dtype=np.float64)
+        minimum = np.maximum(
+            np.min(tetrahedron, axis=0),
+            np.asarray(grid.bounds_min_xyz, dtype=np.float64),
+        )
+        maximum = np.minimum(
+            np.max(tetrahedron, axis=0),
+            np.asarray(grid.bounds_max_xyz, dtype=np.float64),
+        )
+        if np.any(maximum < minimum):
+            continue
+        x_indices = np.flatnonzero((x_centers >= minimum[0]) & (x_centers <= maximum[0]))
+        y_indices = np.flatnonzero((y_centers >= minimum[1]) & (y_centers <= maximum[1]))
+        z_indices = np.flatnonzero((z_centers >= minimum[2]) & (z_centers <= maximum[2]))
+        for iz in z_indices:
+            for iy in y_indices:
+                for ix in x_indices:
+                    point = np.asarray((x_centers[ix], y_centers[iy], z_centers[iz]))
+                    barycentric = _tet4_barycentric_coordinates(point, tetrahedron)
+                    if np.any(barycentric < -barycentric_tolerance) or np.any(
+                        barycentric > 1.0 + barycentric_tolerance
+                    ):
+                        continue
+                    voxel = (int(iz) * ny + int(iy)) * nx + int(ix)
+                    sampled[voxel] += barycentric @ values[node_ids]
+                    sample_count[voxel] += 1
+
+    valid = sample_count > 0
+    if not np.any(valid):
+        raise MagnetizationComparisonError(
+            "no Cartesian cell centers fall inside the selected magnetic tet4 cells"
+        )
+    sampled[valid] /= sample_count[valid, np.newaxis]
+    shaped = sampled.reshape((*grid.shape_zyx, 3))
+    mask = np.broadcast_to(
+        (~valid).reshape((*grid.shape_zyx, 1)),
+        (*grid.shape_zyx, 3),
+    )
+    return StructuredMagnetization(
+        values=np.ma.array(shaped[np.newaxis, ...], mask=mask[np.newaxis, ...]),
+        times=np.asarray([time_s], dtype=np.float64),
+        grid=grid,
+        dataset="m",
+        metadata={
+            "method": "tet4_cartesian_center_barycentric_v1",
+            "axis_order": "zyx",
+            "component_order": ["x", "y", "z"],
+            "magnetic_markers": list(markers),
+            "barycentric_tolerance": float(barycentric_tolerance),
+            "sample_count_min": int(np.min(sample_count[valid])),
+            "sample_count_max": int(np.max(sample_count[valid])),
+            "valid_voxel_count": int(np.count_nonzero(valid)),
+            "valid_fraction": float(np.mean(valid)),
+        },
+    )

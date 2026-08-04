@@ -1,8 +1,8 @@
-# MuMax3 Standard Problem 5 as a Fullmag FDM validation contract
+# MuMax3 Standard Problem 5 as a Fullmag FDM/FEM validation contract
 
-- Status: frozen source-to-IR reproduction; isolated CPU↔CUDA MuMax3-operator step is qualified, but the fresh full trajectory is not
+- Status: frozen source-to-IR reproduction with an executable FEM counterpart; isolated CPU↔CUDA MuMax3-operator step is qualified, but FDM/FEM full scientific qualification is not
 - Owners: Fullmag FDM validation
-- Last updated: 2026-08-03
+- Last updated: 2026-08-04
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -332,24 +332,67 @@ source, but it is not the MuMax3-compatible FDM operator: FEM records
 `zhang_li.fullmag.v1` with `zl_central_reference_v1`, while the FDM source lane
 records `zhang_li.mumax3.v1` with `zl_mumax3_central_v1`.
 
-A managed CPU-double bounded probe completed the FEM materialization,
-Poisson--Robin demagnetization, one-step overdamped relaxation stage, and
-15-step adaptive RK45 Zhang--Li stage to `t=1 ps` on a shared-domain mesh
-(1968 tetrahedra, 383 nodes, 699 active plate elements, FE order 1). The
-terminal volume-weighted mean was
-$(\bar m_x,\bar m_y,\bar m_z)=(1.076279519078731\times10^{-4},
--1.162322864486359\times10^{-3},1.134078912052475\times10^{-3})$.
-The artifact is archived under
-`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-probe-20260804-cpu-fixed-v2`.
+A managed CPU-double FEM run now completes the full two-stage workload with
+the canonical FEM Zhang--Li operator. On the bounded-but-fully-dynamic mesh
+(`hmax=12 nm`, `hmin=6 nm`, airbox `hmax=40 nm`, 1961 tetrahedra, 382 nodes),
+projected-gradient-BB relaxation reaches `9.03e-7 T` in 39 iterations and
+the adaptive RK45 stage accepts 1028 steps to `t=1 ns`. Its final
+volume-weighted mean is
+$(\bar m_x,\bar m_y,\bar m_z)=(0.06571195970862106,
+-0.07068185866088325,-0.001918570717269359)$, with
+$(E_{\rm ex},E_{\rm demag},E_{\rm total})=(2.457573497099033e-18,
+5.962245456383275e-19,3.053798042737360e-18)\,\mathrm J$ and
+$\max|\tau|=3.283768393400342e-2\,\mathrm T$. The artifact is archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-full-20260804-cpu-h12-bb-r12`.
 
-This is an executable FEM smoke probe, not a FEM--FDM accuracy result. The
-relaxation was deliberately bounded to one step and the FEM horizon is `1 ps`,
-whereas the FDM source diagnostic reports `t=1 ns`. A quantitative comparison
-requires the same relaxed state and observation times, at least three FEM
-spatial refinements, controlled `dt` refinement, field and volume-mean metrics,
-and an independent sign/scale audit of the two versioned Zhang--Li operators.
-Until those gates pass, the FEM result remains `reference-executable/bounded`
-and `validated_workloads` must not be advanced.
+The first refinement (`hmax=8 nm`, `hmin=3 nm`, airbox `hmax=30 nm`) has
+10595 tetrahedra and 1822 nodes. It converges with the same torque stop to
+`4.90e-7 T` in 78 minimizer iterations; the 1 ps dynamic endpoint is
+$(0.04073733843953036,-0.009595994833123806,0.01187191608956891)$. A nominal
+`hmax=6 nm`, `hmin=2.5 nm` mesh exposes a qualification blocker: PG-BB
+oscillates near `1.3e-1 T` after 169 iterations, while nonlinear-CG decreases
+the torque monotonically but still ends at `1.19e-5 T` after its 300-step
+budget. The refinement is therefore not converged at the required `1e-6 T`
+stop.
+
+At the matched final time `t=1 ns`, the scalar comparison with the FDM CPU
+MuMax3-operator artifact
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`
+has $\|\Delta\bar m\|_2=0.30233523404716306$ and is recorded by
+`scripts/compare_sp5_scalar_runs.py`. This is a diagnostic endpoint report,
+not equivalence: FEM uses `zhang_li.fullmag.v1`/`zl_central_reference_v1`, FDM
+uses `zhang_li.mumax3.v1`/`zl_mumax3_central_v1`, and the relaxed equilibria,
+finite-element mesh and Poisson--Robin demagnetization are not the same as the
+FDM tensor-FFT realization. The FEM run also comes from a managed runtime with
+`worktree_state=dirty`, so it is not a release qualification artifact.
+
+The earlier one-step bounded probe remains archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-probe-20260804-cpu-fixed-v2`.
+Until a stable three-level FEM `h` sweep, controlled `dt` sweep, matched field
+sampling, and independent operator/sign audit pass, FEM remains
+`reference-executable/bounded` and `validated_workloads` must not advance.
+
+The same final snapshots were then compared as fields on the FDM cell-center
+grid. `scripts/compare_sp5_field_states.py` reconstructs the FEM planner mesh
+from `metadata.json` and evaluates its affine P1 `tet4` field at each Cartesian
+cell center with the diagnostic operator
+`tet4_cartesian_center_barycentric_v1`. The sampling covers all `4096` FDM
+voxels (`valid_fraction=1.0`, one containing tetrahedron per center), and both
+snapshots are at `t=1 ns`. The resulting report is archived at
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-field-comparison-1ns-h12.json`.
+
+The field metrics are substantially different: vector RMS error
+`0.49796257925222454`, maximum error `1.9122155987326996`, p99 error
+`1.679783779553503`, and cosine similarity `0.8741985937637287`. The sampled
+FEM mean is `(0.06568520395227473, -0.07064260442076248,
+-0.0019159783748134006)`, which differs from the volume-weighted FEM artifact
+mean by less than `3e-5` per component; the FDM mean is
+`(-0.23465571179208225, -0.09450957174904828, 0.02294296086440476)`. This is
+evidence that the earlier scalar discrepancy is also visible in the full
+texture, not an artifact of reducing each field to one vector. It remains a
+diagnostic comparison: cell-center interpolation is not volume-consistent
+restriction, and no `h/dt` convergence, common equilibrium, or operator/sign
+parity gate has passed.
 
 ### 6.4 Observables and artifact semantics
 
@@ -384,8 +427,11 @@ orphan `native/tests.rs` file is not runtime evidence.
 
 The FEM counterpart is intentionally mapped separately from the FDM source
 contract. Source-visible, compiled, executed-device, parity, and scientific
-qualification statuses remain separate evidence levels; the bounded managed
-probe does not imply FEM GPU support or cross-backend equivalence.
+qualification statuses remain separate evidence levels. The full FEM CPU
+trajectory is now executable and compared at a matched endpoint, but its
+different canonical Zhang--Li realization, mesh, demagnetization operator, and
+relaxed state prevent an equivalence claim. The managed runtime is dirty, so
+the run is diagnostic rather than release qualification.
 
 (validation)=
 ## 8. Validation strategy and current result
@@ -451,8 +497,9 @@ requirements.
 4. Isolate the central-v1 trajectory mismatch with independent equilibrium,
    operator, demagnetization, and update-order controls before changing the
    published equation.
-5. Add a FEM realization only after its own mesh, demag, and cross-backend
-   convergence gates.
+5. Complete the FEM three-level mesh, demagnetization, timestep, and matched
+   field-sampling gates; the current hmax=6 nm minimizer budget is not yet
+   torque-qualified.
 6. Keep the one-step CPU↔CUDA gate green while extending it to an accepted-step
    trajectory and a device-resident parity matrix.
 
@@ -489,6 +536,8 @@ requirements.
 | `sp5-cuda-mumax3` | `backends/fdm/gpu/cuda/integrators/llg_fp64.cu` | `zhang_li_neighbor_index` | native CUDA central/PBC neighbour realization |
 | `sp5-cuda-cpu-parity-test` | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available` | managed FP64 one-step CPU↔CUDA operator gate |
 | `sp5-ir-mumax3` | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | execution provenance fields for formula/operator/target/Landé |
-| `sp5-fem-fixture` | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class ZhangLiSTT` | canonical Zhang--Li class used by the FEM counterpart fixture |
+| `sp5-fem-fixture` | `packages/fullmag-py/src/fullmag/world.py` | `study` | stage-first study builder invoked by the shared-domain FEM counterpart fixture |
 | `sp5-fem-demag-runtime` | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` | `context_compute_demag_poisson` | FEM Poisson--Robin demagnetization realization and volume-weighted observables |
 | `sp5-fem-zhangli-provenance` | `crates/fullmag-runner/src/artifacts.rs` | `fem_spin_torque_provenance` | resolved FEM CPU engine and versioned Zhang--Li provenance |
+| `sp5-comparison-script` | `scripts/compare_sp5_scalar_runs.py` | `compare` | matched-time FEM/FDM scalar endpoint comparison with diagnostic-only qualification |
+| `sp5-field-comparison-script` | `scripts/compare_sp5_field_states.py` | `compare` | diagnostic tet4 cell-center FEM-to-FDM field comparison on the FDM grid |
