@@ -169,14 +169,17 @@ solvera. Publiczny M3 workload ma jawny `ThermalNoise(seed=77)`: pozostawienie
 samego `Problem.temperature` słusznie wybiera system entropy i uniemożliwia
 byte-exact porównanie niezależnych procesów.
 
-Capability matrix, `validated_workloads` i status Fullmag M2
-`semantic_only` pozostają bez zmian. W szczególności coarse M2 nadal przechodzi
-do runtime, ale pełna macierz BORIS–Fullmag nie zbiega się na drobnych siatkach,
-a `mu_s`, `Q_ia`, flux i torque nie są jeszcze porównywalne ilościowo.
-Ocena celu pozostaje konserwatywnie **84% implementacji / 58% gotowości
-produkcyjnej**: zamknięte contract gates nie kompensują otwartych bram
-reciprocal parity, FEM STT, GPU/FEM cross-backend, pełnej macierzy i zielonego
-full-suite.
+Capability matrix, `validated_workloads` i status ogólnego Fullmag M2
+`semantic_only` pozostają rozdzielone od nowego bounded FEM CPU slice.
+W szczególności coarse M2 nadal przechodzi do runtime, ale pełna macierz
+BORIS–Fullmag nie zbiega się na drobnych siatkach, a `mu_s`, `Q_ia`, flux i
+torque nie są jeszcze porównywalne ilościowo. Bounded reciprocal M2 FEM CPU ma
+`reference_executable` wyłącznie w zakresie opisanym w sekcji 32.55; nie
+otrzymuje `validated_workloads`.
+Ocena celu pozostaje konserwatywnie **86% implementacji / 60% gotowości
+produkcyjnej**: bounded M2 zamyka wykonywalny wycinek, ale nie kompensuje
+otwartych bram reciprocal parity, FEM STT, GPU/FEM cross-backend, pełnej
+macierzy i zielonego full-suite.
 
 ---
 
@@ -6480,13 +6483,19 @@ M3 i sprzężenie z LLG.
 ### 32.55.4. Status planu i Standard Problem 5
 
 Standard Problem 5 z
-`external_solvers/3/test/standardproblem5.mx3` nie został jeszcze uruchomiony
-w tej sesji. Aktualna brama M2 nie udaje wyniku SP5: najpierw musi zostać
-zachowana rozdzielność kwalifikacji transportu i demagnetyzacji, następnie
-trzeba wykonać identyczny fixture MuMax3/Fullmag, zrelaksować stan vortexu,
-uruchomić ten sam horyzont czasu i porównać `m`, energię, torques oraz metryki
-wektorowe przy kontrolowanym refinement. Capability/SP5 pozostaje otwarte;
-brak uruchomienia nie jest traktowany jako sukces ani jako porażka solvera.
+`external_solvers/3/test/standardproblem5.mx3` ma już wcześniejszy, wykonany
+artefakt Fullmag CPU:
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`.
+Zawiera on relaksację i 10 000 kroków dynamicznych, lecz `qualification.json`
+pozostaje `not_evaluated`: maksymalna różnica względem źródłowego wyniku
+MuMax3 przekroczyła `1e-4`. W tej sesji uruchomiłem także świeży fixture
+MuMax3 na RTX 4080 SUPER; hostowy proces po około pięciu minutach pozostawał
+w synchronizacji CUDA bez logu i został przerwany. To jest blokada środowiskowa
+replayu, nie wynik fizyczny. Aktualna brama M2 nie udaje zaliczenia SP5:
+trzeba zachować rozdzielność kwalifikacji transportu i demagnetyzacji oraz
+wykonać identyczny fixture MuMax3/Fullmag z kontrolowanym refinementem.
+Capability/SP5 pozostaje otwarte; istniejący artefakt diagnostyczny nie jest
+awansowany do `validated_workloads`.
 
 Szeroka ocena celu pozostaje konserwatywnie **86% implementacji / 60%
 gotowości produkcyjnej**. Bounded M2 zwiększa zakres wykonywalnego kodu i
