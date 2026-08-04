@@ -6297,15 +6297,17 @@ Dodano wykonywalną bramę
 `native_fem::steady_transport::tests::direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles`.
 Jest to pierwszy wspólny test direct-SHE, w którym FDM CPU i natywny FEM CPU
 otrzymują ten sam opis fizyczny, a nie tylko podobne wartości wejściowe.
-Fixture ma długość `L=1 m` w osi `z`, przekrój `1 m × 0.1 m`, `N_z=16`,
+Fixture ma długość `L=1 m` w osi `z`, przekrój `1 m × 0.1 m`, a sweep ma
+`N_z∈{8,16,32}`,
 `σ=3 S/m`, `σ_s=2 S/m`, `θ_SH=0.1`, `λ_sf=0.2 m` oraz `E_x=1 V/m` przez
 potencjały elektrod `V(x=0)=+0.5 V` i `V(x=L_x)=-0.5 V`. Wszystkie pozostałe
 ściany są izolujące dla ładunku i spinu, `m=(0,0,1)`, sprzężenie jest
 jednokierunkowe, a oba solvery działają w FP64 na CPU w trybie strict.
 
-FDM używa siatki `1×1×16` z `Δz=1/16 m`. FEM używa dokładnie tego samego
-prostopadłościanu, rozciętego na 16 warstw po sześć tetraedrów (`96` tetów,
-`68` węzłów), z markerami `1=x_min`, `2=x_max`, `3=pozostałe ściany`.
+FDM używa siatek `1×1×N_z` z `Δz=1/N_z m`. FEM używa dokładnie tego samego
+prostopadłościanu, rozciętego na `N_z` warstw po sześć tetraedrów (dla
+`N_z=16`: `96` tetów i `68` węzłów), z markerami `1=x_min`, `2=x_max`,
+`3=pozostałe ściany`.
 Wspólna referencja analityczna dla składowej `y` potencjału spinowego jest
 rozwiązaniem jednowymiarowym z izolującymi końcami:
 
@@ -6345,7 +6347,9 @@ Test wymaga jednocześnie:
 - maksymalnego błędu bezwzględnego obu profili względem `sinh` poniżej
   `2e-3 V`,
 - wzajemnej różnicy profili poniżej `5e-2` względnie,
-- dodatniego znaku `μ_y` przy górnej ścianie `z=L`.
+- dodatniego znaku `μ_y` przy górnej ścianie `z=L`,
+- ścisłego spadku błędu oracle FDM i FEM przy każdym przejściu
+  `N_z=8→16→32`.
 
 Obowiązująca receptura zarządzana:
 
@@ -6362,6 +6366,19 @@ direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles ... ok
 test result: 1 passed; 0 failed
 ```
 
+W tym samym przebiegu sweep zbieżności wypisał:
+
+```text
+N_z=8:  FDM 2.6448876e-4 V, FEM 1.5315748e-3 V, cross 3.1032049e-2
+N_z=16: FDM 6.7313028e-5 V, FEM 4.5650007e-4 V, cross 8.6442426e-3
+N_z=32: FDM 1.7190895e-5 V, FEM 1.2418603e-4 V, cross 2.2596799e-3
+```
+
+Każdy błąd maleje przy rafinacji (w przybliżeniu rząd drugi), więc test
+rozróżnia zgodność fizycznego common-limit od przypadkowego dopasowania jednej
+siatki. Jest to nadal ograniczona brama regularnego `h`-refinement; nie jest
+jeszcze pełnym 3D refinementem ani certyfikatem GPU.
+
 To jest wykonywalny dowód zgodności w ograniczonym, liniowym common-limit,
 a nie ogólna deklaracja zgodności backendów. Nie zmieniono capability matrix:
 `validated_workloads` pozostaje puste, a direct/inverse SHE nie awansuje przez
@@ -6370,13 +6387,14 @@ ten test do kwalifikacji produkcyjnej.
 ### 32.54.4. Granica kwalifikacji i następne bramy
 
 Dowód obejmuje wyłącznie jednorodny, one-way M1, FP64, CPU reference lanes,
-stałe materiały, regularny tetra mesh i analityczny profil 1D. Nie obejmuje
-FDM CUDA ani FEM GPU transportu, zbieżności `N_z`/h, nieliniowego M2,
+stałe materiały, regularny tetra mesh i analityczny profil 1D oraz ograniczony
+sweep `N_z`. Nie obejmuje FDM CUDA ani FEM GPU transportu, pełnego 3D
+`h`-refinement, nieliniowego M2,
 reciprocal `iSHE`, interfejsów N/F/T, SML/mixing, Oersteda, skin/MQS,
 transient transport, niejednorodnych `m`/materiałów, BORIS parity ani
 Python/OpenAPI/UI round-trip. `SHE-BORIS-001` pozostaje otwarta; następną
-bramą jest wspólna konwencja `μ_s`/`S` i reciprocal M2, a potem sweep
-rozdzielczości oraz niezależny bilans prądu/spinu.
+bramą jest wspólna konwencja `μ_s`/`S` i reciprocal M2, a potem pełny 3D
+refinement oraz niezależny bilans prądu/spinu.
 
 Szeroka ocena pozostaje konserwatywnie **86% implementacji / 60% gotowości
 produkcyjnej**: wzrósł zakres wykonywalnego dowodu direct-SHE, lecz nie

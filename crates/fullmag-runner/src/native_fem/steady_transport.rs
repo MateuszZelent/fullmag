@@ -846,7 +846,6 @@ mod tests {
             return;
         }
 
-        const NZ: usize = 16;
         const LENGTH_M: f64 = 1.0;
         const SIGMA_SPM: f64 = 3.0;
         const SIGMA_SPIN_SPM: f64 = 2.0;
@@ -854,107 +853,123 @@ mod tests {
         const LAMBDA_SF_M: f64 = 0.2;
         const ELECTRIC_FIELD_V_PER_M: f64 = 1.0;
 
-        let fdm_plan = common_direct_she_fdm_plan(NZ);
-        let mut fdm_workflow =
-            crate::fdm::cpu::spin_transport::FdmSpinTransportWorkflow::from_plan(&fdm_plan)
-                .expect("FDM common-limit workflow construction")
-                .expect("FDM common-limit workflow");
-        let fdm_evaluation = fdm_workflow
-            .evaluate_stage(&fdm_plan.initial_magnetization, 0.0)
-            .expect("FDM direct-SHE common-limit solve");
-        let fdm_module = &fdm_evaluation.modules[0];
-
-        let fem_mesh = common_direct_she_fem_mesh(NZ);
-        let fem_request = NativeFemSteadyTransportRequest {
-            mesh: fem_mesh.clone(),
-            execution: NativeFemSteadyTransportExecution::CpuDouble,
-            interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
-            gauge: NativeFemSteadyTransportGauge::BoundaryReference,
-            constitutive_version: CONSTITUTIVE_VERSION.into(),
-            operator_version: OPERATOR_VERSION.into(),
-            physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
-            charge_conductivity_spm_per_element: vec![SIGMA_SPM; fem_mesh.cell_count()],
-            magnetization: vec![[0.0, 0.0, 1.0]; fem_mesh.nodes.len()],
-            sigma_s_spm: SIGMA_SPIN_SPM,
-            polarization_p: 0.0,
-            theta_sh: THETA_SH,
-            lambda_sf_m: LAMBDA_SF_M,
-            lambda_j_m: None,
-            lambda_phi_m: None,
-            gamma_e_per_ts: 1.760_859_630_23e11,
-            saturation_magnetization_apm: 8.0e5,
-            relative_tolerance: 1.0e-11,
-            absolute_tolerance: 0.0,
-            maximum_iterations: 2000,
-            charge_dirichlet: vec![(1, 0.5), (2, -0.5)],
-            spin_dirichlet: vec![],
-        };
-        let fem_result = solve_native_fem_steady_transport(&fem_request)
-            .expect("FEM direct-SHE common-limit solve");
-
         let amplitude = 2.0 * THETA_SH * SIGMA_SPM * ELECTRIC_FIELD_V_PER_M * LAMBDA_SF_M
             / (SIGMA_SPIN_SPM * (0.5 * LENGTH_M / LAMBDA_SF_M).cosh());
-        let plane_nodes = 4usize;
-        let fem_plane_average = |plane: usize| -> f64 {
-            let start = plane * plane_nodes;
-            fem_result.spin_potential_xyz_v[start..start + plane_nodes]
-                .iter()
-                .map(|value| value[1])
-                .sum::<f64>()
-                / plane_nodes as f64
-        };
+        let mut resolution_errors = Vec::new();
+        for nz in [8usize, 16, 32] {
+            let fdm_plan = common_direct_she_fdm_plan(nz);
+            let mut fdm_workflow =
+                crate::fdm::cpu::spin_transport::FdmSpinTransportWorkflow::from_plan(&fdm_plan)
+                    .expect("FDM common-limit workflow construction")
+                    .expect("FDM common-limit workflow");
+            let fdm_evaluation = fdm_workflow
+                .evaluate_stage(&fdm_plan.initial_magnetization, 0.0)
+                .expect("FDM direct-SHE common-limit solve");
+            let fdm_module = &fdm_evaluation.modules[0];
 
-        assert!(
-            (fem_result.current_density_volume_average_apm2[0]
-                - SIGMA_SPM * ELECTRIC_FIELD_V_PER_M)
-                .abs()
-                < 1.0e-9,
-            "FEM common-limit charge current has wrong SI value: {:?}",
-            fem_result.current_density_volume_average_apm2
-        );
-        assert!(
-            fdm_module.telemetry.spin_scaled_residual < 1.0e-10,
-            "FDM common-limit spin residual is too large: {}",
-            fdm_module.telemetry.spin_scaled_residual
-        );
-        assert!(
-            fem_result.spin_relative_residual < 1.0e-10,
-            "FEM common-limit spin residual is too large: {}",
-            fem_result.spin_relative_residual
-        );
+            let fem_mesh = common_direct_she_fem_mesh(nz);
+            let fem_request = NativeFemSteadyTransportRequest {
+                mesh: fem_mesh.clone(),
+                execution: NativeFemSteadyTransportExecution::CpuDouble,
+                interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
+                gauge: NativeFemSteadyTransportGauge::BoundaryReference,
+                constitutive_version: CONSTITUTIVE_VERSION.into(),
+                operator_version: OPERATOR_VERSION.into(),
+                physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+                charge_conductivity_spm_per_element: vec![SIGMA_SPM; fem_mesh.cell_count()],
+                magnetization: vec![[0.0, 0.0, 1.0]; fem_mesh.nodes.len()],
+                sigma_s_spm: SIGMA_SPIN_SPM,
+                polarization_p: 0.0,
+                theta_sh: THETA_SH,
+                lambda_sf_m: LAMBDA_SF_M,
+                lambda_j_m: None,
+                lambda_phi_m: None,
+                gamma_e_per_ts: 1.760_859_630_23e11,
+                saturation_magnetization_apm: 8.0e5,
+                relative_tolerance: 1.0e-11,
+                absolute_tolerance: 0.0,
+                maximum_iterations: 2000,
+                charge_dirichlet: vec![(1, 0.5), (2, -0.5)],
+                spin_dirichlet: vec![],
+            };
+            let fem_result = solve_native_fem_steady_transport(&fem_request)
+                .expect("FEM direct-SHE common-limit solve");
 
-        let mut max_relative_profile_difference: f64 = 0.0;
-        let mut max_fdm_oracle_error: f64 = 0.0;
-        let mut max_fem_oracle_error: f64 = 0.0;
-        let dz = LENGTH_M / NZ as f64;
-        for z in 0..NZ {
-            let coordinate = (z as f64 + 0.5) * dz - 0.5 * LENGTH_M;
-            let expected = amplitude * (coordinate / LAMBDA_SF_M).sinh();
-            let fdm_value = fdm_module.spin_potential_volts[z][1];
-            let fem_value = 0.5 * (fem_plane_average(z) + fem_plane_average(z + 1));
-            max_fdm_oracle_error = max_fdm_oracle_error.max((fdm_value - expected).abs());
-            max_fem_oracle_error = max_fem_oracle_error.max((fem_value - expected).abs());
-            let scale = expected
-                .abs()
-                .max(fdm_value.abs())
-                .max(fem_value.abs())
-                .max(1.0e-12);
-            max_relative_profile_difference =
-                max_relative_profile_difference.max((fdm_value - fem_value).abs() / scale);
+            let plane_nodes = 4usize;
+            let fem_plane_average = |plane: usize| -> f64 {
+                let start = plane * plane_nodes;
+                fem_result.spin_potential_xyz_v[start..start + plane_nodes]
+                    .iter()
+                    .map(|value| value[1])
+                    .sum::<f64>()
+                    / plane_nodes as f64
+            };
+
+            assert!(
+                (fem_result.current_density_volume_average_apm2[0]
+                    - SIGMA_SPM * ELECTRIC_FIELD_V_PER_M)
+                    .abs()
+                    < 1.0e-9,
+                "FEM common-limit charge current has wrong SI value at Nz={nz}: {:?}",
+                fem_result.current_density_volume_average_apm2
+            );
+            assert!(
+                fdm_module.telemetry.spin_scaled_residual < 1.0e-10,
+                "FDM common-limit spin residual is too large at Nz={nz}: {}",
+                fdm_module.telemetry.spin_scaled_residual
+            );
+            assert!(
+                fem_result.spin_relative_residual < 1.0e-10,
+                "FEM common-limit spin residual is too large at Nz={nz}: {}",
+                fem_result.spin_relative_residual
+            );
+
+            let mut max_relative_profile_difference: f64 = 0.0;
+            let mut max_fdm_oracle_error: f64 = 0.0;
+            let mut max_fem_oracle_error: f64 = 0.0;
+            let dz = LENGTH_M / nz as f64;
+            for z in 0..nz {
+                let coordinate = (z as f64 + 0.5) * dz - 0.5 * LENGTH_M;
+                let expected = amplitude * (coordinate / LAMBDA_SF_M).sinh();
+                let fdm_value = fdm_module.spin_potential_volts[z][1];
+                let fem_value = 0.5 * (fem_plane_average(z) + fem_plane_average(z + 1));
+                max_fdm_oracle_error = max_fdm_oracle_error.max((fdm_value - expected).abs());
+                max_fem_oracle_error = max_fem_oracle_error.max((fem_value - expected).abs());
+                let scale = expected
+                    .abs()
+                    .max(fdm_value.abs())
+                    .max(fem_value.abs())
+                    .max(1.0e-12);
+                max_relative_profile_difference =
+                    max_relative_profile_difference.max((fdm_value - fem_value).abs() / scale);
+            }
+
+            assert!(
+                max_fdm_oracle_error < 2.0e-3 && max_fem_oracle_error < 2.0e-3,
+                "common direct-SHE profiles miss the shared sinh oracle at Nz={nz}: FDM={max_fdm_oracle_error:e}, FEM={max_fem_oracle_error:e}"
+            );
+            assert!(
+                max_relative_profile_difference < 5.0e-2,
+                "FDM and FEM direct-SHE profiles differ beyond the common-limit envelope at Nz={nz}: {max_relative_profile_difference:e}"
+            );
+            assert!(
+                fdm_module.spin_potential_volts[nz - 1][1] > 0.0 && fem_plane_average(nz) > 0.0,
+                "common direct-SHE sign convention is not positive at the upper z face for Nz={nz}"
+            );
+            eprintln!(
+                "M1 direct-SHE Nz={nz}: FDM oracle={max_fdm_oracle_error:e}, FEM oracle={max_fem_oracle_error:e}, cross={max_relative_profile_difference:e}"
+            );
+            resolution_errors.push((nz, max_fdm_oracle_error, max_fem_oracle_error));
         }
 
-        assert!(
-            max_fdm_oracle_error < 2.0e-3 && max_fem_oracle_error < 2.0e-3,
-            "common direct-SHE profiles miss the shared sinh oracle: FDM={max_fdm_oracle_error:e}, FEM={max_fem_oracle_error:e}"
-        );
-        assert!(
-            max_relative_profile_difference < 5.0e-2,
-            "FDM and FEM direct-SHE profiles differ beyond the common-limit envelope: {max_relative_profile_difference:e}"
-        );
-        assert!(
-            fdm_module.spin_potential_volts[NZ - 1][1] > 0.0 && fem_plane_average(NZ) > 0.0,
-            "common direct-SHE sign convention is not positive at the upper z face"
-        );
+        for pair in resolution_errors.windows(2) {
+            assert!(
+                pair[1].1 < pair[0].1 && pair[1].2 < pair[0].2,
+                "M1 direct-SHE profiles must converge under Nz refinement: coarse={:?}, fine={:?}",
+                pair[0],
+                pair[1]
+            );
+        }
     }
 
     #[test]
