@@ -84,7 +84,8 @@
     {"id": "m2-abi-test", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "steady_transport_m2_request_keeps_v1_as_a_nested_prefix", "responsibility": "Freeze the append-only nested M1-prefix ABI layout."},
     {"id": "m2-affine-abi-oracle", "path": "backends/fem/tests/steady_transport_abi_contract.cpp", "symbol": "cpu_double_reciprocal_m2_affine_constitutive_oracle", "responsibility": "Check a nonzero-gradient affine FEM M2 solution, signs, the half-gradient spin convention, node-major result projection, two-drive Onsager cross response, and positive dissipation."},
     {"id": "m2-mesh-convergence-oracle", "path": "backends/fem/tests/steady_transport_contract.cpp", "symbol": "reciprocal_m2_converges_on_three_mesh_resolutions", "responsibility": "Check finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions."},
-    {"id": "m2-fdm-fem-common-limit-oracle", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles", "responsibility": "Compare matched reciprocal FDM cell-centred and FEM plane-averaged profiles on three z resolutions."}
+    {"id": "m2-fdm-fem-common-limit-oracle", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles", "responsibility": "Compare matched reciprocal FDM cell-centred and FEM plane-averaged profiles on three z resolutions."},
+    {"id": "fdm-m2-heterogeneous-interface-gate", "path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs", "symbol": "m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance", "responsibility": "Check anisotropic N/F balance and companion mixing/SML closure with explicit oriented interface and torque accounting."}
   ],
   "public_api": {
     "parameters": [

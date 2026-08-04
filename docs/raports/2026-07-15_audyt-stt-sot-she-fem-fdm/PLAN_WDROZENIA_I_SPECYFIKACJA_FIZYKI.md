@@ -6627,3 +6627,37 @@ i bez zmiennej przestrzennie magnetyzacji. Nie zamyka heterogenicznego/3-D
 sweep, interfejsów N/F/T, niezerowego SHE/AHE, GPU parity, pełnej ścieżki
 Python/UI ani `validated_workloads`. Ocena szeroka pozostaje
 **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.59. Managed FDM M2 heterogeniczny interfejs N/F (2026-08-04)
+
+### 32.59.1. Zakres dowodu
+
+Dodano receptę `just verify-fdm-m2-heterogeneous-interface-contract`, która
+uruchamia dwa istniejące testy silnika FDM CPU-double w zarządzanym kontenerze:
+`m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance`
+oraz `m2_mixing_interface_closes_nonzero_absorption_and_sml_with_torque_target`.
+Pierwszy test ma dwa regiony N/F z jawnym `region_id`, anizotropią,
+spin-Hall i orientowanym prawem `G_up/G_down/G_mix`; drugi wymusza niezerowy
+backflow, absorpcję poprzeczną, SML i torque celu ferromagnetycznego. Oba testy
+sprawdzają niezależne zamknięcie bilansu ładunku i spinu, a drugi dodatkowo
+rozdziela obserwacje interface flux od torque.
+
+### 32.59.2. Managed GREEN
+
+Uruchomienie recepty po poprawieniu filtra testowego (pierwszy przebieg z
+`--exact` miał `0 tests` i nie został uznany za dowód) wykonało faktycznie po
+jednym teście w każdej komendzie:
+
+```text
+test ...::m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 301 filtered out
+test ...::m2_mixing_interface_closes_nonzero_absorption_and_sml_with_torque_target ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 301 filtered out
+```
+
+Ten wynik dowodzi wykonywalnego, zbilansowanego FDM N/F interfejsu z mixing/SML
+w referencyjnym CPU-double. Nie dowodzi jeszcze FEM broken-H1/mortar, wspólnego
+FDM↔FEM interfejsu, niezerowego Hall w geometrii 3-D, GPU parity ani
+`validated_workloads`; bounded FEM M2 nadal fail-closed odrzuca interfejsy
+wewnętrzne. Szeroka ocena celu pozostaje **86% implementacji / 60% gotowości
+produkcyjnej**.

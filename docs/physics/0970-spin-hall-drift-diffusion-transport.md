@@ -1074,6 +1074,15 @@ maximum potential differences are `5.60270e-4`, `1.62324e-4`, and
 pass and the cross-backend error decreases under refinement. This remains a
 uniform, no-interface, no-Hall CPU-double reference gate.
 
+The FDM side also has a managed heterogeneous-interface gate:
+`just verify-fdm-m2-heterogeneous-interface-contract` executes the anisotropic
+N/F balance fixture and the nonzero mixing-conductance fixture with separate
+backflow, transverse absorption, SML, and torque accounting. Both tests pass in
+the managed CUDA image (CPU-double engine lane). This demonstrates that the
+FDM reference can carry explicit region IDs and oriented interface laws; it is
+not FEM interface support or FDM↔FEM parity, and it does not qualify a
+production N/F/T workload.
+
 The native ABI contract additionally executes the affine cube oracle described
 in section 5.2. It is deliberately a separate `just` target so a zero-gradient
 ABI smoke cannot mask a constitutive sign or `G=-\nabla\mu_s/2` factor error.
@@ -1101,6 +1110,7 @@ a qualified workload without the validation gates above.
 | M2 affine constitutive oracle | backends/fem/tests/steady_transport_abi_contract.cpp | cpu_double_reciprocal_m2_affine_constitutive_oracle | nonzero-gradient signs, half-gradient convention, node-major projection, two-drive Onsager cross response, and positive dissipation | `just verify-fem-steady-transport-m2-affine-contract` |
 | M2 mesh convergence oracle | backends/fem/tests/steady_transport_contract.cpp | reciprocal_m2_converges_on_three_mesh_resolutions | finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions | `just verify-fem-steady-transport-m2-convergence-contract` |
 | M2 FDM/FEM common-limit oracle | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles | compare matched reciprocal FDM cell centres with FEM plane averages over three z resolutions | `just verify-fem-steady-transport-m2-common-limit-contract` |
+| FDM M2 heterogeneous-interface gate | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance | exercise an anisotropic N/F region jump and a companion mixing/SML closure with explicit torque accounting | `just verify-fdm-m2-heterogeneous-interface-contract` |
 
 (scientific-bibliography)=
 ## 9. References
