@@ -752,6 +752,35 @@ describe("ControlRoomApi", () => {
     expect(observedInit?.signal?.aborted).toBe(true);
   });
 
+  it("sends a request when the browser exposes crypto without randomUUID", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues(values: Uint8Array) {
+        values.fill(0xab);
+        return values;
+      },
+    });
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      return jsonResponse(liveStatusFixture({ fields_revision: 7 }), init);
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+    });
+
+    try {
+      await expect(api.sessions.current.status()).resolves.toMatchObject({
+        resources: { fields_revision: 7 },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const requestId = new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get(
+      "x-request-id",
+    );
+    expect(requestId).toBe("abababab-abab-4bab-abab-abababababab");
+  });
+
   it("loads current session status through the v2 resource path", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
