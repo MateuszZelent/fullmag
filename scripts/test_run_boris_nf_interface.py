@@ -7,6 +7,7 @@ import pytest
 from run_boris_nf_interface import (
     _managed_command,
     _is_known_post_stage_stdout_flush_failure,
+    _probe_from_managed_log,
     capture_runtime_identity,
     run_boris_case,
     validate_runtime_identity,
@@ -50,6 +51,48 @@ def test_identity_records_binary_and_source_hashes(tmp_path: Path) -> None:
     assert len(identity["binary_sha256"]) == 64
     assert len(identity["source_manifest_sha256"]) == 64
     assert identity["device_detected"] == "cpu"
+
+
+def test_cuda_identity_preserves_nvidia_smi_query_from_runtime_probe(tmp_path: Path) -> None:
+    build_root = _fake_build_root(tmp_path)
+
+    identity = capture_runtime_identity(
+        build_root,
+        "sha256:" + "a" * 64,
+        "cuda",
+        runtime_probe={
+            "binary_version": "BORIS version 4",
+            "python_version": "3.10.12",
+            "device_detected": "NVIDIA GeForce RTX 4080 SUPER",
+            "compute_capability": "8.9",
+            "nvidia_smi_query": "NVIDIA GeForce RTX 4080 SUPER, 8.9",
+            "device_residency_evidence": "nvidia-smi plus managed BORIS command used -g 0",
+            "probe_stdout_sha256": "b" * 64,
+            "probe_stderr_sha256": "c" * 64,
+        },
+    )
+
+    assert identity["nvidia_smi_query"] == "NVIDIA GeForce RTX 4080 SUPER, 8.9"
+
+
+def test_managed_cuda_probe_ignores_container_license_commas() -> None:
+    probe = _probe_from_managed_log(
+        "\n".join(
+            [
+                "CUDA Version 11.8.0",
+                "Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES.",
+                "Python 3.10.12",
+                "BORIS Computational Spintronics 2022, version 4",
+                "NVIDIA GeForce RTX 4080 SUPER, 8.9",
+            ]
+        ),
+        "",
+        "cuda",
+    )
+
+    assert probe["device_detected"] == "NVIDIA GeForce RTX 4080 SUPER"
+    assert probe["compute_capability"] == "8.9"
+    assert probe["nvidia_smi_query"] == "NVIDIA GeForce RTX 4080 SUPER, 8.9"
 
 
 def test_cuda_identity_requires_residency_and_gpu_evidence() -> None:
