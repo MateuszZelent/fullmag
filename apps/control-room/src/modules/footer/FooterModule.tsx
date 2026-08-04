@@ -65,7 +65,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
 
   useEffect(() => {
-    return kernel.bus.on("footer:tab-requested", ({ tab }) => {
+    return kernel.bus.subscribe("footer:tab-requested", ({ tab }) => {
       kernel.layout.setBottomPanelTab(tab);
     });
   }, [kernel.bus, kernel.layout]);

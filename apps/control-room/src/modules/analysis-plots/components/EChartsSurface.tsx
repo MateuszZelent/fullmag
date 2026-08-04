@@ -71,7 +71,7 @@ export function EChartsSurface({
   useEffect(() => {
     if (!bus) return;
     const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
-    return bus.on("analysis-plots:export-requested", (request) => {
+    return bus.subscribe("analysis-plots:export-requested", (request) => {
       if (request.chartId === acceptedChartId) setRequestedExportFormat(request.format);
     });
   }, [bus, chartId, series]);

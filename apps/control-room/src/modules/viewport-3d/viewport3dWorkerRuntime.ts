@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { subscribeViewport3DWorkerRuntimeChanges } from "./viewport3dWorkerRuntimeEvents";
+import { viewport3DWorkerRuntimeEvents } from "./viewport3dWorkerRuntimeEvents";
 
 import {
   disposeViewport3DRegionOverlayBuildWorker,
@@ -158,11 +158,15 @@ export function useViewport3DWorkerRuntime(
   useEffect(() => {
     const lease = acquireViewport3DWorkerRuntime();
     const runtime = sharedRuntime;
+    if (!runtime) {
+      lease.release();
+      return;
+    }
     const publish = () => onSnapshot?.(getViewport3DWorkerRuntimeSnapshot());
     publish();
-    const unsubscribeRuntime = runtime?.subscribe(publish) ?? (() => undefined);
-    const unsubscribeSchedulers = subscribeViewport3DWorkerRuntimeChanges(() => {
-      runtime?.notify();
+    const unsubscribeRuntime = runtime.subscribe(publish);
+    const unsubscribeSchedulers = viewport3DWorkerRuntimeEvents.subscribe(() => {
+      runtime.notify();
     });
     return () => {
       unsubscribeSchedulers();

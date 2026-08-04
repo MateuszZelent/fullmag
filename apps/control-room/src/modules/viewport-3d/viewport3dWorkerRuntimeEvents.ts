@@ -12,3 +12,7 @@ export function subscribeViewport3DWorkerRuntimeChanges(
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+export const viewport3DWorkerRuntimeEvents = {
+  subscribe: subscribeViewport3DWorkerRuntimeChanges,
+};

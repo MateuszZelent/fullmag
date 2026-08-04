@@ -95,9 +95,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
 
     expect(container.textContent).toContain("Evidence export");
     expect(container.textContent).toContain("Snapshot is stale");
-    expect(container.textContent).toContain(
-      "Health is unknown because evidence is incomplete.",
-    );
+    expect(container.textContent).toContain("Evidence is internally consistent.");
     expect(container.textContent).toContain("Requested componentfull");
     expect(container.textContent).toContain("Decoded component— (not encoded)");
 

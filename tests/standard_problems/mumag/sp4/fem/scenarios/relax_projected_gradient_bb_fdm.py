@@ -17,6 +17,8 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.interactive(True)
+study.wait_for_solve(True)
+
 
 
 study.universe(

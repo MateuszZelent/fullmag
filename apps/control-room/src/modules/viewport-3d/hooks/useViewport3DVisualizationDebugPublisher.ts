@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   VisualizationDebugController,
@@ -331,36 +331,29 @@ export function useViewport3DVisualizationDebugPublisher({
 }): {
   onFrameCommitted: (frame: Viewport3DVisualizationDebugFrameCommit) => void;
 } {
-  const publisherRef = useRef<Viewport3DVisualizationDebugPublisher | null>(null);
-  if (publisherRef.current === null) {
-    publisherRef.current = createViewport3DVisualizationDebugPublisher({
+  const [publisher] = useState(() =>
+    createViewport3DVisualizationDebugPublisher({
       adoptionRegistry,
       buildCandidate,
       controller,
       viewportId,
-    });
-  }
+    }),
+  );
   const targetKey = targetIds.join("\u0000");
   useEffect(() => {
-    publisherRef.current?.update({
+    publisher.update({
       buildCandidate,
       carrierTargets,
       revision,
       targetIds,
     });
-  }, [buildCandidate, carrierTargets, revision, targetIds, targetKey]);
-  useEffect(
-    () => () => {
-      publisherRef.current?.dispose();
-      publisherRef.current = null;
-    },
-    [],
-  );
+  }, [buildCandidate, carrierTargets, publisher, revision, targetIds, targetKey]);
+  useEffect(() => () => publisher.dispose(), [publisher]);
   const onFrameCommitted = useCallback(
     (frame: Viewport3DVisualizationDebugFrameCommit) => {
-      publisherRef.current?.commitFrame(frame);
+      publisher.commitFrame(frame);
     },
-    [],
+    [publisher],
   );
   return useMemo(() => ({ onFrameCommitted }), [onFrameCommitted]);
 }

@@ -1091,7 +1091,7 @@ function useMeshSizeHistogramHighlight(
     useState<MeshSizeHistogramHighlight | null>(null);
   useEffect(
     () =>
-      bus.on("viewport:mesh-size-bin-hovered", (event) => {
+      bus.subscribe("viewport:mesh-size-bin-hovered", (event) => {
         setHighlight((current) =>
           retainViewport3DMeshSizeHighlight(current, event.highlight),
         );

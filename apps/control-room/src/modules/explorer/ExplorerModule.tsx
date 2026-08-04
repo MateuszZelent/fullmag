@@ -435,6 +435,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    planarMonitorDraft,
+    planarMonitors.data,
     currentTransports.data,
     spinInterfaces.data,
     spinTorques.data,
@@ -457,6 +459,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== "model") return;
+    ensureExplorerModelObjectDefaults(
+      nodes
+        .filter((node) => node.kind === "object.root")
+        .map((node) => node.id),
+    );
+  }, [activeTab, nodes]);
 
   useEffect(() => {
     const previous = previousSelectedNodeId.current;
@@ -500,7 +511,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [kernel.bus, kernel.selection]);
 
   useEffect(() => {
-    return kernel.bus.on("explorer:tab-requested", ({ tab }) => {
+    return kernel.bus.subscribe("explorer:tab-requested", ({ tab }) => {
       setExplorerActiveTab(tab);
     });
   }, [kernel.bus]);

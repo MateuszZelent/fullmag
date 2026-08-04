@@ -123,7 +123,7 @@ function useFooterLiveScalarSample(
   const [sample, setSample] = useState<FooterLiveScalarSample | null>(null);
 
   useEffect(
-    () => bus.on("telemetry:scalar-sample", (next) => setSample(next)),
+    () => bus.subscribe("telemetry:scalar-sample", (next) => setSample(next)),
     [bus],
   );
 

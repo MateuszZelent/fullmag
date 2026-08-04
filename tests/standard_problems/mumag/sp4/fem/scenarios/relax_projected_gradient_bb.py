@@ -16,7 +16,7 @@ study.engine("fem")
 study.device("auto", precision="double")
 study.mode("strict")
 study.interactive(True)
-
+study.wait_for_solve(True)
 
 study.universe(
     mode="manual",

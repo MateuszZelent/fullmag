@@ -898,6 +898,21 @@ medium-to-fine errors were respectively `1.72849e-4/3.42662e-5 V` and
 bounded one-dimensional-invariant FEM convergence gate, not a full 3-D
 parameter sweep, an FDM/FEM common-limit, or a production qualification.
 
+The managed runner now also executes a reciprocal FDM↔FEM common-limit fixture
+with the same SI data on both discretizations: `sigma=4 S/m`,
+`sigma_s=5 S/m`, `sigma_parallel=6 S/m`, `sigma_perpendicular=3 S/m`,
+`P=0.25`, `theta_SH=sigma_AHE=0`, `lambda_sf=0.3 m`, `m=e_z`, and matched
+charge/spin Dirichlet data on the `z` electrodes. The cell-centred FDM values
+are compared with volume-consistent FEM plane averages on `N_z=8,16,32`
+conforming tetrahedral meshes. The maximum potential differences are
+`5.60270e-4`, `1.62324e-4`, and `4.35987e-5 V`; the maximum `mu_{s,z}`
+differences are `6.72230e-3`, `1.94772e-3`, and `5.23159e-4 V`. Both
+discretizations satisfy their independent residual/balance gates and the
+cross-backend error decreases under refinement. This closes only the uniform,
+finite-spin-flip, no-Hall reciprocal common-limit fixture; heterogeneous
+materials, interfaces, nonzero SHE/AHE, 3-D field variation, GPU parity, and
+production qualification remain open.
+
 An executable managed BORIS N/F smoke now completes at `coarse`, `medium`, and
 `fine` resolutions in the pinned CUDA image
 `nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`
@@ -1042,9 +1057,21 @@ runner-to-FFI materialization test, and the native runtime test
 `just verify-fem-steady-transport-native-contract` M1 regression gate they prove
 an executable bounded FEM M2 slice, not a general FEM M2 qualification. No
 `validated_workloads` entry is claimed: Onsager/dissipation sweeps,
-heterogeneous materials, N/F/T interfaces, mesh convergence, FEM/FDM common
-limit for reciprocal transport, GPU residency, BORIS parity, transient
-coupling, and production qualification remain open.
+heterogeneous materials, N/F/T interfaces, GPU residency, BORIS parity,
+transient coupling, and production qualification remain open. A separate
+managed runner gate now covers the uniform reciprocal FDM↔FEM common limit;
+it is evidence for that exact fixture only and does not promote the general
+capability.
+
+The common-limit gate uses the same SI descriptor in both backends and compares
+FDM cell-centred values against FEM plane-averaged values on `N_z=8,16,32`.
+For `sigma=4`, `sigma_s=5`, `sigma_parallel=6`, `sigma_perpendicular=3`
+S/m, `P=0.25`, `lambda_sf=0.3 m`, `m=e_z`, and zero Hall coefficients, the
+maximum potential differences are `5.60270e-4`, `1.62324e-4`, and
+`4.35987e-5 V`; the corresponding `mu_{s,z}` differences are `6.72230e-3`,
+`1.94772e-3`, and `5.23159e-4 V`. Both independent residual/balance checks
+pass and the cross-backend error decreases under refinement. This remains a
+uniform, no-interface, no-Hall CPU-double reference gate.
 
 The native ABI contract additionally executes the affine cube oracle described
 in section 5.2. It is deliberately a separate `just` target so a zero-gradient
@@ -1072,6 +1099,7 @@ a qualified workload without the validation gates above.
 | ABI layout regression | crates/fullmag-fem-sys/src/lib.rs | steady_transport_m2_request_keeps_v1_as_a_nested_prefix | append-only nested M1-prefix guarantee | focused managed test |
 | M2 affine constitutive oracle | backends/fem/tests/steady_transport_abi_contract.cpp | cpu_double_reciprocal_m2_affine_constitutive_oracle | nonzero-gradient signs, half-gradient convention, node-major projection, two-drive Onsager cross response, and positive dissipation | `just verify-fem-steady-transport-m2-affine-contract` |
 | M2 mesh convergence oracle | backends/fem/tests/steady_transport_contract.cpp | reciprocal_m2_converges_on_three_mesh_resolutions | finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions | `just verify-fem-steady-transport-m2-convergence-contract` |
+| M2 FDM/FEM common-limit oracle | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles | compare matched reciprocal FDM cell centres with FEM plane averages over three z resolutions | `just verify-fem-steady-transport-m2-common-limit-contract` |
 
 (scientific-bibliography)=
 ## 9. References

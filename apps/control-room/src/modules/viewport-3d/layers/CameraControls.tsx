@@ -1041,46 +1041,43 @@ function useOrbitCameraControlsModel({
 
   useEffect(() => {
     const element = gl.domElement;
+    const listenerController = new AbortController();
+    let pointerGestureActive = false;
     const endCanvasPointerGesture = () => {
-      window.removeEventListener("pointerup", endCanvasPointerGesture, {
-        capture: true,
-      });
-      window.removeEventListener("pointercancel", endCanvasPointerGesture, {
-        capture: true,
-      });
+      if (!pointerGestureActive) return;
+      pointerGestureActive = false;
       endViewport3DCameraGesture(cameraGestureRef);
     };
     const beginCanvasPointerGesture = (event: PointerEvent) => {
       if (event.button < 0 || event.button > 2) return;
+      pointerGestureActive = true;
       beginViewport3DCameraGesture(cameraGestureRef);
-      window.addEventListener("pointerup", endCanvasPointerGesture, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", endCanvasPointerGesture, {
-        capture: true,
-        once: true,
-      });
     };
 
+    window.addEventListener("pointerup", endCanvasPointerGesture, {
+      capture: true,
+      signal: listenerController.signal,
+    });
+    window.addEventListener("pointercancel", endCanvasPointerGesture, {
+      capture: true,
+      signal: listenerController.signal,
+    });
     element.addEventListener("pointerdown", beginCanvasPointerGesture, {
       capture: true,
+      signal: listenerController.signal,
     });
 
     return () => {
-      element.removeEventListener("pointerdown", beginCanvasPointerGesture, {
-        capture: true,
-      });
+      listenerController.abort();
       endCanvasPointerGesture();
     };
   }, [cameraGestureRef, gl]);
 
   useEffect(() => {
     const element = gl.domElement;
+    const listenerController = new AbortController();
 
     const restoreControls = () => {
-      window.removeEventListener("pointerup", restoreControls, { capture: true });
-      window.removeEventListener("pointercancel", restoreControls, { capture: true });
       const previousEnabled = previousHudControlsEnabledRef.current;
       previousHudControlsEnabledRef.current = null;
       const controls = controlsRef.current;
@@ -1094,23 +1091,22 @@ function useOrbitCameraControlsModel({
       if (!controls || previousHudControlsEnabledRef.current !== null) return;
       previousHudControlsEnabledRef.current = Boolean(controls.enabled);
       controls.enabled = false;
-      window.addEventListener("pointerup", restoreControls, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", restoreControls, {
-        capture: true,
-        once: true,
-      });
     };
 
+    window.addEventListener("pointerup", restoreControls, {
+      capture: true,
+      signal: listenerController.signal,
+    });
+    window.addEventListener("pointercancel", restoreControls, {
+      capture: true,
+      signal: listenerController.signal,
+    });
     element.addEventListener("pointerdown", handlePointerDownCapture, {
       capture: true,
+      signal: listenerController.signal,
     });
     return () => {
-      element.removeEventListener("pointerdown", handlePointerDownCapture, {
-        capture: true,
-      });
+      listenerController.abort();
       restoreControls();
     };
   }, [gl]);

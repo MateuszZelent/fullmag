@@ -348,21 +348,6 @@ function OrbitRing3D({
   const detachWindowDragListeners = useCallback(() => {
     if (!dragListenersAttachedRef.current) return;
     dragListenersAttachedRef.current = false;
-    const dragMoveListener = dragMoveListenerRef.current;
-    const dragEndListener = dragEndListenerRef.current;
-    if (dragMoveListener) {
-      window.removeEventListener("pointermove", dragMoveListener, {
-        capture: true,
-      });
-    }
-    if (dragEndListener) {
-      window.removeEventListener("pointerup", dragEndListener, {
-        capture: true,
-      });
-      window.removeEventListener("pointercancel", dragEndListener, {
-        capture: true,
-      });
-    }
     dragMoveListenerRef.current = null;
     dragEndListenerRef.current = null;
   }, []);
@@ -384,23 +369,30 @@ function OrbitRing3D({
     const dragEndListener = () => handleUp();
     dragMoveListenerRef.current = dragMoveListener;
     dragEndListenerRef.current = dragEndListener;
-    window.addEventListener("pointermove", dragMoveListener, { capture: true });
-    window.addEventListener("pointerup", dragEndListener, {
-      capture: true,
-      once: true,
-    });
-    window.addEventListener("pointercancel", dragEndListener, {
-      capture: true,
-      once: true,
-    });
   }, [handleMove, handleUp]);
 
   useEffect(() => {
+    const listenerController = new AbortController();
+    const dragMoveListener = (event: PointerEvent) => handleMove(event);
+    const dragEndListener = () => handleUp();
+    window.addEventListener("pointermove", dragMoveListener, {
+      capture: true,
+      signal: listenerController.signal,
+    });
+    window.addEventListener("pointerup", dragEndListener, {
+      capture: true,
+      signal: listenerController.signal,
+    });
+    window.addEventListener("pointercancel", dragEndListener, {
+      capture: true,
+      signal: listenerController.signal,
+    });
     return () => {
+      listenerController.abort();
       detachWindowDragListeners();
       restoreOrbitControls();
     };
-  }, [detachWindowDragListeners, restoreOrbitControls]);
+  }, [detachWindowDragListeners, handleMove, handleUp, restoreOrbitControls]);
 
   return (
     <group renderOrder={WIDGET_RENDER_ORDER + 1}>

@@ -275,9 +275,25 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     renderSettings.wireframeVisible,
   );
   const createEdgeGeometry = useCallback(() => {
-    const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
-    return next;
-  }, [edgeIndices, topologyModel.positions]);
+    const resolvedEdgeIndices = resolveAirboxWireframeEdgeIndices(
+      renderSettings.geometryScope,
+      {
+        edgeIndices: partModel.edgeIndices,
+        volumeEdgeIndices: partModel.volumeEdgeIndices,
+      },
+      renderSettings.wireframeVisible,
+    );
+    return buildLineIndexGeometry(
+      topologyModel.positions,
+      resolvedEdgeIndices,
+    );
+  }, [
+    partModel.edgeIndices,
+    partModel.volumeEdgeIndices,
+    renderSettings.geometryScope,
+    renderSettings.wireframeVisible,
+    topologyModel.positions,
+  ]);
   const edgeGeometry = useViewport3DGeometryUpload({
     createGeometry: createEdgeGeometry,
     dirtyReason: "airbox-wireframe",
