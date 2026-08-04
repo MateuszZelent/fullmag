@@ -27,7 +27,7 @@ G(\mathbf r)=\exp\left[-\frac{(x-x_c)^2}{2\sigma_x^2}
 
 \[
 S_\phi(\mathbf r)=G(\mathbf r)
-\cos\left(k(x-x_c)+\phi\right),\qquad k=2\pi/\lambda.
+\cos\left(k(x-x_{\mathrm{carrier}})+\phi\right),\qquad k=2\pi/\lambda.
 \]
 
 The x drive uses `phi=0`; the z drive uses `phi=-pi/2`, so the second profile
@@ -48,6 +48,7 @@ fm.GaussianPlaneWaveAntenna(
     fwhm_y_m=440e-9,
     center_x_m=-Tx / 2.3,
     center_y_m=0.0,
+    carrier_origin_x_m=0.0,
     t0_s=2e-9,
 )
 ```
@@ -58,8 +59,11 @@ The helper accepts a `FieldTarget`, `DriveActivation`, `time_origin`, and
 `sigma_y=fwhm_y/(2 sqrt(2 ln 2))`; this keeps the user-facing parameter aligned
 with the MuMax source while the IR stores the numerical standard deviation.
 An optional `spatial_phase_rad` is shared by both quadratures. `phase_rad` is
-the temporal phase. `center_z_m` is not needed by this source and is therefore
-not exposed; a regional target controls the magnetic domain.
+the temporal phase. `carrier_origin_x_m` is independent of the Gaussian
+envelope centre; this is required when the source is translated but the
+carrier remains defined in the global coordinate frame. `center_z_m` is not
+needed by this source and is therefore not exposed; a regional target controls
+the magnetic domain.
 
 ## Lowering and round-trip
 
@@ -85,6 +89,7 @@ parameters only:
   "kind": "gaussian_plane_wave",
   "center_x_m": -1.9565217391304348e-6,
   "center_y_m": 0.0,
+  "carrier_origin_x_m": 0.0,
   "sigma_x_m": 1.96e-7,
   "sigma_y_m": 1.868507960633642e-7,
   "wavelength_m": 1.96e-7,
