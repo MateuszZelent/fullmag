@@ -1808,6 +1808,26 @@ impl FemLlgProblem {
         Ok(())
     }
 
+    fn slonczewski_rhs_at(&self, node: usize, magnetization: Vector3) -> Vector3 {
+        let Some(config) = self.terms.slonczewski_stt.as_ref() else {
+            return [0.0, 0.0, 0.0];
+        };
+        if config
+            .active_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.get(node).copied().unwrap_or(false))
+        {
+            return [0.0, 0.0, 0.0];
+        }
+        crate::fdm::cpu::fields::slonczewski_torque_from_config(
+            magnetization,
+            config,
+            self.material.damping,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.saturation_magnetisation,
+        )
+    }
+
     /// In-place LLG RHS: writes result into `out`, uses `scratch` for fields.
     fn llg_rhs_into(
         &self,
@@ -1819,7 +1839,10 @@ impl FemLlgProblem {
         let volumes = &self.topology.magnetic_node_volumes;
         for (i, m) in magnetization.iter().enumerate() {
             out[i] = if volumes[i] > 0.0 {
-                self.llg_rhs_from_field(*m, scratch.h_eff[i])
+                add(
+                    self.llg_rhs_from_field(*m, scratch.h_eff[i]),
+                    self.slonczewski_rhs_at(i, *m),
+                )
             } else {
                 [0.0, 0.0, 0.0]
             };
@@ -2395,7 +2418,10 @@ impl FemLlgProblem {
             .enumerate()
             .map(|(node, (m, h))| {
                 if magnetic_node_volumes[node] > 0.0 {
-                    norm(self.llg_rhs_from_field(*m, *h))
+                    norm(add(
+                        self.llg_rhs_from_field(*m, *h),
+                        self.slonczewski_rhs_at(node, *m),
+                    ))
                 } else {
                     0.0
                 }
@@ -2407,7 +2433,10 @@ impl FemLlgProblem {
             .enumerate()
             .map(|(node, m)| {
                 if magnetic_node_volumes[node] > 0.0 {
-                    norm(self.llg_rhs_from_field(*m, effective_field[node]))
+                    norm(add(
+                        self.llg_rhs_from_field(*m, effective_field[node]),
+                        self.slonczewski_rhs_at(node, *m),
+                    ))
                 } else {
                     0.0
                 }
@@ -2537,7 +2566,10 @@ impl FemLlgProblem {
                 max_torque_Apm = torque_norm;
             }
             let rhs = if self.topology.magnetic_node_volumes[node] > 0.0 {
-                self.llg_rhs_from_field(magnetization[node], effective)
+                add(
+                    self.llg_rhs_from_field(magnetization[node], effective),
+                    self.slonczewski_rhs_at(node, magnetization[node]),
+                )
             } else {
                 [0.0, 0.0, 0.0]
             };
@@ -3519,7 +3551,10 @@ impl FemLlgProblem {
             .enumerate()
             .map(|(node, (m, h))| {
                 if magnetic_node_volumes[node] > 0.0 {
-                    self.llg_rhs_from_field(*m, *h)
+                    add(
+                        self.llg_rhs_from_field(*m, *h),
+                        self.slonczewski_rhs_at(node, *m),
+                    )
                 } else {
                     [0.0, 0.0, 0.0]
                 }
@@ -3531,7 +3566,10 @@ impl FemLlgProblem {
             .enumerate()
             .map(|(node, m)| {
                 if magnetic_node_volumes[node] > 0.0 {
-                    self.llg_rhs_from_field(*m, effective_field[node])
+                    add(
+                        self.llg_rhs_from_field(*m, effective_field[node]),
+                        self.slonczewski_rhs_at(node, *m),
+                    )
                 } else {
                     [0.0, 0.0, 0.0]
                 }
@@ -3921,6 +3959,63 @@ mod tests {
                 value
             );
         }
+    }
+
+    #[test]
+    fn reference_fem_applies_slonczewski_v2_direct_rhs() {
+        let mut problem = unit_tet_problem();
+        let config = crate::SlonczewskiSttConfig {
+            formula: crate::SlonczewskiFormula::FullmagV2,
+            current_density_magnitude: 1.4e11,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.8,
+            epsilon_prime: 0.03,
+            degree: 0.62,
+            thickness: 1.0e-9,
+            current_sign: 1.0,
+            active_mask: None,
+        };
+        problem.terms.slonczewski_stt = Some(config.clone());
+        problem.terms.exchange = false;
+
+        let initial = vec![[1.0, 0.0, 0.0]; problem.topology.n_nodes];
+        let dt = 2.5e-13;
+        let rhs0 = crate::fdm::cpu::fields::slonczewski_torque_from_config(
+            initial[0],
+            &config,
+            problem.material.damping,
+            problem.dynamics.gyromagnetic_ratio,
+            problem.material.saturation_magnetisation,
+        );
+        let stage = normalized(add(initial[0], scale(rhs0, dt))).expect("Heun stage");
+        let rhs1 = crate::fdm::cpu::fields::slonczewski_torque_from_config(
+            stage,
+            &config,
+            problem.material.damping,
+            problem.dynamics.gyromagnetic_ratio,
+            problem.material.saturation_magnetisation,
+        );
+        let expected = normalized(add(
+            initial[0],
+            scale(add(rhs0, rhs1), 0.5 * dt),
+        ))
+        .expect("Heun candidate");
+
+        let mut state = problem.new_state(initial).expect("initial FEM state");
+        let report = problem.step(&mut state, dt).expect("FEM Slonczewski step");
+        for (component, (actual, expected)) in state.magnetization[0]
+            .iter()
+            .zip(expected.iter())
+            .enumerate()
+        {
+            let error = (*actual - *expected).abs();
+            assert!(
+                error <= 1e-12 * expected.abs().max(1.0) + 1e-14,
+                "Slonczewski FEM component {component} mismatch: actual={actual} expected={expected} error={error}"
+            );
+        }
+        assert!(report.max_rhs_amplitude > 0.0);
+        assert!(state.magnetization[0][1].abs() > 0.0);
     }
 
     #[test]
