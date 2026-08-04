@@ -253,6 +253,11 @@ verify-fdm-transient-spin-m3-reference:
     TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
       python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
 
+# Cross-layer authoring parity only.  This gate intentionally does not promote
+# any FEM/FDM, GPU, or external-solver capability.
+verify-spin-transport-authoring-parameter-parity:
+    PYTHONPATH=packages/fullmag-py/src python3 scripts/verify_spin_transport_authoring_parameter_parity.py
+
 verify-fdm-prescribed-sot-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-prescribed-sot-build && cargo_target=/tmp/fullmag-fdm-prescribed-sot-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target prescribed_sot_contract prescribed_sot_cuda_runtime fullmag_fdm && "$build_dir/backends/fdm/prescribed_sot_contract" && LD_LIBRARY_PATH="$build_dir/backends/fdm:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fdm/prescribed_sot_cuda_runtime" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_prescribed_sot -- --nocapture'

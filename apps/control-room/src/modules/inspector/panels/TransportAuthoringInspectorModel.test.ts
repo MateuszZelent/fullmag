@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,12 +10,43 @@ import {
   isKnownSpinTransport,
   readonlyTransportPayload,
   resolveTransportRecord,
+  TRANSPORT_AUTHORING_DRAFT_INVENTORY,
   spinTransportDraft,
   transportIdentity,
   transportSelectionKey,
 } from "./TransportAuthoringInspectorModel";
 
+type ParityManifest = {
+  parameters: Array<{
+    family: string;
+    round_trip: string;
+    status: string;
+    ui_field: string;
+  }>;
+};
+
+function parityManifest(): ParityManifest {
+  return JSON.parse(readFileSync(
+    new URL("../../../../../../docs/specs/spin-transport-authoring-parameter-parity-v1.json", import.meta.url),
+    "utf8",
+  )) as ParityManifest;
+}
+
 describe("transport authoring drafts", () => {
+  it("covers every current/spin manifest field with a typed or opaque draft key", () => {
+    const manifest = parityManifest();
+    for (const parameter of manifest.parameters.filter(({ family }) => family === "current_transport" || family === "spin_transport")) {
+      if (parameter.status === "not_applicable" || parameter.ui_field.startsWith("not-exposed:")) continue;
+      const inventory = TRANSPORT_AUTHORING_DRAFT_INVENTORY[parameter.family as "current_transport" | "spin_transport"];
+      if (parameter.ui_field.startsWith("opaque:")) {
+        expect(inventory.opaque).toContain(parameter.ui_field.slice("opaque:".length));
+        expect(parameter.round_trip).toBe("preserve_and_reject");
+      } else {
+        expect(inventory.typed).toContain(parameter.ui_field);
+      }
+    }
+  });
+
   it("round-trips every complete charge-transport field", () => {
     const resource = {
       kind: "current_transport" as const,

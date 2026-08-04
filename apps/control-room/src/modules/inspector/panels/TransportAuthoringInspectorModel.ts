@@ -54,6 +54,52 @@ export interface SpinTransportDraft {
   reciprocalNonlinear: string;
 }
 
+/**
+ * The parity gate consumes this inventory; it is deliberately derived from
+ * the existing draft keys rather than introducing a second UI schema.
+ */
+export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
+  current_transport: {
+    typed: [
+      "name",
+      "model",
+      "currentDensity",
+      "solveRegion",
+      "coupling",
+      "gauge",
+      "conductivity",
+      "solverEngine",
+      "solverRelativeTolerance",
+      "solverAbsoluteTolerance",
+      "solverMaxIterations",
+      "solverOperatorVersion",
+      "solverPhysicalResidualVersion",
+    ],
+    opaque: ["domain", "materials", "boundaries"],
+  },
+  spin_transport: {
+    typed: [
+      "id",
+      "currentSourceId",
+      "mode",
+      "schemaVersion",
+      "constitutiveVersion",
+      "executionDevice",
+      "executionDiscretization",
+      "executionMode",
+      "executionPrecision",
+      "solverEngine",
+      "solverRelativeTolerance",
+      "solverAbsoluteTolerance",
+      "solverMaxIterations",
+      "solverOperatorVersion",
+      "solverPhysicalResidualVersion",
+      "solverDefaultExternalBoundary",
+    ],
+    opaque: ["domain", "materials", "interfaces", "boundaries", "reciprocalNonlinear"],
+  },
+} as const;
+
 export function transportSelectionKey(
   family: TransportFamily,
   resource: SceneCurrentTransport | SceneSpinTransport,
