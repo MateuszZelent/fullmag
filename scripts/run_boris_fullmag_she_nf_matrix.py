@@ -63,11 +63,15 @@ def run_resolution_matrix(
     boris_build_root: Path,
     fullmag_binary: Path,
     report_root: Path,
+    *,
+    device: str = "cuda",
 ) -> dict[str, object]:
     """Run every declared tuple and retain failures without fabricating fields."""
 
     if not resolutions:
         raise ValueError("matrix requires at least one resolution")
+    if device not in {"cpu", "cuda"}:
+        raise ValueError("matrix device must be cpu or cuda")
     normalized_tolerances = tuple(_finite(value, "tolerance") for value in tolerances)
     if not normalized_tolerances or any(value <= 0.0 for value in normalized_tolerances):
         raise ValueError("matrix tolerances must be finite and positive")
@@ -86,6 +90,7 @@ def run_resolution_matrix(
             fullmag_root = run_root / "fullmag"
             entry: dict[str, object] = {
                 "run_key": run_key,
+                "device": device,
                 "resolution": {
                     "nx": resolution.nx,
                     "ny": resolution.ny,
@@ -112,7 +117,7 @@ def run_resolution_matrix(
                     boris_config,
                     boris_build_root,
                     boris_root,
-                    "cpu",
+                    device,
                     runtime_container=runtime_container,
                 )
                 fullmag_artifact = run_fullmag_nf_reference(
@@ -154,6 +159,7 @@ def run_resolution_matrix(
     summary: dict[str, object] = {
         "schema_version": "fullmag.boris_fullmag_she_nf_matrix.v1",
         "qualification": {"status": "diagnostic", "reason": "matrix is fail-closed"},
+        "device": device,
         "declared_resolutions": len(resolutions),
         "declared_tolerances": list(normalized_tolerances),
         "runs": runs,
@@ -244,6 +250,11 @@ def main() -> int:
     parser.add_argument("--boris-build-root", type=Path, required=True)
     parser.add_argument("--fullmag", type=Path, required=True)
     parser.add_argument("--report-root", type=Path, required=True)
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda"),
+        default=os.environ.get("FULLMAG_BORIS_DEVICE", "cuda"),
+    )
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
     matrix_path = args.report_root / "matrix.json"
@@ -257,6 +268,7 @@ def main() -> int:
             args.boris_build_root,
             args.fullmag,
             args.report_root,
+            device=args.device,
         )
         validate_matrix_summary(summary)
     print(json.dumps({"status": "diagnostic_match", "matrix": str(matrix_path)}, sort_keys=True))

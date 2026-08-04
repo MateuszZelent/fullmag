@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from run_boris_fullmag_she_nf_matrix import validate_matrix_summary
+from run_boris_fullmag_she_nf_matrix import Resolution, run_resolution_matrix, validate_matrix_summary
 
 
 def _metric(value: float) -> dict[str, float]:
@@ -66,3 +66,15 @@ def test_matrix_rejects_nonmonotone_resolution_error() -> None:
     broken["runs"][-1]["comparison"]["observables"]["mu_s"]["max_relative_error"] = 0.9
     with pytest.raises(ValueError, match="monotone across resolution"):
         validate_matrix_summary(broken)
+
+
+def test_matrix_rejects_unknown_device_before_running_cases(tmp_path) -> None:
+    with pytest.raises(ValueError, match="device must be cpu or cuda"):
+        run_resolution_matrix(
+            (Resolution(1, 1, 1, 1),),
+            (1.0e-8,),
+            tmp_path / "boris",
+            tmp_path / "fullmag",
+            tmp_path / "report",
+            device="tpu",
+        )
