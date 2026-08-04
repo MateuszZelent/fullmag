@@ -6125,3 +6125,53 @@ convergence, pełna rodzina integratorów, długie trajektorie, demag, FP32,
 MuMax3/BORIS, SHE/BORIS reciprocal, SML, skin/MQS i Python/OpenAPI/UI
 round-trip. Szeroka ocena celu pozostaje **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.51. FEM↔FDM common-limit dla Slonczewskiego v2 (2026-08-04)
+
+### 32.51.1. Kontrakt porównania i naprawa fixture
+
+Dodano test
+`native_fem::tests::native_fem_slonczewski_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available`.
+Porównuje on jeden krok natywnego FEM GPU z referencyjnym FDM CPU w tym samym
+common-limit: FP64, Heun, `dt` pobrane z tego samego planu FEM, jednorodne
+`m=(1,0,0)`, `J_c=(0,0,1.4e11) A/m^2`, `n_stack=(0,0,1)`, `P=0.62`,
+`Lambda=1.8`, `epsilon_prime=0.03`, `t_F=1e-9 m`, `M_s=8e5 A/m`,
+`alpha=0.1`, `gamma0=2.211e5 m/(A s)`. FDM ma dokładnie jedną aktywną
+komórkę `1x1x1` o rozmiarze `1 nm`, a FEM używa tego samego małego mesh
+two-tets. Demag i pole zewnętrzne są wyłączone; FEM zachowuje
+`enable_exchange=true` tylko jako warunek uruchomienia device-resident RK,
+lecz dla jednorodnego stanu wkład wymiany jest zerowy; FDM wymianę wyłącza
+jawnie.
+
+Pierwsze uruchomienie nie przeszło przez certyfikację wejścia FDM, ponieważ
+numeryczna `region_mask=[1]` nie miała legendy. Naprawa nie polegała na
+obejściu walidacji: fixture tworzy teraz pełny
+`FdmGridCertificateIR::new_with_masks(...)` z aktywną komórką, właściwym
+budżetem pamięci oraz legendą `common-limit:core`. To zachowuje fail-closed
+kontrakt planera i provenance także w teście cross-backend.
+
+### 32.51.2. Managed GREEN i metryka
+
+Nowy test jest osobnym krokiem receptury `just verify-fem-stt-native-contract`,
+wykonywanym w tym samym zarządzanym kontenerze `fem-gpu` po budowie
+`fullmag_fem`. Dla każdego z pięciu węzłów FEM porównywane są trzy składowe
+końcowej magnetyzacji z wynikiem jednej komórki FDM; obowiązuje tolerancja
+`5e-8` względnie `1e-10` absolutnie. Po dołączeniu certyfikatu wynik bramy jest
+GREEN:
+
+```text
+native_fem_slonczewski_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available ... ok
+test result: 1 passed; 0 failed
+```
+
+### 32.51.3. Granica interpretacji
+
+Jest to pierwszy wykonywalny cross-backend common-limit dla bezpośredniego
+Slonczewskiego v2: native FEM GPU kontra FDM CPU reference. Nie dowodzi jeszcze
+zgodności FDM CUDA, zbieżności przestrzennej/czasowej, ciągłego limitu FEM przy
+zagęszczaniu siatki, integracji z demagiem, FP32, długiej trajektorii ani
+zgodności z MuMax3/BORIS. Nie zmienia capability: `validated_workloads`
+pozostaje puste, a kwalifikacja produkcyjna wymaga sweepu `J`, zbieżności
+`dt`/mesh i niezależnego bilansu momentu (tangential/projected/integrated)
+na większej rodzinie geometrii. Szeroka ocena celu pozostaje **86%
+implementacji / 60% gotowości produkcyjnej**.
