@@ -6020,3 +6020,38 @@ bilans N/F, wspólne jednostki `S→V_s→mu_s`, Fullmag FDM/FEM common-limit,
 `iSHA=SHA` reciprocal, profile materiałowe oraz N/F/T mixing/SML.
 Capability direct/inverse SHE pozostaje `semantic_only`, a szeroka ocena celu
 pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.49. Ponowna weryfikacja bramy demaga po aktualnym pullu (2026-08-04)
+
+Po wcześniejszym pullu oraz lokalnych, już zapisanych poprawkach sprawdzono
+stan repozytorium i wykonano bramę jeszcze raz z obowiązującej receptury
+kontenerowej. `master` jest lokalnie siedem commitów przed
+`origin/master` (`HEAD=20d7b4e3ef73c2ba48b77b57cb2e294f50cad2b2`,
+`origin/master=b3c839b9c0d6a7cab99b8ad5c7b88007f7456a01`); nie wykonywano push.
+Niepowiązane usunięcia debugów w `apps/legacy_web` oraz modyfikacja
+`external_solvers/3` pozostały nietknięte.
+
+Uruchomiono:
+
+```text
+just verify-fem-demag-poisson-contract-focused
+```
+
+Receptura ponownie skonfigurowała i zbudowała natywny `fullmag_fem` w
+kontenerze CUDA/MFEM/Hypre, a następnie uruchomiła wszystkie sześć kontraktów:
+`fem_demag_poisson_contract`, `fem_demag_delta_potential_contract`,
+`fem_demag_fem_bem_contract`, `fem_cuda_demag_timing_contract`,
+`fem_cuda_periodic_demag_contract` oraz `fem_cuda_periodic_exchange_contract`.
+Proces zakończył się `exit 0`. Pojedynczy komunikat
+`PCG: Number of iterations: 1 / No convergence!` jest emitowany przez fixture
+sprawdzający odrzucenie niezbiegniętego kandydata; nie oznacza nieudanego całego
+testu ani dowodu zbieżności produkcyjnego przebiegu.
+
+Wniosek jest ograniczony do aktualnego kontraktu wykonawczego: po synchronizacji
+z masterem nie ma regresji w ścieżce Poisson/FEM-BEM, delta-potential,
+timingu CUDA ani okresowym demagu/wymianie, a fail-closed dla nieudanego PCG
+działa. Nie awansuje to jeszcze demaga do pełnej kwalifikacji fizycznej.
+Nadal wymagają osobnych dowodów: medium/fine mesh convergence, airbox i RT0/KKT,
+MPI scaling, długi runtime, mapy przestrzenne oraz cross-backend parity z FDM,
+MuMax3 i zewnętrznymi solverami. Szeroka ocena celu pozostaje konserwatywnie
+**86% implementacji / 60% gotowości produkcyjnej**.
