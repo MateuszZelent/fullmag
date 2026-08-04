@@ -114,7 +114,7 @@ cargo test -p fullmag-runner \
 ```bash
 FULLMAG_USE_MFEM_STACK=ON \
 cargo test -p fullmag-runner \
-  native_fem_slonczewski_step_matches_cpu_reference_when_mfem_stack_is_available \
+  native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available \
   --features fem-gpu -- --nocapture
 ```
 

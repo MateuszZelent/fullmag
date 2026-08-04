@@ -163,5 +163,5 @@ cat <<'EOF'
 
 Suggested parity commands:
   cargo test -p fullmag-runner native_fem_zhang_li_step_matches_cpu_reference_when_mfem_stack_is_available --features fem-gpu -- --nocapture
-  cargo test -p fullmag-runner native_fem_slonczewski_step_matches_cpu_reference_when_mfem_stack_is_available --features fem-gpu -- --nocapture
+  cargo test -p fullmag-runner native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available --features fem-gpu -- --nocapture
 EOF
