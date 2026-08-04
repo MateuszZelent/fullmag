@@ -78,6 +78,13 @@ spin polarization axis, asymmetry factor, free-layer thickness fallback, and
 local damping-like/field-like RHS update. It does not assemble Zhang-Li
 gradients or add any effective-field contribution.
 
+The Rust reference realization shares the evaluator at
+`crates/fullmag-engine/src/fdm/cpu/fields.rs::slonczewski_torque_from_config`;
+`crates/fullmag-engine/src/fem.rs::FemLlgProblem::slonczewski_rhs_at` adds the
+same direct `1/s` source to the FEM LLG RHS and to `max_rhs`. This reference
+path is an oracle/CPU realization only and does not change the native MFEM
+GPU capability label.
+
 ## Zhang-Li CIP
 
 For `zhang_li.fullmag.v1` with `zl_central_reference_v1`, the FEM CPU path
@@ -166,6 +173,10 @@ this same map, SI units, and torque equation.
   time.
 - Canonical v2 FEM CPU execution is implemented but remains unvalidated pending
   the named macrospin/current-scaling and domain-wall convergence gates.
+- The Rust `FemLlgProblem` reference lane now applies the same local canonical
+  Slonczewski v2 RHS through the shared SI evaluator used by the FDM reference
+  lane. Zhang-Li remains a separate native FEM implementation and is not
+  implicitly enabled by this reference-lane change.
 - Canonical v2 FEM GPU plans fail closed before device execution and before GPU
   provenance is created. Existing GPU kernels retain legacy semantics only.
 - `slonczewski_interface_flux.v1` is semantic-only until a distinct oriented

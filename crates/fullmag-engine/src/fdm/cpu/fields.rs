@@ -80,6 +80,48 @@ fn gilbert_zhang_li_scales(beta: f64, alpha: f64) -> (f64, f64) {
     )
 }
 
+/// Evaluate the canonical local Slonczewski RHS contribution shared by the
+/// FDM and FEM reference realizations.  Target-mask and active-cell policy
+/// stay with the caller; this function owns only the SI algebra and Gilbert
+/// conversion.
+pub(crate) fn slonczewski_torque_from_config(
+    magnetization: Vector3,
+    cfg: &SlonczewskiSttConfig,
+    alpha: f64,
+    gyromagnetic_ratio: f64,
+    saturation_magnetisation: f64,
+) -> Vector3 {
+    let ms = saturation_magnetisation.max(1e-30);
+    let thickness = cfg.thickness.max(1e-30);
+    let prefactor = slonczewski_prefactor(
+        cfg.formula,
+        cfg.current_sign,
+        cfg.current_density_magnitude,
+        gyromagnetic_ratio,
+        ms,
+        thickness,
+    );
+    let [px, py, pz] = cfg.spin_polarization_axis;
+    let m_dot_p = dot(magnetization, [px, py, pz]);
+    let lambda_squared = cfg.lambda * cfg.lambda;
+    let degree = if cfg.degree > 0.0 { cfg.degree } else { 1.0 };
+    let epsilon = (degree * lambda_squared)
+        / ((lambda_squared + 1.0) + (lambda_squared - 1.0) * m_dot_p);
+    let (damping_like, field_like) = gilbert_slonczewski_scales(
+        cfg.formula,
+        prefactor,
+        epsilon,
+        cfg.epsilon_prime,
+        alpha,
+    );
+    let m_cross_p = cross(magnetization, [px, py, pz]);
+    let m_cross_m_cross_p = cross(magnetization, m_cross_p);
+    add(
+        scale(m_cross_m_cross_p, damping_like),
+        scale(m_cross_p, field_like),
+    )
+}
+
 fn anisotropy_energy_density_for_magnetization(
     magnetization: Vector3,
     uniaxial: Option<(Vector3, f64, f64)>,
@@ -2590,25 +2632,6 @@ impl ExchangeLlgProblem {
         magnetization: &[Vector3],
         cfg: &SlonczewskiSttConfig,
     ) -> Vec<Vector3> {
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let alpha = self.material.damping;
-        let d = cfg.thickness.max(1e-30);
-        let js = cfg.current_density_magnitude;
-        let prefactor = slonczewski_prefactor(
-            cfg.formula,
-            cfg.current_sign,
-            js,
-            self.dynamics.gyromagnetic_ratio,
-            ms,
-            d,
-        );
-
-        let lam = cfg.lambda;
-        let l2 = lam * lam;
-        let p_degree = if cfg.degree > 0.0 { cfg.degree } else { 1.0 };
-        let eps_prime = cfg.epsilon_prime;
-        let [px, py, pz] = cfg.spin_polarization_axis;
-
         let n = self.grid.cell_count();
 
         (0..n)
@@ -2621,31 +2644,13 @@ impl ExchangeLlgProblem {
                 {
                     return [0.0, 0.0, 0.0];
                 }
-                let [m0, m1, m2] = magnetization[flat];
-                let m_dot_p = m0 * px + m1 * py + m2 * pz;
-
-                let epsilon = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
-                let (damping_like, field_like) = gilbert_slonczewski_scales(
-                    cfg.formula,
-                    prefactor,
-                    epsilon,
-                    eps_prime,
-                    alpha,
-                );
-
-                let mcp_x = m1 * pz - m2 * py;
-                let mcp_y = m2 * px - m0 * pz;
-                let mcp_z = m0 * py - m1 * px;
-
-                let mmcp_x = m1 * mcp_z - m2 * mcp_y;
-                let mmcp_y = m2 * mcp_x - m0 * mcp_z;
-                let mmcp_z = m0 * mcp_y - m1 * mcp_x;
-
-                [
-                    damping_like * mmcp_x + field_like * mcp_x,
-                    damping_like * mmcp_y + field_like * mcp_y,
-                    damping_like * mmcp_z + field_like * mcp_z,
-                ]
+                slonczewski_torque_from_config(
+                    magnetization[flat],
+                    cfg,
+                    self.material.damping,
+                    self.dynamics.gyromagnetic_ratio,
+                    self.material.saturation_magnetisation,
+                )
             })
             .collect()
     }
@@ -2931,25 +2936,6 @@ impl ExchangeLlgProblem {
         cfg: &SlonczewskiSttConfig,
         out: &mut [Vector3],
     ) {
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let alpha = self.material.damping;
-        let d = cfg.thickness.max(1e-30);
-        let js = cfg.current_density_magnitude;
-        let prefactor = slonczewski_prefactor(
-            cfg.formula,
-            cfg.current_sign,
-            js,
-            self.dynamics.gyromagnetic_ratio,
-            ms,
-            d,
-        );
-
-        let lam = cfg.lambda;
-        let l2 = lam * lam;
-        let p_degree = if cfg.degree > 0.0 { cfg.degree } else { 1.0 };
-        let eps_prime = cfg.epsilon_prime;
-        let [px, py, pz] = cfg.spin_polarization_axis;
-
         let n = self.grid.cell_count();
 
         let compute = |flat: usize, o: &mut Vector3| {
@@ -2961,29 +2947,16 @@ impl ExchangeLlgProblem {
             {
                 return;
             }
-            let [m0, m1, m2] = magnetization[flat];
-            let m_dot_p = m0 * px + m1 * py + m2 * pz;
-
-            let epsilon = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
-            let (damping_like, field_like) = gilbert_slonczewski_scales(
-                cfg.formula,
-                prefactor,
-                epsilon,
-                eps_prime,
-                alpha,
+            let torque = slonczewski_torque_from_config(
+                magnetization[flat],
+                cfg,
+                self.material.damping,
+                self.dynamics.gyromagnetic_ratio,
+                self.material.saturation_magnetisation,
             );
-
-            let mcp_x = m1 * pz - m2 * py;
-            let mcp_y = m2 * px - m0 * pz;
-            let mcp_z = m0 * py - m1 * px;
-
-            let mmcp_x = m1 * mcp_z - m2 * mcp_y;
-            let mmcp_y = m2 * mcp_x - m0 * mcp_z;
-            let mmcp_z = m0 * mcp_y - m1 * mcp_x;
-
-            o[0] += damping_like * mmcp_x + field_like * mcp_x;
-            o[1] += damping_like * mmcp_y + field_like * mcp_y;
-            o[2] += damping_like * mmcp_z + field_like * mcp_z;
+            o[0] += torque[0];
+            o[1] += torque[1];
+            o[2] += torque[2];
         };
 
         #[cfg(feature = "parallel")]
@@ -3006,25 +2979,6 @@ impl ExchangeLlgProblem {
         cfg: &SlonczewskiSttConfig,
         out: &mut VectorFieldSoA,
     ) {
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let alpha = self.material.damping;
-        let d = cfg.thickness.max(1e-30);
-        let js = cfg.current_density_magnitude;
-        let prefactor = slonczewski_prefactor(
-            cfg.formula,
-            cfg.current_sign,
-            js,
-            self.dynamics.gyromagnetic_ratio,
-            ms,
-            d,
-        );
-
-        let lam = cfg.lambda;
-        let l2 = lam * lam;
-        let p_degree = if cfg.degree > 0.0 { cfg.degree } else { 1.0 };
-        let eps_prime = cfg.epsilon_prime;
-        let [px, py, pz] = cfg.spin_polarization_axis;
-
         for flat in 0..self.grid.cell_count() {
             if !self.is_active(flat)
                 || cfg
@@ -3034,31 +2988,20 @@ impl ExchangeLlgProblem {
             {
                 continue;
             }
-            let m0 = magnetization.x[flat];
-            let m1 = magnetization.y[flat];
-            let m2 = magnetization.z[flat];
-            let m_dot_p = m0 * px + m1 * py + m2 * pz;
-
-            let epsilon = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
-            let (damping_like, field_like) = gilbert_slonczewski_scales(
-                cfg.formula,
-                prefactor,
-                epsilon,
-                eps_prime,
-                alpha,
+            let torque = slonczewski_torque_from_config(
+                [
+                    magnetization.x[flat],
+                    magnetization.y[flat],
+                    magnetization.z[flat],
+                ],
+                cfg,
+                self.material.damping,
+                self.dynamics.gyromagnetic_ratio,
+                self.material.saturation_magnetisation,
             );
-
-            let mcp_x = m1 * pz - m2 * py;
-            let mcp_y = m2 * px - m0 * pz;
-            let mcp_z = m0 * py - m1 * px;
-
-            let mmcp_x = m1 * mcp_z - m2 * mcp_y;
-            let mmcp_y = m2 * mcp_x - m0 * mcp_z;
-            let mmcp_z = m0 * mcp_y - m1 * mcp_x;
-
-            out.x[flat] += damping_like * mmcp_x + field_like * mcp_x;
-            out.y[flat] += damping_like * mmcp_y + field_like * mcp_y;
-            out.z[flat] += damping_like * mmcp_z + field_like * mcp_z;
+            out.x[flat] += torque[0];
+            out.y[flat] += torque[1];
+            out.z[flat] += torque[2];
         }
     }
 

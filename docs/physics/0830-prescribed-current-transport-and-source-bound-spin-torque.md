@@ -210,7 +210,7 @@ Planner behavior after this change:
   - `AntennaFieldSource` remains the executable RF/current-module family for excitation workflows,
   - `CurrentTransport(prescribed_density)` is now executable on FEM CPU as provenance-bearing current transport,
   - `CurrentTransport(ohmic_poisson)` remains rejected as `semantic_only`,
-  - native FEM CPU/GPU STT execution is now covered by `0850`; the Rust FEM reference lane still rejects STT.
+  - native FEM CPU/GPU STT execution is now covered by `0850`; the Rust FEM reference lane applies canonical local Slonczewski v2, while Zhang-Li remains a separate native FEM capability and is not implied by this lane.
 
 Status vocabulary stays:
 

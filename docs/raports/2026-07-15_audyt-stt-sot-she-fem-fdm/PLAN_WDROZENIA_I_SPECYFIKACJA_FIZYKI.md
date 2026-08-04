@@ -6175,3 +6175,57 @@ pozostaje puste, a kwalifikacja produkcyjna wymaga sweepu `J`, zbieżności
 `dt`/mesh i niezależnego bilansu momentu (tangential/projected/integrated)
 na większej rodzinie geometrii. Szeroka ocena celu pozostaje **86%
 implementacji / 60% gotowości produkcyjnej**.
+
+## 32.52. FEM Rust reference lane: bezpośredni Slonczewski v2 w RHS (2026-08-04)
+
+### 32.52.1. Root cause i korekta wspólnej algebry
+
+Audyt ujawnił, że `FemLlgProblem` przechowywał
+`EffectiveFieldTerms.slonczewski_stt`, ale `llg_rhs_into`,
+`llg_rhs_from_vectors` oraz podsumowania `max_rhs` używały wyłącznie
+`H_eff`. Oznaczało to, że native FEM i FDM miały bezpośredni torque, lecz
+Rust FEM reference lane cicho go pomijał. To było niepoprawne fizycznie i
+uniemożliwiało traktowanie reference lane jako niezależnego orakla.
+
+Wprowadzono jedną współdzieloną funkcję
+`crates/fullmag-engine/src/fdm/cpu/fields.rs::slonczewski_torque_from_config`.
+Zachowuje ona dokładne `e`, signed `current_sign`, `1/(M_s t_F)`, efektywność
+`g(m)`, transformację Gilberta v2 oraz niezależny `epsilon_prime`. FDM AoS/SoA
+wywołuje tę samą funkcję co FEM; maska aktywnych komórek/węzłów nadal należy
+do realizacji dyskretnej. `FemLlgProblem::slonczewski_rhs_at` dodaje torque
+do RHS `dm/dt`, nie do `H_eff`, a `observe_vectors`,
+`evaluate_rhs_summary_from_vectors` i `llg_rhs_from_vectors` raportują także
+jego wkład w `max_rhs`.
+
+### 32.52.2. Test-first i managed GREEN
+
+Dodano test jednostkowy
+`crates/fullmag-engine/src/fem.rs::tests::reference_fem_applies_slonczewski_v2_direct_rhs`.
+Dla jednorodnego tetra i Heuna niezależnie oblicza oba etapy z tego samego
+SI evaluatora, porównuje każdy komponent magnetyzacji po kroku i wymaga
+niezerowego `max_rhs`. Osiem testów silnika związanych ze Slonczewskim (FDM
+AoS/SoA, legacy, v2, oba integratory oraz FEM reference) przechodzi w
+`CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-stt-reference`.
+
+Do istniejącego managed testu native FEM dodano również porównanie
+`cpu_reference_single_step` z niezależnym SI/Heun oracle. Pełna receptura:
+
+```text
+just verify-fem-stt-native-contract
+```
+
+zakończyła się `exit 0`: C++ numeric contract, ABI, planner, Rust FEM
+reference-vs-oracle, native FEM CPU↔GPU trajectory, current scaling oraz
+FEM↔FDM common-limit są GREEN. Ostrzeżenia Rust są wcześniejszymi warningami
+nieużywanych symboli.
+
+### 32.52.3. Granica kwalifikacji
+
+Korekta domyka brak w reference lane dla lokalnego Slonczewskiego v2 i
+utrzymuje rozdział torque–`H_eff`; nie jest dowodem produkcyjnej zgodności
+Zhang-Li, SOT, SHE, SML, demaga ani pełnej trajektorii na wielkich siatkach.
+Nie zmienia capability: native FEM GPU pozostaje
+`reference_executable`, `validated_workloads` pozostaje puste. Nadal wymagane
+są `J`/`dt`/mesh convergence, długie przebiegi, FP32, maski na niejednorodnych
+obszarach oraz wspólna kwalifikacja z FDM CUDA, MuMax3 i BORIS. Szeroka ocena
+celu pozostaje **86% implementacji / 60% gotowości produkcyjnej**.

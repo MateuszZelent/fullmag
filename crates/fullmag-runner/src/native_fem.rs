@@ -8612,6 +8612,21 @@ mod tests {
         plan.stt_epsilon_prime = Some(0.03);
 
         let (expected_m, expected_max_rhs) = canonical_slonczewski_heun_reference(&plan);
+        let (reference_m, _, _, reference_report) = cpu_reference_single_step(&plan);
+        assert_vector_field_close(
+            "independent oracle versus FEM Rust reference m",
+            &reference_m,
+            &expected_m,
+            1e-12,
+            1e-14,
+        );
+        assert_scalar_close(
+            "independent oracle versus FEM Rust reference max_rhs",
+            reference_report.max_rhs_amplitude,
+            expected_max_rhs,
+            1e-12,
+            1e-9,
+        );
         let expected_h_eff = vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()];
         let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
         let stats = backend
