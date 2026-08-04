@@ -6806,3 +6806,54 @@ kwalifikacji target/field/render path ani FDM universe/air/void semantics.
 Dlatego capability i `validated_workloads` pozostają bez awansu, a szeroka
 ocena celu pozostaje konserwatywnie **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.63. Managed FEM STT evidence po pytaniu o brak porównania SP5 (2026-08-04)
+
+### 32.63.1. Co zostało faktycznie porównane
+
+Dotychczasowy replay `external_solvers/3/test/standardproblem5.mx3` był
+wykonany wyłącznie dla FDM: jednorodny grid MuMax3 `32x32x4`, vortex,
+relaksacja, a następnie stałoprądowy Zhang--Li przez `1 ns`. Dla FEM nie
+istniał jeszcze odpowiednik tej geometrii i tej sekwencji etapów. Nie wolno
+więc opisywać wcześniejszego wyniku SP5 jako porównania FDM--FEM.
+
+### 32.63.2. Wykonana brama FEM
+
+Uruchomiono na bieżącym drzewie receptę zarządzaną:
+
+```text
+just verify-fem-stt-native-contract
+```
+
+Przebieg zbudował w obrazie `fem-gpu` natywny `fullmag_fem` z MFEM/CUDA,
+`fem_stt_contract` i `fem_cuda_slonczewski_contract`. Wszystkie filtrowane
+testy zakończyły się `exit 0`:
+
+```text
+FEM CUDA Slonczewski v2 numeric contract PASS
+versioned_stt_extension_is_append_only_after_legacy_plan_prefix ... ok
+auto_fem_canonical_slonczewski_v2_remains_gpu_eligible ... ok
+strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation ... ok
+native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available ... ok
+native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available ... ok
+native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available ... ok
+native_fem_slonczewski_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available ... ok
+```
+
+Dowód obejmuje: niezależny SI oracle jednego kroku, osiem kolejnych kroków
+Heuna CPU--CUDA w FP64, bounded current scaling `0x/0.5x/1x/2x` po projekcji
+stycznej oraz jeden wspólny limit FEM--FDM dla lokalnego Slonczewskiego v2.
+W przebiegu common-limit wyłączono wymianę i demag, a siatka była minimalna;
+nie jest to vortex ani pole demagnetyzujące Standard Problem 5.
+
+### 32.63.3. Granica dowodu i następny gate
+
+Wynik awansuje dowód wykonawczy FEM STT z poziomu samego kontraktu do
+bounded CPU--CUDA/common-limit evidence, ale nie awansuje `SP5` ani
+`validated_workloads`. Brakuje nadal dedykowanego FEM SP5: tej samej objętości
+`100 nm x 100 nm x 10 nm`, siatki przestrzennej z kontrolowanym
+refinementem, inicjalizacji vortex, relaksacji z demagiem FEM, Zhang--Li przez
+`1 ns`, zgodności obserwabli `avg(m)` i trajektorii z MuMax3 oraz raportu
+zbieżności `h`/`dt`. Dopiero taki przebieg może być porównaniem FEM do
+wcześniejszego FDM SP5; obecny status pozostaje **FDM SP5: diagnostyczny,
+FEM SP5: nieuruchomiony**.
