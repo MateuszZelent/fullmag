@@ -7,7 +7,7 @@
 **Dedykowany worktree:** `/tmp/fullmag-spin-transport`, `codex/spin-transport-m0-m3@ab2f686afe0aaa60d269966bd87388c0e59e14c6`  \
 **Merge-base:** `0612941f3b99137cbb171c183452368cc0f71029`; gałąź ma `109` własnych commitów i jest `271` commitów za aktualnym `master`  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-08-03  \
+**Ostatnia aktualizacja:** 2026-08-04  \
 **Raport źródłowy:** [README.md](./README.md)
 
 ---
@@ -6502,3 +6502,45 @@ gotowości produkcyjnej**. Bounded M2 zwiększa zakres wykonywalnego kodu i
 provenance, ale nie zmienia progu produkcyjnego: potrzebne są niezależne
 common-limit/convergence, runtime/device evidence, pełna ścieżka Python/UI i
 kwalifikacja fizyczna demagażu oraz SP5.
+
+## 32.56. Niebłahy oracle konstytutywny bounded M2 FEM CPU (2026-08-04)
+
+### 32.56.1. Luka w dotychczasowym teście
+
+Dotychczasowy test ABI M2 wykonywał jedynie stałe wartości Dirichleta na
+pojedynczym tetraedrze. Jego pola miały zerowe gradienty, więc nie wykrywał
+błędu znaku, czynnika `1/2` w `G_{ia}=-\partial_i\mu_{s,a}/2` ani złej kolejności
+komponentów w projekcji tensorowej.
+
+### 32.56.2. Fixture i oracle
+
+Dodano `cpu_double_reciprocal_m2_affine_constitutive_oracle` w
+`backends/fem/tests/steady_transport_abi_contract.cpp`. Fixture to sześć
+pozytywnie zorientowanych tetraedrów dzielących sześcian jednostkowy; twarze
+`x=0`/`x=1` mają osobne atrybuty Dirichleta, pozostałe są naturalne. Dla
+`m=e_x`, `theta_SH=sigma_AHE=0`, wyłączonych reakcji spinowych i
+`V=x`, `mu_s=(0.2,0.3,0.4)x` rozwiązanie afiniczne jest dokładne. Test sprawdza
+wszystkie węzły, prąd ładunkowy, tensor `Q_{ia}` w układzie node-major,
+zbieżność obu bloków oraz wartości konstytutywne do `1e-8`.
+
+### 32.56.3. Managed GREEN
+
+Nowa recepta:
+
+```text
+just verify-fem-steady-transport-m2-affine-contract
+```
+
+wykonuje konfigurację i budowę `fem_steady_transport_abi_contract` w
+zarządzanym obrazie `fem-gpu`; wynik bieżącego uruchomienia:
+
+```text
+[100%] Built target fem_steady_transport_abi_contract
+fem steady transport ABI contract: PASS
+```
+
+Jest to niezależny dowód wykonania niezerowego gradientu i algebry
+konstytutywnej bounded M2 FEM CPU. Nie zamyka jeszcze mesh convergence,
+Onsager/dissipation sweep, FDM↔FEM reciprocal common-limit, GPU, interfejsów,
+BORIS parity ani `validated_workloads`; szeroka ocena pozostaje **86%
+implementacji / 60% gotowości produkcyjnej**.

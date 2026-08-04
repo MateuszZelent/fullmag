@@ -832,6 +832,7 @@ already-solved records and must not query the time-domain FEM preview ABI.
 | `mixing_flux_balance_v2` | reservoir interface algebra, entropy and torque sign |
 | `theta_sh_zero_v1` | no SHE source |
 | `lambda_limits_v1` | disabled-reaction limits |
+| M2 affine constitutive oracle | exact affine `V=x`, `mu_s=(u_x,u_y,u_z)x` cube solution and projected `J_c`, `Q_ia` values |
 | M2 Onsager oracle | reciprocal signs and nonnegative dissipation |
 | M3 decay | exponential and diffusion-eigenmode decay |
 
@@ -851,6 +852,31 @@ plan. The corresponding BORIS matrix is intentionally diagnostic only: after
 the explicit `Q_ia=Js_ia/MUB_E` normalization, potential profiles improve with
 refinement but `mu_s`, interface fluxes, and torque do not meet the comparison
 contract. This does not promote either solver to cross-backend validation.
+
+The bounded FEM CPU M2 lane also has a nontrivial managed constitutive oracle,
+`just verify-fem-steady-transport-m2-affine-contract`. It uses a
+six-tetrahedron unit cube with Dirichlet faces at `x=0` and `x=1`, uniform
+`m=e_x`, `sigma=3 S/m`, `sigma_parallel=6 S/m`, `sigma_perpendicular=4 S/m`,
+`sigma_s=5 S/m`, `P=0.25`, zero SHE/AHE, and disabled spin-reaction lengths.
+The exact solution is
+
+```text
+V=x,  mu_s,a=u_a x,  u=(0.2,0.3,0.4),  E_x=-1 V/m,  G_xa=-u_a/2 V/m.
+```
+
+Consequently the expected nonzero constitutive entries are
+
+```text
+J_c,x = -6 - 0.5*0.25*3*u_x A/m^2,
+Q_xa = -0.5*5*u_a - 0.25*3*delta_{a,x} A/m^2,
+```
+
+with all transverse flow components zero. The managed native ABI contract
+checks the nodal fields, the node-major vector/tensor projection, convergence,
+and these values to `1e-8` absolute error. This closes a sign/factor and
+nonzero-gradient execution oracle for the bounded FEM M2 constitutive block;
+it does not close mesh convergence, an Onsager/dissipation sweep, FDM/FEM
+reciprocal common-limit, or production qualification.
 
 An executable managed BORIS N/F smoke now completes at `coarse`, `medium`, and
 `fine` resolutions in the pinned CUDA image
@@ -1000,6 +1026,10 @@ heterogeneous materials, N/F/T interfaces, mesh convergence, FEM/FDM common
 limit for reciprocal transport, GPU residency, BORIS parity, transient
 coupling, and production qualification remain open.
 
+The native ABI contract additionally executes the affine cube oracle described
+in section 5.2. It is deliberately a separate `just` target so a zero-gradient
+ABI smoke cannot mask a constitutive sign or `G=-\nabla\mu_s/2` factor error.
+
 (source-code-index)=
 ## 8. Source-code index
 
@@ -1020,6 +1050,7 @@ a qualified workload without the validation gates above.
 | Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |
 | Runtime regression | crates/fullmag-runner/src/native_fem/steady_transport.rs | native_m2_solver_publishes_reciprocal_diagnostics | reciprocal provenance identity | focused managed test |
 | ABI layout regression | crates/fullmag-fem-sys/src/lib.rs | steady_transport_m2_request_keeps_v1_as_a_nested_prefix | append-only nested M1-prefix guarantee | focused managed test |
+| M2 affine constitutive oracle | backends/fem/tests/steady_transport_abi_contract.cpp | cpu_double_reciprocal_m2_affine_constitutive_oracle | nonzero-gradient signs, half-gradient convention, and node-major projection | `just verify-fem-steady-transport-m2-affine-contract` |
 
 (scientific-bibliography)=
 ## 9. References

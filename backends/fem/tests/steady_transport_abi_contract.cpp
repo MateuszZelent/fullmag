@@ -325,6 +325,199 @@ void cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed()
         "M2 accepted a request carrying the M1 constitutive version");
 }
 
+void cpu_double_reciprocal_m2_affine_constitutive_oracle()
+{
+    // Six positively oriented tetrahedra partition the unit cube.  Attributes
+    // 1 and 2 are the x=0/x=1 faces; all other faces are natural boundaries.
+    // With m=e_x, theta_SH=sigma_AHE=0 and all spin-reaction lengths disabled,
+    // V=x and mu_s=(u_x,u_y,u_z)x are an exact solution of the coupled block.
+    const double nodes[] = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 1.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        1.0, 0.0, 1.0,
+        1.0, 1.0, 1.0,
+        0.0, 1.0, 1.0,
+    };
+    const uint32_t cell_types[] = {
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4,
+    };
+    const uint32_t cell_offsets[] = {0, 4, 8, 12, 16, 20, 24};
+    const uint32_t cell_nodes[] = {
+        0, 1, 2, 6,
+        0, 2, 3, 6,
+        0, 4, 5, 6,
+        0, 5, 1, 6,
+        0, 3, 7, 6,
+        0, 7, 4, 6,
+    };
+    const uint32_t facet_types[] = {
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    };
+    const uint32_t facet_roles[] = {
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    };
+    const uint32_t facet_offsets[] = {
+        0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36,
+    };
+    const uint32_t facet_nodes[] = {
+        // x=0 (attribute 1)
+        0, 7, 3, 0, 4, 7,
+        // x=1 (attribute 2)
+        1, 2, 6, 5, 1, 6,
+        // y=0 (attribute 3)
+        0, 1, 5, 0, 5, 4,
+        // y=1 (attribute 4)
+        2, 3, 6, 3, 7, 6,
+        // z=0 (attribute 5)
+        0, 2, 1, 0, 3, 2,
+        // z=1 (attribute 6)
+        4, 5, 6, 7, 4, 6,
+    };
+    const uint32_t facet_markers[] = {
+        1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+    };
+    const double conductivity[] = {
+        3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+    };
+    const double magnetization[] = {
+        1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+    };
+    const uint32_t dirichlet_attributes[] = {1, 2};
+    const double charge_values[] = {0.0, 1.0};
+    const double spin_values[] = {
+        0.0, 0.0, 0.0,
+        0.2, 0.3, 0.4,
+    };
+
+    double potential[8]{};
+    double current[24]{};
+    double spin[24]{};
+    double spin_current[72]{};
+    double torque[24]{};
+
+    auto request = fullmag_fem_steady_transport_m2_request_v1{};
+    request.base = base_request();
+    request.base.constitutive_version = "transport_constitutive.reciprocal.fullmag.v1";
+    request.base.operator_version = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
+    request.base.mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    request.base.mesh.struct_size = sizeof(request.base.mesh);
+    request.base.mesh.nodes_xyz = nodes;
+    request.base.mesh.nodes_xyz_len = 24;
+    request.base.mesh.cell_types = cell_types;
+    request.base.mesh.cell_types_len = 6;
+    request.base.mesh.cell_offsets = cell_offsets;
+    request.base.mesh.cell_offsets_len = 7;
+    request.base.mesh.cell_nodes = cell_nodes;
+    request.base.mesh.cell_nodes_len = 24;
+    request.base.mesh.facet_types = facet_types;
+    request.base.mesh.facet_types_len = 12;
+    request.base.mesh.facet_roles = facet_roles;
+    request.base.mesh.facet_roles_len = 12;
+    request.base.mesh.facet_offsets = facet_offsets;
+    request.base.mesh.facet_offsets_len = 13;
+    request.base.mesh.facet_nodes = facet_nodes;
+    request.base.mesh.facet_nodes_len = 36;
+    request.base.mesh.facet_markers = facet_markers;
+    request.base.mesh.facet_markers_len = 12;
+    request.base.charge_conductivity_spm_per_element = conductivity;
+    request.base.charge_conductivity_spm_per_element_len = 6;
+    request.base.magnetization_xyz = magnetization;
+    request.base.magnetization_xyz_len = 24;
+    request.base.sigma_s_spm = 5.0;
+    request.base.polarization_p = 0.25;
+    request.base.theta_sh = 0.0;
+    request.base.lambda_sf_m = std::numeric_limits<double>::infinity();
+    request.base.has_lambda_j = 0;
+    request.base.has_lambda_phi = 0;
+    request.base.gamma_e_per_ts = 1.76085963023e11;
+    request.base.saturation_magnetization_apm = 8.0e5;
+    request.base.relative_tolerance = 1.0e-11;
+    request.base.absolute_tolerance = 0.0;
+    request.base.maximum_iterations = 500;
+    request.base.charge_dirichlet_boundary_attributes = dirichlet_attributes;
+    request.base.charge_dirichlet_values_v = charge_values;
+    request.base.charge_dirichlet_count = 2;
+    request.base.spin_dirichlet_boundary_attributes = dirichlet_attributes;
+    request.base.spin_dirichlet_values_v = spin_values;
+    request.base.spin_dirichlet_count = 2;
+    request.sigma_parallel_spm = 6.0;
+    request.sigma_perpendicular_spm = 4.0;
+    request.sigma_ahe_spm = 0.0;
+
+    auto result = base_result();
+    result.electric_potential_v = potential;
+    result.electric_potential_v_len = 8;
+    result.charge_current_density_xyz_apm2 = current;
+    result.charge_current_density_xyz_apm2_len = 24;
+    result.spin_potential_xyz_v = spin;
+    result.spin_potential_xyz_v_len = 24;
+    result.spin_current_tensor_row_major_qia_apm2 = spin_current;
+    result.spin_current_tensor_row_major_qia_apm2_len = 72;
+    result.torque_xyz_per_s = torque;
+    result.torque_xyz_len = 24;
+
+    const int status = fullmag_fem_solve_steady_transport_m2_v1(&request, &result);
+    if (status != FULLMAG_FEM_OK) {
+        std::cerr << "steady transport affine M2 solve error: " << result.error_message << '\n';
+    }
+    require(status == FULLMAG_FEM_OK, "affine reciprocal M2 transport solve failed");
+    require(result.charge_converged != 0 && result.spin_converged != 0,
+        "affine reciprocal M2 solve did not converge");
+
+    constexpr double u[3] = {0.2, 0.3, 0.4};
+    constexpr double sigma = 3.0;
+    constexpr double sigma_parallel = 6.0;
+    constexpr double sigma_spin = 5.0;
+    constexpr double polarization = 0.25;
+    constexpr double expected_charge_x[] = {
+        -sigma_parallel - 0.5 * polarization * sigma * u[0],
+        0.0,
+        0.0,
+    };
+    constexpr double expected_spin_x[] = {
+        -0.5 * sigma_spin * u[0] - polarization * sigma,
+        -0.5 * sigma_spin * u[1],
+        -0.5 * sigma_spin * u[2],
+    };
+    for (int node = 0; node < 8; ++node) {
+        const double x = nodes[3 * node];
+        require(std::abs(potential[node] - x) < 1.0e-8,
+            "affine reciprocal M2 charge potential is not exact");
+        for (int component = 0; component < 3; ++component) {
+            require(std::abs(spin[3 * node + component] - u[component] * x) < 1.0e-8,
+                "affine reciprocal M2 spin potential is not exact");
+            require(std::abs(current[3 * node + component] - expected_charge_x[component]) < 1.0e-8,
+                "affine reciprocal M2 charge current has the wrong constitutive value");
+            for (int spin_component = 0; spin_component < 3; ++spin_component) {
+                const double expected = component == 0
+                    ? expected_spin_x[spin_component]
+                    : 0.0;
+                const int index = (node * 9) + (component * 3) + spin_component;
+                require(std::abs(spin_current[index] - expected) < 1.0e-8,
+                    "affine reciprocal M2 spin current has the wrong constitutive value");
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -335,6 +528,8 @@ int main()
         mixing_fails_closed_before_mesh_import();
         cpu_double_transparent_request_materializes_all_transport_fields();
         cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed();
+        const auto affine_oracle = &cpu_double_reciprocal_m2_affine_constitutive_oracle;
+        affine_oracle();
         std::cout << "fem steady transport ABI contract: PASS\n";
         return 0;
     } catch (const std::exception &error) {
