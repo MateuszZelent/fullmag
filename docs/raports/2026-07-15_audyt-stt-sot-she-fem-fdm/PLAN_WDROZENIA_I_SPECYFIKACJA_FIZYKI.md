@@ -7326,3 +7326,80 @@ dla obu backendów (FEM CPU i FDM), lecz ma status diagnostyczny, nie
 
 Szeroka ocena celu pozostaje bez zmian: **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.71. FEM OE-T0: usunięcie limitu gęstego KKT i kwalifikacja sparse CPU (2026-08-04)
+
+### 32.71.1. Problem znaleziony w FEM
+
+OE-T0 miał poprawną fizycznie formulację ważonej projekcji `RT0/H(div)` z
+wierszami zachowania ciągłości, parowania source-cut/lead i deterministycznym
+certyfikatem rangi, ale realizacja serialna budowała gęstą macierz masy oraz
+gęsty KKT. Twarde limity `global_dof_count<=4096` i
+`system_size<=8192` nie były tylko limitami wydajności: dla większej siatki
+solver odrzucał przypadek po kosztownej alokacji macierzy. To blokowało
+rzeczywiste użycie FEM Oersteda na meshach większych od testowego sześcianu.
+
+### 32.71.2. Test-first i implementacja
+
+Najpierw dodano regresję źródłową
+`fem_oet0_large_mesh_has_sparse_kkt_lane`, która wymaga MFEM
+`SparseMatrix`, `MINRESSolver`, selekcji `sparse_kkt` i zakazuje dawnego
+odrzucenia po limicie DOF. Test RED wykazał brak obu elementów. Następnie
+`solve_weighted_rt0_projection` otrzymał dwie jawne realizacje tego samego
+KKT:
+
+- mała siatka zachowuje deterministyczny dense FP64 reference;
+- duża siatka składa sparse `M_f` i `C_f`, tworzy blokowy saddle-point
+  operator MFEM, używa preconditioned MINRES, a następnie niezależnie liczy
+  residual KKT i korekcję energii w tej samej metryce co reference.
+
+Nie dodano projekcji bez więzów, ukrytego fallbacku CPU/GPU ani zmiany znaku,
+jednostek, closure, rank certificate lub digestu. Szczegółowa nota fizyczno-
+numeryczna i mapa źródeł są w:
+`docs/physics/0981-fem-oet0-sparse-kkt.md` oraz
+`docs/physics/0981-fem-oet0-sparse-kkt.source-map.json`.
+
+### 32.71.3. Dowód managed CPU
+
+Standardowa brama szybka nadal przechodzi:
+
+```text
+just verify-fem-oersted-oet0-cpu-contract
+```
+
+W obrazie `fullmag/fem-cpu:local`, z `FULLMAG_ENABLE_CUDA=OFF`, MFEM/Hypre/MPI,
+przeszły `fem_conservative_current_view_contract`, MPI `n1`, MPI `n2` oraz
+byte identity (`4/4`, `100%`, `1.24 s` w ostatnim rerun). Osobny managed
+runtime z `FULLMAG_OET0_LARGE_MESH=1` uruchomił
+`7x7x7` Cartesian tetra fixture (`>4096` RT0 DOF) i zakończył się:
+
+```text
+fem conservative current view contract: PASS
+```
+
+To jest pierwszy wykonywalny FEM CPU dowód sparse KKT poza dawną granicą
+gęstej macierzy. Kontrakt źródłowy po korekcie również zakończył się `exit 0`.
+
+Osobna brama `just verify-fem-oersted-oet0-tsan-cpu-contract` poprawnie
+skonfigurowała i zbudowała instrumentowany kod OE-T0: reguły compile/link,
+wyłączenie MPI oraz rejestracja wyłącznie testu serialnego przeszły. Sam
+proces TSan w obrazie CPU zakończył się jednak środowiskowym błędem:
+`ThreadSanitizer: unexpected memory mapping` (CTest `1/1` failed, exit `8`).
+Nie jest to dowód race ani błędu fizyki; dopóki nie zostanie usunięta
+niezgodność runtime TSan z kontenerem/ASLR, brama pozostaje otwarta i nie
+można na jej podstawie twierdzić o race-free kwalifikacji.
+
+### 32.71.4. Granica fizyczna i produkcyjna
+
+Usunięto blocker skalowalności referencji OE-T0, lecz nie awansowano capability.
+Nadal otwarte są: trzy poziomy mesh i kontrola uwarunkowania/iteracji, pamięć
+vs `n_f+n_s`, deterministyczna realizacja rozproszona MPI, FEM GPU device-resident,
+airbox/direct-field convergence OE-F1/OE-F2, porównanie z niezależnym
+Biot--Savart oraz pełna ścieżka Python--ProblemIR--planner--UI dla zamkniętego
+prądu. `FEM CPU` ma obecnie status `reference-executable-bounded`, nie
+`validated_workload`; `FEM GPU` pozostaje unsupported/semantic-only dla OE-T0.
+
+Po tej korekcie ocena postępu celu (heurystyczna, bez promocji capability) wynosi
+**88% implementacji / 62% gotowości produkcyjnej**. Wzrost dotyczy wyłącznie
+wykonywalnej sparse realizacji OE-T0; nie oznacza zgodności FEM–FDM ani
+produkcyjnego dynamicznego Oersteda.
