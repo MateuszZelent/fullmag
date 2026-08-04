@@ -10,6 +10,15 @@
 **Ostatnia aktualizacja:** 2026-08-04  \
 **Raport źródłowy:** [README.md](./README.md)
 
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@835e7500a`. Brama
+parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
+`not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
+receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
+snapshot źródeł `34f5bac7222d34b1504064ef88c7915894ca2c93ac07bd3955f869ac9dd58c03`
+i capability CUDA 8.9. Jest to identyfikowalny baseline wykonawczy dla
+poniższych testów FEM, nie deklaracja zgodności bieżącego `master` z fizyką
+produkcyjną.
+
 ---
 
 ## 0. Audyt aktualizacyjny 2026-07-28
@@ -7484,3 +7493,125 @@ pod `/zfn2/mateuszz/git/fullmag`, a dopiero potem decyzja o ewentualnym
 awansie capability. Ocena celu pozostaje **88% implementacji / 62%
 gotowości produkcyjnej**; obecna zmiana zwiększa pewność ścieżki authoringu,
 nie odsetek kwalifikacji fizyki.
+
+## 32.73. FEM SP5: wykonanie CPU/GPU i porównanie po pytaniu o zakres FEM (2026-08-05)
+
+### 32.73.1. Managed runtime i inicjalizacja ścieżki GPU
+
+Weryfikację FEM wykonano na dedykowanym, czystym worktree:
+`/mnt/fullmag-zfn2-native/worktrees/sp5-fem-master`, z trwałym magazynem
+buildów pod `/zfn2/mateuszz/git/fullmag`. Runtime powstał przez
+`just ensure-managed-fem-runtime` (z ponownym użyciem gotowego builda i
+`FULLMAG_RUNTIME_PRUNE=0`, ponieważ sprzątanie runtime'ów zawisło na
+niezwiązanym procesie z cwd na `/mnt/storage_5`). Walidacja bundla zakończyła
+się poprawnie; runtime raportował urządzenie NVIDIA GeForce RTX 4080 SUPER,
+compute capability `8.9`, `mfem_device=cuda`, CG+AMG oraz
+`device_hypre_poisson`. To jest dowód uruchomienia i rezydencji CUDA, nie
+jeszcze dowód poprawności STT.
+
+Próba SP5 GPU użyła kanonicznego przykładu FEM, dwustopniowego relaksu PGBB
+i urządzeniowego demagu. Inicjalizacja CUDA, alokacja buforów urządzenia oraz
+demag przeszły; wykonano dwa kroki relaksacji na siatce `759` węzłów / `4116`
+tetów. Przy wejściu w etap całkowania czasowego planner zatrzymał przebieg
+fail-closed z dokładnym powodem:
+
+```text
+native FEM GPU explicit RK plan is ineligible:
+canonical FEM STT formula_version=zhang_li.fullmag.v1 is CPU-only until an
+identical qualified device realization exists
+(fallback_reason=fem_gpu_rk_plan_ineligible)
+```
+
+Nie nastąpił fallback do CPU. Zatem dla SP5 z kanonicznym Zhang--Li wynik
+FEM GPU ma status `unsupported / semantic_only`: ścieżka CUDA działa, lecz
+brakuje kwalifikowanej, identycznej realizacji operatora STT na GPU. Nie wolno
+tego raportować jako awarii fizyki ani jako zgodności FEM GPU.
+
+### 32.73.2. FEM CPU, wspólny czas końcowy i metryki względem FDM
+
+Autorytatywnym, zakończonym przebiegiem CPU pozostaje artefakt:
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-full-20260804-cpu-h12-bb-r12`.
+Użyto P1/tet4 (`1961` tetów, `382` węzły), Poisson--Robin demagu CPU,
+relaksacji PGBB oraz `1028` zaakceptowanych kroków RK45 do `t=1 ns`.
+Reszta demagu wyniosła `9.975e-13`; artefakt sam oznacza kwalifikację jako
+`not_evaluated` i timestep jako `unvalidated`.
+
+Porównanie skalarne z FDM MuMax3 (`.../mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`)
+wykonano na identycznym czasie końcowym. Dla objętościowo redukowanych
+`avg(m)` otrzymano:
+
+```text
+FEM: ( 0.06571195970862106, -0.07068185866088325, -0.001918570717269359 )
+FDM: (-0.23465571179208220, -0.09450957174904828,  0.022942960864404760)
+||delta avg(m)||2 = 0.30233523404716306
+delta E_demag = -5.977587343692384e-19 J
+delta E_ex    = -2.757574450566889e-19 J
+delta E_total = -8.735161794259282e-19 J
+```
+
+Raport maszynowy znajduje się w
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-current-scalar-comparison-20260804.json`.
+To porównanie jest `diagnostic`; nie ustanawia równoważności, ponieważ
+relaksacje, demag i wersje referencyjne Zhang--Li nie są jeszcze wspólne.
+
+Weryfikacja pełnego pola po objętościowo zachowawczym ograniczeniu tet4 do
+`32x32x4` voxeli pokryła `4096/4096` komórek. Raport
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-current-field-comparison-20260804.json`
+podaje:
+
+```text
+vector RMS = 0.49731737652723923
+p99         = 1.6738097210831444
+max         = 1.8966968128889123
+cosine      = 0.874437658356207
+```
+
+Pokrycie jest pełne, więc różnica nie wynika z brakujących próbek. Jest jednak
+różnicą diagnostyczną dwóch odmiennych dyskretyzacji i stanów, a nie testem
+solver-equivalence. FDM pozostaje również `diagnostic-unqualified`: jego
+wartości są bliskie oczekiwaniom z `external_solvers/3/test/standardproblem5.mx3`,
+lecz nie mieszczą się jeszcze w pełnej tolerancji zewnętrznego problemu
+standardowego.
+
+### 32.73.3. Reprodukowalność świeżej siatki CPU — nowy blocker
+
+Dwa świeże przebiegi CPU na tej samej deklarowanej geometrii nie odtworzyły
+wcześniejszej siatki referencyjnej:
+
+- przy `FULLMAG_GMSH_THREADS=8` wygenerowano `4209` tetów / `769` węzłów;
+  lokalny rozmiar charakterystyczny spadł do około `449.878 pm`, a torque
+  pozostawał około `0.32 T` przy kroku `97`; przebieg przerwano bez artefaktu
+  końcowego;
+- przy `FULLMAG_GMSH_THREADS=1` wygenerowano `4177` tetów / `764` węzłów,
+  z tym samym lokalnym minimum około `449.878 pm`; torque wynosił około
+  `0.22 T` przy kroku `38`; przebieg również przerwano bez artefaktu.
+
+Nie jest to dowód, że model CPU jest niestabilny fizycznie; jest to dowód, że
+aktualny proces generowania siatki nie daje jeszcze deterministycznego,
+kontrolowanego wejścia do testu zbieżności. Przed kolejnym porównaniem trzeba
+zachować serializowany artefakt siatki albo wprowadzić deterministyczne
+ustawienia/seed i bramę jakości elementów (w szczególności odrzucenie
+niezamierzonego minimum `449.878 pm`). Samo zwiększenie liczby kroków relaksacji
+nie zamyka tej bramy.
+
+### 32.73.4. Aktualny status FEM i wymagane bramy
+
+FEM został więc porównany na trzech poziomach: kontraktów operatorów CPU/CUDA,
+zakończonego przebiegu SP5 CPU oraz inicjalizacji i fail-closed planowania SP5
+GPU. Uczciwy status po tym przebiegu jest następujący:
+
+| Zakres | Status | Znaczenie |
+|---|---|---|
+| FEM CPU STT/transport/Oersted contracts | `pass` bounded contract | testy operatorów, bez promocji fizyki |
+| FEM CPU SP5 | `reference-executable / bounded diagnostic` | zakończony przebieg do `1 ns`, ale `not_evaluated` |
+| FEM GPU SP5 z `zhang_li.fullmag.v1` | `unsupported / semantic_only` | CUDA i demag działają; RK/STT odrzucony bez fallbacku |
+| FEM↔FDM SP5 | `equivalence_established=false` | scalar i full-field są diagnostyczne |
+| capability `validated_workloads` | bez zmian | brak podstaw do awansu |
+
+Do zamknięcia FEM pozostają: deterministyczny artefakt siatki, wspólny stan
+równowagi, minimum trzy poziomy `h`, sweep `dt`, niezależny audyt znaku i
+operatora Zhang--Li, identyczne próbkowanie pól, pełny przebieg GPU po
+implementacji kwalifikowanej realizacji STT oraz dedykowana recepta/validator
+SP5. Ocena ogólna pozostaje **88% implementacji / 62% gotowości produkcyjnej**;
+nowe dane zwiększają zakres dowodu FEM, ale nie zwiększają kwalifikacji
+produkcyjnej.
