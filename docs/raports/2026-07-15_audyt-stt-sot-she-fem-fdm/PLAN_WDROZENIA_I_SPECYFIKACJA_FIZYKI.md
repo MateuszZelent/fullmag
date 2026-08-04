@@ -6714,3 +6714,41 @@ FDM/FEM GPU parity, BORIS parity, dynamicznego Oersteda/skin/MQS, pełnej
 ścieżki Python/UI ani `validated_workloads`. Capability matrix pozostaje bez
 awansu, a szeroka ocena celu pozostaje **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.61. Ponowna managed brama dynamicznego Oersteda FDM CUDA (2026-08-04)
+
+### 32.61.1. Zakres i wykonanie
+
+Ponownie uruchomiono receptę `just verify-fdm-oersted-native-contract` na
+bieżącym `master` (`650c76c01`). Receptura używa zarządzanego obrazu
+`fem-gpu`, kompiluje natywny backend FDM z CUDA i uruchamia wyłącznie kontrakt
+`oersted_cuda_runtime`; nie jest to hostowy build ani dowód pełnej symulacji
+magnetycznej.
+
+### 32.61.2. Wynik
+
+Przebudowa i uruchomienie zakończyły się `exit 0`:
+
+```text
+PASS: CUDA Oersted stage-time, rollback, adaptive, FSAL, ABM3, and axis oracle contract
+```
+
+Ten przebieg ponownie potwierdza poprawne przekazywanie czasu etapowego,
+transakcyjny rollback, adaptację kroku, FSAL, ABM3 i niezależny oracle osi dla
+natychmiastowego pola Oersteda. Nie awansuje jednak capability: dynamiczny
+current-solve, wspólny `J_c` z transportem SHE, FEM OE-T0/KKT, skin/MQS,
+airbox, GPU residency end-to-end oraz produkcyjny racetrack pozostają poza
+zakresem tej receptury. Zapisany wcześniej stan `semantic_only`/`reference`
+pozostaje bez zmian, a szeroka ocena celu nadal wynosi **86% implementacji /
+60% gotowości produkcyjnej**.
+
+### 32.61.3. Ograniczenie magazynu buildów
+
+Próba przeniesienia receptur kontenerowych bezpośrednio na
+`/mnt/fullmag-zfn2-native` została wycofana: bieżący Docker daemon nie
+propaguje lokalnego obrazu ext4 pod `/zfn2` i widzi w tym miejscu pełny
+`/dev/sdg` checkoutu. Nie wolno traktować takiego bind-mountu jako trwałego
+magazynu. Zasada pozostaje: przed ciężkim buildem trzeba potwierdzić w samym
+kontenerze urządzenie i wolne miejsce widoku `/mnt/fullmag-zfn2-native`; do
+czasu poprawnej konfiguracji demona nie zmienia się istniejących receptur w
+sposób, który mógłby ukryć zapis na pełnym dysku roboczym.
