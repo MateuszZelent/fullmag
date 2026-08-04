@@ -6400,3 +6400,96 @@ Szeroka ocena pozostaje konserwatywnie **86% implementacji / 60% gotowości
 produkcyjnej**: wzrósł zakres wykonywalnego dowodu direct-SHE, lecz nie
 zmieniły się warunki awansu do `validated_workloads` ani do produkcyjnej
 kwalifikacji cross-backend.
+
+## 32.55. Bounded reciprocal M2 FEM CPU — implementacja i brama runtime (2026-08-04)
+
+### 32.55.1. Zakres fizyczny i granica realizacji
+
+Dodano bounded reciprocal M2 dla natywnego FEM CPU. Jest to jedna, monolityczna
+formulacja H1/P1 dla niewiadomych `(V, μ_sx, μ_sy, μ_sz)`, z konstytutywnym
+blokiem:
+
+```text
+J_c = J_mr(E,m) + P σ m_a G_ia + θ_SH σ ε_ija G_ja,
+Q_ia = σ_s G_ia + P σ E_i m_a + θ_SH σ ε_ika E_k,
+E_i = -∂_i V,   G_ia = -1/2 ∂_i μ_s,a.
+```
+
+Symetryczny AMR/PHE (`σ_parallel`, `σ_perpendicular`) i antysymetryczny AHE
+(`σ_AHE`) są przekazywane jako jawne parametry materiału. Planner wymaga
+  dodatniego Schur complementu
+`min(σ_parallel,σ_perpendicular)σ_s-P²σ²`, a nie tylko dodatnich diagonalnych
+przewodności. W tym wydaniu świadomie ograniczono solver do: FP64, CPU,
+`execution_mode=strict`, pełnego wspólnego domenowego H1/P1, jednego
+jednorodnego tensora ładunkowego, jednego materiału spinowego, referencji
+Dirichleta dla potencjału ładunku, bez interfejsów wewnętrznych, bez
+mixing/SML, bez polityki `reciprocal_nonlinear` i bez sprzężenia etapu z LLG
+lub Oerstedem. Żaden niedozwolony przypadek nie przechodzi ukrytą ścieżką M1
+ani FDM.
+
+### 32.55.2. Implementacja cross-layer
+
+- `backends/fem/cpu/mfem/transport/steady_transport.*` ma osobny model
+  konstytutywny `Reciprocal`, blokowy GMRES i diagnostykę reszt/bilansów;
+- `fullmag_fem_solve_steady_transport_m2_v1` korzysta z osobnego symbolu C ABI;
+  request M2 zawiera zagnieżdżony, samookreślający się prefiks requestu M1 i
+  trzy nowe przewodności;
+- `fullmag-ir` zachowuje opcjonalny `ResolvedReciprocalMaterialIR`, a
+  walidacja odróżnia legalny operator FEM M2 od FDM nonlinear M2;
+- planner i runner materializują `fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1`,
+  model `MagnetoresistivePoisson`, źródłowe `Bidirectional`, politykę
+  `block_gmres` oraz provenance `reciprocal_m2`; preflight sprawdza zgodność
+  źródła, masek, granic i Schur complementu;
+- capability matrix ma osobne bounded rows dla charge MR, steady drift,
+  direct SHE i inverse SHE. Status to `reference_executable` wyłącznie dla
+  FEM CPU i tego zakresu; FEM GPU pozostaje `semantic_only`.
+
+### 32.55.3. RED/GREEN i managed evidence
+
+Weryfikacja wykonywana była w kontenerze `fem-gpu` po przebudowie native
+`fullmag_fem`. Najpierw pełna brama ujawniła regresję M1: walidator porównywał
+operator bloku transportowego z odrębnym operatorem równania ładunku.
+Poprawka rozdzieliła oczekiwane wersje `charge_operator` i `spin_operator`;
+publiczny test FEM M1 ponownie przeszedł.
+
+Obowiązujący GREEN:
+
+```text
+just verify-fem-steady-transport-native-contract                 exit 0
+fem steady transport contract: PASS
+fem steady transport ABI contract: PASS
+direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles ... ok
+```
+
+oraz focused managed M2:
+
+```text
+tests::steady_transport_m2_request_keeps_v1_as_a_nested_prefix ... ok
+resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback ... ok
+canonical_m2_descriptor_materializes_reciprocal_ffi_request ... ok
+native_m2_solver_publishes_reciprocal_diagnostics ... ok
+```
+
+Dowód potwierdza wykonanie bounded M2 i identyfikację `constitutive_model=
+reciprocal_m2`; nie jest jeszcze dowodem `validated_workloads`. Nadal otwarte
+są: niezależna analityczna/numeryczna M2 mesh convergence, sweep Onsagera i
+dissipation, heterogeniczne materiały, N/F/T, mixing/SML, GPU, FDM↔FEM
+reciprocal common-limit, BORIS parity, dynamiczny Oersted/skin/MQS, transient
+M3 i sprzężenie z LLG.
+
+### 32.55.4. Status planu i Standard Problem 5
+
+Standard Problem 5 z
+`external_solvers/3/test/standardproblem5.mx3` nie został jeszcze uruchomiony
+w tej sesji. Aktualna brama M2 nie udaje wyniku SP5: najpierw musi zostać
+zachowana rozdzielność kwalifikacji transportu i demagnetyzacji, następnie
+trzeba wykonać identyczny fixture MuMax3/Fullmag, zrelaksować stan vortexu,
+uruchomić ten sam horyzont czasu i porównać `m`, energię, torques oraz metryki
+wektorowe przy kontrolowanym refinement. Capability/SP5 pozostaje otwarte;
+brak uruchomienia nie jest traktowany jako sukces ani jako porażka solvera.
+
+Szeroka ocena celu pozostaje konserwatywnie **86% implementacji / 60%
+gotowości produkcyjnej**. Bounded M2 zwiększa zakres wykonywalnego kodu i
+provenance, ale nie zmienia progu produkcyjnego: potrzebne są niezależne
+common-limit/convergence, runtime/device evidence, pełna ścieżka Python/UI i
+kwalifikacja fizyczna demagażu oraz SP5.

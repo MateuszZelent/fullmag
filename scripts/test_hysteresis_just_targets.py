@@ -28,6 +28,31 @@ def test_managed_fem_staleness_check_prunes_generated_fullmag_dirs() -> None:
     assert '! -path "*/.fullmag/*"' not in justfile
 
 
+def test_fullmag_recipe_accepts_long_form_runtime_aliases() -> None:
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+
+    for alias in (
+        "--dev|dev)",
+        "--static|static)",
+        "--interactive|-i|interactive)",
+        "--headless|headless)",
+        "--fdm|fdm)",
+        "--fem|fem)",
+        "--gpu|gpu)",
+        "--cpu|cpu)",
+    ):
+        assert alias in justfile
+
+
+def test_makefile_default_cargo_target_is_worktree_scoped() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "FULLMAG_CARGO_TARGET_ROOT" in makefile
+    assert "FULLMAG_WORKTREE_KEY" in makefile
+    assert "sha256sum" in makefile
+    assert "FULLMAG_CARGO_TARGET_DIR ?= /tmp/fullmag-zfn2-build/cargo-targets/fullmag-cli\n" not in makefile
+
+
 def test_waveguide_headless_smoke_targets_use_managed_runtime_directly() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
 

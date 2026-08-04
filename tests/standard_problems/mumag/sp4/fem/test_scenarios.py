@@ -49,10 +49,16 @@ RELAXATION_SCENARIOS = {
     name: SCENARIO_ROOT / f"{name}.py" for name in RELAXATION_POLICIES
 }
 TOPOLOGY_SCENARIOS = {"mesh_single_prism_layer"}
+AUDIT_SCENARIOS = {"root_cause_uniform_energy_audit"}
+FDM_COUNTERPART_SCENARIOS = {
+    "relax_projected_gradient_bb_fdm": SCENARIO_ROOT
+    / "relax_projected_gradient_bb_fdm.py"
+}
 SCENARIOS = {**DYNAMICS_SCENARIOS, **RELAXATION_SCENARIOS}
+DIRECT_SCENARIOS = {**SCENARIOS, **FDM_COUNTERPART_SCENARIOS}
 
 
-def _export_run_config(path: Path) -> dict[str, object]:
+def _export_run_config(path: Path, *, backend: str = "fem") -> dict[str, object]:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = runtime_helper.main(
@@ -61,7 +67,7 @@ def _export_run_config(path: Path) -> dict[str, object]:
                 "--script",
                 str(path),
                 "--backend",
-                "fem",
+                backend,
                 "--mode",
                 "strict",
                 "--precision",
@@ -86,7 +92,15 @@ def _active_stage_id(stage: dict[str, object]) -> str:
 
 
 def test_scenario_manifest_includes_dynamics_relaxation_and_topology_scripts() -> None:
-    expected = {f"{scenario}.py" for scenario in {*SCENARIOS, *TOPOLOGY_SCENARIOS}}
+    expected = {
+        f"{scenario}.py"
+        for scenario in {
+            *SCENARIOS,
+            *TOPOLOGY_SCENARIOS,
+            *AUDIT_SCENARIOS,
+            *FDM_COUNTERPART_SCENARIOS,
+        }
+    }
     actual = {
         path.name
         for path in SCENARIO_ROOT.glob("*.py")
@@ -95,7 +109,7 @@ def test_scenario_manifest_includes_dynamics_relaxation_and_topology_scripts() -
     assert actual == expected
 
 
-@pytest.mark.parametrize("scenario,path", SCENARIOS.items())
+@pytest.mark.parametrize("scenario,path", DIRECT_SCENARIOS.items())
 def test_scenario_is_direct_user_python_without_hidden_parameter_builder(
     scenario: str,
     path: Path,
@@ -134,6 +148,34 @@ def test_scenario_is_direct_user_python_without_hidden_parameter_builder(
     ]
     expected_solver_calls = 1 if scenario in DYNAMICS_SCENARIOS else 0
     assert len(solver_calls) == expected_solver_calls
+
+
+def test_fdm_projected_gradient_bb_counterpart_exports_cpu_double_relaxation() -> None:
+    payload = _export_run_config(
+        FDM_COUNTERPART_SCENARIOS["relax_projected_gradient_bb_fdm"],
+        backend="fdm",
+    )
+    assert [stage["entrypoint_kind"] for stage in payload["stages"]] == [
+        "flat_relax",
+        "flat_save_state",
+    ]
+    relax_stage, save_state_stage = payload["stages"]
+    runtime = relax_stage["ir"]["problem_meta"]["runtime_metadata"][
+        "runtime_selection"
+    ]
+    assert runtime["backend"] == "fdm"
+    assert runtime["device"] == "cpu"
+    assert runtime["execution_precision"] == "double"
+    assert relax_stage["ir"]["study"]["stop"] == {
+        "torque_tolerance_apm": pytest.approx(0.7957747154594766),
+        "max_steps": 100_000,
+    }
+    assert save_state_stage["action"] == {
+        "kind": "save_state",
+        "artifact_name": "relaxed_m.zarr",
+        "format": "zarr",
+        "dataset": "m",
+    }
 
 
 @pytest.mark.parametrize("scenario,path", DYNAMICS_SCENARIOS.items())

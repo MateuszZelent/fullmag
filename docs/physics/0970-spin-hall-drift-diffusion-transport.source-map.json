@@ -1,0 +1,96 @@
+{
+  "document": {"path": "docs/physics/0970-spin-hall-drift-diffusion-transport.md"},
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "reference_executable",
+      "reason": "M1 transparent conforming H1/P1 and bounded M2 reciprocal CPU-double slices execute through ProblemIR, native MFEM, and canonical transport artifacts; mesh convergence and production qualification remain open."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "The bounded reciprocal M2 operator has no qualified native FEM GPU realization; the planner rejects GPU requests rather than falling back."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "reference_executable",
+      "reason": "M1 and bounded reciprocal M2 reference slices execute on the CPU lane; broader nonlinear, interface, and cross-backend qualification remains open."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "The published M1/M2 transport contract has no qualified native GPU transport lane; no hidden fallback is permitted."
+    }
+  ],
+  "equations": [
+    {
+      "id": "m1-constitutive-block",
+      "symbols": ["E", "G", "J_c", "Q", "sigma", "sigma_s", "P", "theta_SH"],
+      "sources": ["fem-m1-charge", "fem-m1-spin", "fdm-transport-oracle"]
+    },
+    {
+      "id": "m2-reciprocal-constitutive-block",
+      "symbols": ["Sigma_mr", "sigma_parallel", "sigma_perpendicular", "sigma_AHE", "J_c", "Q"],
+      "sources": ["fem-m2-oracle", "fem-m2-c-api"]
+    },
+    {
+      "id": "m2-schur-positivity",
+      "symbols": ["sigma_parallel", "sigma_perpendicular", "sigma_s", "P", "sigma"],
+      "sources": ["fem-m2-planner", "fem-m2-descriptor"]
+    },
+    {
+      "id": "spin-balance-reaction",
+      "symbols": ["Q", "R_sf", "R_J", "R_phi", "lambda_sf", "lambda_J", "lambda_phi"],
+      "sources": ["fem-m1-spin", "fem-m2-oracle", "fdm-transport-oracle"]
+    }
+  ],
+  "symbols": [
+    {"id": "V", "latex": "V", "meaning": "charge electrochemical potential", "si_unit": "\\mathrm{V}"},
+    {"id": "mu_s", "latex": "\\mu_s", "meaning": "full spin-channel splitting", "si_unit": "\\mathrm{V}"},
+    {"id": "E", "latex": "E_i", "meaning": "electric field, negative charge-potential gradient", "si_unit": "\\mathrm{V\\,m^{-1}}"},
+    {"id": "G", "latex": "G_{ia}", "meaning": "spin-voltage gradient", "si_unit": "\\mathrm{V\\,m^{-1}}"},
+    {"id": "J_c", "latex": "J_{c,i}", "meaning": "conventional charge-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "Q", "latex": "Q_{ia}", "meaning": "charge-equivalent spin-current tensor; first index is flow and second is spin polarization", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "sigma", "latex": "\\sigma", "meaning": "reciprocal reference charge conductivity", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "sigma_s", "latex": "\\sigma_s", "meaning": "spin conductivity", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "sigma_parallel", "latex": "\\sigma_{\\parallel}", "meaning": "magnetoresistive conductivity parallel to magnetization", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "sigma_perpendicular", "latex": "\\sigma_{\\perp}", "meaning": "magnetoresistive conductivity transverse to magnetization", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "sigma_AHE", "latex": "\\sigma_{\\mathrm{AHE}}", "meaning": "anomalous-Hall antisymmetric conductivity coefficient", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "P", "latex": "P", "meaning": "charge-to-spin polarization", "si_unit": "$1$"},
+    {"id": "theta_SH", "latex": "\\theta_{\\mathrm{SH}}", "meaning": "spin-Hall angle with stored sign convention", "si_unit": "$1$"},
+    {"id": "lambda_sf", "latex": "\\lambda_{\\mathrm{sf}}", "meaning": "spin-flip diffusion length", "si_unit": "\\mathrm{m}"},
+    {"id": "lambda_J", "latex": "\\lambda_J", "meaning": "transverse exchange length", "si_unit": "\\mathrm{m}"},
+    {"id": "lambda_phi", "latex": "\\lambda_\\phi", "meaning": "transverse dephasing length", "si_unit": "\\mathrm{m}"},
+    {"id": "Sigma_mr", "latex": "\\Sigma_{\\mathrm{mr}}", "meaning": "symmetric AMR/PHE charge-conductivity tensor", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "R_sf", "latex": "R_{\\mathrm{sf}}", "meaning": "spin-flip reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "R_J", "latex": "R_J", "meaning": "transverse exchange reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "R_phi", "latex": "R_\\phi", "meaning": "transverse dephasing reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"}
+  ],
+  "sources": [
+    {"id": "fem-m1-charge", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_charge", "responsibility": "Assemble and solve the bounded conforming H1/P1 charge equation for M1."},
+    {"id": "fem-m1-spin", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_spin", "responsibility": "Assemble and solve the bounded conforming H1/P1 spin equation for M1."},
+    {"id": "fem-m2-oracle", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_reciprocal", "responsibility": "Assemble and solve the bounded reciprocal conforming H1/P1 FEM block system."},
+    {"id": "fem-m2-c-api", "path": "native/include/fullmag_fem.h", "symbol": "fullmag_fem_solve_steady_transport_m2_v1", "responsibility": "Expose the stable M2 ABI request and result contract."},
+    {"id": "fem-m2-planner", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolve_m1_fem_spin_transport", "responsibility": "Resolve bounded FEM M1/M2 descriptors, material uniformity, and Schur positivity without fallback."},
+    {"id": "fem-m2-descriptor", "path": "crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs", "symbol": "materialize_native_fem_steady_transport_request", "responsibility": "Fail closed on descriptor contradictions and map reciprocal material to the native request."},
+    {"id": "fem-m2-ffi", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "solve_native_fem_steady_transport", "responsibility": "Select the explicit M1 or M2 ABI symbol and preserve constitutive provenance."},
+    {"id": "fdm-transport-oracle", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "solve_coupled_module", "responsibility": "Provide the CPU FDM coupled charge/spin realization used by reference comparisons."},
+    {"id": "m2-plan-test", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback", "responsibility": "Verify Python/IR/planner materialization of the bounded FEM M2 descriptor."},
+    {"id": "m2-runtime-test", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "native_m2_solver_publishes_reciprocal_diagnostics", "responsibility": "Execute the managed native M2 solver and check reciprocal diagnostic identity."},
+    {"id": "m2-abi-test", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "steady_transport_m2_request_keeps_v1_as_a_nested_prefix", "responsibility": "Freeze the append-only nested M1-prefix ABI layout."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "CurrentTransport.coupling", "type": "Literal['one_way','bidirectional']", "default": "one_way", "si_unit": "$1$", "validation": "bidirectional requires the complete reciprocal material and a steady FEM M2/FDM M2-compatible solver policy", "meaning": "source-owned charge/spin reciprocity", "backend_support": "FEM CPU bounded M2; FDM CPU bounded reference; GPU semantic-only", "problem_ir": "current_modules[].coupling"},
+      {"python": "ChargeTransportMaterial.sigma_Spm", "type": "float", "default": "required", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite and positive", "meaning": "reciprocal scalar charge conductivity", "backend_support": "FEM/FDM CPU reference lanes", "problem_ir": "current_modules[].definition.materials[].material.sigma_spm"},
+      {"python": "ChargeTransportMaterial.sigma_parallel_Spm", "type": "float-or-none", "default": "required for bounded FEM M2", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite and positive; uniform across the bounded FEM domain", "meaning": "AMR/PHE conductivity parallel to magnetization", "backend_support": "FEM CPU bounded M2; FDM M2 reference", "problem_ir": "current_modules[].definition.materials[].material.sigma_parallel_spm"},
+      {"python": "ChargeTransportMaterial.sigma_perpendicular_Spm", "type": "float-or-none", "default": "required for bounded FEM M2", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite and positive; uniform across the bounded FEM domain", "meaning": "AMR/PHE conductivity transverse to magnetization", "backend_support": "FEM CPU bounded M2; FDM M2 reference", "problem_ir": "current_modules[].definition.materials[].material.sigma_perpendicular_spm"},
+      {"python": "ChargeTransportMaterial.sigma_AHE_Spm", "type": "float-or-none", "default": "required for bounded FEM M2", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite; uniform across the bounded FEM domain", "meaning": "anomalous-Hall coefficient", "backend_support": "FEM CPU bounded M2; FDM M2 reference", "problem_ir": "current_modules[].definition.materials[].material.sigma_ahe_spm"},
+      {"python": "SpinDriftDiffusion.solver", "type": "SpinSolverPolicy", "default": "required", "si_unit": "$1$", "validation": "bounded FEM M2 requires block_gmres-compatible charge/spin linear policies and no reciprocal_nonlinear policy", "meaning": "spatial transport solve and residual policy", "backend_support": "FEM CPU bounded M2; GPU rejected", "problem_ir": "spin_transport_modules[].solver"}
+    ]
+  }
+}

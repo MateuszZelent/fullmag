@@ -25,6 +25,7 @@ type PreparationResult = ResourceResult<SimulationPreparationResource>;
 
 afterEach(() => {
   updateRealtimeCommunicationPolicy({});
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -84,11 +85,13 @@ function makeKernel(
 function Probe({
   enabled = true,
   observations,
+  requiredRevision,
 }: {
   enabled?: boolean;
   observations: PreparationResult[];
+  requiredRevision?: number | null;
 }) {
-  observations.push(useSimulationPreparation({ enabled }));
+  observations.push(useSimulationPreparation({ enabled, requiredRevision }));
   return null;
 }
 
@@ -115,6 +118,61 @@ async function waitFor(
 }
 
 describe("useSimulationPreparation", () => {
+  it("retries a failed load while the status advertises an unread preparation revision", async () => {
+    vi.useFakeTimers();
+    updateRealtimeCommunicationPolicy({ error_retry_ms: 10 });
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new ControlRoomApiError("upstream unavailable", 502))
+      .mockResolvedValueOnce(preparationFixture(8));
+    const { kernel, resources } = makeKernel(load);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    resources.invalidate(SIMULATION_PREPARATION_PATH, 8);
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} requiredRevision={8} />
+          </KernelContext.Provider>,
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(resultSnapshot(observations.at(-1)!)).toMatchObject({
+        data: null,
+        revision: 8,
+        status: "error",
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(resultSnapshot(observations.at(-1)!)).toMatchObject({
+        data: { revision: 8 },
+        revision: 8,
+        status: "ready",
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it.each([
     new ControlRoomApiError("authorization token secret-token rejected", 401),
     new ControlRoomApiError(

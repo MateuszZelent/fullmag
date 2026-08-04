@@ -1,6 +1,8 @@
 .PHONY: up down shell fmt check cargo-check cargo-test web-install web-build-static web-build-static-if-needed py-install py-test repo-check smoke install-cli install-cli-dev install-cli-static show-cli-path control-room control-room-stop fem-gpu-build fem-gpu-shell fem-gpu-check fem-gpu-test fem-gpu-native-test
 
-FULLMAG_CARGO_TARGET_DIR ?= /tmp/fullmag-zfn2-build/cargo-targets/fullmag-cli
+FULLMAG_CARGO_TARGET_ROOT ?= /tmp/fullmag-zfn2-build/cargo-targets
+FULLMAG_WORKTREE_KEY ?= $(shell printf '%s' '$(abspath $(CURDIR))' | sha256sum | cut -c1-16)
+FULLMAG_CARGO_TARGET_DIR ?= $(FULLMAG_CARGO_TARGET_ROOT)/fullmag-cli-$(FULLMAG_WORKTREE_KEY)
 
 up:
 	docker compose up -d postgres minio nats dev

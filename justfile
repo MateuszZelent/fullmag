@@ -3691,18 +3691,23 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
         key_lc="$(printf "%s" "$key" | tr "[:upper:]" "[:lower:]")"; value_lc="$(printf "%s" "$value" | tr "[:upper:]" "[:lower:]")"; \
         case "$key_lc" in \
-          build) build="$value_lc" ;; \
-          force) force="$value_lc" ;; \
-          frontend|ui) frontend="$value_lc" ;; \
-          backend|discretization|engine) backend="$value_lc" ;; \
-          device|execution) device="$value_lc" ;; \
-          mode|run_mode) run_mode="$value_lc" ;; \
-          script) script="$value" ;; \
-          web_port|web-port|port) web_port="$value" ;; \
-          static|dev) frontend="$key_lc" ;; \
-          fem|fdm|auto) backend="$key_lc" ;; \
-          gpu|cpu) device="$key_lc" ;; \
-          interactive|headless) run_mode="$key_lc" ;; \
+          --build|build) build="$value_lc" ;; \
+          --force|force) if [ "$key" = "$raw" ]; then force="true"; else force="$value_lc"; fi ;; \
+          --frontend|frontend|ui) frontend="$value_lc" ;; \
+          --backend|--discretization|--engine|backend|discretization|engine) backend="$value_lc" ;; \
+          --device|--execution|device|execution) device="$value_lc" ;; \
+          --mode|--run_mode|mode|run_mode) run_mode="$value_lc" ;; \
+          --script|script) script="$value" ;; \
+          --web_port|--web-port|--port|web_port|web-port|port) web_port="$value" ;; \
+          --static|static) frontend="static" ;; \
+          --dev|dev) frontend="dev" ;; \
+          --fem|fem) backend="fem" ;; \
+          --fdm|fdm) backend="fdm" ;; \
+          --auto|auto) backend="auto" ;; \
+          --gpu|gpu) device="gpu" ;; \
+          --cpu|cpu) device="cpu" ;; \
+          --interactive|-i|interactive) run_mode="interactive" ;; \
+          --headless|headless) run_mode="headless" ;; \
           true|false) build="$key_lc" ;; \
           *) script="$raw" ;; \
         esac; \

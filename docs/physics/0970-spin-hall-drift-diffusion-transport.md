@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-03
+- Last updated: 2026-08-04
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -11,11 +11,14 @@
   `sml_reservoir.fullmag.v2`,
   `dos_isotropic_nonmagnetic.fullmag.v1`
 - Operator versions: `fv_spin_upwind_v1`, `structured_cross_gradient_v1`,
-  `fem_charge_spin_broken_h1_mortar.v1`
+  `fem_charge_spin_broken_h1_mortar.v1`,
+  `fem_charge_spin_conforming_h1_p1.transparent.v1`,
+  `fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1`
 
 The normative identifier categories and exact spellings are frozen by section
 8.1 of the runtime contract.
 
+(problem-statement)=
 ## 1. Problem statement
 
 Spin Hall physics in Fullmag is a solved charge-and-spin transport problem, not
@@ -27,6 +30,7 @@ angular-momentum accounting across FDM and FEM.
 The note is a target contract, not an implementation claim. Until the listed
 gates pass, capabilities must remain at their evidence-supported status.
 
+(governing-equations)=
 ## 2. Physical model
 
 ### 2.1 Variables, indices, and electrochemical convention
@@ -323,6 +327,7 @@ execution disables error-based rejection but still executes the same versioned
 ARS stages. `coupled_bdf2_small_oracle.v1` remains validation-only and is not a
 production authoring choice in M3.
 
+(symbols-and-si-units)=
 ### 2.7 Symbols and SI units
 
 | Symbol | Meaning | SI unit / condition |
@@ -345,6 +350,68 @@ production authoring choice in M3.
 | `eta_transport` | allowed transport-to-outer-error fraction | 1; initial contract `0.1` |
 | `dt` | current outer LLG step size | s, `>0` |
 
+The machine-readable symbol contract used by the source map is:
+
+| id | latex | meaning | si_unit |
+|---|---|---|---|
+| V | V | charge electrochemical potential | \mathrm{V} |
+| mu_s | \mu_s | full spin-channel splitting | \mathrm{V} |
+| E | E_i | electric field, negative charge-potential gradient | \mathrm{V\,m^{-1}} |
+| G | G_{ia} | spin-voltage gradient | \mathrm{V\,m^{-1}} |
+| J_c | J_{c,i} | conventional charge-current density | \mathrm{A\,m^{-2}} |
+| Q | Q_{ia} | charge-equivalent spin-current tensor; first index is flow and second is spin polarization | \mathrm{A\,m^{-2}} |
+| sigma | \sigma | reciprocal reference charge conductivity | \mathrm{S\,m^{-1}} |
+| sigma_s | \sigma_s | spin conductivity | \mathrm{S\,m^{-1}} |
+| sigma_parallel | \sigma_{\parallel} | magnetoresistive conductivity parallel to magnetization | \mathrm{S\,m^{-1}} |
+| sigma_perpendicular | \sigma_{\perp} | magnetoresistive conductivity transverse to magnetization | \mathrm{S\,m^{-1}} |
+| sigma_AHE | \sigma_{\mathrm{AHE}} | anomalous-Hall antisymmetric conductivity coefficient | \mathrm{S\,m^{-1}} |
+| P | P | charge-to-spin polarization | $1$ |
+| theta_SH | \theta_{\mathrm{SH}} | spin-Hall angle with stored sign convention | $1$ |
+| lambda_sf | \lambda_{\mathrm{sf}} | spin-flip diffusion length | \mathrm{m} |
+| lambda_J | \lambda_J | transverse exchange length | \mathrm{m} |
+| lambda_phi | \lambda_\phi | transverse dephasing length | \mathrm{m} |
+| Sigma_mr | \Sigma_{\mathrm{mr}} | symmetric AMR/PHE charge-conductivity tensor | \mathrm{S\,m^{-1}} |
+| R_sf | R_{\mathrm{sf}} | spin-flip reaction density | \mathrm{A\,m^{-3}} |
+| R_J | R_J | transverse exchange reaction density | \mathrm{A\,m^{-3}} |
+| R_phi | R_\phi | transverse dephasing reaction density | \mathrm{A\,m^{-3}} |
+
+```{math}
+:label: m1-constitutive-block
+J_{c,i}=\sigma E_i,\qquad
+Q_{ia}=\sigma_sG_{ia}+P\sigma E_i m_a
+       +\theta_{\mathrm{SH}}\sigma\epsilon_{ika}E_k.
+```
+
+```{math}
+:label: m2-reciprocal-constitutive-block
+\begin{aligned}
+J_{c,i}&=J_{\mathrm{mr},i}+P\sigma m_aG_{ia}
+       +\theta_{\mathrm{SH}}\sigma\epsilon_{ija}G_{ja},\\
+Q_{ia}&=\sigma_sG_{ia}+P\sigma E_i m_a
+       +\theta_{\mathrm{SH}}\sigma\epsilon_{ika}E_k,
+\end{aligned}
+```
+
+```{math}
+:label: m2-schur-positivity
+\lambda_{\min}(\Sigma_{\mathrm{mr}})\sigma_s-P^2\sigma^2>0,
+\qquad
+\lambda_{\min}(\Sigma_{\mathrm{mr}})=
+\min(\sigma_{\parallel},\sigma_{\perp}).
+```
+
+```{math}
+:label: spin-balance-reaction
+\partial_iQ_{ia}=-R_{\mathrm{sf},a}-R_{J,a}-R_{\phi,a},
+\quad
+R_{\mathrm{sf}}=\frac{\sigma_s}{2\lambda_{\mathrm{sf}}^2}\mu_s,
+\quad
+R_J=\frac{\sigma_s}{2\lambda_J^2}(\mu_s\times m),
+\quad
+R_\phi=\frac{\sigma_s}{2\lambda_\phi^2}m\times(\mu_s\times m).
+```
+
+(assumptions-and-validity)=
 ### 2.8 Assumptions and validity limits
 
 The model is local, diffusive, and electroquasistatic. Its anisotropic
@@ -357,6 +424,7 @@ warns or rejects when device dimensions approach the mean free path. NaN/Inf,
 nonpositive dissipative coefficients, invalid references, missing charge gauge,
 nonpositive active lengths, M1+iSHE, or transient without `C_s` are invalid.
 
+(discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 FDM finite-volume contract
@@ -486,6 +554,7 @@ against independent FDM and FEM double oracles.
 
 ## 4. API, IR, planner, runtime, and workspace impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 Canonical public constructs are `CurrentTransport`, `SpinDriftDiffusion`,
@@ -511,10 +580,160 @@ provides positive `gmres_restart` and `max_picard_iterations`, positive
 the source with an independent coupling. Reciprocal authoring is steady-only
 until a transient M2 contract is published. Python, SceneDocument, the
 resource-first Rust authoring schema, and the Control Room inspector preserve
-these fields. This is an authoring/reference contract: the UI advertises the
-M2 lane as `semantic_only`, and it must not be interpreted as a production
+these fields. The general M2 lane remains semantic_only until the workload
+gates below close; the bounded FEM CPU slice is reference_executable only for
+the exact scope in section 7.2 and must not be interpreted as a general
 FDM/FEM/GPU execution guarantee.
 
+(round-trip-and-failure-semantics)=
+### 4.1.1 Requested intent, resolved execution, and failure semantics
+
+The authoring round trip preserves requested intent separately from resolved
+execution. The Python fields for coupling, material tensor, solver policy,
+requested discretization, device, precision, and execution mode lower into
+ProblemIR; planner normalization then records the resolved constitutive model,
+operator version, lane, and qualification state. A successful bounded M2 run
+must expose both records in its descriptor and provenance. No resolver may
+silently substitute M1, FDM, or a different device when the requested
+combination is unsupported.
+
+Validation errors are fail-closed and identify the owning field and the
+physical reason. Examples are a missing reciprocal conductivity, a nonpositive
+Schur complement, a mixed charge tensor outside the bounded FEM scope, an
+incompatible nonlinear policy, a missing charge gauge, or a GPU request without
+an executable transport operator. Unsupported combinations remain visible as
+diagnostics and do not produce a plausible-looking fallback artifact.
+
+The following table is the complete public parameter inventory for the bounded
+M2 authoring slice. The ProblemIR column is the canonical normalized path; an
+export/import cycle must preserve the value and its units.
+
+| Python parameter | Type | Default | SI unit | Validation | Physical meaning | Executable scope | ProblemIR mapping |
+|---|---|---|---|---|---|---|---|
+| CurrentTransport.coupling | Literal['one_way','bidirectional'] | one_way | $1$ | bidirectional requires the complete reciprocal material and a steady FEM M2/FDM M2-compatible solver policy | source-owned charge/spin reciprocity | FEM CPU bounded M2; FDM CPU bounded reference; GPU semantic-only | current_modules[].coupling |
+| ChargeTransportMaterial.sigma_Spm | float | required | $\mathrm{S\,m^{-1}}$ | finite and positive | reciprocal scalar charge conductivity | FEM/FDM CPU reference lanes | current_modules[].definition.materials[].material.sigma_spm |
+| ChargeTransportMaterial.sigma_parallel_Spm | float-or-none | required for bounded FEM M2 | $\mathrm{S\,m^{-1}}$ | finite and positive; uniform across the bounded FEM domain | AMR/PHE conductivity parallel to magnetization | FEM CPU bounded M2; FDM M2 reference | current_modules[].definition.materials[].material.sigma_parallel_spm |
+| ChargeTransportMaterial.sigma_perpendicular_Spm | float-or-none | required for bounded FEM M2 | $\mathrm{S\,m^{-1}}$ | finite and positive; uniform across the bounded FEM domain | AMR/PHE conductivity transverse to magnetization | FEM CPU bounded M2; FDM M2 reference | current_modules[].definition.materials[].material.sigma_perpendicular_spm |
+| ChargeTransportMaterial.sigma_AHE_Spm | float-or-none | required for bounded FEM M2 | $\mathrm{S\,m^{-1}}$ | finite; uniform across the bounded FEM domain | anomalous-Hall coefficient | FEM CPU bounded M2; FDM M2 reference | current_modules[].definition.materials[].material.sigma_ahe_spm |
+| SpinDriftDiffusion.solver | SpinSolverPolicy | required | $1$ | bounded FEM M2 requires block_gmres-compatible charge/spin linear policies and no reciprocal_nonlinear policy | spatial transport solve and residual policy | FEM CPU bounded M2; GPU rejected | spin_transport_modules[].solver |
+
+The table is intentionally narrower than the complete physical contract:
+boundaries, interfaces, spin capacitance, transient policies, torque targets,
+and nonlinear reciprocal iteration parameters remain represented in ProblemIR,
+but are rejected by the bounded native FEM M2 lane when their implementation
+contract is not present.
+
+The following executable Python cell is the minimal authoring-to-IR round trip
+for this bounded slice. The charge policy is authored with the public block
+policy; planner resolution changes the requested FDM operator to the explicit
+bounded FEM operator only after all FEM scope checks pass.
+
+```python
+# %%
+from fullmag.model.current_transport import (
+    ChargeInsulating,
+    ChargePotentialGauge,
+    ChargeSolverPolicy,
+    ChargeTransportMaterial,
+    ChargeTransportMaterialAssignment,
+    CurrentTransport,
+    VoltageElectrode,
+)
+from fullmag.model.spin_torque import RegionRef
+from fullmag.model.spin_transport import (
+    SpinDriftDiffusion,
+    SpinSolverPolicy,
+    SpinTransportMaterial,
+    SpinTransportMaterialAssignment,
+    SurfaceRef,
+    TransportExecution,
+)
+
+strip = RegionRef("strip")
+x_min = SurfaceRef("strip", "x_min", (-1.0, 0.0, 0.0))
+x_max = SurfaceRef("strip", "x_max", (1.0, 0.0, 0.0))
+side_faces = tuple(
+    SurfaceRef("strip", name, normal)
+    for name, normal in (
+        ("y_min", (0.0, -1.0, 0.0)),
+        ("y_max", (0.0, 1.0, 0.0)),
+        ("z_min", (0.0, 0.0, -1.0)),
+        ("z_max", (0.0, 0.0, 1.0)),
+    )
+)
+
+charge = CurrentTransport(
+    name="charge",
+    model="ohmic_poisson",
+    coupling="bidirectional",
+    domain=(strip,),
+    materials=(
+        ChargeTransportMaterialAssignment(
+            region=strip,
+            material=ChargeTransportMaterial(
+                sigma_Spm=4.0e6,
+                sigma_parallel_Spm=4.4e6,
+                sigma_perpendicular_Spm=4.0e6,
+                sigma_AHE_Spm=0.2e6,
+            ),
+        ),
+    ),
+    boundaries=(
+        VoltageElectrode("left", (x_min,), potential_V=0.0),
+        VoltageElectrode("right", (x_max,), potential_V=1.0e-3),
+        ChargeInsulating("sides", side_faces),
+    ),
+    gauge=ChargePotentialGauge("dirichlet_reference"),
+    solver=ChargeSolverPolicy(
+        engine="block_gmres",
+        relative_tolerance=1.0e-10,
+        absolute_tolerance=0.0,
+        max_iterations=500,
+        operator_version="fdm_coupled_charge_spin_fv_block_gmres.v1",
+        physical_residual_version="transport_balance_integrated_l2.v1",
+    ),
+)
+
+spin = SpinDriftDiffusion(
+    id="spin",
+    current_source_id="charge",
+    domain=(strip,),
+    materials=(
+        SpinTransportMaterialAssignment(
+            region=strip,
+            material=SpinTransportMaterial(
+                sigma_s_Spm=5.0e6,
+                polarization_p=0.2,
+                theta_sh=0.1,
+                lambda_sf_m=2.0e-9,
+            ),
+        ),
+    ),
+    solver=SpinSolverPolicy(
+        engine="gmres",
+        relative_tolerance=1.0e-10,
+        absolute_tolerance=0.0,
+        max_iterations=500,
+        operator_version="fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1",
+        default_external_boundary="spin_insulating",
+    ),
+    requested_execution=TransportExecution(
+        discretization="fem",
+        device="cpu",
+        precision="double",
+        execution_mode="strict",
+    ),
+)
+
+charge_ir = charge.to_ir()
+spin_ir = spin.to_ir(coupling=charge.coupling)
+assert charge_ir["coupling"] == "bidirectional"
+assert charge_ir["model"] == "magnetoresistive_poisson"
+assert spin_ir["constitutive_version"] == "transport_constitutive.reciprocal.fullmag.v1"
+assert spin_ir["requested_execution"]["discretization"] == "fem"
+```
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 Typed IR includes `SpinTransportModuleIR`, charge/spin materials,
@@ -539,6 +758,7 @@ one-way/bidirectional coupling. Planner resolves one engine, enforces solver
 symmetry, positivity, validity, stage cadence, strict residency, and records
 requested/resolved lane. `validated` is workload/lane/precision/BC scoped.
 
+(implementation-mapping)=
 ### 4.4 Runtime, quantities, provenance, OpenAPI, and UI
 
 Transport workflow owns `V`, `mu_s`, `J_c`, and `Q`; torque only consumes
@@ -597,6 +817,7 @@ with the same quantity id fail before native execution rather than overwriting
 one another. Requested field schedules for these steady quantities select the
 already-solved records and must not query the time-domain FEM preview ABI.
 
+(validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical and algebraic checks
@@ -711,6 +932,7 @@ linear-solver relative tolerance.
 
 Unchecked items are not implied by publication of this note.
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 Ballistic and tunnelling transport, first-principles interfaces, Rashba–Edelstein
@@ -742,7 +964,65 @@ specified spin flux, `H(curl)`/broken-H1 mortar mixing or SML,
 hypre/libCEED production preconditioners, GPU residency, stage coupling, and
 FDM/FEM common-limit convergence remain unchecked work in sections 5 and 6.
 
-## 8. References
+### 7.2 FEM CPU M2 bounded reciprocal implementation evidence
+
+The native FEM CPU lane now contains a deliberately bounded M2 realization. It
+uses one monolithic conforming `H1 P1` block system for
+`(V,mu_sx,mu_sy,mu_sz)` and the reciprocal constitutive tensor from section
+2.2. The charge block includes the symmetric AMR/PHE tensor and AHE term;
+the `P` and SHE/iSHE off-diagonal blocks are assembled together and solved by
+GMRES. The C ABI is a separate symbol,
+`fullmag_fem_solve_steady_transport_m2_v1`, and its request appends
+`sigma_parallel`, `sigma_perpendicular`, and `sigma_AHE` after a nested,
+self-describing `fullmag_fem_steady_transport_request_v1` prefix. This keeps
+the M1 ABI layout stable while making the reciprocal material explicit.
+
+The executable scope is intentionally narrower than the physical M2 contract:
+CPU, FP64, `execution_mode=strict`, full-domain conforming H1/P1, one uniform
+anisotropic charge tensor, one uniform spin material, a Dirichlet charge
+reference, no internal spin interfaces, no mixing/SML, no reciprocal nonlinear
+Picard policy, and no LLG/Oersted stage coupling. The planner rejects a missing
+or non-positive Schur complement
+`min(sigma_parallel,sigma_perpendicular)*sigma_s - P^2*sigma^2`, rejects
+heterogeneous charge tensors in this lane, and never falls back to FDM or to
+the M1 one-way solver. The native wrapper publishes the constitutive/operator
+versions and reciprocal residual/balance diagnostics in provenance.
+
+The managed evidence is split into four independent gates: the Rust ABI layout
+test, the planner test
+`resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback`, the exact
+runner-to-FFI materialization test, and the native runtime test
+`native_m2_solver_publishes_reciprocal_diagnostics`. Together with the managed
+`just verify-fem-steady-transport-native-contract` M1 regression gate they prove
+an executable bounded FEM M2 slice, not a general FEM M2 qualification. No
+`validated_workloads` entry is claimed: Onsager/dissipation sweeps,
+heterogeneous materials, N/F/T interfaces, mesh convergence, FEM/FDM common
+limit for reciprocal transport, GPU residency, BORIS parity, transient
+coupling, and production qualification remain open.
+
+(source-code-index)=
+## 8. Source-code index
+
+The source map binds every executable claim in this note to a path and symbol.
+These rows are implementation-specific; they do not promote a source file to
+a qualified workload without the validation gates above.
+
+| Claim | Path | Symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| M1 charge realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_charge | FEM CPU charge assembly and solve | managed native M1 contract |
+| M1 spin realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_spin | FEM CPU spin assembly and solve | managed native M1 contract |
+| M2 reciprocal realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_reciprocal | monolithic reciprocal FEM block solve | focused managed M2 runtime test |
+| M2 C ABI | native/include/fullmag_fem.h | fullmag_fem_solve_steady_transport_m2_v1 | stable request and result contract | native ABI contract |
+| Planner resolution | crates/fullmag-plan/src/spin_transport.rs | resolve_m1_fem_spin_transport | bounded M1/M2 descriptor and Schur checks | planner M2 test |
+| Descriptor materialization | crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs | materialize_native_fem_steady_transport_request | fail-closed descriptor-to-FFI mapping | runner materialization test |
+| Native dispatch | crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_steady_transport | explicit M1/M2 ABI selection and provenance | runner runtime test |
+| FDM reference | crates/fullmag-runner/src/fdm/cpu/spin_transport.rs | solve_coupled_module | CPU FDM coupled charge/spin realization | FDM reference/common-limit tests |
+| Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |
+| Runtime regression | crates/fullmag-runner/src/native_fem/steady_transport.rs | native_m2_solver_publishes_reciprocal_diagnostics | reciprocal provenance identity | focused managed test |
+| ABI layout regression | crates/fullmag-fem-sys/src/lib.rs | steady_transport_m2_request_keeps_v1_as_a_nested_prefix | append-only nested M1-prefix guarantee | focused managed test |
+
+(scientific-bibliography)=
+## 9. References
 
 1. T. Valet and A. Fert, Phys. Rev. B 48, 7099 (1993), DOI: 10.1103/PhysRevB.48.7099.
 2. S. Zhang, P. M. Levy, and A. Fert, Phys. Rev. Lett. 88, 236601 (2002), DOI: 10.1103/PhysRevLett.88.236601.
