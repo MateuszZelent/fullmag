@@ -82,7 +82,8 @@
     {"id": "m2-plan-test", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback", "responsibility": "Verify Python/IR/planner materialization of the bounded FEM M2 descriptor."},
     {"id": "m2-runtime-test", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "native_m2_solver_publishes_reciprocal_diagnostics", "responsibility": "Execute the managed native M2 solver and check reciprocal diagnostic identity."},
     {"id": "m2-abi-test", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "steady_transport_m2_request_keeps_v1_as_a_nested_prefix", "responsibility": "Freeze the append-only nested M1-prefix ABI layout."},
-    {"id": "m2-affine-abi-oracle", "path": "backends/fem/tests/steady_transport_abi_contract.cpp", "symbol": "cpu_double_reciprocal_m2_affine_constitutive_oracle", "responsibility": "Check a nonzero-gradient affine FEM M2 solution, signs, the half-gradient spin convention, node-major result projection, two-drive Onsager cross response, and positive dissipation."}
+    {"id": "m2-affine-abi-oracle", "path": "backends/fem/tests/steady_transport_abi_contract.cpp", "symbol": "cpu_double_reciprocal_m2_affine_constitutive_oracle", "responsibility": "Check a nonzero-gradient affine FEM M2 solution, signs, the half-gradient spin convention, node-major result projection, two-drive Onsager cross response, and positive dissipation."},
+    {"id": "m2-mesh-convergence-oracle", "path": "backends/fem/tests/steady_transport_contract.cpp", "symbol": "reciprocal_m2_converges_on_three_mesh_resolutions", "responsibility": "Check finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions."}
   ],
   "public_api": {
     "parameters": [

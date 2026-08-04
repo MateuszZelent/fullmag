@@ -6547,3 +6547,38 @@ wzajemnych i dodatniej mocy dla bounded M2 FEM CPU. Nie zamyka jeszcze
 parametrycznego/meshowego Onsager-dissipation sweep, FDM↔FEM reciprocal
 common-limit, GPU, interfejsów, BORIS parity ani `validated_workloads`; szeroka
 ocena pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.57. Trzy siatki dla bounded reciprocal M2 FEM CPU (2026-08-04)
+
+### 32.57.1. Zakres testu
+
+Do `backends/fem/tests/steady_transport_contract.cpp` dodano
+`reciprocal_m2_converges_on_three_mesh_resolutions`. Test rozwiązuje ten sam
+jednorodny problem M2 na conforming tetra meshes `N_x=8,16,32`, z
+`sigma_s=5`, `sigma_parallel=6`, `sigma_perpendicular=3`, `P=0.25` i finite
+`lambda_sf=0.3 m`; charge i spin mają elektrody tylko na `x=0`/`x=1`, a
+pozostałe ściany są naturalne. Finite spin-flip wymusza nieafiniczny profil i
+eliminuje fałszywy pass wynikający z samego dokładnego odwzorowania P1.
+
+### 32.57.2. Managed GREEN i wartości
+
+Brama:
+
+```text
+just verify-fem-steady-transport-m2-convergence-contract
+```
+
+przeszła w zarządzanym obrazie `fem-gpu`:
+
+```text
+reciprocal M2 mesh midpoint: nx=8 V=0.527052 mu_x=0.175368,
+nx=16 V=0.526914 mu_x=0.177036, nx=32 V=0.526879 mu_x=0.177449;
+errors coarse/medium=0.000172849/3.42662e-05 V, 0.00208109/0.000412567 V
+fem steady transport contract: PASS
+```
+
+Oba obserwowane błędy midpoint maleją przy rafinacji. Jest to ograniczona
+brama przestrzennej zbieżności FEM CPU z profilem jednorodnym poprzecznie; nie
+zamyka pełnego 3-D `h`/`p` sweep, heterogenicznych materiałów, interfejsów,
+FDM↔FEM reciprocal common-limit, GPU, ani `validated_workloads`. Szeroka ocena
+pozostaje **86% implementacji / 60% gotowości produkcyjnej**.

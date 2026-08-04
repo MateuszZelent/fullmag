@@ -888,6 +888,16 @@ dissipation oracle for the bounded FEM M2 constitutive block. It does not
 close a parameter/mesh sweep, heterogeneous-material balance, FDM/FEM
 reciprocal common-limit, or production qualification.
 
+The managed FEM contract also runs the bounded reciprocal problem on three
+conforming tetrahedral meshes (`N_x=8,16,32`) with finite
+`lambda_sf=0.3 m`, nonzero polarization, and natural transverse boundaries.
+The midpoint values were `V=(0.527052,0.526914,0.526879) V` and
+`mu_{s,x}=(0.175368,0.177036,0.177449) V`; the coarse-to-fine versus
+medium-to-fine errors were respectively `1.72849e-4/3.42662e-5 V` and
+`2.08109e-3/4.12567e-4 V`. Both errors decrease under refinement. This is a
+bounded one-dimensional-invariant FEM convergence gate, not a full 3-D
+parameter sweep, an FDM/FEM common-limit, or a production qualification.
+
 An executable managed BORIS N/F smoke now completes at `coarse`, `medium`, and
 `fine` resolutions in the pinned CUDA image
 `nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`
@@ -1061,6 +1071,7 @@ a qualified workload without the validation gates above.
 | Runtime regression | crates/fullmag-runner/src/native_fem/steady_transport.rs | native_m2_solver_publishes_reciprocal_diagnostics | reciprocal provenance identity | focused managed test |
 | ABI layout regression | crates/fullmag-fem-sys/src/lib.rs | steady_transport_m2_request_keeps_v1_as_a_nested_prefix | append-only nested M1-prefix guarantee | focused managed test |
 | M2 affine constitutive oracle | backends/fem/tests/steady_transport_abi_contract.cpp | cpu_double_reciprocal_m2_affine_constitutive_oracle | nonzero-gradient signs, half-gradient convention, node-major projection, two-drive Onsager cross response, and positive dissipation | `just verify-fem-steady-transport-m2-affine-contract` |
+| M2 mesh convergence oracle | backends/fem/tests/steady_transport_contract.cpp | reciprocal_m2_converges_on_three_mesh_resolutions | finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions | `just verify-fem-steady-transport-m2-convergence-contract` |
 
 (scientific-bibliography)=
 ## 9. References

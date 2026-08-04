@@ -520,6 +520,107 @@ void reciprocal_m2_uniform_she_and_ishe_have_canonical_si_response()
         "reciprocal direct-SHE spin current has the wrong sign or magnitude");
 }
 
+void reciprocal_m2_converges_on_three_mesh_resolutions()
+{
+    constexpr double length_m = 1.0;
+    constexpr double width_m = 0.2;
+    constexpr double height_m = 0.2;
+    constexpr std::array<int, 3> x_elements = {8, 16, 32};
+    std::array<double, 3> potential_midpoint{};
+    std::array<double, 3> spin_midpoint{};
+
+    for (std::size_t index = 0; index < x_elements.size(); ++index) {
+        mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+            x_elements[index], 1, 1, mfem::Element::TETRAHEDRON,
+            length_m, width_m, height_m);
+        mfem::ConstantCoefficient sigma(4.0);
+        mfem::VectorConstantCoefficient magnetization(
+            mfem::Vector({1.0, 0.0, 0.0}));
+        SteadyTransportParameters parameters;
+        parameters.constitutive_model = TransportConstitutiveModel::Reciprocal;
+        parameters.sigma_s_spm = 5.0;
+        parameters.sigma_parallel_spm = 6.0;
+        parameters.sigma_perpendicular_spm = 3.0;
+        parameters.sigma_ahe_spm = 0.0;
+        parameters.polarization_p = 0.25;
+        parameters.theta_sh = 0.0;
+        parameters.lambda_sf_m = 0.3;
+        parameters.lambda_j_m = std::numeric_limits<double>::infinity();
+        parameters.lambda_phi_m = std::numeric_limits<double>::infinity();
+        parameters.relative_tolerance = 1.0e-11;
+        parameters.maximum_iterations = 1000;
+        SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+
+        const auto electrodes = x_electrodes(mesh);
+        mfem::FunctionCoefficient voltage([](const mfem::Vector &x) {
+            return 1.0 - x[0];
+        });
+        mfem::VectorFunctionCoefficient spin_boundary(3, [](const mfem::Vector &x,
+                                                             mfem::Vector &value) {
+            value.SetSize(3);
+            value = 0.0;
+            value[0] = 1.0 - x[0];
+        });
+        const auto diagnostics = oracle.solve_reciprocal(
+            electrodes, voltage, electrodes, &spin_boundary,
+            ChargeGauge::BoundaryReference);
+        require(diagnostics.charge.converged && diagnostics.spin.converged,
+            "three-grid reciprocal M2 solve did not converge");
+        require(diagnostics.charge.relative_residual < 1.0e-10 &&
+                diagnostics.spin.relative_residual < 1.0e-10,
+            "three-grid reciprocal M2 residual exceeds contract");
+
+        double potential_sum = 0.0;
+        double spin_sum = 0.0;
+        int midpoint_count = 0;
+        const double midpoint = 0.5 * length_m;
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            if (std::abs(mesh.GetVertex(vertex)[0] - midpoint) > 1.0e-12) {
+                continue;
+            }
+            mfem::Array<int> scalar_dofs;
+            oracle.electric_potential().FESpace()->GetVertexDofs(vertex, scalar_dofs);
+            require(scalar_dofs.Size() == 1,
+                "reciprocal M2 midpoint vertex does not have one scalar H1 dof");
+            potential_sum += oracle.electric_potential()[scalar_dofs[0]];
+            mfem::Array<int> vector_dofs;
+            oracle.spin_potential().FESpace()->GetVertexDofs(vertex, vector_dofs);
+            require(vector_dofs.Size() == 1,
+                "reciprocal M2 midpoint vertex does not have one vector H1 dof");
+            spin_sum += oracle.spin_potential()[
+                oracle.spin_potential().FESpace()->DofToVDof(vector_dofs[0], 0)];
+            ++midpoint_count;
+        }
+        require(midpoint_count > 0, "three-grid reciprocal M2 mesh has no midpoint vertices");
+        potential_midpoint[index] = potential_sum / midpoint_count;
+        spin_midpoint[index] = spin_sum / midpoint_count;
+    }
+
+    const double potential_coarse_error =
+        std::abs(potential_midpoint[0] - potential_midpoint[2]);
+    const double potential_medium_error =
+        std::abs(potential_midpoint[1] - potential_midpoint[2]);
+    const double spin_coarse_error =
+        std::abs(spin_midpoint[0] - spin_midpoint[2]);
+    const double spin_medium_error =
+        std::abs(spin_midpoint[1] - spin_midpoint[2]);
+    std::cout << "reciprocal M2 mesh midpoint: nx=8 V=" << potential_midpoint[0]
+              << " mu_x=" << spin_midpoint[0]
+              << ", nx=16 V=" << potential_midpoint[1]
+              << " mu_x=" << spin_midpoint[1]
+              << ", nx=32 V=" << potential_midpoint[2]
+              << " mu_x=" << spin_midpoint[2]
+              << "; errors coarse/medium=" << potential_coarse_error << "/"
+              << potential_medium_error << " V, " << spin_coarse_error << "/"
+              << spin_medium_error << " V\n";
+    require(potential_coarse_error > potential_medium_error &&
+            spin_coarse_error > spin_medium_error,
+        "reciprocal M2 midpoint errors do not decrease under refinement");
+    require(potential_medium_error < 0.8 * potential_coarse_error &&
+            spin_medium_error < 0.8 * spin_coarse_error,
+        "reciprocal M2 three-grid refinement is too weak");
+}
+
 } // namespace
 
 int main()
@@ -535,6 +636,8 @@ int main()
         direct_she_matches_uniform_film_sinh_profile();
         direct_she_converges_on_three_mesh_resolutions();
         reciprocal_m2_uniform_she_and_ishe_have_canonical_si_response();
+        const auto m2_convergence_oracle = &reciprocal_m2_converges_on_three_mesh_resolutions;
+        m2_convergence_oracle();
         std::cout << "fem steady transport contract: PASS\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
