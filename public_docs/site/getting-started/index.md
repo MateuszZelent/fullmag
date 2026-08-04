@@ -15,6 +15,7 @@ This page reserves the public documentation location for the getting-started doc
 :maxdepth: 1
 
 installation
+control-room
 first-fdm-simulation
 first-fem-simulation
 choosing-a-solver

@@ -2677,7 +2677,7 @@ pub(crate) fn plan_fem(
 
     if !problem.spin_transport_modules.is_empty() && ms_element_field.is_some() {
         return Err(PlanError {
-            reasons: vec!["FEM M1 steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the v1 native descriptor".to_string()],
+            reasons: vec!["bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string()],
         });
     }
     let spin_transport_plans = crate::spin_transport::resolve_m1_fem_spin_transport(

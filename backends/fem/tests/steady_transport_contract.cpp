@@ -12,6 +12,7 @@
 namespace {
 
 using fullmag::fem::transport::ChargeGauge;
+using fullmag::fem::transport::TransportConstitutiveModel;
 using fullmag::fem::transport::SteadyTransportOracle;
 using fullmag::fem::transport::SteadyTransportParameters;
 
@@ -49,6 +50,13 @@ mfem::Array<int> x_electrodes(const mfem::Mesh &mesh)
             marker[mesh.GetBdrAttribute(boundary) - 1] = 1;
         }
     }
+    return marker;
+}
+
+mfem::Array<int> all_external_boundaries(const mfem::Mesh &mesh)
+{
+    mfem::Array<int> marker(mesh.bdr_attributes.Max());
+    marker = 1;
     return marker;
 }
 
@@ -431,6 +439,87 @@ void direct_she_converges_on_three_mesh_resolutions()
         "direct-SHE three-grid refinement is too weak");
 }
 
+void reciprocal_m2_uniform_she_and_ishe_have_canonical_si_response()
+{
+    constexpr double sigma_spm = 4.0;
+    constexpr double sigma_s_spm = 3.0;
+    constexpr double theta_sh = 0.1;
+    constexpr double electric_field_v_per_m = 1.0;
+    constexpr double spin_gradient_v_per_m = 0.4;
+    constexpr double spin_potential_gradient_v_per_m = 0.5 * spin_gradient_v_per_m;
+
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        8, 2, 8, mfem::Element::TETRAHEDRON, 1.0, 0.4, 1.0);
+    mfem::ConstantCoefficient sigma(sigma_spm);
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+    SteadyTransportParameters parameters;
+    parameters.constitutive_model = TransportConstitutiveModel::Reciprocal;
+    parameters.sigma_s_spm = sigma_s_spm;
+    parameters.sigma_parallel_spm = sigma_spm;
+    parameters.sigma_perpendicular_spm = sigma_spm;
+    parameters.sigma_ahe_spm = 0.0;
+    parameters.polarization_p = 0.0;
+    parameters.theta_sh = theta_sh;
+    parameters.lambda_sf_m = std::numeric_limits<double>::infinity();
+    parameters.lambda_j_m = std::numeric_limits<double>::infinity();
+    parameters.lambda_phi_m = std::numeric_limits<double>::infinity();
+    parameters.relative_tolerance = 1.0e-11;
+    parameters.maximum_iterations = 1000;
+    SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+
+    const auto charge_marker = all_external_boundaries(mesh);
+    const auto spin_marker = all_external_boundaries(mesh);
+    mfem::FunctionCoefficient voltage([](const mfem::Vector &x) {
+        return 1.0 - x[0];
+    });
+    mfem::VectorFunctionCoefficient spin_boundary(3, [](const mfem::Vector &x,
+                                                         mfem::Vector &value) {
+        value.SetSize(3);
+        value = 0.0;
+        value[1] = 0.4 * (1.0 - x[2]);
+    });
+
+    const auto diagnostics = oracle.solve_reciprocal(
+        charge_marker, voltage, spin_marker, &spin_boundary,
+        ChargeGauge::BoundaryReference);
+    require(diagnostics.charge.converged, "reciprocal charge solve did not converge");
+    require(diagnostics.spin.converged, "reciprocal spin solve did not converge");
+    require(diagnostics.charge.relative_residual < 1.0e-10,
+        "reciprocal charge residual exceeds contract");
+    require(diagnostics.spin.relative_residual < 1.0e-10,
+        "reciprocal spin residual exceeds contract");
+
+    const double expected_charge_x = sigma_spm * electric_field_v_per_m -
+        theta_sh * sigma_spm * spin_potential_gradient_v_per_m;
+    const double expected_spin_zy = sigma_s_spm * spin_potential_gradient_v_per_m +
+        theta_sh * sigma_spm * electric_field_v_per_m;
+    const auto &spin_current = oracle.spin_current_tensor();
+    const int node_count = spin_current.FESpace()->GetNDofs();
+    double mean_spin_zy = 0.0;
+    for (int node = 0; node < node_count; ++node) {
+        mean_spin_zy += spin_current[spin_current.FESpace()->DofToVDof(node, 7)];
+    }
+    mean_spin_zy /= node_count;
+    mfem::VectorFunctionCoefficient expected_spin(3, [](const mfem::Vector &x,
+                                                         mfem::Vector &value) {
+        value.SetSize(3);
+        value = 0.0;
+        value[1] = 0.4 * (1.0 - x[2]);
+    });
+    mfem::FunctionCoefficient expected_voltage([](const mfem::Vector &x) {
+        return 1.0 - x[0];
+    });
+    require(max_nodal_error(oracle.electric_potential(), expected_voltage) < 1.0e-9,
+        "reciprocal charge potential does not reproduce the prescribed linear field");
+    require(max_vector_nodal_error(oracle.spin_potential(), expected_spin) < 1.0e-9,
+        "reciprocal spin potential does not reproduce the prescribed linear field");
+    require(std::abs(diagnostics.charge.current_density_volume_average_apm2[0] -
+            expected_charge_x) < 1.0e-9,
+        "reciprocal iSHE charge current has the wrong sign or magnitude");
+    require(std::abs(mean_spin_zy - expected_spin_zy) < 1.0e-9,
+        "reciprocal direct-SHE spin current has the wrong sign or magnitude");
+}
+
 } // namespace
 
 int main()
@@ -445,6 +534,7 @@ int main()
         direct_she_sign_and_torque_projection_are_canonical();
         direct_she_matches_uniform_film_sinh_profile();
         direct_she_converges_on_three_mesh_resolutions();
+        reciprocal_m2_uniform_she_and_ishe_have_canonical_si_response();
         std::cout << "fem steady transport contract: PASS\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

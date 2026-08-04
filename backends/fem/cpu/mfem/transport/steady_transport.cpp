@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace fullmag::fem::transport {
 namespace {
@@ -31,7 +32,7 @@ void validate_parameters(const SteadyTransportParameters &p)
         return (std::isfinite(value) && value > 0.0) ||
             (std::isinf(value) && value > 0.0);
     };
-    if (!(std::isfinite(p.lambda_sf_m) && p.lambda_sf_m > 0.0) ||
+    if (!valid_length(p.lambda_sf_m) ||
         !valid_length(p.lambda_j_m) ||
         !valid_length(p.lambda_phi_m)) {
         throw std::invalid_argument("active spin-reaction lengths must be positive; disabled is +infinity");
@@ -48,6 +49,14 @@ void validate_parameters(const SteadyTransportParameters &p)
     if (p.interface_model != SpinInterfaceModel::TransparentConformingH1) {
         throw std::invalid_argument(
             "mixing/SML transport requires the unimplemented broken-H1 mortar realization");
+    }
+    if (p.constitutive_model == TransportConstitutiveModel::Reciprocal) {
+        if (!(std::isfinite(p.sigma_parallel_spm) && p.sigma_parallel_spm > 0.0) ||
+            !(std::isfinite(p.sigma_perpendicular_spm) && p.sigma_perpendicular_spm > 0.0) ||
+            !std::isfinite(p.sigma_ahe_spm)) {
+            throw std::invalid_argument(
+                "reciprocal charge conductivities must be finite; symmetric terms must be positive");
+        }
     }
 }
 
@@ -180,6 +189,213 @@ private:
     const SteadyTransportParameters &parameters_;
 };
 
+double levi_civita(int i, int j, int k)
+{
+    if ((i == 0 && j == 1 && k == 2) ||
+        (i == 1 && j == 2 && k == 0) ||
+        (i == 2 && j == 0 && k == 1)) {
+        return 1.0;
+    }
+    if ((i == 0 && j == 2 && k == 1) ||
+        (i == 2 && j == 1 && k == 0) ||
+        (i == 1 && j == 0 && k == 2)) {
+        return -1.0;
+    }
+    return 0.0;
+}
+
+class CoupledTransportGradientIntegrator final : public mfem::BilinearFormIntegrator {
+public:
+    CoupledTransportGradientIntegrator(
+        mfem::Coefficient &conductivity,
+        mfem::VectorCoefficient &magnetization,
+        const SteadyTransportParameters &parameters)
+        : conductivity_(conductivity), magnetization_(magnetization), parameters_(parameters)
+    {
+    }
+
+    void AssembleElementMatrix(
+        const mfem::FiniteElement &element,
+        mfem::ElementTransformation &transformation,
+        mfem::DenseMatrix &element_matrix) override
+    {
+        const int dofs = element.GetDof();
+        const int dimension = element.GetDim();
+        if (dimension != 3) {
+            throw std::invalid_argument("reciprocal FEM transport requires a 3-D element");
+        }
+        constexpr int components = 4; // V, mu_x, mu_y, mu_z
+        element_matrix.SetSize(components * dofs);
+        element_matrix = 0.0;
+
+        const int order = std::max(2, 2 * element.GetOrder());
+        const mfem::IntegrationRule &rule = mfem::IntRules.Get(
+            element.GetGeomType(), order);
+        mfem::DenseMatrix physical_gradient(dofs, dimension);
+        mfem::Vector m(3);
+        double coefficient[4][4][3][3]{};
+
+        for (int q = 0; q < rule.GetNPoints(); ++q) {
+            const mfem::IntegrationPoint &point = rule.IntPoint(q);
+            transformation.SetIntPoint(&point);
+            element.CalcPhysDShape(transformation, physical_gradient);
+            magnetization_.Eval(m, transformation, point);
+            const double norm = m.Norml2();
+            if (!(std::isfinite(norm) && norm > 0.0)) {
+                throw std::invalid_argument(
+                    "reciprocal FEM transport magnetization is non-finite or zero");
+            }
+            m /= norm;
+            const double sigma = conductivity_.Eval(transformation, point);
+            const double weight = point.weight * transformation.Weight();
+            if (!(std::isfinite(sigma) && sigma > 0.0 && std::isfinite(weight))) {
+                throw std::invalid_argument(
+                    "reciprocal FEM transport conductivity or quadrature weight is invalid");
+            }
+            for (int row = 0; row < components; ++row) {
+                for (int column = 0; column < components; ++column) {
+                    for (int i = 0; i < dimension; ++i) {
+                        for (int j = 0; j < dimension; ++j) {
+                            coefficient[row][column][i][j] = 0.0;
+                        }
+                    }
+                }
+            }
+
+            for (int i = 0; i < dimension; ++i) {
+                for (int j = 0; j < dimension; ++j) {
+                    coefficient[0][0][i][j] =
+                        parameters_.sigma_perpendicular_spm * (i == j ? 1.0 : 0.0) +
+                        (parameters_.sigma_parallel_spm -
+                            parameters_.sigma_perpendicular_spm) * m[i] * m[j];
+                    for (int k = 0; k < dimension; ++k) {
+                        coefficient[0][0][i][j] += parameters_.sigma_ahe_spm *
+                            levi_civita(i, k, j) * m[k];
+                    }
+                }
+            }
+            for (int spin_component = 0; spin_component < 3; ++spin_component) {
+                for (int i = 0; i < dimension; ++i) {
+                    for (int j = 0; j < dimension; ++j) {
+                        coefficient[0][spin_component + 1][i][j] =
+                            0.5 * parameters_.polarization_p * sigma *
+                                m[spin_component] * (i == j ? 1.0 : 0.0) +
+                            0.5 * parameters_.theta_sh * sigma *
+                                levi_civita(i, j, spin_component);
+                        coefficient[spin_component + 1][0][i][j] =
+                            parameters_.polarization_p * sigma *
+                                m[spin_component] * (i == j ? 1.0 : 0.0) +
+                            parameters_.theta_sh * sigma *
+                                levi_civita(i, j, spin_component);
+                        coefficient[spin_component + 1][spin_component + 1][i][j] =
+                            0.5 * parameters_.sigma_s_spm * (i == j ? 1.0 : 0.0);
+                    }
+                }
+            }
+
+            for (int test_dof = 0; test_dof < dofs; ++test_dof) {
+                for (int trial_dof = 0; trial_dof < dofs; ++trial_dof) {
+                    for (int row = 0; row < components; ++row) {
+                        for (int column = 0; column < components; ++column) {
+                            double value = 0.0;
+                            for (int i = 0; i < dimension; ++i) {
+                                for (int j = 0; j < dimension; ++j) {
+                                    value += physical_gradient(test_dof, i) *
+                                        coefficient[row][column][i][j] *
+                                        physical_gradient(trial_dof, j);
+                                }
+                            }
+                            element_matrix(
+                                row * dofs + test_dof,
+                                column * dofs + trial_dof) += weight * value;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+private:
+    mfem::Coefficient &conductivity_;
+    mfem::VectorCoefficient &magnetization_;
+    const SteadyTransportParameters &parameters_;
+};
+
+class CoupledReactionMatrixCoefficient final : public mfem::MatrixCoefficient {
+public:
+    CoupledReactionMatrixCoefficient(
+        mfem::VectorCoefficient &magnetization,
+        const SteadyTransportParameters &parameters)
+        : mfem::MatrixCoefficient(4), magnetization_(magnetization), parameters_(parameters)
+    {
+    }
+
+    void Eval(
+        mfem::DenseMatrix &matrix,
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point) override
+    {
+        ReactionMatrixCoefficient reaction(magnetization_, parameters_);
+        mfem::DenseMatrix spin_reaction;
+        reaction.Eval(spin_reaction, transformation, point);
+        matrix.SetSize(4);
+        matrix = 0.0;
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 3; ++column) {
+                matrix(row + 1, column + 1) = spin_reaction(row, column);
+            }
+        }
+    }
+
+private:
+    mfem::VectorCoefficient &magnetization_;
+    const SteadyTransportParameters &parameters_;
+};
+
+class CoupledBoundaryCoefficient final : public mfem::VectorCoefficient {
+public:
+    CoupledBoundaryCoefficient(
+        const mfem::Array<int> &charge_marker,
+        mfem::Coefficient &boundary_potential,
+        const mfem::Array<int> &spin_marker,
+        mfem::VectorCoefficient *boundary_spin_potential)
+        : mfem::VectorCoefficient(4), charge_marker_(charge_marker),
+          boundary_potential_(boundary_potential), spin_marker_(spin_marker),
+          boundary_spin_potential_(boundary_spin_potential)
+    {
+    }
+
+    void Eval(
+        mfem::Vector &value,
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point) override
+    {
+        value.SetSize(4);
+        value = 0.0;
+        const int attribute = transformation.Attribute;
+        if (attribute <= 0 || attribute > charge_marker_.Size()) {
+            return;
+        }
+        const int index = attribute - 1;
+        if (charge_marker_[index] != 0) {
+            value[0] = boundary_potential_.Eval(transformation, point);
+        }
+        if (spin_marker_[index] != 0 && boundary_spin_potential_ != nullptr) {
+            mfem::Vector spin(3);
+            boundary_spin_potential_->Eval(spin, transformation, point);
+            for (int component = 0; component < 3; ++component) {
+                value[component + 1] = spin[component];
+            }
+        }
+    }
+
+private:
+    const mfem::Array<int> &charge_marker_;
+    mfem::Coefficient &boundary_potential_;
+    const mfem::Array<int> &spin_marker_;
+    mfem::VectorCoefficient *boundary_spin_potential_;
+};
+
 } // namespace
 
 class SteadyTransportOracle::Impl {
@@ -193,8 +409,9 @@ public:
           parameters(parameters), collection(1, mesh.Dimension()),
           scalar_space(&mesh, &collection), vector_space(&mesh, &collection, 3, mfem::Ordering::byNODES),
           tensor_space(&mesh, &collection, 9, mfem::Ordering::byNODES),
+          coupled_space(&mesh, &collection, 4, mfem::Ordering::byNODES),
           potential(&scalar_space), current(&vector_space), spin(&vector_space),
-          spin_current(&tensor_space), torque(&vector_space)
+          spin_current(&tensor_space), torque(&vector_space), coupled_state(&coupled_space)
     {
         validate_parameters(parameters);
         if (mesh.Dimension() != 3) {
@@ -205,6 +422,7 @@ public:
         spin = 0.0;
         spin_current = 0.0;
         torque = 0.0;
+        coupled_state = 0.0;
         validate_material_coefficients();
     }
 
@@ -220,10 +438,17 @@ public:
                 if (!(std::isfinite(sigma) && sigma > 0.0)) {
                     throw std::invalid_argument("charge conductivity must be finite and positive");
                 }
-                if (!(parameters.sigma_s_spm -
+                if (parameters.constitutive_model == TransportConstitutiveModel::Reciprocal) {
+                    const double minimum_charge_conductivity = std::min(
+                        parameters.sigma_parallel_spm, parameters.sigma_perpendicular_spm);
+                    if (!(minimum_charge_conductivity * parameters.sigma_s_spm -
+                            parameters.polarization_p * parameters.polarization_p * sigma * sigma > 0.0)) {
+                        throw std::invalid_argument(
+                            "reciprocal spin material violates the positive Schur complement");
+                    }
+                } else if (!(parameters.sigma_s_spm -
                         parameters.polarization_p * parameters.polarization_p * sigma > 0.0)) {
-                    throw std::invalid_argument(
-                        "spin material violates sigma_s-P^2 sigma>0");
+                    throw std::invalid_argument("spin material violates sigma_s-P^2 sigma>0");
                 }
             }
         }
@@ -234,6 +459,10 @@ public:
         mfem::Coefficient &boundary_potential,
         ChargeGauge gauge)
     {
+        if (parameters.constitutive_model != TransportConstitutiveModel::OneWay) {
+            throw std::invalid_argument(
+                "reciprocal transport requires the monolithic solve_reciprocal entry point");
+        }
         if (marker.Size() != mesh.bdr_attributes.Max()) {
             throw std::invalid_argument("charge boundary marker size does not match mesh attributes");
         }
@@ -305,6 +534,10 @@ public:
         const mfem::Array<int> &marker,
         mfem::VectorCoefficient *boundary_spin_potential)
     {
+        if (parameters.constitutive_model != TransportConstitutiveModel::OneWay) {
+            throw std::invalid_argument(
+                "reciprocal transport requires the monolithic solve_reciprocal entry point");
+        }
         if (marker.Size() != mesh.bdr_attributes.Max()) {
             throw std::invalid_argument("spin boundary marker size does not match mesh attributes");
         }
@@ -383,6 +616,230 @@ public:
         return diagnostics;
     }
 
+    ReciprocalSolveDiagnostics solve_reciprocal(
+        const mfem::Array<int> &charge_marker,
+        mfem::Coefficient &boundary_potential,
+        const mfem::Array<int> &spin_marker,
+        mfem::VectorCoefficient *boundary_spin_potential,
+        ChargeGauge gauge)
+    {
+        if (parameters.constitutive_model != TransportConstitutiveModel::Reciprocal) {
+            throw std::invalid_argument(
+                "solve_reciprocal requires reciprocal constitutive parameters");
+        }
+        if (charge_marker.Size() != mesh.bdr_attributes.Max() ||
+            spin_marker.Size() != mesh.bdr_attributes.Max()) {
+            throw std::invalid_argument(
+                "reciprocal charge and spin boundary marker sizes must match mesh attributes");
+        }
+        if (gauge == ChargeGauge::Missing ||
+            (gauge == ChargeGauge::BoundaryReference && marker_sum(charge_marker) == 0)) {
+            throw std::invalid_argument(
+                "reciprocal charge transport requires a boundary reference or zero-mean gauge");
+        }
+        if (gauge == ChargeGauge::ZeroMeanPotential) {
+            throw std::invalid_argument(
+                "reciprocal FEM reference lane currently requires a Dirichlet charge reference");
+        }
+        if (marker_sum(spin_marker) > 0 && boundary_spin_potential == nullptr) {
+            throw std::invalid_argument(
+                "reciprocal spin Dirichlet boundaries require a value coefficient");
+        }
+        if (marker_sum(spin_marker) == 0 &&
+            !active_length(parameters.lambda_sf_m) &&
+            !active_length(parameters.lambda_j_m) &&
+            !active_length(parameters.lambda_phi_m)) {
+            throw std::invalid_argument(
+                "reciprocal spin operator has an unremoved constant nullspace");
+        }
+
+        mfem::Array<int> combined_marker(mesh.bdr_attributes.Max());
+        combined_marker = 0;
+        for (int boundary = 0; boundary < combined_marker.Size(); ++boundary) {
+            combined_marker[boundary] =
+                (charge_marker[boundary] != 0 || spin_marker[boundary] != 0) ? 1 : 0;
+        }
+        CoupledBoundaryCoefficient boundary_values(
+            charge_marker, boundary_potential, spin_marker, boundary_spin_potential);
+        coupled_state = 0.0;
+        coupled_state.ProjectBdrCoefficient(boundary_values, combined_marker);
+
+        mfem::BilinearForm form(&coupled_space);
+        form.AddDomainIntegrator(new CoupledTransportGradientIntegrator(
+            conductivity, magnetization, parameters));
+        CoupledReactionMatrixCoefficient reaction(magnetization, parameters);
+        form.AddDomainIntegrator(new mfem::VectorMassIntegrator(reaction));
+        form.Assemble();
+
+        mfem::LinearForm rhs(&coupled_space);
+        rhs = 0.0;
+        rhs.Assemble();
+        mfem::Array<int> essential_true_dofs;
+        // Charge and spin Dirichlet data are component-wise.  Passing the
+        // union marker without a component would constrain all four fields
+        // and silently impose zero on the field that was not prescribed on a
+        // given boundary.
+        mfem::Array<int> essential_true_dof_marker(coupled_space.GetTrueVSize());
+        essential_true_dof_marker = 0;
+        mfem::Array<int> component_true_dofs;
+        const auto mark_component_dofs = [&](const mfem::Array<int> &marker, int component) {
+            coupled_space.GetEssentialTrueDofs(marker, component_true_dofs, component);
+            for (int index = 0; index < component_true_dofs.Size(); ++index) {
+                essential_true_dof_marker[component_true_dofs[index]] = 1;
+            }
+        };
+        mark_component_dofs(charge_marker, 0);
+        for (int component = 1; component < 4; ++component) {
+            mark_component_dofs(spin_marker, component);
+        }
+        int essential_count = 0;
+        for (int index = 0; index < essential_true_dof_marker.Size(); ++index) {
+            essential_count += essential_true_dof_marker[index] != 0 ? 1 : 0;
+        }
+        essential_true_dofs.SetSize(essential_count);
+        int essential_index = 0;
+        for (int index = 0; index < essential_true_dof_marker.Size(); ++index) {
+            if (essential_true_dof_marker[index] != 0) {
+                essential_true_dofs[essential_index++] = index;
+            }
+        }
+        mfem::OperatorPtr system_operator;
+        mfem::Vector solution, system_rhs;
+        form.FormLinearSystem(
+            essential_true_dofs, coupled_state, rhs, system_operator, solution, system_rhs);
+        mfem::GMRESSolver solver;
+        solver.SetOperator(*system_operator.Ptr());
+        solver.SetRelTol(parameters.relative_tolerance);
+        solver.SetAbsTol(0.0);
+        solver.SetMaxIter(parameters.maximum_iterations);
+        solver.SetKDim(std::min(100, std::max(1, parameters.maximum_iterations)));
+        solver.SetPrintLevel(0);
+        solver.Mult(system_rhs, solution);
+
+        double relative_residual = std::numeric_limits<double>::infinity();
+        if (system_rhs.Size() == 0) {
+            relative_residual = 0.0;
+        } else {
+            mfem::Vector residual(system_rhs.Size());
+            system_operator->Mult(solution, residual);
+            residual -= system_rhs;
+            const double scale = system_rhs.Norml2();
+            relative_residual = residual.Norml2() /
+                (scale > 0.0 ? scale : std::numeric_limits<double>::min());
+        }
+        form.RecoverFEMSolution(solution, rhs, coupled_state);
+        for (int dof = 0; dof < scalar_space.GetVSize(); ++dof) {
+            potential[dof] = coupled_state[coupled_space.DofToVDof(dof, 0)];
+            for (int component = 0; component < 3; ++component) {
+                spin[spin.FESpace()->DofToVDof(dof, component)] =
+                    coupled_state[coupled_space.DofToVDof(dof, component + 1)];
+            }
+        }
+
+        mfem::Vector weak_residual(coupled_state.Size());
+        form.Mult(coupled_state, weak_residual);
+        weak_residual -= rhs;
+        last_spin_weak_balance = {0.0, 0.0, 0.0};
+        for (int dof = 0; dof < scalar_space.GetVSize(); ++dof) {
+            for (int component = 0; component < 3; ++component) {
+                last_spin_weak_balance[component] +=
+                    weak_residual[coupled_space.DofToVDof(dof, component + 1)];
+            }
+        }
+
+        project_charge_current();
+        project_spin_current();
+        ReciprocalSolveDiagnostics diagnostics;
+        diagnostics.charge.converged = solver.GetConverged();
+        diagnostics.charge.iterations = solver.GetNumIterations();
+        diagnostics.charge.relative_residual = relative_residual;
+        diagnostics.spin.converged = solver.GetConverged();
+        diagnostics.spin.iterations = solver.GetNumIterations();
+        diagnostics.spin.relative_residual = relative_residual;
+        accumulate_charge_diagnostics(diagnostics.charge);
+        accumulate_spin_diagnostics(diagnostics.spin);
+        project_torque(diagnostics.spin);
+        return diagnostics;
+    }
+
+    void constitutive_response(
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point,
+        mfem::Vector &charge,
+        mfem::DenseMatrix &spin_current_value)
+    {
+        mfem::Vector grad_v(3);
+        potential.GetGradient(transformation, grad_v);
+        mfem::Vector electric_field(grad_v);
+        electric_field *= -1.0;
+        mfem::DenseMatrix grad_mu;
+        spin.GetVectorGradient(transformation, grad_mu);
+        mfem::Vector m(3);
+        magnetization.Eval(m, transformation, point);
+        const double norm = m.Norml2();
+        if (!(std::isfinite(norm) && norm > 0.0)) {
+            throw std::invalid_argument("transport magnetization is non-finite or zero");
+        }
+        m /= norm;
+        const double sigma = conductivity.Eval(transformation, point);
+        charge.SetSize(3);
+        spin_current_value.SetSize(3);
+        charge = 0.0;
+        spin_current_value = 0.0;
+        if (parameters.constitutive_model == TransportConstitutiveModel::OneWay) {
+            for (int flow = 0; flow < 3; ++flow) {
+                charge[flow] = sigma * electric_field[flow];
+                for (int component = 0; component < 3; ++component) {
+                    double she = 0.0;
+                    for (int k = 0; k < 3; ++k) {
+                        she += parameters.theta_sh * sigma *
+                            levi_civita(flow, k, component) * electric_field[k];
+                    }
+                    spin_current_value(flow, component) =
+                        -0.5 * parameters.sigma_s_spm * grad_mu(component, flow) +
+                        parameters.polarization_p * sigma * electric_field[flow] *
+                            m[component] + she;
+                }
+            }
+            return;
+        }
+
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                const double sigma_mr =
+                    parameters.sigma_perpendicular_spm * (i == j ? 1.0 : 0.0) +
+                    (parameters.sigma_parallel_spm - parameters.sigma_perpendicular_spm) *
+                        m[i] * m[j];
+                charge[i] += sigma_mr * electric_field[j];
+                for (int k = 0; k < 3; ++k) {
+                    charge[i] += parameters.sigma_ahe_spm *
+                        levi_civita(i, k, j) * m[k] * electric_field[j];
+                }
+            }
+            for (int component = 0; component < 3; ++component) {
+                const double g = -0.5 * grad_mu(component, i);
+                charge[i] += parameters.polarization_p * sigma * m[component] * g;
+                for (int j = 0; j < 3; ++j) {
+                    charge[i] += parameters.theta_sh * sigma *
+                        levi_civita(i, j, component) *
+                        (-0.5 * grad_mu(component, j));
+                }
+            }
+        }
+        for (int i = 0; i < 3; ++i) {
+            for (int component = 0; component < 3; ++component) {
+                spin_current_value(i, component) =
+                    parameters.sigma_s_spm * (-0.5 * grad_mu(component, i)) +
+                    parameters.polarization_p * sigma * electric_field[i] *
+                        m[component];
+                for (int k = 0; k < 3; ++k) {
+                    spin_current_value(i, component) += parameters.theta_sh * sigma *
+                        levi_civita(i, k, component) * electric_field[k];
+                }
+            }
+        }
+    }
+
     void source_matrix(
         mfem::ElementTransformation &transformation,
         const mfem::IntegrationPoint &point,
@@ -404,10 +861,8 @@ public:
     {
         class ChargeCurrentCoefficient final : public mfem::VectorCoefficient {
         public:
-            ChargeCurrentCoefficient(
-                mfem::GridFunction &potential,
-                mfem::Coefficient &conductivity)
-                : mfem::VectorCoefficient(3), potential_(potential), conductivity_(conductivity)
+            explicit ChargeCurrentCoefficient(Impl &owner)
+                : mfem::VectorCoefficient(3), owner_(owner)
             {
             }
 
@@ -416,14 +871,13 @@ public:
                 mfem::ElementTransformation &transformation,
                 const mfem::IntegrationPoint &point) override
             {
-                potential_.GetGradient(transformation, value);
-                value *= -conductivity_.Eval(transformation, point);
+                mfem::DenseMatrix spin_current;
+                owner_.constitutive_response(transformation, point, value, spin_current);
             }
 
         private:
-            mfem::GridFunction &potential_;
-            mfem::Coefficient &conductivity_;
-        } coefficient(potential, conductivity);
+            Impl &owner_;
+        } coefficient(*this);
 
         current.ProjectCoefficient(coefficient);
     }
@@ -443,15 +897,12 @@ public:
                 const mfem::IntegrationPoint &point) override
             {
                 mfem::DenseMatrix gradient;
-                owner_.spin.GetVectorGradient(transformation, gradient);
-                mfem::DenseMatrix source;
-                owner_.source_matrix(transformation, point, source);
+                mfem::Vector charge;
+                owner_.constitutive_response(transformation, point, charge, gradient);
                 value.SetSize(9);
                 for (int flow = 0; flow < 3; ++flow) {
                     for (int component = 0; component < 3; ++component) {
-                        value[flow * 3 + component] =
-                            -0.5 * owner_.parameters.sigma_s_spm * gradient(component, flow) +
-                            source(flow, component);
+                        value[flow * 3 + component] = gradient(flow, component);
                     }
                 }
             }
@@ -475,11 +926,11 @@ public:
             for (int q = 0; q < rule.GetNPoints(); ++q) {
                 const auto &point = rule.IntPoint(q);
                 transformation->SetIntPoint(&point);
-                mfem::Vector gradient(3);
-                potential.GetGradient(*transformation, gradient);
+                mfem::Vector charge(3);
+                mfem::DenseMatrix spin_current;
+                constitutive_response(*transformation, point, charge, spin_current);
                 const double weight = point.weight * transformation->Weight();
-                const double sigma = conductivity.Eval(*transformation, point);
-                volume_current.Add(-sigma * weight, gradient);
+                volume_current.Add(weight, charge);
                 volume += weight;
             }
         }
@@ -500,13 +951,13 @@ public:
                 mfem::IntegrationPoint element_point;
                 face->Loc1.Transform(face_point, element_point);
                 face->Elem1->SetIntPoint(&element_point);
-                mfem::Vector gradient(3);
-                potential.GetGradient(*face->Elem1, gradient);
+                mfem::Vector charge(3);
+                mfem::DenseMatrix spin_current;
+                constitutive_response(*face->Elem1, element_point, charge, spin_current);
                 mfem::Vector normal(3);
                 face->Face->SetIntPoint(&face_point);
                 mfem::CalcOrtho(face->Face->Jacobian(), normal);
-                const double sigma = conductivity.Eval(*face->Elem1, element_point);
-                boundary_current += -sigma * (gradient * normal) * face_point.weight;
+                boundary_current += (charge * normal) * face_point.weight;
             }
         }
         diagnostics.net_boundary_current_a = boundary_current;
@@ -530,18 +981,16 @@ public:
                 mfem::IntegrationPoint element_point;
                 face->Loc1.Transform(face_point, element_point);
                 face->Elem1->SetIntPoint(&element_point);
-                mfem::DenseMatrix gradient;
-                spin.GetVectorGradient(*face->Elem1, gradient);
-                mfem::DenseMatrix source;
-                source_matrix(*face->Elem1, element_point, source);
+                mfem::Vector charge;
+                mfem::DenseMatrix spin_current_value;
+                constitutive_response(*face->Elem1, element_point, charge, spin_current_value);
                 mfem::Vector normal(3);
                 face->Face->SetIntPoint(&face_point);
                 mfem::CalcOrtho(face->Face->Jacobian(), normal);
                 for (int a = 0; a < 3; ++a) {
                     double flux = 0.0;
                     for (int i = 0; i < 3; ++i) {
-                        flux += normal[i] *
-                            (-0.5 * parameters.sigma_s_spm * gradient(a, i) + source(i, a));
+                        flux += normal[i] * spin_current_value(i, a);
                     }
                     diagnostics.boundary_spin_flux_a[a] += face_point.weight * flux;
                 }
@@ -712,11 +1161,13 @@ public:
     mfem::FiniteElementSpace scalar_space;
     mfem::FiniteElementSpace vector_space;
     mfem::FiniteElementSpace tensor_space;
+    mfem::FiniteElementSpace coupled_space;
     mfem::GridFunction potential;
     mfem::GridFunction current;
     mfem::GridFunction spin;
     mfem::GridFunction spin_current;
     mfem::GridFunction torque;
+    mfem::GridFunction coupled_state;
     std::vector<std::unique_ptr<SpinSourceColumnCoefficient>> source_coefficients;
     std::array<double, 3> last_spin_weak_balance{};
 };
@@ -745,6 +1196,18 @@ SpinSolveDiagnostics SteadyTransportOracle::solve_spin(
     mfem::VectorCoefficient *boundary_spin_potential)
 {
     return impl_->solve_spin(dirichlet_boundary_marker, boundary_spin_potential);
+}
+
+ReciprocalSolveDiagnostics SteadyTransportOracle::solve_reciprocal(
+    const mfem::Array<int> &charge_dirichlet_boundary_marker,
+    mfem::Coefficient &boundary_potential,
+    const mfem::Array<int> &spin_dirichlet_boundary_marker,
+    mfem::VectorCoefficient *boundary_spin_potential,
+    ChargeGauge gauge)
+{
+    return impl_->solve_reciprocal(
+        charge_dirichlet_boundary_marker, boundary_potential,
+        spin_dirichlet_boundary_marker, boundary_spin_potential, gauge);
 }
 
 const mfem::GridFunction &SteadyTransportOracle::electric_potential() const

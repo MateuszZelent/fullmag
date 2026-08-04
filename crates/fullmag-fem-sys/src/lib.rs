@@ -15,6 +15,7 @@ pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
 pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,6 +697,15 @@ pub struct fullmag_fem_steady_transport_request_v1 {
     pub spin_dirichlet_boundary_attributes: *const u32,
     pub spin_dirichlet_values_v: *const f64,
     pub spin_dirichlet_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_m2_request_v1 {
+    pub base: fullmag_fem_steady_transport_request_v1,
+    pub sigma_parallel_spm: f64,
+    pub sigma_perpendicular_spm: f64,
+    pub sigma_ahe_spm: f64,
 }
 
 #[repr(C)]
@@ -1560,6 +1570,10 @@ extern "C" {
         request: *const fullmag_fem_steady_transport_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,
     ) -> i32;
+    pub fn fullmag_fem_solve_steady_transport_m2_v1(
+        request: *const fullmag_fem_steady_transport_m2_request_v1,
+        result: *mut fullmag_fem_steady_transport_result_v1,
+    ) -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
@@ -2145,6 +2159,24 @@ mod tests {
                     fullmag_fem_steady_transport_result_v1,
                     electric_potential_v
                 )
+        );
+    }
+
+    #[test]
+    fn steady_transport_m2_request_keeps_v1_as_a_nested_prefix() {
+        assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_m2_request_v1, base),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_m2_request_v1, sigma_parallel_spm),
+            std::mem::size_of::<fullmag_fem_steady_transport_request_v1>()
+        );
+        assert!(
+            std::mem::size_of::<fullmag_fem_steady_transport_m2_request_v1>()
+                >= std::mem::size_of::<fullmag_fem_steady_transport_request_v1>()
+                    + 3 * std::mem::size_of::<f64>()
         );
     }
 

@@ -18,6 +18,7 @@ document tree as a public navigation tree.
 :maxdepth: 2
 
 product
+ui-architecture
 semantic-model
 runtime
 planner-and-capabilities

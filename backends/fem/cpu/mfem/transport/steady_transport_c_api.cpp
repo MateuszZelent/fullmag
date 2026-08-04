@@ -41,6 +41,10 @@ constexpr const char *kConstitutiveVersion =
     "transport_constitutive.one_way.fullmag.v1";
 constexpr const char *kOperatorVersion =
     "fem_charge_spin_conforming_h1_p1.transparent.v1";
+constexpr const char *kM2ConstitutiveVersion =
+    "transport_constitutive.reciprocal.fullmag.v1";
+constexpr const char *kM2OperatorVersion =
+    "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 constexpr const char *kPhysicalResidualVersion =
     "transport_balance_integrated_l2.v1";
 
@@ -180,7 +184,9 @@ void validate_request_header(
 void validate_request(
     const fullmag_fem_steady_transport_request_v1 &request,
     const fullmag_fem_steady_transport_result_v1 &result,
-    const MeshView &mesh)
+    const MeshView &mesh,
+    const char *expected_constitutive_version = kConstitutiveVersion,
+    const char *expected_operator_version = kOperatorVersion)
 {
     validate_request_header(request, result);
     if (request.abi_version != FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION) {
@@ -210,8 +216,8 @@ void validate_request(
         FULLMAG_FEM_STEADY_TRANSPORT_TRANSPARENT_CONFORMING_H1) {
         throw std::invalid_argument("unknown FEM steady transport interface model");
     }
-    if (!equals(request.constitutive_version, kConstitutiveVersion) ||
-        !equals(request.operator_version, kOperatorVersion) ||
+    if (!equals(request.constitutive_version, expected_constitutive_version) ||
+        !equals(request.operator_version, expected_operator_version) ||
         !equals(request.physical_residual_version, kPhysicalResidualVersion)) {
         throw std::invalid_argument(
             "unsupported FEM steady transport constitutive/operator/residual version");
@@ -572,6 +578,153 @@ int solve(
     return FULLMAG_FEM_OK;
 }
 
+int solve_m2(
+    const fullmag_fem_steady_transport_m2_request_v1 &request,
+    fullmag_fem_steady_transport_result_v1 &result)
+{
+    const auto &base = request.base;
+    if (base.abi_version != FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION ||
+        base.struct_size != sizeof(fullmag_fem_steady_transport_request_v1)) {
+        throw std::invalid_argument("steady transport M2 base ABI header mismatch");
+    }
+    const MeshView mesh_view = make_mesh_view(base.mesh);
+    validate_request(
+        base, result, mesh_view, kM2ConstitutiveVersion, kM2OperatorVersion);
+    if (!(std::isfinite(request.sigma_parallel_spm) && request.sigma_parallel_spm > 0.0) ||
+        !(std::isfinite(request.sigma_perpendicular_spm) &&
+            request.sigma_perpendicular_spm > 0.0) ||
+        !std::isfinite(request.sigma_ahe_spm)) {
+        throw std::invalid_argument("reciprocal charge conductivities must be finite and positive");
+    }
+    for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
+        const double sigma = base.charge_conductivity_spm_per_element[i];
+        const double minimum_charge_conductivity = std::min(
+            request.sigma_parallel_spm, request.sigma_perpendicular_spm);
+        if (!(minimum_charge_conductivity * base.sigma_s_spm -
+                base.polarization_p * base.polarization_p * sigma * sigma > 0.0)) {
+            throw std::invalid_argument("reciprocal spin material violates the positive Schur complement");
+        }
+    }
+    auto mesh = import_mesh(base.mesh, mesh_view);
+
+    mfem::Vector conductivity_values(static_cast<int>(mesh_view.n_elements));
+    for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
+        conductivity_values[static_cast<int>(i)] =
+            base.charge_conductivity_spm_per_element[i];
+    }
+    mfem::PWConstCoefficient conductivity(conductivity_values);
+
+    mfem::H1_FECollection magnetization_collection(1, 3);
+    mfem::FiniteElementSpace magnetization_space(
+        mesh.get(), &magnetization_collection, 3, mfem::Ordering::byNODES);
+    if (magnetization_space.GetNDofs() != static_cast<int>(mesh_view.n_nodes)) {
+        throw std::runtime_error("magnetization P1 space DOF count does not equal n_nodes");
+    }
+    mfem::GridFunction magnetization_grid(&magnetization_space);
+    for (uint64_t node = 0; node < mesh_view.n_nodes; ++node) {
+        for (int component = 0; component < 3; ++component) {
+            magnetization_grid[component * static_cast<int>(mesh_view.n_nodes) +
+                static_cast<int>(node)] =
+                base.magnetization_xyz[3u * node + static_cast<uint64_t>(component)];
+        }
+    }
+    mfem::VectorGridFunctionCoefficient magnetization(&magnetization_grid);
+
+    fullmag::fem::transport::SteadyTransportParameters parameters;
+    parameters.constitutive_model =
+        fullmag::fem::transport::TransportConstitutiveModel::Reciprocal;
+    parameters.sigma_s_spm = base.sigma_s_spm;
+    parameters.sigma_parallel_spm = request.sigma_parallel_spm;
+    parameters.sigma_perpendicular_spm = request.sigma_perpendicular_spm;
+    parameters.sigma_ahe_spm = request.sigma_ahe_spm;
+    parameters.polarization_p = base.polarization_p;
+    parameters.theta_sh = base.theta_sh;
+    parameters.lambda_sf_m = base.lambda_sf_m;
+    parameters.lambda_j_m = base.has_lambda_j != 0
+        ? base.lambda_j_m : std::numeric_limits<double>::infinity();
+    parameters.lambda_phi_m = base.has_lambda_phi != 0
+        ? base.lambda_phi_m : std::numeric_limits<double>::infinity();
+    parameters.gamma_e_per_ts = base.gamma_e_per_ts;
+    parameters.saturation_magnetization_apm = base.saturation_magnetization_apm;
+    parameters.relative_tolerance = base.relative_tolerance;
+    parameters.maximum_iterations = static_cast<int>(base.maximum_iterations);
+
+    fullmag::fem::transport::SteadyTransportOracle oracle(
+        *mesh, conductivity, magnetization, parameters);
+    const auto charge_marker = boundary_marker(
+        *mesh, base.charge_dirichlet_boundary_attributes, base.charge_dirichlet_count);
+    BoundaryScalarCoefficient charge_boundary(
+        base.charge_dirichlet_boundary_attributes,
+        base.charge_dirichlet_values_v,
+        base.charge_dirichlet_count);
+    if (base.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL) {
+        throw std::domain_error("reciprocal FEM reference lane requires a Dirichlet charge reference");
+    }
+    const auto spin_marker = boundary_marker(
+        *mesh, base.spin_dirichlet_boundary_attributes, base.spin_dirichlet_count);
+    std::unique_ptr<BoundaryVectorCoefficient> spin_boundary;
+    if (base.spin_dirichlet_count > 0) {
+        spin_boundary = std::make_unique<BoundaryVectorCoefficient>(
+            base.spin_dirichlet_boundary_attributes,
+            base.spin_dirichlet_values_v,
+            base.spin_dirichlet_count);
+    }
+    const auto diagnostics = oracle.solve_reciprocal(
+        charge_marker, charge_boundary, spin_marker, spin_boundary.get(),
+        fullmag::fem::transport::ChargeGauge::BoundaryReference);
+    if (!diagnostics.charge.converged || !diagnostics.spin.converged) {
+        throw std::runtime_error("FEM reciprocal steady transport solve did not converge");
+    }
+
+    const uint64_t nodes = mesh_view.n_nodes;
+    copy_scalar(oracle.electric_potential(), result.electric_potential_v, nodes);
+    copy_by_vdim(oracle.charge_current_density(), 3,
+        result.charge_current_density_xyz_apm2, nodes);
+    copy_by_vdim(oracle.spin_potential(), 3, result.spin_potential_xyz_v, nodes);
+    copy_by_vdim(oracle.spin_current_tensor(), 9,
+        result.spin_current_tensor_row_major_qia_apm2, nodes);
+    copy_by_vdim(oracle.transport_torque(), 3, result.torque_xyz_per_s, nodes);
+
+    result.charge_converged = diagnostics.charge.converged ? 1 : 0;
+    result.charge_iterations = static_cast<uint32_t>(diagnostics.charge.iterations);
+    result.charge_relative_residual = diagnostics.charge.relative_residual;
+    result.net_boundary_current_a = diagnostics.charge.net_boundary_current_a;
+    result.spin_converged = diagnostics.spin.converged ? 1 : 0;
+    result.spin_iterations = static_cast<uint32_t>(diagnostics.spin.iterations);
+    result.spin_relative_residual = diagnostics.spin.relative_residual;
+    result.torque_l2_per_s = diagnostics.spin.torque_l2_per_s;
+    for (int component = 0; component < 3; ++component) {
+        result.current_density_volume_average_apm2[component] =
+            diagnostics.charge.current_density_volume_average_apm2[component];
+        result.boundary_spin_flux_a[component] = diagnostics.spin.boundary_spin_flux_a[component];
+        result.reaction_integral_a[component] = diagnostics.spin.reaction_integral_a[component];
+        result.angular_momentum_balance_apm2[component] =
+            diagnostics.spin.angular_momentum_balance_apm2[component];
+        result.torque_volume_average_per_s[component] =
+            diagnostics.spin.torque_volume_average_per_s[component];
+    }
+    result.error_message[0] = '\0';
+    std::snprintf(
+        result.diagnostics_json,
+        sizeof(result.diagnostics_json),
+        "{\"schema_version\":\"fem_steady_transport_diagnostics.v1\","
+        "\"constitutive_version\":\"%s\",\"operator_version\":\"%s\","
+        "\"physical_residual_version\":\"%s\",\"execution_lane\":\"fem_cpu_double\","
+        "\"interface_model\":\"transparent_conforming_h1\",\"constitutive_model\":\"reciprocal_m2\","
+        "\"charge_converged\":true,\"charge_iterations\":%u,"
+        "\"charge_relative_residual\":%.17g,\"spin_converged\":true,\"spin_iterations\":%u,"
+        "\"spin_relative_residual\":%.17g,\"torque_l2_per_s\":%.17g}",
+        kM2ConstitutiveVersion,
+        kM2OperatorVersion,
+        kPhysicalResidualVersion,
+        result.charge_iterations,
+        result.charge_relative_residual,
+        result.spin_iterations,
+        result.spin_relative_residual,
+        result.torque_l2_per_s);
+    return FULLMAG_FEM_OK;
+}
+
 #endif
 
 } // namespace
@@ -600,6 +753,42 @@ extern "C" int fullmag_fem_solve_steady_transport_v1(
 #else
     set_error(result,
         "FEM steady transport requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_m2_v1(
+    const fullmag_fem_steady_transport_m2_request_v1 *request,
+    fullmag_fem_steady_transport_result_v1 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "steady transport M2 requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        if (request->base.abi_version != FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION ||
+            request->base.struct_size != sizeof(fullmag_fem_steady_transport_request_v1)) {
+            throw std::invalid_argument("steady transport M2 base ABI header mismatch");
+        }
+        if (result->abi_version != FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION ||
+            result->struct_size != sizeof(fullmag_fem_steady_transport_result_v1)) {
+            throw std::invalid_argument("steady transport M2 result ABI header mismatch");
+        }
+        return solve_m2(*request, *result);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result,
+        "FEM reciprocal steady transport requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
 }

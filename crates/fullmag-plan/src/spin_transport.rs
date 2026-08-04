@@ -432,6 +432,8 @@ fn materialize_m2_descriptor(
 
 const FEM_CONSTITUTIVE_VERSION: &str = "transport_constitutive.one_way.fullmag.v1";
 const FEM_OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.transparent.v1";
+const FEM_M2_CONSTITUTIVE_VERSION: &str = "transport_constitutive.reciprocal.fullmag.v1";
+const FEM_M2_OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 const FEM_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
 const FEM_CHARGE_OPERATOR_VERSION: &str = "fem_charge_conforming_h1_p1.transparent.v1";
 const FEM_CHARGE_RESIDUAL_VERSION: &str = "charge_balance_integrated_l2.v1";
@@ -460,7 +462,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             requested.device,
             ExecutionDevice::Cpu | ExecutionDevice::Auto
         ) {
-            errors.push(format!("{prefix} requested GPU, but M1 FEM transport has no GPU realization and cannot fall back silently"));
+            errors.push(format!("{prefix} requested GPU, but bounded FEM steady transport has no GPU realization and cannot fall back silently"));
         }
         if requested.precision != ExecutionPrecision::Double
             || problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -474,14 +476,6 @@ pub(crate) fn resolve_m1_fem_spin_transport(
         }
         if module.mode != fullmag_ir::SpinTransportModeIR::Steady {
             errors.push(format!("{prefix} supports steady mode only"));
-        }
-        if module.constitutive_version != FEM_CONSTITUTIVE_VERSION
-            || module.solver.operator_version != FEM_OPERATOR_VERSION
-            || module.solver.physical_residual_version != FEM_RESIDUAL_VERSION
-        {
-            errors.push(format!(
-                "{prefix} requests an unsupported constitutive/operator/residual version"
-            ));
         }
         if !matches!(module.solver.engine.as_str(), "auto" | "gmres") {
             errors.push(format!(
@@ -536,17 +530,49 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             ));
             continue;
         };
-        if model != fullmag_ir::CurrentTransportModelIR::OhmicPoisson {
+        let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+        let expected_model = if reciprocal {
+            fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
+        } else {
+            fullmag_ir::CurrentTransportModelIR::OhmicPoisson
+        };
+        let expected_constitutive = if reciprocal {
+            FEM_M2_CONSTITUTIVE_VERSION
+        } else {
+            FEM_CONSTITUTIVE_VERSION
+        };
+        let expected_operator = if reciprocal {
+            FEM_M2_OPERATOR_VERSION
+        } else {
+            FEM_OPERATOR_VERSION
+        };
+        if model != expected_model {
             errors.push(format!(
-                "{prefix} source '{}' must use ohmic_poisson",
+                "{prefix} source '{}' model is inconsistent with bounded FEM steady transport coupling",
                 module.current_source_id
             ));
             continue;
         }
-        if coupling != fullmag_ir::TransportCouplingIR::OneWay {
-            errors.push(format!("{prefix} supports one_way coupling only"));
+        if module.constitutive_version != expected_constitutive
+            || module.solver.operator_version != expected_operator
+            || module.solver.physical_residual_version != FEM_RESIDUAL_VERSION
+        {
+            errors.push(format!(
+                "{prefix} requests an unsupported constitutive/operator/residual version"
+            ));
         }
-        if !matches!(charge.solver.engine.as_str(), "auto" | "cg") {
+        if reciprocal {
+            if !matches!(charge.solver.engine.as_str(), "auto" | "block_gmres") {
+                errors.push(format!(
+                    "{prefix} M2 requires charge solver engine auto or block_gmres"
+                ));
+            }
+            if module.solver.reciprocal_nonlinear.is_some() {
+                errors.push(format!(
+                    "{prefix} bounded FEM M2 is a single linear monolithic solve; reciprocal_nonlinear policy is not executable"
+                ));
+            }
+        } else if !matches!(charge.solver.engine.as_str(), "auto" | "cg") {
             errors.push(format!("{prefix} requires charge solver engine auto or cg"));
         }
         if charge.solver.linear.absolute_tolerance != 0.0 {
@@ -554,16 +580,21 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 "{prefix} currently requires charge absolute_tolerance=0"
             ));
         }
-        if charge.solver.operator_version != FEM_CHARGE_OPERATOR_VERSION
-            || charge.solver.physical_residual_version != FEM_CHARGE_RESIDUAL_VERSION
-        {
+        let charge_operator_ok = if reciprocal {
+            charge.solver.operator_version == FEM_M2_OPERATOR_VERSION
+                && charge.solver.physical_residual_version == FEM_RESIDUAL_VERSION
+        } else {
+            charge.solver.operator_version == FEM_CHARGE_OPERATOR_VERSION
+                && charge.solver.physical_residual_version == FEM_CHARGE_RESIDUAL_VERSION
+        };
+        if !charge_operator_ok {
             errors.push(format!(
                 "{prefix} requests an unsupported charge operator/residual version"
             ));
         }
         if charge.solver.linear != module.solver.linear {
             errors.push(format!(
-                "{prefix} v1 ABI requires identical charge and spin linear solver policies"
+                "{prefix} bounded FEM ABI requires identical charge and spin linear solver policies"
             ));
         }
         if initial_magnetization.len() != mesh.nodes.len() {
@@ -581,6 +612,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             mesh_parts,
             saturation_magnetization_apm,
             gamma0_m_per_a_s,
+            reciprocal,
         );
         match descriptor {
             Ok(descriptor) => plans.push(ResolvedSpinTransportPlanIR {
@@ -594,12 +626,22 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 constitutive_version: module.constitutive_version.clone(),
                 operator_version: module.solver.operator_version.clone(),
                 physical_residual_version: module.solver.physical_residual_version.clone(),
-                capabilities: vec![
-                    "transport.charge.ohmic".into(),
-                    "transport.spin.steady_drift_diffusion".into(),
-                    "transport.spin.direct_she".into(),
-                    "transport.coupling.one_way".into(),
-                ],
+                capabilities: if reciprocal {
+                    vec![
+                        "transport.charge.magnetoresistive".into(),
+                        "transport.spin.steady_drift_diffusion".into(),
+                        "transport.spin.direct_she".into(),
+                        "transport.spin.inverse_she".into(),
+                        "transport.coupling.bidirectional".into(),
+                    ]
+                } else {
+                    vec![
+                        "transport.charge.ohmic".into(),
+                        "transport.spin.steady_drift_diffusion".into(),
+                        "transport.spin.direct_she".into(),
+                        "transport.coupling.one_way".into(),
+                    ]
+                },
                 inserted_default_boundaries: inserted_fem_default_boundaries(charge, module),
                 fdm_cpu_double: None,
                 fdm_cpu_double_reciprocal: None,
@@ -625,6 +667,7 @@ fn materialize_fem_descriptor(
     mesh_parts: &[FemMeshPartIR],
     saturation_magnetization_apm: f64,
     gamma0_m_per_a_s: f64,
+    reciprocal: bool,
 ) -> Result<ResolvedFemSpinTransportIR, Vec<String>> {
     let charge_domain = fem_domain_mask(
         &charge.domain,
@@ -698,8 +741,70 @@ fn materialize_fem_descriptor(
         .iter()
         .any(|material| material.is_none_or(|material| material != reference))
     {
-        return Err(vec!["FEM conforming-H1 M1 currently requires one uniform spin material across the complete solve domain".into()]);
+        return Err(vec!["bounded FEM conforming-H1 transport currently requires one uniform spin material across the complete solve domain".into()]);
     }
+
+    if reciprocal && !module.interfaces.is_empty() {
+        return Err(vec![
+            "bounded FEM M2 currently requires a single conforming domain without internal spin interfaces"
+                .into(),
+        ]);
+    }
+    let reciprocal_material = if reciprocal {
+        let Some(first_charge) = charge.materials.first() else {
+            return Err(vec![
+                "bounded FEM M2 requires anisotropic charge material assignments".into(),
+            ]);
+        };
+        let Some(sigma_parallel) = first_charge.material.sigma_parallel_spm else {
+            return Err(vec![
+                "bounded FEM M2 charge materials require sigma_parallel_Spm".into(),
+            ]);
+        };
+        let Some(sigma_perpendicular) = first_charge.material.sigma_perpendicular_spm else {
+            return Err(vec![
+                "bounded FEM M2 charge materials require sigma_perpendicular_Spm".into(),
+            ]);
+        };
+        let Some(sigma_ahe) = first_charge.material.sigma_ahe_spm else {
+            return Err(vec![
+                "bounded FEM M2 charge materials require sigma_AHE_Spm".into(),
+            ]);
+        };
+        for assignment in &charge.materials {
+            if assignment.material.sigma_parallel_spm != Some(sigma_parallel)
+                || assignment.material.sigma_perpendicular_spm != Some(sigma_perpendicular)
+                || assignment.material.sigma_ahe_spm != Some(sigma_ahe)
+            {
+                return Err(vec![
+                    "bounded FEM M2 requires one uniform anisotropic charge tensor across the conforming domain"
+                        .into(),
+                ]);
+            }
+        }
+        let minimum = sigma_parallel.min(sigma_perpendicular);
+        if conductivity.iter().any(|sigma| {
+            minimum * reference.sigma_s_spm
+                - reference.polarization_p.powi(2) * sigma.powi(2)
+                <= 0.0
+        }) {
+            return Err(vec![
+                "bounded FEM M2 charge/spin material violates the positive Schur complement"
+                    .into(),
+            ]);
+        }
+        Some(fullmag_ir::ResolvedReciprocalMaterialIR {
+            sigma_spm: first_charge.material.sigma_spm,
+            sigma_spin_spm: reference.sigma_s_spm,
+            sigma_parallel_spm: sigma_parallel,
+            sigma_perpendicular_spm: sigma_perpendicular,
+            sigma_ahe_spm: sigma_ahe,
+            polarization_p: reference.polarization_p,
+            theta_sh: reference.theta_sh,
+        })
+    } else {
+        None
+    };
 
     validate_charge_face_exact_boundary_ownership(charge, mesh, mesh_parts)?;
     validate_spin_face_exact_boundary_ownership(module, mesh, mesh_parts)?;
@@ -787,6 +892,11 @@ fn materialize_fem_descriptor(
                 "boundary-reference gauge requires at least one voltage electrode".into(),
             ]);
         }
+        fullmag_ir::ChargePotentialGaugeIR::ZeroMean if reciprocal => {
+            return Err(vec![
+                "bounded FEM M2 requires a Dirichlet voltage reference".into(),
+            ]);
+        }
         fullmag_ir::ChargePotentialGaugeIR::ZeroMean if !charge_dirichlet.is_empty() => {
             return Err(vec![
                 "zero-mean gauge conflicts with voltage electrodes".into()
@@ -803,7 +913,11 @@ fn materialize_fem_descriptor(
     }
     const MU0_H_PER_M: f64 = 1.256_637_061_435_917_3e-6;
     Ok(ResolvedFemSpinTransportIR {
-        descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
+        descriptor_schema: if reciprocal {
+            "fullmag.fem.spin_transport_descriptor.m2.v1".into()
+        } else {
+            "fullmag.fem.spin_transport_descriptor.v1".into()
+        },
         charge_definition: charge.clone(),
         charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
             regions: charge.domain.clone(),
@@ -823,6 +937,7 @@ fn materialize_fem_descriptor(
         charge_dirichlet,
         spin_dirichlet,
         sigma_s_spm: reference.sigma_s_spm,
+        reciprocal_material,
         polarization_p: reference.polarization_p,
         theta_sh: reference.theta_sh,
         lambda_sf_m: reference.lambda_sf_m,
@@ -831,7 +946,11 @@ fn materialize_fem_descriptor(
         saturation_magnetization_apm,
         gamma_e_rad_per_s_t: gamma0_m_per_a_s / MU0_H_PER_M,
         spin_solver: module.solver.clone(),
-        resolved_charge_engine: "cg".into(),
+        resolved_charge_engine: if reciprocal {
+            "gmres".into()
+        } else {
+            "cg".into()
+        },
         resolved_spin_engine: "gmres".into(),
         interface_law: "transparent".into(),
         interface_realization: "transparent_conforming_h1".into(),
@@ -839,7 +958,11 @@ fn materialize_fem_descriptor(
         capability_status: "reference_executable".into(),
         implementation_state: "executable".into(),
         validation_state: "algebra_validated".into(),
-        validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
+        validation_scope: if reciprocal {
+            "fem_cpu_double_conforming_h1_p1_reciprocal_m2".into()
+        } else {
+            "fem_cpu_double_conforming_h1_p1_transparent_m1".into()
+        },
     })
 }
 
@@ -2572,6 +2695,82 @@ mod tests {
             plans[0].inserted_default_boundaries,
             ["spin:all_external_surfaces=spin_insulating"]
         );
+    }
+
+    #[test]
+    fn resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.spin_transport_modules[0]
+            .requested_execution
+            .discretization = BackendTarget::Fem;
+        let CurrentModuleIR::CurrentTransport {
+            model,
+            coupling,
+            definition: Some(charge),
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        *model = CurrentTransportModelIR::MagnetoresistivePoisson;
+        *coupling = TransportCouplingIR::Bidirectional;
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        let material = &mut charge.materials[0].material;
+        material.sigma_parallel_spm = Some(4.4e6);
+        material.sigma_perpendicular_spm = Some(4.0e6);
+        material.sigma_ahe_spm = Some(0.2e6);
+        charge.solver.engine = "block_gmres".into();
+        charge.solver.operator_version = FEM_M2_OPERATOR_VERSION.into();
+        charge.solver.physical_residual_version = FEM_RESIDUAL_VERSION.into();
+        problem.spin_transport_modules[0].constitutive_version =
+            FEM_M2_CONSTITUTIVE_VERSION.into();
+        problem.spin_transport_modules[0].solver.operator_version =
+            FEM_M2_OPERATOR_VERSION.into();
+        problem.spin_torque_modules.clear();
+        problem
+            .validate()
+            .expect("bounded FEM M2 fixture should satisfy canonical IR validation");
+
+        let plans = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect("bounded FEM M2 descriptor");
+        let plan = &plans[0];
+        assert_eq!(plan.resolved_coupling, TransportCouplingIR::Bidirectional);
+        assert!(plan.fdm_cpu_double.is_none());
+        let descriptor = plan
+            .fem_cpu_double
+            .as_ref()
+            .expect("executable FEM M2 descriptor");
+        let material = descriptor
+            .reciprocal_material
+            .as_ref()
+            .expect("reciprocal material");
+        assert_eq!(material.sigma_parallel_spm, 4.4e6);
+        assert_eq!(material.sigma_perpendicular_spm, 4.0e6);
+        assert_eq!(material.sigma_ahe_spm, 0.2e6);
+        assert_eq!(
+            descriptor.descriptor_schema,
+            "fullmag.fem.spin_transport_descriptor.m2.v1"
+        );
+        assert_eq!(
+            descriptor.validation_scope,
+            "fem_cpu_double_conforming_h1_p1_reciprocal_m2"
+        );
+        assert!(plan
+            .capabilities
+            .contains(&"transport.spin.inverse_she".to_string()));
     }
 
     #[test]

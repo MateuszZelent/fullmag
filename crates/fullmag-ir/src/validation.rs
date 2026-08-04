@@ -1143,8 +1143,20 @@ fn validate_charge_transport_definition(
     }
     let solver = &definition.solver;
     let supported_solver = if reciprocal {
+        let supported_operator = match requested_backend {
+            crate::BackendTarget::Fem => {
+                solver.operator_version
+                    == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+            }
+            crate::BackendTarget::Auto => matches!(
+                solver.operator_version.as_str(),
+                "fdm_coupled_charge_spin_fv_block_gmres.v1"
+                    | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+            ),
+            _ => solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1",
+        };
         solver.engine == "block_gmres"
-            && solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            && supported_operator
             && solver.physical_residual_version == "transport_balance_integrated_l2.v1"
     } else {
         let supported_operator = match requested_backend {
@@ -2068,17 +2080,33 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             }
         }
         let supported_operator = if reciprocal {
-            module.solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            match module.requested_execution.discretization {
+                crate::BackendTarget::Fem => {
+                    module.solver.operator_version
+                        == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                }
+                crate::BackendTarget::Auto => matches!(
+                    module.solver.operator_version.as_str(),
+                    "fdm_coupled_charge_spin_fv_block_gmres.v1"
+                        | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                ),
+                _ => module.solver.operator_version
+                    == "fdm_coupled_charge_spin_fv_block_gmres.v1",
+            }
         } else {
             match module.requested_execution.discretization {
                 crate::BackendTarget::Fdm => module.solver.operator_version == "fv_spin_upwind_v1",
                 crate::BackendTarget::Fem => {
                     module.solver.operator_version
                         == "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                        || module.solver.operator_version
+                            == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
                 }
                 crate::BackendTarget::Auto => matches!(
                     module.solver.operator_version.as_str(),
-                    "fv_spin_upwind_v1" | "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                    "fv_spin_upwind_v1"
+                        | "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                        | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
                 ),
                 crate::BackendTarget::Hybrid => false,
             }
@@ -2091,7 +2119,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             ));
         }
         if reciprocal {
+            let bounded_fem_m2 = module.solver.operator_version
+                == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                && matches!(
+                    module.requested_execution.discretization,
+                    crate::BackendTarget::Fem | crate::BackendTarget::Auto
+                );
             match &module.solver.reciprocal_nonlinear {
+                None if bounded_fem_m2 => {}
                 Some(policy)
                     if policy.gmres_restart > 0
                         && policy.max_picard_iterations > 0

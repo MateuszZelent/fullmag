@@ -347,12 +347,18 @@ fn packaged_install_root(self_exe: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod control_room_guard_tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     use super::{
-        api_openapi_response_is_compatible, control_room_launch_signature, BootstrapProcessGuard,
-        packaged_install_root, ControlRoomGuard, GuardedProcess,
+        api_openapi_response_is_compatible, control_room_launch_signature, packaged_install_root,
+        wait_for_api_ready, BootstrapProcessGuard, ControlRoomGuard, GuardedProcess,
     };
+    use std::process::Command as TestCommand;
 
     struct RecordingProcess {
         events: Arc<Mutex<Vec<&'static str>>>,
@@ -474,6 +480,51 @@ mod control_room_guard_tests {
             "[\"add_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"]}",
         );
         assert!(api_openapi_response_is_compatible(current));
+    }
+
+    #[test]
+    fn startup_wait_accepts_health_ready_api_before_contract_probe_finishes() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::from(super::LOOPBACK_V4_OCTETS), 0))
+            .expect("readiness fixture should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("readiness fixture should be nonblocking");
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = thread::spawn(move || {
+            while !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut request = [0_u8; 4096];
+                        let _ = stream.read(&mut request);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let mut child = TestCommand::new("sh")
+            .args(["-c", "sleep 2"])
+            .spawn()
+            .expect("readiness fixture child should start");
+
+        let result = wait_for_api_ready(port, &mut child, Duration::from_millis(500));
+
+        stop.store(true, Ordering::Release);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = server.join();
+
+        assert!(
+            result.is_ok(),
+            "health-ready API must not be blocked by the optional contract probe: {result:?}"
+        );
     }
 
     #[test]
@@ -616,7 +667,9 @@ pub(crate) fn bootstrap_control_plane(
     };
 
     if let Some(live_workspace) = live_workspace {
-        sync_current_live_workspace_snapshot(live_workspace)?;
+        // The publisher is already running and has a pending snapshot from
+        // workspace startup.  Keep the first sync off the bootstrap critical
+        // path so a busy API cannot delay or abort Control Room startup.
         live_workspace.publish_snapshot();
     }
 
@@ -858,20 +911,6 @@ pub(crate) fn spawn_control_room(
         bootstrap_control_plane(session_id, dev_mode, requested_port, Some(live_workspace))?;
     open_in_browser(&ready);
     Ok((ready.web_port, ready.api_child, ready.frontend_child))
-}
-
-pub(crate) fn sync_current_live_workspace_snapshot(
-    live_workspace: &LocalLiveWorkspace,
-) -> Result<()> {
-    let snapshot = live_workspace.snapshot().snapshot();
-    sync_current_live_snapshot(
-        snapshot
-            .session
-            .as_ref()
-            .map(|session| session.session_id.as_str())
-            .unwrap_or("current"),
-        &snapshot,
-    )
 }
 
 fn resolve_web_port(requested: Option<u16>, url_file: &Path) -> Result<u16> {
@@ -1730,7 +1769,11 @@ fn configure_repo_local_library_env(
 fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        if api_bridge_is_ready(port) {
+        // A newly spawned API is considered live once its health endpoint
+        // responds.  Contract validation remains mandatory for reusing an
+        // existing process, but OpenAPI generation and the internal snapshot
+        // probe can legitimately lag while the runtime is under startup load.
+        if api_is_ready(port) {
             return Ok(());
         }
         if let Some(status) = child

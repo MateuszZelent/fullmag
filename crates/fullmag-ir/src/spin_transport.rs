@@ -342,6 +342,12 @@ pub struct ResolvedFemSpinTransportIR {
     pub spin_dirichlet: Vec<(u32, [f64; 3])>,
     #[serde(rename = "sigma_s_Spm")]
     pub sigma_s_spm: f64,
+    /// Present only for the bounded reciprocal FEM M2 reference lane.  The
+    /// native FEM ABI currently accepts one uniform anisotropic charge tensor
+    /// over the conforming solve domain; elementwise `sigma_spm` remains in
+    /// `charge_conductivity_spm_per_element`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reciprocal_material: Option<ResolvedReciprocalMaterialIR>,
     pub polarization_p: f64,
     pub theta_sh: f64,
     pub lambda_sf_m: f64,

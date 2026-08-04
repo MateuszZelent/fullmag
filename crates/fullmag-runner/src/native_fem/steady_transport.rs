@@ -7,6 +7,8 @@ use std::ptr;
 
 const CONSTITUTIVE_VERSION: &str = "transport_constitutive.one_way.fullmag.v1";
 const OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.transparent.v1";
+const M2_CONSTITUTIVE_VERSION: &str = "transport_constitutive.reciprocal.fullmag.v1";
+const M2_OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 const PHYSICAL_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
 
 mod descriptor;
@@ -22,6 +24,12 @@ pub(crate) enum NativeFemSteadyTransportExecution {
     /// Representable for fail-closed preflight testing, but unavailable in M1.
     #[allow(dead_code)]
     GpuDouble,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeFemSteadyTransportConstitutiveModel {
+    OneWay,
+    ReciprocalM2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,12 +52,16 @@ pub(crate) struct NativeFemSteadyTransportRequest {
     pub execution: NativeFemSteadyTransportExecution,
     pub interface: NativeFemSteadyTransportInterface,
     pub gauge: NativeFemSteadyTransportGauge,
+    pub constitutive_model: NativeFemSteadyTransportConstitutiveModel,
     pub constitutive_version: String,
     pub operator_version: String,
     pub physical_residual_version: String,
     pub charge_conductivity_spm_per_element: Vec<f64>,
     pub magnetization: Vec<[f64; 3]>,
     pub sigma_s_spm: f64,
+    pub sigma_parallel_spm: Option<f64>,
+    pub sigma_perpendicular_spm: Option<f64>,
+    pub sigma_ahe_spm: Option<f64>,
     pub polarization_p: f64,
     pub theta_sh: f64,
     pub lambda_sf_m: f64,
@@ -195,8 +207,16 @@ fn preflight(request: &NativeFemSteadyTransportRequest) -> Result<(), RunError> 
             message: "FEM mixing/SML transport requires the unavailable broken-H1 mortar realization and fails before provenance".to_string(),
         });
     }
-    if request.constitutive_version != CONSTITUTIVE_VERSION
-        || request.operator_version != OPERATOR_VERSION
+    let expected_versions = match request.constitutive_model {
+        NativeFemSteadyTransportConstitutiveModel::OneWay => {
+            (CONSTITUTIVE_VERSION, OPERATOR_VERSION)
+        }
+        NativeFemSteadyTransportConstitutiveModel::ReciprocalM2 => {
+            (M2_CONSTITUTIVE_VERSION, M2_OPERATOR_VERSION)
+        }
+    };
+    if request.constitutive_version != expected_versions.0
+        || request.operator_version != expected_versions.1
         || request.physical_residual_version != PHYSICAL_RESIDUAL_VERSION
     {
         return Err(RunError {
@@ -252,10 +272,65 @@ fn preflight(request: &NativeFemSteadyTransportRequest) -> Result<(), RunError> 
             message: "zero-mean charge gauge conflicts with voltage electrodes".to_string(),
         });
     }
+    if request.constitutive_model == NativeFemSteadyTransportConstitutiveModel::ReciprocalM2
+        && request.gauge != NativeFemSteadyTransportGauge::BoundaryReference
+    {
+        return Err(RunError {
+            message: "reciprocal FEM M2 requires a Dirichlet charge reference".to_string(),
+        });
+    }
     if request.absolute_tolerance != 0.0 {
         return Err(RunError {
-            message: "FEM M1 steady transport currently requires absolute_tolerance=0".to_string(),
+            message: "FEM steady transport currently requires absolute_tolerance=0".to_string(),
         });
+    }
+    match request.constitutive_model {
+        NativeFemSteadyTransportConstitutiveModel::OneWay => {
+            if request.sigma_parallel_spm.is_some()
+                || request.sigma_perpendicular_spm.is_some()
+                || request.sigma_ahe_spm.is_some()
+            {
+                return Err(RunError {
+                    message: "one-way FEM transport must not carry reciprocal charge coefficients"
+                        .to_string(),
+                });
+            }
+        }
+        NativeFemSteadyTransportConstitutiveModel::ReciprocalM2 => {
+            let (Some(sigma_parallel), Some(sigma_perpendicular), Some(sigma_ahe)) = (
+                request.sigma_parallel_spm,
+                request.sigma_perpendicular_spm,
+                request.sigma_ahe_spm,
+            ) else {
+                return Err(RunError {
+                    message: "reciprocal FEM M2 requires sigma_parallel, sigma_perpendicular, and sigma_AHE"
+                        .to_string(),
+                });
+            };
+            if !sigma_parallel.is_finite()
+                || sigma_parallel <= 0.0
+                || !sigma_perpendicular.is_finite()
+                || sigma_perpendicular <= 0.0
+                || !sigma_ahe.is_finite()
+            {
+                return Err(RunError {
+                    message: "reciprocal FEM M2 charge coefficients must be finite with positive symmetric conductivities"
+                        .to_string(),
+                });
+            }
+            let minimum = sigma_parallel.min(sigma_perpendicular);
+            for sigma in &request.charge_conductivity_spm_per_element {
+                if minimum * request.sigma_s_spm
+                    - request.polarization_p * request.polarization_p * sigma * sigma
+                    <= 0.0
+                {
+                    return Err(RunError {
+                        message: "reciprocal FEM M2 material violates the positive Schur complement"
+                            .to_string(),
+                    });
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -339,7 +414,7 @@ pub(crate) fn solve_native_fem_steady_transport(
     let mut spin_current = vec![0.0; 9 * node_count];
     let mut torque = vec![0.0; 3 * node_count];
 
-    let ffi_request = ffi::fullmag_fem_steady_transport_request_v1 {
+    let base_request = ffi::fullmag_fem_steady_transport_request_v1 {
         abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION,
         reserved_flags: 0,
         struct_size: std::mem::size_of::<ffi::fullmag_fem_steady_transport_request_v1>() as u64,
@@ -408,8 +483,28 @@ pub(crate) fn solve_native_fem_steady_transport(
         diagnostics_json: [0; 1024],
     };
 
-    let status =
-        unsafe { ffi::fullmag_fem_solve_steady_transport_v1(&ffi_request, &mut ffi_result) };
+    let status = match request.constitutive_model {
+        NativeFemSteadyTransportConstitutiveModel::OneWay => unsafe {
+            ffi::fullmag_fem_solve_steady_transport_v1(&base_request, &mut ffi_result)
+        },
+        NativeFemSteadyTransportConstitutiveModel::ReciprocalM2 => {
+            let m2_request = ffi::fullmag_fem_steady_transport_m2_request_v1 {
+                base: base_request,
+                sigma_parallel_spm: request
+                    .sigma_parallel_spm
+                    .expect("M2 preflight validates sigma_parallel_spm"),
+                sigma_perpendicular_spm: request
+                    .sigma_perpendicular_spm
+                    .expect("M2 preflight validates sigma_perpendicular_spm"),
+                sigma_ahe_spm: request
+                    .sigma_ahe_spm
+                    .expect("M2 preflight validates sigma_ahe_spm"),
+            };
+            unsafe {
+                ffi::fullmag_fem_solve_steady_transport_m2_v1(&m2_request, &mut ffi_result)
+            }
+        }
+    };
     if status != ffi::FULLMAG_FEM_OK {
         return Err(RunError {
             message: chars(&ffi_result.error_message),
@@ -489,12 +584,16 @@ mod tests {
             execution: NativeFemSteadyTransportExecution::CpuDouble,
             interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
             gauge: NativeFemSteadyTransportGauge::BoundaryReference,
+            constitutive_model: NativeFemSteadyTransportConstitutiveModel::OneWay,
             constitutive_version: CONSTITUTIVE_VERSION.to_string(),
             operator_version: OPERATOR_VERSION.to_string(),
             physical_residual_version: PHYSICAL_RESIDUAL_VERSION.to_string(),
             charge_conductivity_spm_per_element: vec![4.0],
             magnetization: vec![[0.0, 0.0, 1.0]; 4],
             sigma_s_spm: 5.0,
+            sigma_parallel_spm: None,
+            sigma_perpendicular_spm: None,
+            sigma_ahe_spm: None,
             polarization_p: 0.2,
             theta_sh: 0.1,
             lambda_sf_m: 0.5,
@@ -602,6 +701,7 @@ mod tests {
                 charge_dirichlet: vec![(1, 1.0)],
                 spin_dirichlet: vec![],
                 sigma_s_spm: 5.0,
+                reciprocal_material: None,
                 polarization_p: 0.2,
                 theta_sh: 0.1,
                 lambda_sf_m: 0.5,
@@ -621,6 +721,49 @@ mod tests {
                 validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
             }),
         }
+    }
+
+    fn resolved_m2_plan() -> ResolvedSpinTransportPlanIR {
+        let mut plan = resolved_plan();
+        plan.resolved_coupling = TransportCouplingIR::Bidirectional;
+        plan.constitutive_version = M2_CONSTITUTIVE_VERSION.into();
+        plan.operator_version = M2_OPERATOR_VERSION.into();
+        plan.capabilities = vec![
+            "transport.charge.magnetoresistive".into(),
+            "transport.spin.steady_drift_diffusion".into(),
+            "transport.spin.direct_she".into(),
+            "transport.spin.inverse_she".into(),
+            "transport.coupling.bidirectional".into(),
+        ];
+        let descriptor = plan.fem_cpu_double.as_mut().expect("FEM descriptor");
+        descriptor.descriptor_schema = "fullmag.fem.spin_transport_descriptor.m2.v1".into();
+        descriptor.charge_definition.materials[0]
+            .material
+            .sigma_parallel_spm = Some(4.4);
+        descriptor.charge_definition.materials[0]
+            .material
+            .sigma_perpendicular_spm = Some(4.0);
+        descriptor.charge_definition.materials[0]
+            .material
+            .sigma_ahe_spm = Some(0.2);
+        descriptor.charge_definition.solver.engine = "block_gmres".into();
+        descriptor.charge_definition.solver.operator_version = M2_OPERATOR_VERSION.into();
+        descriptor.charge_definition.solver.physical_residual_version =
+            PHYSICAL_RESIDUAL_VERSION.into();
+        descriptor.charge_solver = descriptor.charge_definition.solver.clone();
+        descriptor.reciprocal_material = Some(fullmag_ir::ResolvedReciprocalMaterialIR {
+            sigma_spm: 4.0,
+            sigma_spin_spm: 5.0,
+            sigma_parallel_spm: 4.4,
+            sigma_perpendicular_spm: 4.0,
+            sigma_ahe_spm: 0.2,
+            polarization_p: 0.2,
+            theta_sh: 0.1,
+        });
+        descriptor.spin_solver.operator_version = M2_OPERATOR_VERSION.into();
+        descriptor.resolved_charge_engine = "gmres".into();
+        descriptor.validation_scope = "fem_cpu_double_conforming_h1_p1_reciprocal_m2".into();
+        plan
     }
 
     fn common_direct_she_fdm_plan(nz: usize) -> FdmPlanIR {
@@ -873,12 +1016,16 @@ mod tests {
                 execution: NativeFemSteadyTransportExecution::CpuDouble,
                 interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
                 gauge: NativeFemSteadyTransportGauge::BoundaryReference,
+                constitutive_model: NativeFemSteadyTransportConstitutiveModel::OneWay,
                 constitutive_version: CONSTITUTIVE_VERSION.into(),
                 operator_version: OPERATOR_VERSION.into(),
                 physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
                 charge_conductivity_spm_per_element: vec![SIGMA_SPM; fem_mesh.cell_count()],
                 magnetization: vec![[0.0, 0.0, 1.0]; fem_mesh.nodes.len()],
                 sigma_s_spm: SIGMA_SPIN_SPM,
+                sigma_parallel_spm: None,
+                sigma_perpendicular_spm: None,
+                sigma_ahe_spm: None,
                 polarization_p: 0.0,
                 theta_sh: THETA_SH,
                 lambda_sf_m: LAMBDA_SF_M,
@@ -973,6 +1120,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "fem-gpu")]
+    fn native_m2_solver_publishes_reciprocal_diagnostics() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!("skipping native FEM M2 runtime test: CPU MFEM stack unavailable");
+            return;
+        }
+        let mut m2 = request();
+        m2.constitutive_model = NativeFemSteadyTransportConstitutiveModel::ReciprocalM2;
+        m2.constitutive_version = M2_CONSTITUTIVE_VERSION.into();
+        m2.operator_version = M2_OPERATOR_VERSION.into();
+        m2.sigma_parallel_spm = Some(4.0);
+        m2.sigma_perpendicular_spm = Some(4.0);
+        m2.sigma_ahe_spm = Some(0.0);
+        m2.spin_dirichlet = vec![(1, [0.0, 0.0, 0.0])];
+        let result = solve_native_fem_steady_transport(&m2)
+            .expect("native FEM M2 request should execute");
+        assert_eq!(
+            result.diagnostics["constitutive_model"],
+            serde_json::json!("reciprocal_m2")
+        );
+        assert_eq!(result.constitutive_version, M2_CONSTITUTIVE_VERSION);
+        assert_eq!(result.operator_version, M2_OPERATOR_VERSION);
+    }
+
+    #[test]
     fn preflight_rejects_short_and_long_element_marker_vectors_before_ffi() {
         for markers in [vec![], vec![1, 1]] {
             let mut malformed = request();
@@ -1058,6 +1230,28 @@ mod tests {
         assert!(provenance.fallback.is_none());
         assert!(provenance.degradation.is_none());
         assert_eq!(provenance.stage_coupling, "none");
+    }
+
+    #[test]
+    fn canonical_m2_descriptor_materializes_reciprocal_ffi_request() {
+        let fixture = request();
+        let resolved = resolved_m2_plan();
+        let mapped = materialize_native_fem_steady_transport_request(
+            &fixture.mesh,
+            &fixture.magnetization,
+            &resolved,
+        )
+        .expect("canonical native M2 request");
+        assert_eq!(
+            mapped.constitutive_model,
+            NativeFemSteadyTransportConstitutiveModel::ReciprocalM2
+        );
+        assert_eq!(mapped.constitutive_version, M2_CONSTITUTIVE_VERSION);
+        assert_eq!(mapped.operator_version, M2_OPERATOR_VERSION);
+        assert_eq!(mapped.sigma_parallel_spm, Some(4.4));
+        assert_eq!(mapped.sigma_perpendicular_spm, Some(4.0));
+        assert_eq!(mapped.sigma_ahe_spm, Some(0.2));
+        preflight(&mapped).expect("bounded M2 request preflight");
     }
 
     #[test]

@@ -624,6 +624,20 @@ typedef struct {
     uint64_t spin_dirichlet_count;
 } fullmag_fem_steady_transport_request_v1;
 
+/*
+ * Bounded reciprocal M2 reference lane.  The v1 M1 request above is kept
+ * byte-for-byte stable; this wrapper is a separate symbol and carries the
+ * same mesh/BC/result contract plus the symmetric charge conductivities and
+ * anomalous-Hall coefficient required by the Onsager block.
+ */
+#define FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION 1u
+typedef struct {
+    fullmag_fem_steady_transport_request_v1 base;
+    double sigma_parallel_spm;
+    double sigma_perpendicular_spm;
+    double sigma_ahe_spm;
+} fullmag_fem_steady_transport_m2_request_v1;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t reserved_flags;
@@ -1380,6 +1394,10 @@ typedef struct {
 int fullmag_fem_is_available(void);
 int fullmag_fem_solve_steady_transport_v1(
     const fullmag_fem_steady_transport_request_v1 *request,
+    fullmag_fem_steady_transport_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_m2_v1(
+    const fullmag_fem_steady_transport_m2_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
 );
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);

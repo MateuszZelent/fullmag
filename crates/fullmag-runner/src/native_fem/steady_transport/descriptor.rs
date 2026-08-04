@@ -1,7 +1,8 @@
 use super::{
-    NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
-    NativeFemSteadyTransportInterface, NativeFemSteadyTransportRequest, CONSTITUTIVE_VERSION,
-    OPERATOR_VERSION, PHYSICAL_RESIDUAL_VERSION,
+    NativeFemSteadyTransportConstitutiveModel, NativeFemSteadyTransportExecution,
+    NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
+    NativeFemSteadyTransportRequest, CONSTITUTIVE_VERSION, M2_CONSTITUTIVE_VERSION,
+    M2_OPERATOR_VERSION, OPERATOR_VERSION, PHYSICAL_RESIDUAL_VERSION,
 };
 use crate::types::{RunError, TransportExecutionProvenance};
 use fullmag_ir::{CurrentModuleIR, FemPlanIR, ResolvedSpinTransportPlanIR};
@@ -110,8 +111,14 @@ pub(super) fn validate_bound_current_source_modules(
             resolved.module_id
         ),
     })?;
-    if *model != fullmag_ir::CurrentTransportModelIR::OhmicPoisson
-        || *coupling != fullmag_ir::TransportCouplingIR::OneWay
+    let reciprocal = resolved.resolved_coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+    let expected_model = if reciprocal {
+        fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
+    } else {
+        fullmag_ir::CurrentTransportModelIR::OhmicPoisson
+    };
+    if *model != expected_model
+        || *coupling != resolved.resolved_coupling
         || current_density.is_some()
         || solve_region.is_some()
         || conductivity.is_some()
@@ -146,6 +153,21 @@ pub(super) fn materialize_native_fem_steady_transport_request(
             ),
         });
     }
+    let reciprocal = resolved.resolved_coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+    let (constitutive_model, constitutive_version, operator_version) = if reciprocal {
+        (
+            NativeFemSteadyTransportConstitutiveModel::ReciprocalM2,
+            M2_CONSTITUTIVE_VERSION,
+            M2_OPERATOR_VERSION,
+        )
+    } else {
+        (
+            NativeFemSteadyTransportConstitutiveModel::OneWay,
+            CONSTITUTIVE_VERSION,
+            OPERATOR_VERSION,
+        )
+    };
+    let reciprocal_material = descriptor.reciprocal_material.as_ref();
     Ok(NativeFemSteadyTransportRequest {
         mesh: mesh.clone(),
         execution: NativeFemSteadyTransportExecution::CpuDouble,
@@ -158,12 +180,17 @@ pub(super) fn materialize_native_fem_steady_transport_request(
                 NativeFemSteadyTransportGauge::ZeroMeanPotential
             }
         },
-        constitutive_version: resolved.constitutive_version.clone(),
-        operator_version: resolved.operator_version.clone(),
+        constitutive_model,
+        constitutive_version: constitutive_version.to_string(),
+        operator_version: operator_version.to_string(),
         physical_residual_version: resolved.physical_residual_version.clone(),
         charge_conductivity_spm_per_element: descriptor.charge_conductivity_spm_per_element.clone(),
         magnetization: initial_magnetization.to_vec(),
         sigma_s_spm: descriptor.sigma_s_spm,
+        sigma_parallel_spm: reciprocal_material.map(|material| material.sigma_parallel_spm),
+        sigma_perpendicular_spm:
+            reciprocal_material.map(|material| material.sigma_perpendicular_spm),
+        sigma_ahe_spm: reciprocal_material.map(|material| material.sigma_ahe_spm),
         polarization_p: descriptor.polarization_p,
         theta_sh: descriptor.theta_sh,
         lambda_sf_m: descriptor.lambda_sf_m,
@@ -184,12 +211,69 @@ fn resolved_fem_descriptor_contradiction(
     resolved: &ResolvedSpinTransportPlanIR,
     descriptor: &fullmag_ir::ResolvedFemSpinTransportIR,
 ) -> bool {
-    let expected_capabilities = BTreeSet::from([
-        "transport.charge.ohmic",
-        "transport.spin.steady_drift_diffusion",
-        "transport.spin.direct_she",
-        "transport.coupling.one_way",
-    ]);
+    let reciprocal = resolved.resolved_coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+    let expected_capabilities = if reciprocal {
+        BTreeSet::from([
+            "transport.charge.magnetoresistive",
+            "transport.spin.steady_drift_diffusion",
+            "transport.spin.direct_she",
+            "transport.spin.inverse_she",
+            "transport.coupling.bidirectional",
+        ])
+    } else {
+        BTreeSet::from([
+            "transport.charge.ohmic",
+            "transport.spin.steady_drift_diffusion",
+            "transport.spin.direct_she",
+            "transport.coupling.one_way",
+        ])
+    };
+    let expected_constitutive = if reciprocal {
+        M2_CONSTITUTIVE_VERSION
+    } else {
+        CONSTITUTIVE_VERSION
+    };
+    let expected_operator = if reciprocal {
+        M2_OPERATOR_VERSION
+    } else {
+        OPERATOR_VERSION
+    };
+    let expected_charge_operator = if reciprocal {
+        M2_OPERATOR_VERSION
+    } else {
+        "fem_charge_conforming_h1_p1.transparent.v1"
+    };
+    let expected_schema = if reciprocal {
+        "fullmag.fem.spin_transport_descriptor.m2.v1"
+    } else {
+        "fullmag.fem.spin_transport_descriptor.v1"
+    };
+    let expected_charge_engine = if reciprocal { "gmres" } else { "cg" };
+    let expected_charge_solver_engine = if reciprocal {
+        matches!(descriptor.charge_solver.engine.as_str(), "auto" | "block_gmres")
+    } else {
+        matches!(descriptor.charge_solver.engine.as_str(), "auto" | "cg")
+    };
+    let reciprocal_material_valid = match (reciprocal, descriptor.reciprocal_material.as_ref()) {
+        (false, None) => true,
+        (true, Some(material)) => {
+            material.sigma_spm.is_finite()
+                && material.sigma_spm > 0.0
+                && material.sigma_spin_spm == descriptor.sigma_s_spm
+                && material.polarization_p == descriptor.polarization_p
+                && material.theta_sh == descriptor.theta_sh
+                && material.sigma_parallel_spm.is_finite()
+                && material.sigma_parallel_spm > 0.0
+                && material.sigma_perpendicular_spm.is_finite()
+                && material.sigma_perpendicular_spm > 0.0
+                && material.sigma_ahe_spm.is_finite()
+                && material.sigma_parallel_spm.min(material.sigma_perpendicular_spm)
+                    * material.sigma_spin_spm
+                    - material.polarization_p.powi(2) * material.sigma_spm.powi(2)
+                    > 0.0
+        }
+        _ => false,
+    };
     let capabilities = resolved
         .capabilities
         .iter()
@@ -197,7 +281,6 @@ fn resolved_fem_descriptor_contradiction(
         .collect::<BTreeSet<_>>();
     resolved.fdm_cpu_double.is_some()
         || resolved.fdm_cpu_double_reciprocal.is_some()
-        || resolved.resolved_coupling != fullmag_ir::TransportCouplingIR::OneWay
         || resolved.requested_execution.execution_mode != fullmag_ir::ExecutionMode::Strict
         || !matches!(
             resolved.requested_execution.discretization,
@@ -211,10 +294,10 @@ fn resolved_fem_descriptor_contradiction(
         || resolved.resolved_discretization != fullmag_ir::BackendTarget::Fem
         || resolved.resolved_device != fullmag_ir::ExecutionDevice::Cpu
         || resolved.resolved_precision != fullmag_ir::ExecutionPrecision::Double
-        || resolved.constitutive_version != CONSTITUTIVE_VERSION
-        || resolved.operator_version != OPERATOR_VERSION
+        || resolved.constitutive_version != expected_constitutive
+        || resolved.operator_version != expected_operator
         || resolved.physical_residual_version != PHYSICAL_RESIDUAL_VERSION
-        || descriptor.descriptor_schema != "fullmag.fem.spin_transport_descriptor.v1"
+        || descriptor.descriptor_schema != expected_schema
         || descriptor.charge_definition.gauge != descriptor.charge_gauge
         || descriptor.charge_definition.solver != descriptor.charge_solver
         || descriptor.charge_definition.domain != descriptor.charge_domain.regions
@@ -237,27 +320,39 @@ fn resolved_fem_descriptor_contradiction(
         })
         || transport_boundary_attributes(descriptor)
             .any(|attribute| attribute == 0 || !mesh.boundary_markers.contains(&attribute))
-        || descriptor.charge_solver.operator_version != "fem_charge_conforming_h1_p1.transparent.v1"
-        || descriptor.charge_solver.physical_residual_version != "charge_balance_integrated_l2.v1"
+        || descriptor.charge_solver.operator_version != expected_charge_operator
+        || descriptor.charge_solver.physical_residual_version
+            != if reciprocal {
+                PHYSICAL_RESIDUAL_VERSION
+            } else {
+                "charge_balance_integrated_l2.v1"
+            }
         || descriptor.spin_solver.operator_version != resolved.operator_version
         || descriptor.spin_solver.physical_residual_version != resolved.physical_residual_version
         || descriptor.charge_solver.linear != descriptor.spin_solver.linear
         || descriptor.charge_solver.linear.absolute_tolerance != 0.0
-        || !matches!(descriptor.charge_solver.engine.as_str(), "auto" | "cg")
+        || !expected_charge_solver_engine
         || !matches!(descriptor.spin_solver.engine.as_str(), "auto" | "gmres")
-        || descriptor.resolved_charge_engine != "cg"
+        || descriptor.resolved_charge_engine != expected_charge_engine
         || descriptor.resolved_spin_engine != "gmres"
         || descriptor.interface_law != "transparent"
         || descriptor
             .interfaces
             .iter()
-            .any(|interface| interface.law != "transparent")
+            .any(|interface| interface.law != "transparent" || reciprocal)
         || descriptor.interface_realization != "transparent_conforming_h1"
         || descriptor.stage_coupling != "none"
         || descriptor.capability_status != "reference_executable"
         || descriptor.implementation_state != "executable"
         || descriptor.validation_state != "algebra_validated"
-        || descriptor.validation_scope != "fem_cpu_double_conforming_h1_p1_transparent_m1"
+        || descriptor.validation_scope
+            != if reciprocal {
+                "fem_cpu_double_conforming_h1_p1_reciprocal_m2"
+            } else {
+                "fem_cpu_double_conforming_h1_p1_transparent_m1"
+            }
+        || (reciprocal && descriptor.spin_solver.reciprocal_nonlinear.is_some())
+        || !reciprocal_material_valid
         || capabilities != expected_capabilities
 }
 
