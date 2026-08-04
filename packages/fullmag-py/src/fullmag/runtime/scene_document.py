@@ -589,7 +589,13 @@ def _canonical_spin_torques(values: object, *, scene_ids: bool) -> list[dict[str
         entry = _mapping(copy.deepcopy(value), f"spin_torques[{index}]")
         kind = entry.get("kind")
         formula = entry.get("formula_version")
-        if kind == "zhang_li" or (kind == "slonczewski" and formula not in {"slonczewski.fullmag.v2", "slonczewski.fullmag.v1"}):
+        if (
+            (kind == "zhang_li" and formula not in {"zhang_li.fullmag.v1", "zhang_li.mumax3.v1"})
+            or (
+                kind == "slonczewski"
+                and formula not in {"slonczewski.fullmag.v2", "slonczewski.fullmag.v1"}
+            )
+        ):
             entry.pop("id", None)
         module = _decode_spin_torque(entry)
         canonical = module.to_ir_module()  # type: ignore[attr-defined]

@@ -60,6 +60,12 @@ def _normalized_axis(
             f"{field_name} norm must be greater than epsilon_axis "
             f"({PRESCRIBED_SOT_V1_EPSILON_AXIS:g})"
         )
+    raw_norm = math.hypot(*authored)
+    if math.isclose(raw_norm, 1.0, rel_tol=0.0, abs_tol=1.0e-15):
+        # Preserve an already canonical unit vector bit-for-bit.  Re-normalizing
+        # a serialized unit vector can introduce a last-bit drift on every
+        # scene-document round trip.
+        return authored, authored
     return authored, tuple(component / scaled_norm for component in scaled)
 
 
