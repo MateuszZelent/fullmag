@@ -8634,6 +8634,130 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_slonczewski_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available() {
+        if !is_gpu_available() {
+            eprintln!("skipping FEM↔FDM common-limit test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut fem_plan = make_exchange_only_plan();
+        fem_plan.external_field = None;
+        fem_plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem_plan.mesh.nodes.len()];
+        fem_plan.stt_thickness = Some(1.0e-9);
+        fem_plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            operator_version: None,
+            realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: None,
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+        });
+        fem_plan.current_density = Some([0.0, 0.0, 1.4e11]);
+        fem_plan.stt_degree = Some(0.62);
+        fem_plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        fem_plan.stt_lambda = Some(1.8);
+        fem_plan.stt_epsilon_prime = Some(0.03);
+        let dt = fem_plan.fixed_timestep.expect("common-limit fixed timestep");
+
+        let mut fdm_plan = fullmag_ir::FdmPlanIR::default();
+        fdm_plan.grid = fullmag_ir::GridDimensions { cells: [1, 1, 1] };
+        fdm_plan.cell_size = [1.0e-9, 1.0e-9, 1.0e-9];
+        fdm_plan.region_mask = vec![1];
+        fdm_plan.active_mask = Some(vec![true]);
+        fdm_plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                fdm_plan.origin_m,
+                fdm_plan.grid.cells,
+                fdm_plan.cell_size,
+                1,
+                fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                fdm_plan.active_mask.as_deref(),
+                &fdm_plan.region_mask,
+            )
+            .expect("FDM common-limit grid certificate")
+            .with_region_legend(vec![fullmag_ir::FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "common-limit".to_string(),
+                region_id: "common-limit:core".to_string(),
+                priority: 0,
+            }]),
+        );
+        fdm_plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        fdm_plan.material = fullmag_ir::FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.1,
+            ..Default::default()
+        };
+        fdm_plan.enable_exchange = false;
+        fdm_plan.enable_demag = false;
+        fdm_plan.gyromagnetic_ratio = 2.211e5;
+        fdm_plan.precision = fullmag_ir::ExecutionPrecision::Double;
+        fdm_plan.exchange_bc = fullmag_ir::ExchangeBoundaryCondition::Neumann;
+        fdm_plan.integrator = Some(fullmag_ir::IntegratorChoice::Heun);
+        fdm_plan.fixed_timestep = Some(dt);
+        fdm_plan.current_density = fem_plan.current_density;
+        fdm_plan.stt_degree = fem_plan.stt_degree;
+        fdm_plan.stt_spin_polarization = fem_plan.stt_spin_polarization;
+        fdm_plan.stt_lambda = fem_plan.stt_lambda;
+        fdm_plan.stt_epsilon_prime = fem_plan.stt_epsilon_prime;
+        fdm_plan.stt_thickness = fem_plan.stt_thickness;
+        fdm_plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
+        fdm_plan.slonczewski_stack_normal = Some([0.0, 0.0, 1.0]);
+        fdm_plan.slonczewski_active_mask = Some(vec![true]);
+
+        let fdm_run = crate::fdm::cpu::reference::execute_reference_fdm(
+            &fdm_plan,
+            dt,
+            &[],
+            None,
+            None,
+        )
+        .expect("FDM common-limit reference run");
+        assert_eq!(
+            fdm_run.result.final_magnetization.len(),
+            1,
+            "one-cell FDM common-limit reference must produce one magnetization"
+        );
+        let expected = fdm_run.result.final_magnetization[0];
+
+        let mut fem_backend =
+            NativeFemBackend::create(&fem_plan).expect("FEM common-limit native create");
+        fem_backend
+            .step(dt)
+            .expect("FEM common-limit native step");
+        let actual = fem_backend
+            .copy_m(fem_plan.mesh.nodes.len())
+            .expect("FEM common-limit magnetization");
+        for (node, value) in actual.iter().enumerate() {
+            assert_scalar_close(
+                &format!("FEM↔FDM common-limit m[{node}][0]"),
+                value[0],
+                expected[0],
+                5e-8,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("FEM↔FDM common-limit m[{node}][1]"),
+                value[1],
+                expected[1],
+                5e-8,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("FEM↔FDM common-limit m[{node}][2]"),
+                value[2],
+                expected[2],
+                5e-8,
+                1e-10,
+            );
+        }
+    }
+
+    #[test]
     fn native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available() {
         if !native_cpu_gpu_parity_available(false) {
             return;
