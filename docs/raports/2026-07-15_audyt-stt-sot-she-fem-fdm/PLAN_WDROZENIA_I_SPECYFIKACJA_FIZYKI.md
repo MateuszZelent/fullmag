@@ -6521,7 +6521,10 @@ pozytywnie zorientowanych tetraedrów dzielących sześcian jednostkowy; twarze
 `m=e_x`, `theta_SH=sigma_AHE=0`, wyłączonych reakcji spinowych i
 `V=x`, `mu_s=(0.2,0.3,0.4)x` rozwiązanie afiniczne jest dokładne. Test sprawdza
 wszystkie węzły, prąd ładunkowy, tensor `Q_{ia}` w układzie node-major,
-zbieżność obu bloków oraz wartości konstytutywne do `1e-8`.
+zbieżność obu bloków oraz wartości konstytutywne do `1e-8`. Następnie wykonuje
+dwa dodatkowe stany afiniczne: charge-only (`E_x=-1`, `G_{xx}=0`) i spin-only
+(`E_x=0`, `G_{xx}=-1/2`), sprawdzając równość wzajemnych odpowiedzi
+`Q_{xx}(E_x)/E_x=J_x(G_{xx})/G_{xx}` oraz dodatnią moc diagonalną.
 
 ### 32.56.3. Managed GREEN
 
@@ -6539,8 +6542,8 @@ zarządzanym obrazie `fem-gpu`; wynik bieżącego uruchomienia:
 fem steady transport ABI contract: PASS
 ```
 
-Jest to niezależny dowód wykonania niezerowego gradientu i algebry
-konstytutywnej bounded M2 FEM CPU. Nie zamyka jeszcze mesh convergence,
-Onsager/dissipation sweep, FDM↔FEM reciprocal common-limit, GPU, interfejsów,
-BORIS parity ani `validated_workloads`; szeroka ocena pozostaje **86%
-implementacji / 60% gotowości produkcyjnej**.
+Jest to niezależny dowód wykonania niezerowego gradientu, dwóch odpowiedzi
+wzajemnych i dodatniej mocy dla bounded M2 FEM CPU. Nie zamyka jeszcze
+parametrycznego/meshowego Onsager-dissipation sweep, FDM↔FEM reciprocal
+common-limit, GPU, interfejsów, BORIS parity ani `validated_workloads`; szeroka
+ocena pozostaje **86% implementacji / 60% gotowości produkcyjnej**.

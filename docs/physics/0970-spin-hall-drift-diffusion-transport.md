@@ -873,9 +873,19 @@ Q_xa = -0.5*5*u_a - 0.25*3*delta_{a,x} A/m^2,
 
 with all transverse flow components zero. The managed native ABI contract
 checks the nodal fields, the node-major vector/tensor projection, convergence,
-and these values to `1e-8` absolute error. This closes a sign/factor and
-nonzero-gradient execution oracle for the bounded FEM M2 constitutive block;
-it does not close mesh convergence, an Onsager/dissipation sweep, FDM/FEM
+and these values to `1e-8` absolute error. It then executes two additional
+single-gradient affine drives: a charge-only state with $E_x=-1\,\mathrm{V/m}$
+and a spin-only state with $G_{xx}=-1/2\,\mathrm{V/m}$. The measured cross
+responses satisfy
+
+```text
+Q_xx(E_x)/E_x = J_x(G_xx)/G_xx
+```
+
+to `1e-8`, and both diagonal powers $E\mathbin{\cdot}J_c$ and
+$G\mathbin{:}Q$ are positive. This is an executable two-drive Onsager and
+dissipation oracle for the bounded FEM M2 constitutive block. It does not
+close a parameter/mesh sweep, heterogeneous-material balance, FDM/FEM
 reciprocal common-limit, or production qualification.
 
 An executable managed BORIS N/F smoke now completes at `coarse`, `medium`, and
@@ -1050,7 +1060,7 @@ a qualified workload without the validation gates above.
 | Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |
 | Runtime regression | crates/fullmag-runner/src/native_fem/steady_transport.rs | native_m2_solver_publishes_reciprocal_diagnostics | reciprocal provenance identity | focused managed test |
 | ABI layout regression | crates/fullmag-fem-sys/src/lib.rs | steady_transport_m2_request_keeps_v1_as_a_nested_prefix | append-only nested M1-prefix guarantee | focused managed test |
-| M2 affine constitutive oracle | backends/fem/tests/steady_transport_abi_contract.cpp | cpu_double_reciprocal_m2_affine_constitutive_oracle | nonzero-gradient signs, half-gradient convention, and node-major projection | `just verify-fem-steady-transport-m2-affine-contract` |
+| M2 affine constitutive oracle | backends/fem/tests/steady_transport_abi_contract.cpp | cpu_double_reciprocal_m2_affine_constitutive_oracle | nonzero-gradient signs, half-gradient convention, node-major projection, two-drive Onsager cross response, and positive dissipation | `just verify-fem-steady-transport-m2-affine-contract` |
 
 (scientific-bibliography)=
 ## 9. References

@@ -1,5 +1,6 @@
 #include "fullmag_fem.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cmath>
 #include <iostream>
@@ -401,8 +402,8 @@ void cpu_double_reciprocal_m2_affine_constitutive_oracle()
         1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
     };
     const uint32_t dirichlet_attributes[] = {1, 2};
-    const double charge_values[] = {0.0, 1.0};
-    const double spin_values[] = {
+    double charge_values[] = {0.0, 1.0};
+    double spin_values[] = {
         0.0, 0.0, 0.0,
         0.2, 0.3, 0.4,
     };
@@ -516,6 +517,64 @@ void cpu_double_reciprocal_m2_affine_constitutive_oracle()
             }
         }
     }
+
+    // Two additional affine drives isolate the reciprocal P*sigma cross block.
+    // The charge-only drive has E_x=-1 V/m and G_xx=0; the spin-only drive has
+    // E_x=0 and G_xx=-1/2 V/m.  Reciprocity requires
+    // J_x(G_xx)/G_xx = Q_xx(E_x)/E_x, while both diagonal powers must be positive.
+    const auto solve_drive = [&]() {
+        std::fill(std::begin(potential), std::end(potential), 0.0);
+        std::fill(std::begin(current), std::end(current), 0.0);
+        std::fill(std::begin(spin), std::end(spin), 0.0);
+        std::fill(std::begin(spin_current), std::end(spin_current), 0.0);
+        std::fill(std::begin(torque), std::end(torque), 0.0);
+        const int drive_status = fullmag_fem_solve_steady_transport_m2_v1(&request, &result);
+        if (drive_status != FULLMAG_FEM_OK) {
+            std::cerr << "steady transport affine M2 drive error: " << result.error_message << '\n';
+        }
+        require(drive_status == FULLMAG_FEM_OK, "affine reciprocal M2 drive failed");
+        require(result.charge_converged != 0 && result.spin_converged != 0,
+            "affine reciprocal M2 drive did not converge");
+    };
+    const auto average_current_x = [&]() {
+        double value = 0.0;
+        for (int node = 0; node < 8; ++node) {
+            value += current[3 * node];
+        }
+        return value / 8.0;
+    };
+    const auto average_spin_q_xx = [&]() {
+        double value = 0.0;
+        for (int node = 0; node < 8; ++node) {
+            value += spin_current[9 * node];
+        }
+        return value / 8.0;
+    };
+
+    std::fill(std::begin(spin_values), std::end(spin_values), 0.0);
+    charge_values[0] = 0.0;
+    charge_values[1] = 1.0;
+    solve_drive();
+    const double charge_only_jx = average_current_x();
+    const double charge_only_qxx = average_spin_q_xx();
+
+    charge_values[0] = 0.0;
+    charge_values[1] = 0.0;
+    spin_values[3] = 1.0;
+    solve_drive();
+    const double spin_only_jx = average_current_x();
+    const double spin_only_qxx = average_spin_q_xx();
+
+    constexpr double charge_only_e = -1.0;
+    constexpr double spin_only_g = -0.5;
+    require(std::abs(charge_only_jx + sigma_parallel) < 1.0e-8,
+        "charge-only affine reciprocal M2 current is not the expected diagonal response");
+    require(std::abs(spin_only_qxx - sigma_spin * spin_only_g) < 1.0e-8,
+        "spin-only affine reciprocal M2 current is not the expected diagonal response");
+    require(std::abs(charge_only_qxx / charge_only_e - spin_only_jx / spin_only_g) < 1.0e-8,
+        "affine reciprocal M2 cross response violates Onsager reciprocity");
+    require(charge_only_e * charge_only_jx > 0.0 && spin_only_g * spin_only_qxx > 0.0,
+        "affine reciprocal M2 diagonal response has negative dissipation");
 }
 
 } // namespace
