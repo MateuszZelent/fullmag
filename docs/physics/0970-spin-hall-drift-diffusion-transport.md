@@ -631,6 +631,20 @@ the explicit `Q_ia=Js_ia/MUB_E` normalization, potential profiles improve with
 refinement but `mu_s`, interface fluxes, and torque do not meet the comparison
 contract. This does not promote either solver to cross-backend validation.
 
+An executable managed BORIS N/F smoke now completes at `coarse`, `medium`, and
+`fine` resolutions in the pinned CUDA image
+`nvidia/cuda@sha256:94fd755736cb58979173d491504f0b573247b1745250249415b07fefc738e41f`
+with BORIS 2022 version 4 on an RTX 4080 SUPER (compute capability 8.9). The
+stage marker, all N/F OVF fields, and an immutable runtime identity are present.
+This is execution evidence only: the artifact deliberately remains
+`qualification.status=diagnostic`. The coarse and medium meshes have no
+interior cells for the residual stencil, so their zero residuals are vacuous;
+the fine normal-metal spin residual is `3.7620952779e-2`, above the declared
+`1e-5` tolerance (the fine ferromagnet residual is `1.0362313921e-9`). The
+interface charge and spin-torque closures are retained as raw diagnostics and
+are not accepted as balanced. Consequently the run does not close BORIS
+convergence, N/F interface balance, or Fullmag↔BORIS parity.
+
 #### 5.2.1 BORIS residual units and scope
 
 The BORIS display contract is not dimensionally identical to the Fullmag field

@@ -132,6 +132,8 @@ def capture_runtime_identity(
         "probe_stdout_sha256": str(probe.get("probe_stdout_sha256", "")),
         "probe_stderr_sha256": str(probe.get("probe_stderr_sha256", "")),
     }
+    if device == "cuda":
+        identity["nvidia_smi_query"] = str(probe.get("nvidia_smi_query", ""))
     validate_runtime_identity(identity)
     return identity
 
@@ -188,10 +190,7 @@ def _probe_from_managed_log(stdout: str, stderr: str, device: str) -> dict[str, 
             }
         )
     else:
-        gpu_line = next(
-            (line.strip() for line in combined.splitlines() if "," in line and "compute" not in line.lower()),
-            "",
-        )
+        gpu_line = _managed_gpu_identity_line(combined)
         if not gpu_line:
             raise RuntimeError("managed CUDA output is missing nvidia-smi identity")
         parts = [part.strip() for part in gpu_line.split(",", 1)]
@@ -204,6 +203,19 @@ def _probe_from_managed_log(stdout: str, stderr: str, device: str) -> dict[str, 
             }
         )
     return probe
+
+
+def _managed_gpu_identity_line(combined_output: str) -> str:
+    """Return the nvidia-smi `name, compute_capability` line from mixed logs."""
+
+    for raw_line in combined_output.splitlines():
+        line = raw_line.strip()
+        if "," not in line:
+            continue
+        name, capability = (part.strip() for part in line.split(",", 1))
+        if name and re.fullmatch(r"\d+(?:\.\d+)?", capability):
+            return f"{name}, {capability}"
+    return ""
 
 
 def _managed_shell(
@@ -458,10 +470,7 @@ def run_boris_case(
     if device == "cuda":
         # Preserve the exact query in the immutable identity rather than only
         # retaining a display name.
-        probe["nvidia_smi_query"] = next(
-            (line.strip() for line in combined.splitlines() if "," in line and "compute" not in line.lower()),
-            "",
-        )
+        probe["nvidia_smi_query"] = _managed_gpu_identity_line(combined)
     identity = capture_runtime_identity(
         build_root,
         image_digest,
