@@ -3648,6 +3648,12 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("realizedRegionIds: fdmRealizedRegionIds");
     expect(source).toContain("membership=${fdmRegionMembership.revision ?? \"none\"}");
     expect(source).toContain("const fdmRealizedRegionIds = useMemo");
+    expect(source).toContain(
+      "fdmRegionMembership.error || fdmRegionMembershipBinary.error",
+    );
+    expect(source).toContain(
+      'fdmRegionMembership.status === "ready" ? undefined : null',
+    );
     expect(source).toContain("fdmBuildFieldRevision");
     expect(source).toContain("fdmInstanceModel: fdmInstanceModel");
     expect(source).toContain("fdmVectorSegments");

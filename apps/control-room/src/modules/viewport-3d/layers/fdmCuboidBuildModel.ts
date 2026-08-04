@@ -1,4 +1,7 @@
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import {
+  FMRM_INACTIVE_REGION_ID,
+  type DecodedFieldVector,
+} from "@/kernel/api/codecs";
 
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import type { Viewport3DVectorAnchorMode } from "../viewport3dRenderModel";
@@ -86,10 +89,17 @@ export function buildFdmCuboidInstanceModel(
   const topography = normalizeVoxelTopography(options.voxelTopography);
   const gridCells = Math.max(nx * ny * nz, 1);
   const totalCells = Math.min(domain.totalCells, gridCells);
+  const realizedMembershipRequested = options.realizedRegionIds !== undefined;
+  if (realizedMembershipRequested && options.realizedRegionIds === null) {
+    return null;
+  }
   const realizedRegionIds = validRealizedRegionIds(
     options.realizedRegionIds,
     totalCells,
   );
+  if (realizedMembershipRequested && !realizedRegionIds) {
+    return null;
+  }
   const realizedCellIndices = realizedRegionIds
     ? collectRealizedCellIndices(realizedRegionIds)
     : null;
@@ -174,11 +184,17 @@ function validRealizedRegionIds(
 
 function collectRealizedCellIndices(regionIds: Uint32Array): Uint32Array {
   const activeIndices = new Uint32Array(
-    regionIds.reduce((count, regionId) => count + (regionId > 0 ? 1 : 0), 0),
+    regionIds.reduce(
+      (count, regionId) =>
+        count + (regionId !== FMRM_INACTIVE_REGION_ID ? 1 : 0),
+      0,
+    ),
   );
   let writeOffset = 0;
   for (let cellIndex = 0; cellIndex < regionIds.length; cellIndex += 1) {
-    if ((regionIds[cellIndex] ?? 0) === 0) continue;
+    if ((regionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) === FMRM_INACTIVE_REGION_ID) {
+      continue;
+    }
     activeIndices[writeOffset] = cellIndex;
     writeOffset += 1;
   }

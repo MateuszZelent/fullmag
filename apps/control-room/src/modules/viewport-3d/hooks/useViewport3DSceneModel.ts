@@ -2375,15 +2375,32 @@ export function useViewport3DSceneModel({
     revision: fdmRegionMembership.revision,
   });
   const fdmRealizedRegionIds = useMemo(() => {
+    if (!fdmDomain) return undefined;
+    if (fdmRegionMembership.error || fdmRegionMembershipBinary.error) {
+      return null;
+    }
+    if (!fdmRegionMembership.data) {
+      // A settled 204 means there is no realized artifact yet and the
+      // authored grid is an explicit pre-run representation. While loading,
+      // do not render a potentially misleading full-grid fallback.
+      return fdmRegionMembership.status === "ready" ? undefined : null;
+    }
     const binary = fdmRegionMembershipBinary.data;
-    if (!binary || !fdmDomain) return null;
+    if (!binary) return null;
     const shapeMatches = binary.counts.every(
       (count, axis) => count === fdmDomain.shape[axis],
     );
     return shapeMatches && binary.cellCount === fdmDomain.totalCells
       ? binary.regionIds
       : null;
-  }, [fdmDomain, fdmRegionMembershipBinary.data]);
+  }, [
+    fdmDomain,
+    fdmRegionMembership.data,
+    fdmRegionMembership.error,
+    fdmRegionMembership.status,
+    fdmRegionMembershipBinary.data,
+    fdmRegionMembershipBinary.error,
+  ]);
   const femDomain = useMemo(
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],

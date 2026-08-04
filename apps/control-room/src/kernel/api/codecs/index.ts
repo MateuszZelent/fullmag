@@ -14,6 +14,7 @@ export {
 } from "./periodicPairsCodec";
 export {
   decodeFdmRegionMembership,
+  FMRM_INACTIVE_REGION_ID,
   FMRM_HEADER_LEN,
   type DecodedFdmRegionMembership,
 } from "./fdmRegionMembershipCodec";

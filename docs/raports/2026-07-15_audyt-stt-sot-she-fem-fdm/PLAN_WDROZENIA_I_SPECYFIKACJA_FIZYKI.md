@@ -6752,3 +6752,57 @@ magazynu. Zasada pozostaje: przed ciężkim buildem trzeba potwierdzić w samym
 kontenerze urządzenie i wolne miejsce widoku `/mnt/fullmag-zfn2-native`; do
 czasu poprawnej konfiguracji demona nie zmienia się istniejących receptur w
 sposób, który mógłby ukryć zapis na pełnym dysku roboczym.
+
+## 32.62. Naprawa dekodowania i fail-closed FDM region-membership w Control Room (2026-08-04)
+
+### 32.62.1. Root cause i zakres
+
+Audyt `docs/audits/2026-08-04-fdm-ui-audit.md` wykazał rozjazd między aktualnym
+artefaktem runnera a frontendowym dekoderem. Runner publikuje `FMRM` v2 z
+`version=2`, `kind=2`; `u32::MAX` oznacza komórkę nieaktywną, a `0` aktywną
+komórkę bez przypisanego regionu. Dekoder Control Room akceptował wyłącznie
+`version=1/kind=1`, a model viewportu filtrował `regionId > 0`. W rezultacie
+poprawny v2 payload był odrzucany, a błąd przechodził do próbkowania całego
+authored gridu, wizualnie włączając komórki poza domeną.
+
+### 32.62.2. Implementacja
+
+Frontendowy codec
+`apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec.ts` teraz:
+
+- traktuje v2/kind=2 jako kontrakt pierwszorzędny;
+- zachowuje ograniczoną kompatybilność v1/kind=1, normalizując historyczne
+  zero-inactive do wspólnego sentinela `FMRM_INACTIVE_REGION_ID`;
+- zwraca wersję i rodzaj payloadu oraz nie zmienia v2 `0` active/unassigned;
+- posiada fixture testowy z dokładnym aktualnym nagłówkiem backendu.
+
+`fdmCuboidBuildModel.ts` interpretuje wyłącznie `u32::MAX` jako inactive, więc
+region `0` pozostaje widoczną aktywną komórką. `useViewport3DSceneModel.ts`
+rozróżnia brak artefaktu (`204`, jawny pre-run authored fallback) od błędu,
+braku binarnego payloadu lub niezgodnego shape/count (fail-closed: model nie
+jest renderowany). Błąd nie jest już maskowany pełnym pudełkiem FDM.
+
+Zmiana jest frontend-only; nie zmienia tras, OpenAPI v2, generated types,
+realtime ani właściciela zasobu. HTTP v2 descriptor/binary pozostaje źródłem
+stanu, a codec/resource hook jest jedyną ścieżką do unified viewport.
+
+### 32.62.3. Dowód i granica kwalifikacji
+
+Focused Control Room tests zakończyły się:
+
+```text
+5 test files passed; 143 tests passed
+```
+
+Obejmują codec v1/v2, sentinele active-unassigned/inactive, fail-closed model,
+resource path i FDM layer. `pnpm --dir apps/control-room typecheck` oraz
+targeted ESLint dla zmienionych plików zakończyły się `exit 0`.
+Globalny `check:api-hygiene` nadal zatrzymuje się na istniejącym false-positive
+`legacy live/bootstrap/poll/preview path` dla słowa `poll` w komentarzu
+`src/kernel/diagnostics/solverTrace.ts`; nie jest to błąd tej zmiany.
+
+Nie wykonano jeszcze browser/WebGL smoke z rzeczywistym artefaktem FDM, pełnej
+kwalifikacji target/field/render path ani FDM universe/air/void semantics.
+Dlatego capability i `validated_workloads` pozostają bez awansu, a szeroka
+ocena celu pozostaje konserwatywnie **86% implementacji / 60% gotowości
+produkcyjnej**.
