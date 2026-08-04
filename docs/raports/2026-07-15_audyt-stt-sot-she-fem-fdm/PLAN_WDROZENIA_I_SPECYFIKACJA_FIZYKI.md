@@ -7403,3 +7403,84 @@ Po tej korekcie ocena postępu celu (heurystyczna, bez promocji capability) wyno
 **88% implementacji / 62% gotowości produkcyjnej**. Wzrost dotyczy wyłącznie
 wykonywalnej sparse realizacji OE-T0; nie oznacza zgodności FEM–FDM ani
 produkcyjnego dynamicznego Oersteda.
+
+## 32.72. Wykonywalna brama parytetu authoringu STT/SOT/SHE/Oersted i granica FEM (2026-08-04)
+
+### 32.72.1. Zakres bramy
+
+Po stronie authoringu zamknięto jeden wspólny, fail-closed gate dla czterech
+warstw: manifestu parametrów, Python DSL, `ProblemIR`/planera Rust oraz modeli
+inspektora UI. Źródłem prawdy jest
+`docs/specs/spin-transport-authoring-parameter-parity-v1.json`; inwentarze
+`TRANSPORT_AUTHORING_DRAFT_INVENTORY` i
+`SPIN_AUTHORING_DRAFT_INVENTORY` są tylko projekcją istniejących kluczy draftu,
+nie drugim modelem fizycznym. Pola, których UI jeszcze nie edytuje, są jawnie
+oznaczone `opaque:*`, zachowywane bez utraty danych i odrzucane przez planner;
+nie ma cichego fallbacku ani udawania, że parametr jest wykonywalny.
+
+Zakres ten obejmuje parametry authoringu obecne w manifeście dla:
+
+- `CurrentTransport` (Ohmic/Poisson),
+- `SpinDriftDiffusion` (steady SHE/iSHE kontrakt),
+- `SlonczewskiSTT` i `PrescribedSpinOrbitTorque`,
+- `OerstedCylinder` i `OerstedField`.
+
+Nie jest to jeszcze dowód, że każda z tych fizyk jest wykonywalna w FEM lub
+FDM. W szczególności `opaque:*` i `declared_unsupported` pozostają częścią
+kontraktu zachowania danych, ale nie rozszerzają capability solvera.
+
+### 32.72.2. Test i dowód managed
+
+Gate został zapisany jako repozytoryjna recepta:
+
+```text
+just verify-spin-transport-authoring-parameter-parity
+```
+
+Ostatni przebieg zakończył się `pass`. Raport maszynowy znajduje się w:
+`.fullmag/reports/spin-transport-authoring-parameter-parity/report.json`.
+Dowód jest związany z pełnym commitem
+`92ea429cfc3919a23b23f9503427318239ffc9c4` i SHA-256 manifestu
+`88d08887d00210d44cbb85da5de9c59a8337b733ac9b81c2bf14317cb1d7ecac`.
+Przebieg obejmuje manifest (`1` test), Python (`2` testy plus istniejący
+drift-diffusion), Rust IR/planner (`2` grupy testów) i UI (`23` testy w dwóch
+modelach inspektora). Raport wymusza `physics: not_qualified` oraz
+`backend_capability_promotion: forbidden`, więc sam zielony gate nie może
+awansować FEM, FDM, GPU ani zgodności z zewnętrznym solverem.
+
+### 32.72.3. Co to zmienia dla FEM
+
+FEM został porównany, nie tylko FDM. Istnieją dwa niezależne poziomy dowodu:
+
+1. kontrakty operatorów FEM CPU/CUDA dla Slonczewskiego, transportu M1/M2 i
+   Oersteda (w tym sparse OE-T0 oraz OE-F1/OE-F2 CPU), opisane w §§32.68–32.71;
+2. pełny diagnostyczny SP5 FEM CPU do `t=1 ns`, porównany z FDM na tym samym
+   czasie i z objętościowo zachowawczym ograniczeniem tet4→voxel.
+
+Wynik pola po ograniczeniu dla artefaktów z §32.69 wynosił: `4096/4096`
+pokrytych voxeli, `vector RMS=0.49731737652723923`, `p99=1.6738097210831444`,
+`max=1.8966968128889123`, `cosine=0.874437658356207`. To jest rzeczywista
+różnica diagnostyczna, nie błąd pokrycia, ale nie jest jeszcze różnicą dwóch
+identycznych problemów numerycznych: FEM używa P1/tet4 i Poisson--Robin
+demag, FDM siatki kartezjańskiej i operatora FFT, a stany relaksacji oraz
+implementacje Zhang--Li mają odrębne wersje referencyjne.
+
+Dlatego granica pozostaje jawna: `FEM SP5 = reference-executable / bounded
+diagnostic`, `FDM SP5 = diagnostic-unqualified`, a
+`FEM↔FDM equivalence_established = false`. Do zamknięcia porównania FEM
+brakuje wspólnego stanu początkowego/końcowego, co najmniej trzech poziomów
+`h`, sweepu `dt`, niezależnego audytu znaku i operatora Zhang--Li, zgodności
+próbkowania pól oraz pełnego przebiegu FEM GPU device-resident. Nie zmieniono
+macierzy capability ani `validated_workloads`.
+
+### 32.72.4. Weryfikacja i następna brama
+
+Powyższy gate authoringu nie zastępuje bram FEM. Pełny `pnpm ... typecheck`
+pozostaje obecnie zablokowany przez niezależne, niezatwierdzone zmiany w
+`useActiveLaneCapabilities` i `domainPresentation`; nie przypisuje się tego
+do parytetu transportu. Następna brama FEM to kontrolowane porównanie
+zbieżności (mesh/airbox/`dt`/operator) na managed runtime zapisującym artefakty
+pod `/zfn2/mateuszz/git/fullmag`, a dopiero potem decyzja o ewentualnym
+awansie capability. Ocena celu pozostaje **88% implementacji / 62%
+gotowości produkcyjnej**; obecna zmiana zwiększa pewność ścieżki authoringu,
+nie odsetek kwalifikacji fizyki.
