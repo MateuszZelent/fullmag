@@ -1,5 +1,9 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
-import type { HysteresisExecutionTreeResource } from "@/kernel/api/apiTypes";
+import type {
+  DomainMetaResource,
+  HysteresisExecutionTreeResource,
+} from "@/kernel/api/apiTypes";
+import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 import type {
   CrossSectionFrameExtent,
   CrossSectionPlot,
@@ -62,6 +66,15 @@ type ExplorerNodeKind =
   | "airbox.visualization.debug"
   | "boundary-faces.root"
   | "mesh.root"
+  | "mesh.grid"
+  | "mesh.grid.descriptor"
+  | "mesh.grid.magnetic-support"
+  | "mesh.grid.active-unassigned"
+  | "mesh.grid.mask"
+  | "mesh.grid.provenance"
+  | "mesh.grid.region"
+  | "mesh.grid.universe-outside-support"
+  | "fdm.cell"
   | "mesh.shared-domain"
   | "mesh.builds"
   | "mesh.quality"
@@ -273,6 +286,12 @@ export interface ExplorerNode {
   extensionId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
+  cellOrdinal?: string;
+  cellIJK?: readonly [number, number, number];
+  cellMaskState?: "inactive" | "active-unassigned" | "region";
+  numericRegionId?: number | null;
+  gridFingerprint?: string | null;
+  membershipRevision?: string | null;
   fmrPeakIndex?: number;
   frequencyIndex?: number;
   analysisFieldSource?: "eigen-mode" | "frequency-response";
@@ -419,6 +438,11 @@ export interface ModelTreeFieldDriveSnapshot {
 }
 
 export interface ModelTreeSnapshot {
+  /** DomainMeta remains available when a derived presentation is loading or degraded. */
+  domainMeta?: DomainMetaResource | null;
+  domainDiscretization?: "fdm" | "fem" | null;
+  domainPresentationStatus?: "idle" | "loading" | "ready" | "stale" | "error";
+  domainPresentation?: DomainPresentation | null;
   couplings?: readonly ModelTreeCouplingSnapshot[];
   fieldDrives?: readonly ModelTreeFieldDriveSnapshot[];
   crossSections?: ModelTreeCrossSectionSnapshot | null;

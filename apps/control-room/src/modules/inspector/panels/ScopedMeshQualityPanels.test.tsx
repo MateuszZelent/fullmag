@@ -183,6 +183,27 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     revision: 3,
     status: "ready",
   }),
+  useDomainMetaResource: () => ({
+    data: null,
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
+  useFdmRegionMembershipResource: () => ({
+    data: null,
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
+  useFdmRegionMembershipBinaryResource: () => ({
+    data: null,
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
   useMeshBuildCurrent: () => ({
     data: {
       effective_airbox_target: { growth_rate: 1.4, hmax: 2e-8, hmin: 4e-9 },
@@ -512,6 +533,7 @@ describe("scoped mesh quality panels", () => {
         couplingDependencies={[]}
         deleteRegion={vi.fn()}
         draftDirty={false}
+        meshLane="fem"
         draft={{
           enabled: true,
           frame: "object",

@@ -5021,6 +5021,55 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "carrier_origin_x_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "carrier_phase_rad": {
+                "format": "double",
+                "type": "number"
+              },
+              "center_x_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "center_y_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "gaussian_plane_wave"
+                ],
+                "type": "string"
+              },
+              "sigma_x_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "sigma_y_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "wavelength_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center_x_m",
+              "center_y_m",
+              "carrier_origin_x_m",
+              "sigma_x_m",
+              "sigma_y_m",
+              "wavelength_m",
+              "carrier_phase_rad",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },

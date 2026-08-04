@@ -33,6 +33,24 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("sessionStatus.data");
   });
 
+  it("uses the structured-grid resource path for explicit FDM visualization targets", () => {
+    expect(panelSource).toContain("useDomainMetaResource");
+    expect(panelSource).toContain("useFdmRegionMembershipResource");
+    expect(panelSource).toContain(
+      "const fdmTarget = fdmResourcesEnabled && isFdmVisualizationTarget(target)",
+    );
+    expect(panelSource).toContain("femResourcesEnabled &&");
+    expect(panelSource).toContain(
+      "useVisualizationStateResource({\n    enabled: femResourcesEnabled",
+    );
+    expect(panelSource).toContain(
+      "resolveObjectVisualizationTargetForLane({",
+    );
+    expect(panelSource).toContain("fdmGridCellCount");
+    expect(panelSource).toContain('value="Structured grid cells"');
+    expect(panelSource).not.toContain('"No airbox mesh part is present in the shared-domain manifest."');
+  });
+
   it("selects only visualization overrides relevant to the inspected target", () => {
     expect(panelSource).toContain("useObjectVisualizationController");
     expect(panelSource).toContain("useObjectVisualizationSelector");

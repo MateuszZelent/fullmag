@@ -10,10 +10,14 @@ import type {
 } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
+  interactionAvailabilityForDiscretization,
+  normalizeInteractionDiscretization,
+  type InteractionDiscretization,
   type PhysicsInteractionId,
 } from "@/shared/domain/physics/interactions";
 import {
@@ -162,6 +166,8 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
+    isEnabled: (context) => ribbonInteractionDiscretization(context) === "fem",
+    disabledReason: airboxCommandDisabledReason,
     run: patchAirboxVisualizationFromCommand,
   },
   {
@@ -170,6 +176,8 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
+    isEnabled: (context) => ribbonInteractionDiscretization(context) === "fem",
+    disabledReason: airboxCommandDisabledReason,
     run: resetAirboxVisualizationFromCommand,
   },
   {
@@ -178,9 +186,12 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-selection",
     category: "View",
     scope: "workspace",
-    isEnabled: (context) => Boolean(context.selection),
+    isEnabled: (context) =>
+      Boolean(context.selection) && ribbonInteractionDiscretization(context) === "fem",
     disabledReason: (context) =>
-      context.selection ? null : "Selection controller is not available.",
+      context.selection
+        ? airboxCommandDisabledReason(context)
+        : "Selection controller is not available.",
     run: focusAirboxFromCommand,
   },
   {
@@ -292,6 +303,8 @@ async function patchVisualizationTargetFromCommand(
   }
 
   if (input.target.kind === "airbox") {
+    const guard = requireFemAirboxLane(context);
+    if (guard) return guard;
     return patchAirboxVisualization(context, input.patch);
   }
 
@@ -326,6 +339,8 @@ async function clearVisualizationTargetFromCommand(
 async function patchAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   const patch = asRecord(context.input) as VisualizationTargetPatch | null;
   if (!patch) {
     return { message: "Airbox visualization patch is missing.", status: "failed" };
@@ -336,6 +351,8 @@ async function patchAirboxVisualizationFromCommand(
 async function resetAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   if (context.visualizationSync || context.api) {
     await patchVisualizationState(
       context,
@@ -349,6 +366,8 @@ async function resetAirboxVisualizationFromCommand(
 }
 
 function focusAirboxFromCommand(context: CommandContext): CommandResult {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   context.selection?.set(
     {
       kind: "airbox.visualization",
@@ -414,6 +433,19 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
     };
   }
 
+  const availability = interactionAvailabilityForDiscretization(
+    input.interactionId,
+    ribbonInteractionDiscretization(context),
+  );
+  if (availability.status !== "supported") {
+    return {
+      message:
+        availability.reason ??
+        `Interaction '${input.interactionId}' is unavailable for the current lane.`,
+      status: "failed",
+    };
+  }
+
   const current = context.selection?.get() as Selection | undefined;
   const objectId = current?.objectId ?? null;
   const regionId =
@@ -448,6 +480,8 @@ async function patchAirboxVisualization(
   context: CommandContext,
   patch: VisualizationTargetPatch,
 ): Promise<CommandResult> {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patch);
   if (Object.keys(localPatch).length > 0) {
     context.visualization?.patchViewportPreferences(
@@ -636,11 +670,12 @@ function asPhysicsInteractionInput(
     : null;
 }
 
-function isVisualizationTargetKind(
+export function isVisualizationTargetKind(
   value: unknown,
 ): value is VisualizationTargetKind {
   return (
     value === "airbox" ||
+    value === "fdm-domain" ||
     value === "object" ||
     value === "part" ||
     value === "region"
@@ -651,4 +686,35 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function ribbonInteractionDiscretization(
+  context: CommandContext,
+): InteractionDiscretization {
+  const rawResource = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  // Keep direct command consumers that predate session-status injection
+  // compatible; live RibbonModule contexts publish the key explicitly and
+  // therefore still fail closed while the lane is unresolved.
+  if (rawResource === undefined) return "fem";
+  const resource = asRecord(rawResource);
+  const status = asRecord(resource?.data ?? resource);
+  return normalizeInteractionDiscretization(
+    asRecord(status?.domain)?.discretization,
+  );
+}
+
+function airboxCommandDisabledReason(context: CommandContext): string | null {
+  const lane = ribbonInteractionDiscretization(context);
+  if (lane === "fdm") {
+    return "FEM airbox visualization is not applicable to FDM; use the structured universe/grid extent.";
+  }
+  if (lane === "unknown") {
+    return "Discretization lane is unresolved; FEM airbox visualization is disabled.";
+  }
+  return null;
+}
+
+function requireFemAirboxLane(context: CommandContext): CommandResult | null {
+  const reason = airboxCommandDisabledReason(context);
+  return reason ? { message: reason, status: "failed" } : null;
 }

@@ -120,9 +120,11 @@ import {
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
+  type FdmSelectionGrid,
   type HysteresisReplayGlyphModel,
   type HysteresisReplayMeshCompatibility,
 } from "../model/viewport3DTargets";
+import { resolveFdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 import {
   buildViewport3DTargetRenderPlan,
   buildViewport3DFieldResourceRequestId,
@@ -2076,6 +2078,7 @@ function resolveSelectionMeshQualityMetric(
 
 const VIEWPORT_3D_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
   "airbox",
+  "fdm-domain",
   "object",
   "part",
   "region",
@@ -2374,6 +2377,20 @@ export function useViewport3DSceneModel({
     enabled: Boolean(fdmDomain && fdmRegionMembership.data),
     revision: fdmRegionMembership.revision,
   });
+  const fdmSelectionGrid = useMemo<FdmSelectionGrid | null>(() => {
+    if (!fdmDomain) return null;
+    const membership = fdmRegionMembership.data;
+    return {
+      ...fdmDomain,
+      // A cell can be focused only while the current membership resource
+      // proves the same grid identity. Grid-level nodes remain focusable from
+      // the descriptor even when membership is loading or stale.
+      gridFingerprint:
+        membership && membership.freshness.toLowerCase() === "current"
+          ? membership.grid_fingerprint
+          : null,
+    };
+  }, [fdmDomain, fdmRegionMembership.data]);
   const fdmRealizedRegionIds = useMemo(() => {
     if (!fdmDomain) return undefined;
     if (fdmRegionMembership.error || fdmRegionMembershipBinary.error) {
@@ -2739,14 +2756,30 @@ export function useViewport3DSceneModel({
       ),
     [primitiveModel],
   );
+  const universeBounds = useMemo(
+    () => resolveUniverseBounds(universe.data),
+    [universe.data],
+  );
+  const fdmUniverseOutsideSupport = useMemo(
+    () =>
+      resolveFdmUniverseOutsideSupportOverlayModel({
+        magneticSupportBounds: fdmDomain?.bounds ?? null,
+        // UniverseResource currently has no role or magnetic-support bounds;
+        // keep the overlay fail-closed until that explicit API contract exists.
+        semanticRole: null,
+        universeBounds,
+      }),
+    [fdmDomain, universe.data, universeBounds],
+  );
   const topologyBounds = useMemo(
     () => (topologyCurrent ? resolveTopologyBounds(topology.data) : null),
     [topology.data, topologyCurrent],
   );
   const resourceBounds =
     topologyBounds ??
-    resolveDomainBounds(domainMeta.data) ??
-    resolveUniverseBounds(universe.data);
+    (fdmUniverseOutsideSupport?.universeBounds ??
+      resolveDomainBounds(domainMeta.data) ??
+      universeBounds);
   const bounds =
     combineViewport3DBounds(
       [resourceBounds, primitiveBounds].filter(
@@ -2765,8 +2798,13 @@ export function useViewport3DSceneModel({
     () =>
       resolveViewport3DRegionSelectionBounds(selection, allRegionOverlays) ??
       resolvePrimitiveSelectionBounds(selection, primitiveModel) ??
-      resolveViewport3DSelectionBounds(selection, femDomain, bounds),
-    [selection, allRegionOverlays, primitiveModel, femDomain, bounds],
+      resolveViewport3DSelectionBounds(
+        selection,
+        femDomain,
+        bounds,
+        fdmSelectionGrid,
+      ),
+    [selection, allRegionOverlays, primitiveModel, femDomain, bounds, fdmSelectionGrid],
   );
   const globalLayers = renderingState?.layers;
   const globalObjectBaseSettings = useMemo(
@@ -4142,6 +4180,7 @@ export function useViewport3DSceneModel({
     fdmRegionMembership: fdmRegionMembership.data,
     fdmRegionMembershipBinary: fdmRegionMembershipBinary.data,
     fdmInstanceModel: fdmInstanceModel,
+    fdmUniverseOutsideSupport,
     fdmSettings,
     fdmSurfaceColors,
     fdmVectorSegments,

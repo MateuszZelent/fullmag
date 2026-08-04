@@ -1649,6 +1649,75 @@ fn regional_field_drive_exact_wire_round_trips() {
 }
 
 #[test]
+fn regional_field_drive_gaussian_plane_wave_profile_round_trips() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "antenna_x",
+        "name": "Antenna x quadrature",
+        "kind": "regional",
+        "enabled": true,
+        "target": {"kind": "global"},
+        "amplitude_B_T": 0.003,
+        "direction": [1.0, 0.0, 0.0],
+        "spatial_profile": {
+            "kind": "gaussian_plane_wave",
+            "center_x_m": -1.0e-6,
+            "center_y_m": 0.0,
+            "carrier_origin_x_m": 0.0,
+            "sigma_x_m": 196.0e-9,
+            "sigma_y_m": 186.8507960633642e-9,
+            "wavelength_m": 196.0e-9,
+            "carrier_phase_rad": 0.0
+        },
+        "waveform": {
+            "kind": "sinusoidal",
+            "frequency_hz": 4.5e9,
+            "phase_rad": -56.548667764616276,
+            "offset": 0.0
+        },
+        "time_origin": "stage_local",
+        "activation": {"kind": "all_time_evolution"}
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value.clone()).unwrap();
+    decoded.validate().expect("Gaussian profile is valid");
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap()["field_drives"],
+        value["field_drives"]
+    );
+}
+
+#[test]
+fn regional_field_drive_gaussian_plane_wave_profile_rejects_unknown_fields() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "antenna_x",
+        "name": "Antenna x quadrature",
+        "kind": "regional",
+        "enabled": true,
+        "target": {"kind": "global"},
+        "amplitude_B_T": 0.003,
+        "direction": [1.0, 0.0, 0.0],
+        "spatial_profile": {
+            "kind": "gaussian_plane_wave",
+            "center_x_m": 0.0,
+            "center_y_m": 0.0,
+            "carrier_origin_x_m": 0.0,
+            "sigma_x_m": 1.0e-9,
+            "sigma_y_m": 1.0e-9,
+            "wavelength_m": 1.0e-9,
+            "carrier_phase_rad": 0.0,
+            "unexpected": 1
+        },
+        "waveform": {"kind": "constant"},
+        "time_origin": "stage_local",
+        "activation": {"kind": "all_time_evolution"}
+    }]);
+
+    assert!(serde_json::from_value::<ProblemIR>(value).is_err());
+}
+
+#[test]
 fn regional_field_drive_unknown_fields_are_rejected() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
     value["field_drives"] = serde_json::json!([{

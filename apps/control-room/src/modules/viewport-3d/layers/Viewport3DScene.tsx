@@ -95,6 +95,7 @@ import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
 import {
   AirboxLayer,
   DomainBoxLayer,
+  FdmUniverseOutsideSupportLayer,
   SelectionHighlightLayer,
 } from "./BoundsLayers";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
@@ -140,6 +141,7 @@ import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { clampNumber } from "../viewport3dMath";
 import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -158,6 +160,7 @@ interface Viewport3DSceneProps {
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
+  fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
   fdmSettings: VisualizationTargetSettings;
   fdmSurfaceColors: ScalarColorBuffer | null;
@@ -190,6 +193,7 @@ interface Viewport3DSceneProps {
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
+  onSelectFdmCell?: (instanceId: number) => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
   orbitDebugCommitRevision: number;
@@ -659,6 +663,8 @@ function Viewport3DOverlayLayerStack({
   planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
+  fdmDomain,
+  fdmUniverseOutsideSupport,
   fdmSettings,
   materialProfile,
   onSelectDomain,
@@ -680,6 +686,8 @@ function Viewport3DOverlayLayerStack({
   | "planarMonitorFramePreview"
   | "dimensionFrameDensity"
   | "dimensionFrameMode"
+  | "fdmDomain"
+  | "fdmUniverseOutsideSupport"
   | "fdmSettings"
   | "onSelectDomain"
   | "scaleLabelsVisible"
@@ -727,10 +735,15 @@ function Viewport3DOverlayLayerStack({
       {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
         <>
           <DomainBoxLayer
-            bounds={bounds}
+            bounds={fdmDomain?.bounds ?? bounds}
             boundsVisible={fdmSettings.boundsVisible}
             colors={colors}
             onSelectDomain={onSelectDomain}
+          />
+          <FdmUniverseOutsideSupportLayer
+            colors={colors}
+            model={fdmUniverseOutsideSupport}
+            tracker={tracker}
           />
           <SelectionHighlightLayer
             bounds={selectionBounds}
@@ -797,6 +810,7 @@ function Viewport3DModelLayerStack({
   onInspectClear,
   onInspectSample,
   onSelectDomain,
+  onSelectFdmCell,
   onSelectObject,
   onSelectPart,
   onSelectRegion,
@@ -842,6 +856,7 @@ function Viewport3DModelLayerStack({
   | "onInspectClear"
   | "onInspectSample"
   | "onSelectDomain"
+  | "onSelectFdmCell"
   | "onSelectObject"
   | "onSelectPart"
   | "onSelectRegion"
@@ -941,6 +956,7 @@ function Viewport3DModelLayerStack({
           onInspectClear={onInspectClear}
           onInspectSample={onInspectSample}
           onSelectDomain={onSelectDomain}
+          onSelectFdmCell={onSelectFdmCell}
           onSelectRegion={onSelectRegion}
           regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
           selectedObjectId={selectedObjectId}
@@ -1184,6 +1200,8 @@ export function Viewport3DScene({
   dimensionFrameDensity,
   dimensionFrameMode,
   airboxSettings,
+  fdmDomain,
+  fdmUniverseOutsideSupport,
   fdmInstanceModel,
   fdmSettings,
   fdmSurfaceColors,
@@ -1210,6 +1228,7 @@ export function Viewport3DScene({
   onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
+  onSelectFdmCell,
   onSelectPart,
   onSelectRegion,
   orbitDebugAngles,
@@ -1337,6 +1356,8 @@ export function Viewport3DScene({
         planarMonitorFramePreview={planarMonitorFramePreview}
         dimensionFrameDensity={dimensionFrameDensity}
         dimensionFrameMode={dimensionFrameMode}
+        fdmDomain={fdmDomain}
+        fdmUniverseOutsideSupport={fdmUniverseOutsideSupport}
         fdmSettings={fdmSettings}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
@@ -1374,6 +1395,7 @@ export function Viewport3DScene({
         onInspectClear={onInspectClear}
         onInspectSample={onInspectSample}
         onSelectDomain={onSelectDomain}
+        onSelectFdmCell={onSelectFdmCell}
         onSelectObject={onSelectObject}
         onSelectPart={onSelectPart}
         onSelectRegion={onSelectRegion}

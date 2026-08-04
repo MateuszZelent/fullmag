@@ -43,6 +43,8 @@ import {
   useMeshSharedDomainManifestResource,
   useMeshRegionMembershipsResource,
   useSceneResource,
+  useDomainMetaResource,
+  useFdmRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   isVisualizationAirboxIdentity,
@@ -55,6 +57,7 @@ import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildVisualizationPanelSections,
@@ -65,6 +68,13 @@ import {
   removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
+  restoreVisualizationAppliedBaseline,
+  fdmGridCellCount,
+  fdmVisualizationResourceNotice,
+  isFdmVisualizationTarget,
+  resolveObjectVisualizationLane,
+  resolveObjectVisualizationResourceGates,
+  resolveObjectVisualizationTargetForLane,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
   surfaceSolidColorPatch,
@@ -117,26 +127,43 @@ import {
 function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
 ) {
-  const target = resolveVisualizationTargetFromSelection(selection);
+  const selectionTarget = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
-  const visualizationState = useVisualizationStateResource();
   const manifestStatus = useSessionStatusSelector(
     selectObjectVisualizationManifestStatus,
     {
-      enabled: Boolean(target),
+      enabled: Boolean(selectionTarget),
       isEqual: objectVisualizationManifestStatusEquals,
     },
   );
+  const lane = resolveObjectVisualizationLane(manifestStatus?.domain.discretization);
+  const target = resolveObjectVisualizationTargetForLane({
+    lane,
+    selection,
+    selectionTarget,
+  });
+  const { fdm: fdmResourcesEnabled, fem: femResourcesEnabled } =
+    resolveObjectVisualizationResourceGates({ lane, target });
+  const fdmTarget = fdmResourcesEnabled && isFdmVisualizationTarget(target);
+  const visualizationState = useVisualizationStateResource({
+    enabled: femResourcesEnabled,
+  });
   const [feedback, setFeedback] = useState<string | null>(null);
   const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
   const pending = false;
-  const scene = useSceneResource({ enabled: Boolean(target) });
+  const scene = useSceneResource({ enabled: femResourcesEnabled });
+  const fdmDomain = useDomainMetaResource({ enabled: fdmResourcesEnabled });
+  const fdmMembership = useFdmRegionMembershipResource({
+    enabled: fdmResourcesEnabled,
+  });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
+    enabled:
+      femResourcesEnabled &&
+      shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
   });
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
@@ -179,7 +206,7 @@ function useObjectVisualizationPanelState(
   }, [resolvedTarget]);
   const regionMemberships = useMeshRegionMembershipsResource(
     regionId ? [regionId] : [],
-    { enabled: Boolean(regionId) }
+    { enabled: femResourcesEnabled && Boolean(regionId) },
   );
   const childRegionTargets = useMemo(
     () =>
@@ -342,6 +369,18 @@ function useObjectVisualizationPanelState(
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!resolvedTarget) return;
+    if (resolvedTarget.kind === "fdm-domain") {
+      const viewportPatch = viewportRenderingPreferencesPatch(patchValue);
+      if (Object.keys(viewportPatch).length > 0) {
+        visualization.patchViewportPreferences(resolvedTarget, viewportPatch);
+      }
+      const localPatch = persistentVisualizationTargetPatch(patchValue);
+      if (Object.keys(localPatch).length > 0) {
+        visualization.patchTarget(resolvedTarget, localPatch);
+      }
+      setFeedback(null);
+      return;
+    }
     const patchTargets =
       resolvedTarget.kind === "object" && patchChildRegions && childRegionTargets.length > 0
         ? [resolvedTarget, ...childRegionTargets]
@@ -422,6 +461,11 @@ function useObjectVisualizationPanelState(
 
   async function resetTarget(): Promise<void> {
     if (!resolvedTarget) return;
+    if (resolvedTarget.kind === "fdm-domain") {
+      visualization.clearTarget(resolvedTarget);
+      setFeedback(null);
+      return;
+    }
     if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
         resetAirboxVisualizationState(visualizationState.data ?? { overrides: [] }),
@@ -469,22 +513,12 @@ function useObjectVisualizationPanelState(
   async function restoreAppliedBaseline(
     baseline: ObjectVisualizationAppliedBaseline,
   ): Promise<void> {
-    const baselineTargets = baseline.targets.map((entry) => entry.target);
-    const retainedOverrides = (visualizationState.data?.overrides ?? []).filter(
-      (entry) =>
-        !baselineTargets.some((baselineTarget) =>
-          visualizationStateOverrideMatchesTarget(entry, baselineTarget),
-        ),
-    );
-    visualizationSync.queuePatch({
-      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+    restoreVisualizationAppliedBaseline({
+      baseline,
+      currentOverrides: visualizationState.data?.overrides ?? [],
+      queuePatch: (statePatch) => visualizationSync.queuePatch(statePatch),
+      visualization,
     });
-    for (const { preferences, target: baselineTarget } of baseline.targets) {
-      visualization.clearTarget(baselineTarget);
-      if (preferences) {
-        visualization.patchViewportPreferences(baselineTarget, preferences);
-      }
-    }
     setFeedback(null);
   }
 
@@ -568,13 +602,25 @@ function useObjectVisualizationPanelState(
   const displaySettings =
     renderResolution?.finalSettings ?? effectiveSettings ?? panelSettings;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
+  const fdmCellCount = fdmTarget ? fdmGridCellCount(fdmDomain.data) : null;
+  const fdmNotice = fdmTarget
+    ? fdmVisualizationResourceNotice({
+        domain: fdmDomain.data,
+        domainError: fdmDomain.error,
+        domainStatus: fdmDomain.status,
+        membership: fdmMembership.data,
+        membershipError: fdmMembership.error,
+        membershipStatus: fdmMembership.status,
+      })
+    : null;
   const regionCarrier = resolveRegionVisualizationCarrier({
-    manifestRegions: manifest.data?.regions,
-    memberships: regionMemberships.data,
-    target: resolvedTarget,
+    manifestRegions: fdmTarget ? null : manifest.data?.regions,
+    memberships: fdmTarget ? null : regionMemberships.data,
+    target: fdmTarget ? null : resolvedTarget,
   });
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
+      fdmCellCount,
       geometryScope: "full",
       manifestRegions: manifest.data?.regions,
       memberships: regionMemberships.data,
@@ -582,6 +628,7 @@ function useObjectVisualizationPanelState(
       target: resolvedTarget,
     }),
     surface: resolveVisualizationVectorBudgetRange({
+      fdmCellCount,
       geometryScope: "surface",
       manifestRegions: manifest.data?.regions,
       memberships: regionMemberships.data,
@@ -637,7 +684,10 @@ function useObjectVisualizationPanelState(
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
-    vectorTopologyHash: manifest.data?.topology_fingerprint ?? null,
+    vectorTopologyHash: fdmTarget
+      ? fdmMembership.data?.grid_fingerprint ?? null
+      : manifest.data?.topology_fingerprint ?? null,
+    fdmNotice,
   } as const;
 }
 
@@ -703,6 +753,7 @@ function ObjectVisualizationPanelView({
     childRegionOverrideCount,
     childRegionTargets,
     feedback,
+    fdmNotice,
     fieldCatalog,
     hasTargetOverride,
     onFieldCatalogRequest,
@@ -778,6 +829,9 @@ function ObjectVisualizationPanelView({
         <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
         <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
         <FieldRow label="Kind" value={target.kind} />
+        {target.kind === "fdm-domain" ? (
+          <FieldRow label="Geometry" value="Structured grid cells" />
+        ) : null}
         <FieldRow
           label="Override"
           value={visualizationOverrideStateLabel({
@@ -810,6 +864,7 @@ function ObjectVisualizationPanelView({
               : settings.renderMode)
           }
         />
+        {fdmNotice ? <FeedbackBanner kind="warning" message={fdmNotice} /> : null}
       </InspectorGroup>
 
       <ObjectVisualizationOverview

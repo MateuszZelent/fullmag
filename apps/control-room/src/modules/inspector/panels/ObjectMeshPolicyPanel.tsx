@@ -9,6 +9,9 @@ import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   SCENE_RESOURCE_KEY,
+  useDomainMetaResource,
+  useFdmRegionMembershipBinaryResource,
+  useFdmRegionMembershipResource,
   resolveObjectMeshPolicyResourceKey,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshReportResourceKey,
@@ -19,6 +22,7 @@ import {
   useObjectMeshSizeFieldResource,
   useObjectTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import { Button } from "@/shared/ui/Button";
@@ -58,6 +62,12 @@ import {
   validateObjectMeshTopologyCapabilities,
   type ObjectMeshPolicyDraft,
 } from "./ObjectMeshPolicyPanelModel";
+import {
+  resolveFdmObjectMeshInspectorModel,
+  resolveMeshInspectorLane,
+  fdmMeshNotApplicableReason,
+  type FdmObjectMeshInspectorResources,
+} from "./fdmMeshInspectorModel";
 
 type Feedback =
   | {
@@ -240,6 +250,86 @@ function ObjectMeshPolicySummarySection({
       <FieldRow label="Report state" value={reportStatus} />
       <FieldRow label="Quality state" value={qualityStatus} />
     </InspectorGroup>
+  );
+}
+
+export function FdmObjectMeshPolicySection({
+  objectId,
+  resources,
+}: {
+  objectId: string | null | undefined;
+  resources: FdmObjectMeshInspectorResources;
+}) {
+  const model = useMemo(
+    () =>
+      resolveFdmObjectMeshInspectorModel({
+        lane: "fdm",
+        objectId,
+        resources,
+      }),
+    [objectId, resources],
+  );
+  const statusKind = model.status === "error" ? "error" : "warning";
+  return (
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="FDM Structured Grid" badge={model.status}>
+        {model.notice ? <FeedbackBanner kind={statusKind} message={model.notice} /> : null}
+        <FieldRow label="Mesh semantics" value="structured grid cells" />
+        <FieldRow label="Origin" value={model.origin?.join(", ") ?? "not materialized"} unit="m" />
+        <FieldRow label="Spacing" value={model.spacing?.join(", ") ?? "not materialized"} unit="m" />
+        <FieldRow label="Grid shape" value={model.shape?.join(" × ") ?? "not materialized"} />
+        <FieldRow label="Total cells" value={model.totalCells?.toLocaleString("en-US") ?? "not materialized"} />
+        <FieldRow
+          label="Cell participation"
+          value={
+            model.participation === "canonical-mask"
+              ? `${model.activeCellCount ?? 0} active · ${model.inactiveCellCount ?? 0} outside support`
+              : model.participation === "legacy-ambiguous"
+                ? "legacy mask is ambiguous; classification withheld"
+                : model.participation === "descriptor-only"
+                  ? "canonical mask descriptor available; binary mask not loaded"
+                  : "not materialized"
+          }
+        />
+        <FieldRow
+          label="Region metadata"
+          value={
+            model.metadata.length > 0
+              ? model.metadata.map((entry) => `${entry.regionId} (${entry.numericId})`).join(", ")
+              : "none for selected object"
+          }
+        />
+        <FieldRow label="Grid fingerprint" value={model.gridFingerprint ?? "not materialized"} mono />
+      </InspectorGroup>
+      <InspectorGroup title="FEM Mesh Controls" badge="not applicable" collapsible defaultOpen={false}>
+        <FeedbackBanner kind="warning" message={fdmMeshNotApplicableReason()} />
+        <FieldRow label="Element order" value="Not applicable for FDM" />
+        <FieldRow label="Tetra / prism / hex topology" value="Not applicable for FDM" />
+        <FieldRow label="Gmsh and size fields" value="Not applicable for FDM" />
+        <FieldRow label="Mesh quality" value="Not applicable for structured cells" />
+        <FieldRow label="Shared-domain build" value="Not available in the FDM mesh inspector" />
+        <FieldRow label="Write actions" value="Read-only: no FEM policy patch or mesh-build command" />
+      </InspectorGroup>
+    </div>
+  );
+}
+
+function MeshPolicyLaneUnavailableSection({
+  lane,
+}: {
+  lane: "unknown";
+}) {
+  return (
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="Mesh Policy" badge="unresolved">
+        <FeedbackBanner
+          kind="warning"
+          message="Mesh policy lane is unresolved; FEM mesh resources and controls are withheld until the session discretization is explicit."
+        />
+        <FieldRow label="Discretization" value={lane} />
+        <FieldRow label="Write actions" value="Unavailable until FEM or FDM is resolved" />
+      </InspectorGroup>
+    </div>
   );
 }
 
@@ -730,12 +820,31 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
   const kernel = useKernel();
   const { api, commands, resources } = kernel;
-  const policy = useObjectMeshPolicyResource(objectId);
-  const report = useObjectMeshReportResource(objectId);
-  const quality = useObjectMeshQualityResource(objectId);
-  const sizeField = useObjectMeshSizeFieldResource(objectId);
-  const topology = useObjectTopologyResource(objectId);
-  const meshCapabilities = useMeshCapabilitiesResource();
+  const sessionDiscretization = useSessionStatusSelector(
+    (status) => status.data?.domain.discretization ?? null,
+  );
+  const meshLane = resolveMeshInspectorLane(sessionDiscretization);
+  const explicitFdm = meshLane === "fdm";
+  const fdmDomain = useDomainMetaResource({ enabled: explicitFdm });
+  const fdmMembership = useFdmRegionMembershipResource({ enabled: explicitFdm });
+  const fdmMembershipBinary = useFdmRegionMembershipBinaryResource(undefined, {
+    enabled: explicitFdm,
+  });
+  const fdmMeshResources = useMemo<FdmObjectMeshInspectorResources>(
+    () => ({
+      binary: fdmMembershipBinary,
+      domain: fdmDomain,
+      membership: fdmMembership,
+    }),
+    [fdmDomain, fdmMembership, fdmMembershipBinary],
+  );
+  const femResourcesEnabled = meshLane === "fem";
+  const policy = useObjectMeshPolicyResource(objectId, { enabled: femResourcesEnabled });
+  const report = useObjectMeshReportResource(objectId, { enabled: femResourcesEnabled });
+  const quality = useObjectMeshQualityResource(objectId, { enabled: femResourcesEnabled });
+  const sizeField = useObjectMeshSizeFieldResource(objectId, { enabled: femResourcesEnabled });
+  const topology = useObjectTopologyResource(objectId, { enabled: femResourcesEnabled });
+  const meshCapabilities = useMeshCapabilitiesResource({ enabled: femResourcesEnabled });
   const topologyCapabilities = useMemo(
     () => resolveObjectMeshTopologyCapabilities(meshCapabilities.data),
     [meshCapabilities.data],
@@ -821,6 +930,16 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }: {
     silentSuccess?: boolean;
   } = {}): Promise<{ ok: boolean }> => {
+    if (meshLane !== "fem") {
+      setFeedback({
+        kind: "error",
+        message:
+          explicitFdm
+            ? "FDM mesh is a read-only structured grid; FEM policy patches are not applicable."
+            : "Mesh policy lane is unresolved; FEM policy patches are unavailable.",
+      });
+      return { ok: false };
+    }
     if (!objectId) {
       setFeedback({ kind: "error", message: "No selected scene object." });
       return { ok: false };
@@ -867,9 +986,19 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     } finally {
       setPending(false);
     }
-  }, [api, draft, objectId, resources, topologyCapabilities]);
+  }, [api, draft, explicitFdm, meshLane, objectId, resources, topologyCapabilities]);
 
   async function buildMesh(): Promise<void> {
+    if (meshLane !== "fem") {
+      setFeedback({
+        kind: "error",
+        message:
+          explicitFdm
+            ? "FDM mesh is a read-only structured grid; FEM mesh-build commands are not applicable."
+            : "Mesh policy lane is unresolved; FEM mesh-build commands are unavailable.",
+      });
+      return;
+    }
     if (!objectId) {
       setFeedback({ kind: "error", message: "No selected scene object." });
       return;
@@ -925,12 +1054,24 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     "staged",
     pending,
     isDirty,
-    !("error" in validation) && topologyCapabilityError === null,
+    meshLane === "fem" && !("error" in validation) && topologyCapabilityError === null,
     undefined,
     applyInspectorDraft,
     resetInspectorDraft,
   );
   const activeTab = useInspectorActiveTab();
+
+  if (explicitFdm) {
+    return (
+      <FdmObjectMeshPolicySection
+        objectId={objectId}
+        resources={fdmMeshResources}
+      />
+    );
+  }
+  if (meshLane !== "fem") {
+    return <MeshPolicyLaneUnavailableSection lane="unknown" />;
+  }
 
   return (
     <div className="fm-inspector-panel">

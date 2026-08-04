@@ -4519,6 +4519,23 @@ export interface components {
             /** @enum {string} */
             kind: "geometry_mask";
             object_id: string;
+        } | {
+            /** Format: double */
+            carrier_origin_x_m: number;
+            /** Format: double */
+            carrier_phase_rad: number;
+            /** Format: double */
+            center_x_m: number;
+            /** Format: double */
+            center_y_m: number;
+            /** @enum {string} */
+            kind: "gaussian_plane_wave";
+            /** Format: double */
+            sigma_x_m: number;
+            /** Format: double */
+            sigma_y_m: number;
+            /** Format: double */
+            wavelength_m: number;
         };
         FieldStateExportRequest: {
             file_name?: string | null;

@@ -85,6 +85,8 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
+  isExplicitFdmStudy,
+  normalizeDemagRealizationForLane,
   validateStudyGlobalDraft,
   type StudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
@@ -738,6 +740,7 @@ export function useStudyInspectorPanelController(
   const commitGlobalDraft = async () => {
     const errors = validateStudyGlobalDraft(state.globalDraft, {
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+      sessionDiscretization: runtimeStatus?.domain.discretization,
     }).filter(
       (issue) => issue.severity === "error",
     );
@@ -756,7 +759,9 @@ export function useStudyInspectorPanelController(
     dispatch({ type: "setAuthoringBusy", busy: true });
     try {
       const response = await kernel.api.model.commitTransaction(
-        buildStudyGlobalMergePatch(state.globalDraft),
+        buildStudyGlobalMergePatch(state.globalDraft, {
+          sessionDiscretization: runtimeStatus?.domain.discretization,
+        }),
       );
       const revision = response.scene_revision;
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
@@ -851,6 +856,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   } = useStudyInspectorPanelController(selection);
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+    sessionDiscretization: runtimeStatus?.domain.discretization,
   });
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
   const stageValidation = state.stageDrafts.flatMap((draft, index) => [
@@ -928,6 +934,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
           draft={state.globalDraft}
           model={model}
+          sessionDiscretization={runtimeStatus?.domain.discretization}
           snapshot={snapshot}
           onCommit={() => void commitGlobalDraft()}
           onUpdate={(patch) =>
@@ -1056,7 +1063,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
 type StudyCommandRunner = (commandId: string, input?: unknown) => void;
 type StudyCommandDisabledReason = (commandId: string) => string | null;
 
-function StudyRuntimeSection({
+export function StudyRuntimeSection({
   commandDisabledReason,
   model,
   onOpenCommand,
@@ -1073,6 +1080,9 @@ function StudyRuntimeSection({
     <InspectorGroup title="Runtime" badge={model.runtime.state}>
       <FieldRow label="Run" value={model.runtime.runId} />
       <FieldRow label="Active stage" value={model.runtime.activeStageLabel} />
+      {model.runtime.runtimeProvenance ? (
+        <StudyRuntimeProvenanceRows provenance={model.runtime.runtimeProvenance} />
+      ) : null}
       <FieldRow
         label="Command"
         value={
@@ -1207,6 +1217,31 @@ function StudyRuntimeSection({
         />
       </div>
     </InspectorGroup>
+  );
+}
+
+function StudyRuntimeProvenanceRows({
+  provenance,
+}: {
+  provenance: NonNullable<StudyInspectorModel["runtime"]["runtimeProvenance"]>;
+}) {
+  return (
+    <div className="fm-study-runtime-provenance" data-provenance-status={provenance.fallback.status}>
+      <FieldRow label="Requested backend" value={provenance.requested.backend} mono />
+      <FieldRow label="Requested device" value={provenance.requested.device} mono />
+      <FieldRow label="Requested mode" value={provenance.requested.mode} mono />
+      <FieldRow label="Requested precision" value={provenance.requested.precision} mono />
+      <FieldRow label="Resolved backend" value={provenance.resolved.backend} mono />
+      <FieldRow label="Resolved device" value={provenance.resolved.device} mono />
+      <FieldRow label="Resolved mode" value={provenance.resolved.mode} mono />
+      <FieldRow label="Resolved precision" value={provenance.resolved.precision} mono />
+      <FieldRow label="Resolved runtime family" value={provenance.resolved.runtimeFamily} mono />
+      <FieldRow label="Resolved engine" value={provenance.resolved.engine} mono />
+      <FieldRow label="Fallback status" value={provenance.fallback.status} status={provenance.fallback.status} />
+      <FieldRow label="Fallback reason" value={provenance.fallback.reason} />
+      <FieldRow label="Fallback engines" value={`${provenance.fallback.originalEngine} → ${provenance.fallback.fallbackEngine}`} mono />
+      <FieldRow label="Fallback message" value={provenance.fallback.message} />
+    </div>
   );
 }
 
@@ -1360,6 +1395,8 @@ export function StudyBoundarySection({
   model,
   onCommit,
   onUpdate,
+  sessionDiscretization,
+  requestedDiscretization,
   snapshot,
 }: {
   algorithmsAvailable?: readonly string[];
@@ -1372,9 +1409,28 @@ export function StudyBoundarySection({
   model: StudyInspectorModel;
   onCommit: () => void;
   onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
+  requestedDiscretization?: string | null;
+  sessionDiscretization?: string | null;
   snapshot: StudyInspectorSnapshot;
 }) {
-  const validation = validateStudyGlobalDraft(draft, { algorithmsAvailable });
+  const explicitFdm = isExplicitFdmStudy({
+    requestedBackend: draft.requestedBackend,
+    requestedDiscretization,
+    sessionDiscretization,
+  });
+  const demagRealization = normalizeDemagRealizationForLane(
+    draft.demagRealization,
+    {
+      requestedBackend: draft.requestedBackend,
+      requestedDiscretization,
+      sessionDiscretization,
+    },
+  );
+  const validation = validateStudyGlobalDraft(draft, {
+    algorithmsAvailable,
+    requestedDiscretization,
+    sessionDiscretization,
+  });
   const hasErrors = validation.some((issue) => issue.severity === "error");
   return (
     <InspectorGroup
@@ -1387,8 +1443,12 @@ export function StudyBoundarySection({
       <FieldRow label="Current field" value={model.boundary.externalField} />
       <FieldRow label="Current solver" value={model.boundary.solver} />
       <FieldRow
-        label="Current FEM demag policy"
-        value={model.boundary.femDemagSolverPolicy}
+        label={explicitFdm ? "Current FDM demag strategy" : "Current FEM demag policy"}
+        value={
+          explicitFdm
+            ? model.boundary.demagRealization
+            : model.boundary.femDemagSolverPolicy
+        }
       />
       <FieldRow label="Current CPU threads" value={model.requested.cpuThreads} />
       <FormField
@@ -1456,18 +1516,30 @@ export function StudyBoundarySection({
         onChange={(event) => onUpdate({ demagEnabled: event.target.checked })}
       />
       <FormField
-        label="Demag"
+        label={explicitFdm ? "FDM demag" : "Demag"}
         type="select"
-        value={draft.demagRealization}
+        value={demagRealization}
         onChange={(event) => onUpdate({ demagRealization: event.target.value })}
       >
-        <option value="auto">Auto</option>
-        <option value="poisson_robin">Poisson Robin</option>
-        <option value="poisson_dirichlet">Poisson Dirichlet</option>
-        <option value="fredkin_koehler">Fredkin Koehler</option>
-        <option value="bem">BEM</option>
-        <option value="fmm">FMM</option>
-        <option value="airbox_robin">Airbox Robin</option>
+        {explicitFdm ? (
+          <>
+            <option value="auto">Auto</option>
+            <option value="single_grid">FDM single grid</option>
+            <option value="multilayer_convolution">
+              FDM multilayer convolution
+            </option>
+          </>
+        ) : (
+          <>
+            <option value="auto">Auto</option>
+            <option value="poisson_robin">Poisson Robin</option>
+            <option value="poisson_dirichlet">Poisson Dirichlet</option>
+            <option value="fredkin_koehler">Fredkin Koehler</option>
+            <option value="bem">BEM</option>
+            <option value="fmm">FMM</option>
+            <option value="airbox_robin">Airbox Robin</option>
+          </>
+        )}
       </FormField>
       <FormField
         label="External field"
@@ -1486,16 +1558,23 @@ export function StudyBoundarySection({
         requestedDevice={draft.requestedDevice}
         requestedPrecision={draft.requestedPrecision}
       />
-      <FormField
-        label="FEM demag policy"
-        hint="FEM demag solver policy JSON object."
-        rows={4}
-        type="textarea"
-        value={draft.femDemagSolverPolicy}
-        onChange={(event) =>
-          onUpdate({ femDemagSolverPolicy: event.target.value })
-        }
-      />
+      {explicitFdm ? (
+        <FieldRow
+          label="FEM demag policy"
+          value="Not applicable for an explicit FDM lane"
+        />
+      ) : (
+        <FormField
+          label="FEM demag policy"
+          hint="FEM demag solver policy JSON object."
+          rows={4}
+          type="textarea"
+          value={draft.femDemagSolverPolicy}
+          onChange={(event) =>
+            onUpdate({ femDemagSolverPolicy: event.target.value })
+          }
+        />
+      )}
       {validation.length > 0 ? (
         <ul className="fm-inspector-validation-list">
           {validation.map((issue) => (

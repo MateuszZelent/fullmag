@@ -13,6 +13,7 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -54,6 +55,7 @@ import { ObjectRegionOverviewPanel as ObjectRegionOverviewPanelImpl } from "./re
 import { ObjectRegionTexturePanel as ObjectRegionTexturePanelImpl } from "./region/ObjectRegionTexturePanel";
 import { ObjectRegionVisualizationPanel as ObjectRegionVisualizationPanelImpl } from "./region/ObjectRegionVisualizationPanel";
 import type { RegionSubPanelProps } from "./region/shared";
+import { resolveMeshInspectorLane } from "./fdmMeshInspectorModel";
 
 type Feedback =
   | {
@@ -133,7 +135,15 @@ export function ObjectRegionsPanel(props: InspectorPanelProps) {
 function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const { api, resources, selection: selectionController } = kernel;
-  const scene = useSceneResource();
+  const sessionDiscretization = useSessionStatusSelector(
+    (status) => status.data?.domain.discretization ?? null,
+  );
+  const meshLane = resolveMeshInspectorLane(sessionDiscretization);
+  const regionVisualizationSelection =
+    selection.kind === "object.region.visualization";
+  const scene = useSceneResource({
+    enabled: !regionVisualizationSelection || meshLane === "fem",
+  });
   const regions = useModelRegionsResource();
   const materialFields = useModelMaterialFieldsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
@@ -174,29 +184,39 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   });
 
   const membership = useMeshRegionMembershipResource(model.regionId, {
-    enabled: model.mode === "committed" && model.regionId !== "none",
+    enabled:
+      meshLane === "fem" &&
+      model.mode === "committed" &&
+      model.regionId !== "none",
   });
   const activeBuild = useMeshBuildCurrent({
-    enabled: model.mode === "committed" && model.regionId !== "none",
+    enabled:
+      meshLane === "fem" &&
+      model.mode === "committed" &&
+      model.regionId !== "none",
   });
   const regionMeshLifecycle = useMemo(
     () =>
-      resolveRegionMeshLifecycle({
-        build: activeBuild.data,
-        draftDirty: objectRegionDraftDirty(draft, baseDraft),
-        membership: membership.data,
-        policyEnabled: draft.meshPolicy.enabled,
-        supported: !model.diagnostics.some(
-          (diagnostic) =>
-            diagnostic.capabilityGate === "regions.mesh_policy" &&
-            diagnostic.severity === "error",
-        ),
-      }),
-    [activeBuild.data, baseDraft, draft, membership.data, model.diagnostics],
+      meshLane === "fem"
+        ? resolveRegionMeshLifecycle({
+            build: activeBuild.data,
+            draftDirty: objectRegionDraftDirty(draft, baseDraft),
+            membership: membership.data,
+            policyEnabled: draft.meshPolicy.enabled,
+            supported: !model.diagnostics.some(
+              (diagnostic) =>
+                diagnostic.capabilityGate === "regions.mesh_policy" &&
+                diagnostic.severity === "error",
+            ),
+          })
+        : null,
+    [activeBuild.data, baseDraft, draft, membership.data, meshLane, model.diagnostics],
   );
 
   const canWriteRegion =
     model.mode === "committed" && model.source === "authored_object_region";
+  const femMeshLane = meshLane === "fem";
+  const canWriteMeshRegion = canWriteRegion && femMeshLane;
   const couplingDependencies = useMemo(
     () =>
       resolveRegionCouplingDependencies(
@@ -309,7 +329,9 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "error", message: "Select an authored object region." });
       return false;
     }
-    const validationErrors = validateObjectRegionDraft(draft);
+    const validationErrors = validateObjectRegionDraft(draft, {
+      meshPolicyLane: meshLane,
+    });
     if (validationErrors.length > 0) {
       setFeedback({ kind: "error", message: validationErrors[0] ?? "Invalid region draft." });
       return false;
@@ -320,7 +342,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       const response = await api.model.patchObjectRegionResource(
         model.objectId,
         model.regionId,
-        buildObjectRegionPatch(draft),
+        buildObjectRegionPatch(draft, { meshPolicyLane: meshLane }),
         { baseRevision: model.revision ?? undefined },
       );
       const revision = revisionFromScene(response);
@@ -342,8 +364,25 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   }
 
   async function buildRegion(): Promise<void> {
+    if (meshLane !== "fem") {
+      setFeedback({
+        kind: "error",
+        message:
+          meshLane === "fdm"
+            ? "FDM region membership is read-only; FEM shared-domain mesh builds are not applicable."
+            : "Mesh lane is unresolved; FEM shared-domain mesh builds are unavailable.",
+      });
+      return;
+    }
     if (!canWriteRegion) {
       setFeedback({ kind: "error", message: "Select an authored object region." });
+      return;
+    }
+    if (!regionMeshLifecycle) {
+      setFeedback({
+        kind: "error",
+        message: "FEM region mesh lifecycle is unavailable outside the FEM lane.",
+      });
       return;
     }
     if (regionMeshLifecycle.status === "unsupported") {
@@ -466,6 +505,8 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     buildRegion,
     regionMeshLifecycle,
     canWriteRegion,
+    canWriteMeshRegion,
+    meshLane,
     updateDraft,
     updateShape,
     updateShapeVector,

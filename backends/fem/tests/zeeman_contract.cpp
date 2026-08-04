@@ -424,6 +424,35 @@ void spatial_sinc_regional_drive_uses_tetra_volume_projection() {
     check(basis[4] > 0.0 && basis[1] < 7.0, "spatial sinc basis is a bounded volume projection");
 }
 
+void spatial_gaussian_plane_wave_uses_global_carrier_origin() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 4;
+    ctx.mesh.n_elements = 1;
+    ctx.mesh.nodes_xyz = {0,0,0, 49e-9,0,0, 0,1e-9,0, 0,0,1e-9};
+    ctx.mesh.cell_nodes = {0,1,2,3};
+    ctx.mesh.magnetic_element_mask = {1};
+    ctx.mesh.node_volumes = {1.0/24.0, 1.0/24.0, 1.0/24.0, 1.0/24.0};
+    auto drive_desc = global_uniform_drive_desc();
+    drive_desc.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE;
+    drive_desc.spatial_profile.gaussian_center_x_m = -1.0e-6;
+    drive_desc.spatial_profile.gaussian_center_y_m = 0.0;
+    drive_desc.spatial_profile.gaussian_carrier_origin_x_m = 0.0;
+    drive_desc.spatial_profile.gaussian_sigma_x_m = 196.0e-9;
+    drive_desc.spatial_profile.gaussian_sigma_y_m = 196.0e-9;
+    drive_desc.spatial_profile.gaussian_wavelength_m = 196.0e-9;
+    drive_desc.spatial_profile.gaussian_carrier_phase_rad = 0.0;
+    fullmag_fem_plan_desc plan{};
+    plan.regional_field_drives = &drive_desc;
+    plan.regional_field_drive_count = 1;
+    std::string error;
+    check(fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error), error.c_str());
+    check(fullmag::fem::project_regional_field_drive_bases(ctx, error), error.c_str());
+    const auto &basis = ctx.zeeman.regional_drives[0].basis_h_xyz;
+    const double expected_at_carrier_origin = 7.0 * std::exp(-0.5 * std::pow(1.0e-6 / 196.0e-9, 2.0));
+    check_near(basis[1], expected_at_carrier_origin, 2.0e-4, "Gaussian basis at global carrier origin");
+    check(std::fabs(basis[4]) < 2.0e-6, "Gaussian quarter-wave quadrature is near zero");
+}
+
 void geometry_mask_projection_matches_analytic_clipped_tetra_volume() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -656,6 +685,7 @@ int main() {
     regional_drive_invalid_numeric_descriptors_fail_closed();
     global_uniform_regional_drive_projects_and_materializes_exactly();
     spatial_sinc_regional_drive_uses_tetra_volume_projection();
+    spatial_gaussian_plane_wave_uses_global_carrier_origin();
     geometry_mask_projection_matches_analytic_clipped_tetra_volume();
     periodic_node_pair_requires_identical_projected_basis_without_averaging();
     multiple_regional_drives_superpose_and_cancel();

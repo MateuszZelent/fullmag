@@ -121,6 +121,8 @@ function useObjectRegionMagneticParametersPanelView({
   buildRegion,
   regionMeshLifecycle,
   canWriteRegion,
+  canWriteMeshRegion,
+  meshLane = "unknown",
   couplingDependencies,
   updateMaterialOverride,
   addMaterialOverride,
@@ -284,7 +286,7 @@ function useObjectRegionMagneticParametersPanelView({
   );
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Material Overrides">
         <ObjectRegionInlineDiagnostics
@@ -637,6 +639,8 @@ function useObjectRegionMagneticParametersPanelView({
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}
         canWriteRegion={canWriteRegion}
+        canWriteMeshRegion={canWriteMeshRegion}
+        meshLane={meshLane}
         couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}

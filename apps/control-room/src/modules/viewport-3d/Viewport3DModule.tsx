@@ -147,6 +147,7 @@ import { toCameraTuple } from "./viewport3dCameraModel";
 import {
   viewportSelectionForMeshPart,
   viewportSelectionForDomain,
+  viewportSelectionForFdmCell,
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
@@ -1183,9 +1184,13 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
-  const { onSelectDomain, onSelectObject, onSelectPart, onSelectRegion } =
+  const { onSelectDomain, onSelectFdmCell, onSelectObject, onSelectPart, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
+      fdmDomain: sceneModel.fdmDomain,
+      fdmInstanceModel: sceneModel.fdmInstanceModel,
+      fdmRegionMembership: sceneModel.fdmRegionMembership,
+      fdmRegionMembershipBinary: sceneModel.fdmRegionMembershipBinary,
       semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
   });
@@ -1287,6 +1292,7 @@ export default function Viewport3DModule({
       onRegionOverlaySourceChange={changeRegionOverlaySource}
       onRegionOverlayVisibilityChange={changeRegionOverlayVisibility}
       onSelectDomain={onSelectDomain}
+      onSelectFdmCell={onSelectFdmCell}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
       onSelectRegion={onSelectRegion}
@@ -1366,16 +1372,38 @@ function useViewport3DMeshCellAuditSelection({
 
 function useViewport3DSelectionHandlers({
   domainId,
+  fdmDomain,
+  fdmInstanceModel,
+  fdmRegionMembership,
+  fdmRegionMembershipBinary,
   semanticTargetCatalog,
   select,
 }: {
   domainId: string | null | undefined;
+  fdmDomain: { shape: readonly [number, number, number] } | null;
+  fdmInstanceModel: import("./layers/FdmCuboidLayer").FdmCuboidInstanceModel | null | undefined;
+  fdmRegionMembership: import("@/kernel/api/apiTypes").FdmRegionMembershipResource | null | undefined;
+  fdmRegionMembershipBinary: import("@/kernel/api/codecs").DecodedFdmRegionMembership | null | undefined;
   semanticTargetCatalog: SemanticRenderTargetCatalog;
   select: ReturnType<typeof useSelectionActions>["select"];
 }) {
   const onSelectDomain = useCallback(() => {
     select(viewportSelectionForDomain(domainId));
   }, [domainId, select]);
+  const onSelectFdmCell = useCallback(
+    (instanceId: number) => {
+      const selection = viewportSelectionForFdmCell({
+        binary: fdmRegionMembershipBinary,
+        domainShape: fdmDomain?.shape,
+        instanceId,
+        membership: fdmRegionMembership,
+        model: fdmInstanceModel,
+      });
+      // Missing/stale/legacy identity deliberately produces no selection.
+      if (selection) select(selection);
+    },
+    [fdmDomain?.shape, fdmInstanceModel, fdmRegionMembership, fdmRegionMembershipBinary, select],
+  );
   const onSelectPart = useCallback(
     (partSelection: Viewport3DPartSelection) => {
       const address = resolveSemanticTargetForMeshPart(
@@ -1408,7 +1436,7 @@ function useViewport3DSelectionHandlers({
     [select],
   );
 
-  return { onSelectDomain, onSelectObject, onSelectPart, onSelectRegion };
+  return { onSelectDomain, onSelectFdmCell, onSelectObject, onSelectPart, onSelectRegion };
 }
 
 const Viewport3DFrame = memo(function Viewport3DFrame({

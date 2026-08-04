@@ -10,6 +10,7 @@ import {
 
 import {
   resolveMeshPartBounds,
+  type FdmGridRenderDomain,
   type FemManifestRenderDomain,
   type Viewport3DMeshPart,
 } from "../viewport3dDomainAdapter";
@@ -65,10 +66,19 @@ export function targetForFdmDomain(
 ): VisualizationTargetRef | null {
   if (!domainId) return null;
   return {
-    id: visualizationTargetIdForSceneObject(domainId),
-    kind: "object",
+    id: "fdm-domain",
+    kind: "fdm-domain",
     label: domainId,
   };
+}
+
+/**
+ * FDM grid metadata used by selection focus.  The optional fingerprint is
+ * supplied only when the current membership resource proves the grid
+ * identity; a cell selection must fail closed when it is unavailable.
+ */
+export interface FdmSelectionGrid extends FdmGridRenderDomain {
+  gridFingerprint?: string | null;
 }
 
 export function targetForMeshPart(
@@ -285,8 +295,13 @@ export function resolveViewport3DSelectionBounds(
   selection: Selection,
   domain: FemManifestRenderDomain,
   fallbackBounds: Viewport3DBounds | null,
+  fdmGrid: FdmSelectionGrid | null = null,
 ): Viewport3DBounds | null {
   if (!selection.kind) return null;
+
+  if (isFdmSelection(selection, fdmGrid)) {
+    return resolveFdmSelectionBounds(selection, fdmGrid);
+  }
 
   return (
     resolveMeshQualityElementBounds(selection, fallbackBounds) ??
@@ -299,6 +314,149 @@ export function resolveViewport3DSelectionBounds(
       ? resolveAirboxBounds(domain)
       : fallbackBounds)
   );
+}
+
+const FDM_GRID_SELECTION_KINDS = new Set([
+  "mesh.grid",
+  "mesh.grid.descriptor",
+  "mesh.grid.magnetic-support",
+  "mesh.grid.active-unassigned",
+  "mesh.grid.mask",
+  "mesh.grid.provenance",
+  "mesh.grid.region",
+  "mesh.grid.universe-outside-support",
+]);
+
+function isFdmSelection(
+  selection: Selection,
+  fdmGrid: FdmSelectionGrid | null,
+): boolean {
+  return Boolean(
+      selection.ref?.type === "fdm-domain" ||
+      selection.ref?.type === "fdm-cell" ||
+      selection.kind === "fdm.cell" ||
+      (selection.kind !== null &&
+        FDM_GRID_SELECTION_KINDS.has(selection.kind)) ||
+      (selection.kind === "universe.root" && fdmGrid),
+  );
+}
+
+function resolveFdmSelectionBounds(
+  selection: Selection,
+  fdmGrid: FdmSelectionGrid | null,
+): Viewport3DBounds | null {
+  if (!fdmGrid) return null;
+  if (selection.ref?.type === "fdm-cell") {
+    return resolveFdmCellBounds(selection.ref, fdmGrid);
+  }
+
+  // A grid node, including the optional universe-outside-support summary,
+  // focuses the canonical structured extent. It never consults FEM parts.
+  return resolveFdmGridBounds(fdmGrid);
+}
+
+export function resolveFdmGridBounds(
+  grid: Pick<FdmSelectionGrid, "bounds" | "origin" | "shape" | "spacing">,
+): Viewport3DBounds | null {
+  if (grid.bounds) return grid.bounds;
+  const origin = finiteTuple3(grid.origin);
+  const shape = positiveIntegerTuple3(grid.shape);
+  const spacing = positiveTuple3(grid.spacing);
+  if (!origin || !shape || !spacing) return null;
+  const size: [number, number, number] = [
+    shape[0] * spacing[0],
+    shape[1] * spacing[1],
+    shape[2] * spacing[2],
+  ];
+  return boundsFromCenterAndSize(
+    [
+      origin[0] + size[0] / 2,
+      origin[1] + size[1] / 2,
+      origin[2] + size[2] / 2,
+    ],
+    size,
+  );
+}
+
+export function resolveFdmCellBounds(
+  ref: Extract<NonNullable<Selection["ref"]>, { type: "fdm-cell" }>,
+  grid: FdmSelectionGrid,
+): Viewport3DBounds | null {
+  const currentFingerprint = grid.gridFingerprint?.trim() ?? "";
+  if (!currentFingerprint || ref.gridFingerprint !== currentFingerprint) {
+    return null;
+  }
+  const origin = finiteTuple3(grid.origin);
+  const shape = positiveIntegerTuple3(grid.shape);
+  const spacing = positiveTuple3(grid.spacing);
+  if (!origin || !shape || !spacing) return null;
+
+  const [ix, iy, iz] = ref.ijk;
+  if (
+    !Number.isInteger(ix) ||
+    !Number.isInteger(iy) ||
+    !Number.isInteger(iz) ||
+    ix < 0 ||
+    iy < 0 ||
+    iz < 0 ||
+    ix >= shape[0] ||
+    iy >= shape[1] ||
+    iz >= shape[2]
+  ) {
+    return null;
+  }
+  const ordinal = Number(ref.cellOrdinal);
+  const expectedOrdinal = ix + shape[0] * (iy + shape[1] * iz);
+  if (!Number.isSafeInteger(ordinal) || ordinal !== expectedOrdinal) {
+    return null;
+  }
+
+  const size: [number, number, number] = [spacing[0], spacing[1], spacing[2]];
+  return boundsFromCenterAndSize(
+    [
+      origin[0] + (ix + 0.5) * spacing[0],
+      origin[1] + (iy + 0.5) * spacing[1],
+      origin[2] + (iz + 0.5) * spacing[2],
+    ],
+    size,
+  );
+}
+
+function finiteTuple3(
+  value: readonly number[] | null | undefined,
+): [number, number, number] | null {
+  if (!value || value.length < 3) return null;
+  const tuple: [number, number, number] = [value[0]!, value[1]!, value[2]!];
+  return tuple.every(Number.isFinite) ? tuple : null;
+}
+
+function positiveTuple3(
+  value: readonly number[] | null | undefined,
+): [number, number, number] | null {
+  const tuple = finiteTuple3(value);
+  return tuple && tuple.every((component) => component > 0) ? tuple : null;
+}
+
+function positiveIntegerTuple3(
+  value: readonly number[] | null | undefined,
+): [number, number, number] | null {
+  const tuple = finiteTuple3(value);
+  return tuple && tuple.every(
+    (component) => Number.isSafeInteger(component) && component > 0,
+  )
+    ? tuple
+    : null;
+}
+
+function boundsFromCenterAndSize(
+  center: [number, number, number],
+  size: [number, number, number],
+): Viewport3DBounds {
+  return {
+    center,
+    radius: Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12),
+    size,
+  };
 }
 
 function resolveMeshQualityElementBounds(

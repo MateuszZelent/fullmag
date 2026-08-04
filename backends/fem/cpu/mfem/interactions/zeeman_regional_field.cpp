@@ -196,8 +196,17 @@ double spatial_profile_value(const RegionalFieldDriveRuntime &drive, const Point
 {
     if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK &&
         !geometry_contains(drive, drive.geometry_root_index, point)) return 0.0;
-    return drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM ? 1.0
-        : spatial_sinc(drive, point);
+    if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM) return 1.0;
+    if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE) {
+        const double dx = (point[0] - drive.gaussian_center_x_m) / drive.gaussian_sigma_x_m;
+        const double dy = (point[1] - drive.gaussian_center_y_m) / drive.gaussian_sigma_y_m;
+        const double envelope = std::exp(-0.5 * (dx * dx + dy * dy));
+        const double carrier = 2.0 * 3.14159265358979323846 *
+            (point[0] - drive.gaussian_carrier_origin_x_m) /
+            drive.gaussian_wavelength_m + drive.gaussian_carrier_phase_rad;
+        return envelope * std::cos(carrier);
+    }
+    return spatial_sinc(drive, point);
 }
 
 template <size_t N>
@@ -259,8 +268,10 @@ bool integrate_profile_adaptive(
     constexpr std::array<double, 2> w2{0.5, 0.5};
     constexpr std::array<double, 4> p4{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262};
     constexpr std::array<double, 4> w4{0.17392742256872692, 0.32607257743127307, 0.32607257743127307, 0.17392742256872692};
-    if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_SINC && depth == 0) {
-        // Spatial sinc is smooth. The tensor Gauss-4 Duffy rule is the
+    if ((drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_SINC ||
+         drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE) &&
+        depth == 0) {
+        // Spatial sinc/Gaussian profile is smooth. The tensor Gauss-4 Duffy rule is the
         // production projection; recursive refinement is reserved for
         // discontinuous geometry-mask boundaries. A sinc wavelength below
         // the element scale is a planner/mesh-resolution error, not something
@@ -339,7 +350,7 @@ bool copy_regional_field_drive_plan(
             error = "regional field drive marker target must not be empty";
             return false;
         }
-        if (source.spatial_profile.kind > FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK) {
+        if (source.spatial_profile.kind > FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE) {
             error = "regional field drive spatial profile kind is unsupported";
             return false;
         }
@@ -369,9 +380,27 @@ bool copy_regional_field_drive_plan(
         drive.sinc_center_m = source.spatial_profile.sinc_center_m;
         drive.sinc_width_m = source.spatial_profile.sinc_width_m;
         drive.sinc_window = source.spatial_profile.sinc_window;
+        drive.gaussian_center_x_m = source.spatial_profile.gaussian_center_x_m;
+        drive.gaussian_center_y_m = source.spatial_profile.gaussian_center_y_m;
+        drive.gaussian_carrier_origin_x_m = source.spatial_profile.gaussian_carrier_origin_x_m;
+        drive.gaussian_sigma_x_m = source.spatial_profile.gaussian_sigma_x_m;
+        drive.gaussian_sigma_y_m = source.spatial_profile.gaussian_sigma_y_m;
+        drive.gaussian_wavelength_m = source.spatial_profile.gaussian_wavelength_m;
+        drive.gaussian_carrier_phase_rad = source.spatial_profile.gaussian_carrier_phase_rad;
         if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_SINC &&
             (!std::isfinite(drive.sinc_period_m) || drive.sinc_period_m <= 0.0)) {
             error = "regional field drive spatial sinc period must be finite and positive";
+            return false;
+        }
+        if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE &&
+            (!std::isfinite(drive.gaussian_center_x_m) ||
+             !std::isfinite(drive.gaussian_center_y_m) ||
+             !std::isfinite(drive.gaussian_carrier_origin_x_m) ||
+             !std::isfinite(drive.gaussian_sigma_x_m) || drive.gaussian_sigma_x_m <= 0.0 ||
+             !std::isfinite(drive.gaussian_sigma_y_m) || drive.gaussian_sigma_y_m <= 0.0 ||
+             !std::isfinite(drive.gaussian_wavelength_m) || drive.gaussian_wavelength_m <= 0.0 ||
+             !std::isfinite(drive.gaussian_carrier_phase_rad))) {
+            error = "regional field drive Gaussian plane-wave profile parameters are invalid";
             return false;
         }
         if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK) {

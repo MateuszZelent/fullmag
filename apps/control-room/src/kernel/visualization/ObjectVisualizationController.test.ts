@@ -555,6 +555,55 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("resolves an FDM cell selection to the structured-grid visualization target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "fdm.cell",
+        label: "Cell 7",
+        nodeId: "model:mesh:grid",
+        objectId: null,
+        ref: {
+          cellOrdinal: "7",
+          gridFingerprint: "grid-1",
+          ijk: [1, 2, 0],
+          kind: "fdm.cell",
+          maskState: "active-unassigned",
+          membershipRevision: "mesh-1:membership-1",
+          nodeId: "model:mesh:grid",
+          numericRegionId: 0,
+          regionId: null,
+          type: "fdm-cell",
+          visualizationTargetId: "fdm-domain",
+        },
+      }),
+    ).toEqual({
+      id: "fdm-domain",
+      kind: "fdm-domain",
+      label: "Cell 7",
+    });
+  });
+
+  it("resolves structured-grid Explorer selections to the same FDM target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh.grid.descriptor",
+        label: "Structured Grid",
+        nodeId: "model:mesh:grid",
+        objectId: null,
+        ref: {
+          kind: "mesh.grid.descriptor",
+          nodeId: "model:mesh:grid",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-domain",
+        },
+      }),
+    ).toEqual({
+      id: "fdm-domain",
+      kind: "fdm-domain",
+      label: "Structured Grid",
+    });
+  });
+
   it("keeps an orphan part target separate from its Explorer node address", () => {
     expect(
       resolveVisualizationTargetFromSelection({
@@ -1009,6 +1058,54 @@ describe("ObjectVisualizationController", () => {
         vectorLengthScale: 0.75,
         vectorsVisible: false,
       },
+    });
+  });
+
+  it("does not seed the FDM domain from global FEM visualization state", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const visualizationState = {
+      active_quantity_id: "H_eff",
+      colormap: "inferno",
+      layers: {
+        bounds: { opacity: 0.25, visible: true },
+        points: { opacity: 0.35, visible: true },
+        surface: { opacity: 0.45, visible: false },
+        vectors: { density: 17, visible: true },
+        wireframe: { visible: true },
+      },
+      revision: 19,
+      vector_glyphs: true,
+      vector_style: {
+        color_mode: "x",
+        length_scale: 2.5,
+        thickness: 3,
+      },
+    };
+
+    controller.patchDefaults("fdm-domain", { surfaceOpacityPercent: 64 });
+    controller.patchTarget(target, { activeQuantityId: "H_demag" });
+    controller.patchViewportPreferences(target, { vectorCenteringEnabled: false });
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: visualizationState as never,
+    });
+
+    expect(resolved.baseSettings).toEqual(DEFAULT_OBJECT_VISUALIZATION);
+    expect(resolved.settings).toMatchObject({
+      activeQuantityId: "H_demag",
+      boundsVisible: false,
+      pointsVisible: false,
+      scalarColorPalette: "viridis",
+      shaderVisible: true,
+      surfaceOpacityPercent: 64,
+      vectorBudget: 1200,
+      vectorCenteringEnabled: false,
+      vectorColorMode: "orientation",
+      vectorsVisible: false,
+      wireframeVisible: false,
     });
   });
 
@@ -1580,6 +1677,26 @@ describe("ObjectVisualizationController", () => {
       scope_id: "free-layer",
       style: { vector_alpha: 0.55 },
     });
+  });
+
+  it("keeps the viewport-local FDM domain out of FEM visualization overrides", () => {
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const existing = [
+      {
+        scope: "object" as const,
+        scope_id: "film",
+        visible: true,
+      },
+    ];
+
+    expect(
+      visualizationStateOverrideFromTargetPatch(target, { visible: false }),
+    ).toBeNull();
+    expect(
+      mergeVisualizationStateTargetOverride(existing, target, {
+        visible: false,
+      }),
+    ).toEqual(existing);
   });
 
   it("defaults target surface projection to raw nodal", () => {

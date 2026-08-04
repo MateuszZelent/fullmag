@@ -1,0 +1,123 @@
+{
+  "document": {
+    "path": "docs/physics/0921-gaussian-plane-wave-regional-profile.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "planned_executable",
+      "reason": "The typed profile and native projection are being implemented; no runtime qualification evidence exists yet."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "planned_executable",
+      "reason": "The GPU lane can consume a projected basis, but this profile has not passed a managed native GPU gate."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "planned_reference",
+      "reason": "The planner evaluator is the intended CPU reference; analytic and refinement tests are pending."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "The current public FDM CUDA path rejects regional field drives and does not provide a qualified basis lane."
+    }
+  ],
+  "equations": [
+    {
+      "id": "gaussian-plane-wave-envelope",
+      "symbols": ["r", "x", "y", "xc", "yc", "sigma_x", "sigma_y"],
+      "sources": ["python-profile"]
+    },
+    {
+      "id": "gaussian-plane-wave-quadratures",
+      "symbols": ["k", "lambda", "phi_s", "S_x", "S_z", "G"],
+      "sources": ["python-profile"]
+    },
+    {
+      "id": "gaussian-plane-wave-time-field",
+      "symbols": ["B0", "B_drive", "H_drive", "mu0", "f", "tau", "phi_t", "t0"],
+      "sources": ["python-profile", "fdm-resolver"]
+    },
+    {
+      "id": "gaussian-plane-wave-energy",
+      "symbols": ["E_drive", "Ms", "m"],
+      "sources": ["fem-profile"]
+    },
+    {
+      "id": "gaussian-plane-wave-fdm-average",
+      "symbols": ["w_qc", "V_c", "H0_qc", "e_q"],
+      "sources": ["fdm-resolver"]
+    },
+    {
+      "id": "gaussian-plane-wave-fem-projection",
+      "symbols": ["M_i", "varphi_i", "w_qi", "H0_qi"],
+      "sources": ["fem-profile"]
+    }
+  ],
+  "symbols": [
+    {"id": "r", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "x", "latex": "$x$", "meaning": "Cartesian x coordinate", "si_unit": "$\\mathrm{m}$"},
+    {"id": "y", "latex": "$y$", "meaning": "Cartesian y coordinate", "si_unit": "$\\mathrm{m}$"},
+    {"id": "xc", "latex": "$x_c$", "meaning": "Gaussian-envelope x centre", "si_unit": "$\\mathrm{m}$"},
+    {"id": "yc", "latex": "$y_c$", "meaning": "Gaussian-envelope y centre", "si_unit": "$\\mathrm{m}$"},
+    {"id": "sigma_x", "latex": "$\\sigma_x$", "meaning": "Gaussian x standard deviation", "si_unit": "$\\mathrm{m}$"},
+    {"id": "sigma_y", "latex": "$\\sigma_y$", "meaning": "Gaussian y standard deviation", "si_unit": "$\\mathrm{m}$"},
+    {"id": "k", "latex": "$k$", "meaning": "carrier wavenumber", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "lambda", "latex": "$\\lambda$", "meaning": "carrier wavelength", "si_unit": "$\\mathrm{m}$"},
+    {"id": "phi_s", "latex": "$\\phi_s$", "meaning": "spatial carrier phase", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "S_x", "latex": "$S_x$", "meaning": "dimensionless x quadrature profile", "si_unit": "$1$"},
+    {"id": "S_z", "latex": "$S_z$", "meaning": "dimensionless z quadrature profile", "si_unit": "$1$"},
+    {"id": "G", "latex": "$G$", "meaning": "dimensionless Gaussian envelope", "si_unit": "$1$"},
+    {"id": "B0", "latex": "$B_0$", "meaning": "peak flux-density amplitude", "si_unit": "$\\mathrm{T}$"},
+    {"id": "B_drive", "latex": "$\\mathbf B_{\\mathrm{drive}}$", "meaning": "imposed flux-density field", "si_unit": "$\\mathrm{T}$"},
+    {"id": "H_drive", "latex": "$\\mathbf H_{\\mathrm{drive}}$", "meaning": "imposed effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "f", "latex": "$f$", "meaning": "carrier frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "tau", "latex": "$\\tau$", "meaning": "stage-local or absolute time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "phi_t", "latex": "$\\phi_t$", "meaning": "temporal phase", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "t0", "latex": "$t_0$", "meaning": "waveform time shift", "si_unit": "$\\mathrm{s}$"},
+    {"id": "E_drive", "latex": "$E_{\\mathrm{drive}}$", "meaning": "Zeeman energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "w_qc", "latex": "$w_{qc}$", "meaning": "FDM cell-averaged spatial weight", "si_unit": "$1$"},
+    {"id": "V_c", "latex": "$V_c$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "H0_qc", "latex": "$\\mathbf H^0_{qc}$", "meaning": "FDM immutable drive basis", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "e_q", "latex": "$\\hat{\\mathbf e}_q$", "meaning": "normalized drive direction", "si_unit": "$1$"},
+    {"id": "M_i", "latex": "$M_i$", "meaning": "FEM lumped P1 mass", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "varphi_i", "latex": "$\\varphi_i$", "meaning": "FEM P1 basis function", "si_unit": "$1$"},
+    {"id": "w_qi", "latex": "$w_{qi}$", "meaning": "FEM nodal spatial weight", "si_unit": "$1$"},
+    {"id": "H0_qi", "latex": "$\\mathbf H^0_{qi}$", "meaning": "FEM immutable drive basis", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "sources": [
+    {"id": "python-profile", "path": "packages/fullmag-py/src/fullmag/model/antenna.py", "symbol": "class GaussianPlaneWaveFieldProfile", "responsibility": "Validate and serialize the closed Gaussian plane-wave spatial profile."},
+    {"id": "python-antenna", "path": "packages/fullmag-py/src/fullmag/model/antenna.py", "symbol": "class GaussianPlaneWaveAntenna", "responsibility": "Expand the parameterized authoring module into two canonical RegionalFieldDrive values."},
+    {"id": "fdm-resolver", "path": "crates/fullmag-plan/src/regional_field_drive.rs", "symbol": "spatial_point_value", "responsibility": "Construct the deterministic FDM regional-drive basis from the spatial profile and target."},
+    {"id": "fem-profile", "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp", "symbol": "spatial_profile_value", "responsibility": "Evaluate the native FEM regional spatial profile while projecting the immutable basis."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "GaussianPlaneWaveAntenna.id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "stable module prefix and generated drive id", "backend_support": "FEM/FDM authoring lanes", "problem_ir": "field_drives[].id"},
+      {"python": "amplitude_B_T", "type": "float", "default": "required", "si_unit": "$\\mathrm{T}$", "validation": "finite and $\\ge 0$", "meaning": "peak flux-density amplitude", "backend_support": "FEM/FDM CPU; FEM GPU planned; FDM GPU unsupported", "problem_ir": "field_drives[].amplitude_B_T"},
+      {"python": "frequency_hz", "type": "float", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "finite and $>0$", "meaning": "sinusoidal frequency", "backend_support": "FEM/FDM CPU; FEM GPU planned; FDM GPU unsupported", "problem_ir": "field_drives[].waveform.frequency_hz"},
+      {"python": "wavelength_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite and $>0$", "meaning": "carrier wavelength", "backend_support": "FEM/FDM CPU; FEM GPU planned; FDM GPU unsupported", "problem_ir": "field_drives[].spatial_profile.wavelength_m"},
+      {"python": "sigma_x_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite and $>0$", "meaning": "longitudinal Gaussian width", "backend_support": "FEM/FDM CPU; FEM GPU planned; FDM GPU unsupported", "problem_ir": "field_drives[].spatial_profile.sigma_x_m"},
+      {"python": "fwhm_y_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite and $>0$", "meaning": "transverse Gaussian full width at half maximum", "backend_support": "FEM/FDM CPU; FEM GPU planned; FDM GPU unsupported", "problem_ir": "field_drives[].spatial_profile.sigma_y_m"},
+      {"python": "center_x_m", "type": "float", "default": "0", "si_unit": "$\\mathrm{m}$", "validation": "finite", "meaning": "envelope centre in `x`", "backend_support": "all planned CPU lanes", "problem_ir": "field_drives[].spatial_profile.center_x_m"},
+      {"python": "center_y_m", "type": "float", "default": "0", "si_unit": "$\\mathrm{m}$", "validation": "finite", "meaning": "envelope centre in `y`", "backend_support": "all planned CPU lanes", "problem_ir": "field_drives[].spatial_profile.center_y_m"},
+      {"python": "carrier_origin_x_m", "type": "float", "default": "0", "si_unit": "$\\mathrm{m}$", "validation": "finite", "meaning": "independent carrier phase origin", "backend_support": "all planned CPU lanes", "problem_ir": "field_drives[].spatial_profile.carrier_origin_x_m"},
+      {"python": "spatial_phase_rad", "type": "float", "default": "0", "si_unit": "$\\mathrm{rad}$", "validation": "finite", "meaning": "shared carrier phase", "backend_support": "all planned CPU lanes", "problem_ir": "field_drives[].spatial_profile.carrier_phase_rad"},
+      {"python": "phase_rad", "type": "float", "default": "0", "si_unit": "$\\mathrm{rad}$", "validation": "finite", "meaning": "temporal phase", "backend_support": "all planned CPU lanes", "problem_ir": "field_drives[].waveform.phase_rad"},
+      {"python": "t0_s", "type": "float", "default": "0", "si_unit": "$\\mathrm{s}$", "validation": "finite and $\\ge 0$", "meaning": "temporal shift", "backend_support": "all planned CPU lanes", "problem_ir": "field_drives[].waveform.phase_rad"},
+      {"python": "target", "type": "FieldTarget", "default": "global", "si_unit": "$1$", "validation": "existing typed target validation", "meaning": "magnetic target", "backend_support": "existing regional-drive target lanes", "problem_ir": "field_drives[].target"},
+      {"python": "activation", "type": "DriveActivation", "default": "all evolution", "si_unit": "$1$", "validation": "existing activation validation", "meaning": "stage selection", "backend_support": "existing regional-drive activation lanes", "problem_ir": "field_drives[].activation"},
+      {"python": "time_origin", "type": "str", "default": "stage_local", "si_unit": "$1$", "validation": "`stage_local` or `absolute`", "meaning": "waveform clock", "backend_support": "existing regional-drive clock lanes", "problem_ir": "field_drives[].time_origin"},
+      {"python": "enabled", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "boolean", "meaning": "source enable", "backend_support": "existing regional-drive lanes", "problem_ir": "field_drives[].enabled"}
+    ]
+  }
+}

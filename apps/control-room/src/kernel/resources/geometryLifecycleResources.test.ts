@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -70,6 +71,27 @@ import {
 } from "./geometryLifecycleResources";
 
 describe("geometry lifecycle resources", () => {
+  it("allows object FEM resources to be disabled for the explicit FDM lane", () => {
+    const source = readFileSync(
+      new URL("./geometryLifecycleResources.ts", import.meta.url),
+      "utf8",
+    );
+    for (const hookName of [
+      "useObjectTopologyResource",
+      "useObjectMeshReportResource",
+      "useObjectMeshQualityResource",
+      "useObjectMeshSizeFieldResource",
+      "useObjectMeshPolicyResource",
+    ]) {
+      const hookStart = source.indexOf(`export function ${hookName}`);
+      expect(hookStart, hookName).toBeGreaterThanOrEqual(0);
+      const hookSource = source.slice(hookStart, source.indexOf("\n}\n", hookStart) + 3);
+      expect(hookSource, hookName).toContain("options: ResourceHookOptions = {}");
+      expect(hookSource, hookName).toContain("options.enabled !== false");
+      expect(hookSource, hookName).toContain("enabled,");
+    }
+  });
+
   it("uses canonical v2 resource paths as hook keys", () => {
     expect(SCENE_RESOURCE_KEY).toBe(MODEL_SCENE_PATH);
     expect(GEOMETRY_CAPABILITIES_RESOURCE_KEY).toBe(

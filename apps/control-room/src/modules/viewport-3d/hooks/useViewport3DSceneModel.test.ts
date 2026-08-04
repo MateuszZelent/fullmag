@@ -223,6 +223,15 @@ describe("useViewport3DSceneModel", () => {
     );
   });
 
+  it("passes a current FDM grid identity to selection focus without a FEM fallback", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("const fdmSelectionGrid = useMemo<FdmSelectionGrid | null>");
+    expect(source).toContain('membership.freshness.toLowerCase() === "current"');
+    expect(source).toContain("resolveViewport3DSelectionBounds(");
+    expect(source).toContain("fdmSelectionGrid,");
+  });
+
   it("filters live authored region overlays once matching mesh-backed regions exist", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const regionOverlayBlock = source.slice(

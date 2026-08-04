@@ -121,10 +121,35 @@ export interface StudyInspectorModel {
     relaxTimeStop: StudyRelaxTimeStopModel | null;
     relaxTorqueStop: StudyRelaxTorqueStopModel | null;
     runId: string;
+    runtimeProvenance?: StudyRuntimeProvenance;
     state: string;
   };
   selectedStage: StudyStageModel | null;
   stages: StudyStageModel[];
+}
+
+export interface StudyRuntimeProvenance {
+  requested: {
+    backend: string;
+    device: string;
+    mode: string;
+    precision: string;
+  };
+  resolved: {
+    backend: string;
+    device: string;
+    mode: string;
+    precision: string;
+    runtimeFamily: string;
+    engine: string;
+  };
+  fallback: {
+    status: "not loaded" | "none" | "occurred";
+    originalEngine: string;
+    fallbackEngine: string;
+    reason: string;
+    message: string;
+  };
 }
 
 interface ResolveStudyInspectorModelInput {
@@ -308,6 +333,7 @@ export function resolveStudyInspectorModel({
       relaxTimeStop,
       relaxTorqueStop,
       runId: currentRun?.run_id ?? "none",
+      runtimeProvenance: studyRuntimeProvenanceFromCurrentRun(currentRun),
       state:
         solverStatus?.runtime_state ??
         currentRun?.status ??
@@ -317,6 +343,95 @@ export function resolveStudyInspectorModel({
     selectedStage,
     stages,
   };
+}
+
+/**
+ * Projects the execution request and the runtime's resolved execution without
+ * guessing when resolution is absent. `CurrentRunResource` is the sole source
+ * for this read-only provenance surface; authoring defaults such as `auto` are
+ * never promoted to resolved values.
+ */
+export function studyRuntimeProvenanceFromCurrentRun(
+  currentRun: CurrentRunResource | null | undefined,
+): StudyRuntimeProvenance {
+  if (!currentRun) {
+    return {
+      requested: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+      },
+      resolved: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+        runtimeFamily: "not loaded",
+        engine: "not loaded",
+      },
+      fallback: {
+        status: "not loaded",
+        originalEngine: "not loaded",
+        fallbackEngine: "not loaded",
+        reason: "not loaded",
+        message: "Current run provenance is not loaded.",
+      },
+    };
+  }
+
+  const fallback = currentRun.resolved_fallback;
+  const fallbackOccurred = fallback?.occurred === true;
+  return {
+    requested: {
+      backend: runtimeProvenanceValue(currentRun.requested_backend, "not available"),
+      device: runtimeProvenanceValue(currentRun.requested_device, "not available"),
+      mode: runtimeProvenanceValue(currentRun.requested_mode, "not available"),
+      precision: runtimeProvenanceValue(
+        currentRun.requested_precision,
+        "not available",
+      ),
+    },
+    resolved: {
+      backend: runtimeProvenanceValue(currentRun.resolved_backend, "unresolved"),
+      device: runtimeProvenanceValue(currentRun.resolved_device, "unresolved"),
+      mode: runtimeProvenanceValue(currentRun.resolved_mode, "unresolved"),
+      precision: runtimeProvenanceValue(
+        currentRun.resolved_precision,
+        "unresolved",
+      ),
+      runtimeFamily: runtimeProvenanceValue(
+        currentRun.resolved_runtime_family,
+        "unresolved",
+      ),
+      engine: runtimeProvenanceValue(currentRun.resolved_engine_id, "unresolved"),
+    },
+    fallback: {
+      status: fallbackOccurred ? "occurred" : "none",
+      originalEngine: runtimeProvenanceValue(
+        fallback?.original_engine,
+        fallback ? "not provided" : "not applicable",
+      ),
+      fallbackEngine: runtimeProvenanceValue(
+        fallback?.fallback_engine,
+        fallback ? "not provided" : "not applicable",
+      ),
+      reason: runtimeProvenanceValue(
+        fallback?.reason,
+        fallback ? "not provided" : "not reported",
+      ),
+      message: runtimeProvenanceValue(
+        fallback?.message,
+        fallback ? "not provided" : "No fallback reported.",
+      ),
+    },
+  };
+}
+
+function runtimeProvenanceValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : fallback;
 }
 
 type CommandQueueEntry = CommandQueueStatusResource["commands"][number];

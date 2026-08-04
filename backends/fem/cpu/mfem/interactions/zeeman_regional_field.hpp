@@ -23,6 +23,13 @@ struct RegionalFieldDriveRuntime {
     double sinc_center_m = 0.0;
     double sinc_width_m = 0.0;
     uint32_t sinc_window = FULLMAG_FEM_SPATIAL_WINDOW_NONE;
+    double gaussian_center_x_m = 0.0;
+    double gaussian_center_y_m = 0.0;
+    double gaussian_carrier_origin_x_m = 0.0;
+    double gaussian_sigma_x_m = 0.0;
+    double gaussian_sigma_y_m = 0.0;
+    double gaussian_wavelength_m = 0.0;
+    double gaussian_carrier_phase_rad = 0.0;
     std::vector<fullmag_fem_geometry_mask_node> geometry_nodes;
     uint32_t geometry_root_index = 0;
     std::array<double, 3> direction{0.0, 0.0, 0.0};

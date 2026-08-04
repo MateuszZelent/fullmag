@@ -3,10 +3,127 @@ import { describe, expect, it } from "vitest";
 import {
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
+  isExplicitFdmStudy,
+  normalizeDemagRealizationForLane,
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 
 describe("StudyGlobalAuthoringModel", () => {
+  it("recognizes only an explicit FDM request or session discretization", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        sessionDiscretization: "auto",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fem",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not serialize the FEM solver policy for an explicit FDM study", () => {
+    const request = buildStudyGlobalMergePatch(
+      {
+        ...createStudyGlobalDraft({
+          study: {
+            requested_backend: "auto",
+            fem_demag_solver_policy: { solver: "CG" },
+          },
+        }),
+        demagRealization: "multilayer_convolution",
+      },
+      { sessionDiscretization: "fdm" },
+    );
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: "multilayer_convolution",
+      fem_demag_solver_policy: null,
+    });
+  });
+
+  it("normalizes a stale FDM strategy when an auto request resolves to FEM", () => {
+    const draft = {
+      ...createStudyGlobalDraft({
+        study: {
+          requested_backend: "auto",
+          demag_realization: "multilayer_convolution",
+          fem_demag_solver_policy: { solver: "CG" },
+        },
+      }),
+      demagRealization: "single_grid",
+    };
+    const request = buildStudyGlobalMergePatch(draft, {
+      sessionDiscretization: "fem",
+    });
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: "auto",
+      fem_demag_solver_policy: { solver: "CG" },
+    });
+    expect(
+      normalizeDemagRealizationForLane("multilayer_convolution", {
+        requestedBackend: "auto",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe("auto");
+  });
+
+  it("honors requestedDiscretization when no backend field is explicit", () => {
+    const draft = {
+      ...createStudyGlobalDraft({
+        study: { requested_backend: "auto" },
+      }),
+      demagRealization: "multilayer_convolution",
+    };
+    const request = buildStudyGlobalMergePatch(draft, {
+      requestedDiscretization: "fdm",
+      sessionDiscretization: "fem",
+    });
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: "multilayer_convolution",
+    });
+    expect(
+      normalizeDemagRealizationForLane("single_grid", {
+        requestedDiscretization: "fem",
+      }),
+    ).toBe("auto");
+  });
+
+  it("validates FDM demag strategies without applying FEM policy validation", () => {
+    const draft = {
+      ...createStudyGlobalDraft({ study: { requested_backend: "fdm" } }),
+      demagRealization: "poisson_robin",
+      femDemagSolverPolicy: "not-json",
+    };
+    expect(
+      validateStudyGlobalDraft(draft, {
+        algorithmsAvailable: [],
+        sessionDiscretization: "fdm",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "FDM demag realization must be auto, single_grid, or multilayer_convolution.",
+    ]);
+  });
+
   it("creates a global study draft from scene study settings", () => {
     expect(
       createStudyGlobalDraft({

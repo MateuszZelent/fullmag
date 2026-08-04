@@ -11,12 +11,24 @@ import {
   usePlanarScalarResource,
   usePlanarVectorResource,
 } from "@/kernel/resources/planarFieldResources";
-import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import {
+  usePlanarMonitorResource,
+  usePlanarMonitorsResource,
+} from "@/kernel/resources/planarMonitorResources";
+import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 
 import { fieldMapStore, useFieldMapState } from "./fieldMapStore";
-import { buildFieldMapDataPlan } from "./model/fieldMapDataPlan";
-import { surfaceProjectionStatus } from "./model/fieldMapRenderModel";
+import {
+  buildFieldMapDataPlan,
+  buildFieldMapProbeQuery,
+} from "./model/fieldMapDataPlan";
+import {
+  resolveFieldMapAuxiliaryDiagnostics,
+  surfaceProjectionStatus,
+} from "./model/fieldMapRenderModel";
 import { PlanarSurface } from "./renderer/PlanarSurface";
 
 export default function FieldMapModule() {
@@ -28,6 +40,44 @@ export default function FieldMapModule() {
   const planar = visualization.data?.planar;
   const activeMonitorId = planar?.active_monitor_id ?? state.activeMonitorId;
   const monitors = usePlanarMonitorsResource({ enabled: active });
+  const monitor = usePlanarMonitorResource(activeMonitorId ?? "", {
+    enabled: active && activeMonitorId !== null,
+  });
+  const domain = useDomainMetaResource({ enabled: active });
+  const runtime = useSessionStatusSelector(
+    (status) => ({
+      expectedFieldRevision:
+        typeof status.data?.resources.field_revision === "number"
+          ? status.data.resources.field_revision
+          : null,
+      expectedMeshRevision:
+        typeof status.data?.resources.mesh_revision === "number"
+          ? status.data.resources.mesh_revision
+          : null,
+      discretization: status.data?.domain.discretization ?? null,
+    }),
+    {
+      enabled: active,
+      isEqual: (left, right) =>
+        left.expectedFieldRevision === right.expectedFieldRevision &&
+        left.expectedMeshRevision === right.expectedMeshRevision &&
+        left.discretization === right.discretization,
+    },
+  );
+  const selectedFieldSnapshot = useSelectionSelector((selection) => {
+    const ref = selection.ref;
+    if (!ref || typeof ref !== "object") {
+      return { snapshotId: null, stageId: null };
+    }
+    const candidate = ref as { snapshotId?: unknown; stageId?: unknown };
+    return {
+      snapshotId: typeof candidate.snapshotId === "string" ? candidate.snapshotId : null,
+      stageId: typeof candidate.stageId === "string" ? candidate.stageId : null,
+    };
+  }, {
+    isEqual: (left, right) =>
+      left.snapshotId === right.snapshotId && left.stageId === right.stageId,
+  });
 
   useEffect(() => {
     if (activeMonitorId || !monitors.data?.monitors.length) return;
@@ -40,6 +90,14 @@ export default function FieldMapModule() {
   const plan = buildFieldMapDataPlan({
     active,
     component: planar?.component ?? state.component,
+    discretization:
+      domain.data?.discretization ?? runtime.discretization ?? null,
+    expectedFieldRevision: runtime.expectedFieldRevision,
+    expectedMeshRevision: runtime.expectedMeshRevision,
+    expectedMonitorRevision:
+      typeof monitor.data?.scene_revision === "number"
+        ? monitor.data.scene_revision
+        : null,
     includeMesh: planar?.layers.mesh ?? true,
     monitorId: activeMonitorId,
     quantityId: planar?.quantity_id ?? state.quantityId,
@@ -48,6 +106,9 @@ export default function FieldMapModule() {
       planar?.resolution.height ?? 512,
     ],
     showVectors: planar?.layers.vectors ?? false,
+    snapshotId: selectedFieldSnapshot.snapshotId,
+    stageId: selectedFieldSnapshot.stageId,
+    viewScope: planar?.view_scope ?? { kind: "monitor_target" },
   });
   const meta = usePlanarFieldMetaResource(
     plan.quantityId,
@@ -82,13 +143,7 @@ export default function FieldMapModule() {
   const probe = usePlanarProbeResource(
     plan.quantityId,
     plan.monitorId,
-    {
-      component: planar?.component ?? state.component,
-      resolution_x: plan.query.resolution_x,
-      resolution_y: plan.query.resolution_y,
-      u_m: pinned?.[0] ?? 0,
-      v_m: pinned?.[1] ?? 0,
-    },
+    buildFieldMapProbeQuery(plan.query, pinned?.[0] ?? 0, pinned?.[1] ?? 0),
     { enabled: plan.enabled && pinned !== null },
   );
   const frame = useMemo(
@@ -105,6 +160,13 @@ export default function FieldMapModule() {
 
   if (!activeMonitorId) {
     return <FieldMapStatus message="Select a planar monitor to open the 2D view." />;
+  }
+  if (plan.availability === "not-applicable") {
+    return (
+      <FieldMapStatus
+        message={`Field Map not applicable: ${plan.unavailableReason ?? "the selected scope is unsupported."}`}
+      />
+    );
   }
   if (meta.status === "error" || scalar.status === "error") {
     return (
@@ -154,6 +216,13 @@ export default function FieldMapModule() {
           <span>{meta.data.scalar_min ?? "auto"}</span>
         </div>
       </div>
+      <FieldMapAuxiliaryDiagnostics
+        layers={[
+          { label: "Occupancy mask", requested: plan.requestMask, resource: mask },
+          { label: "Vector overlay", requested: plan.requestVectors, resource: vectors },
+          { label: "Mesh overlay", requested: plan.requestMesh, resource: meshOverlay },
+        ]}
+      />
       {probe.data ? (
         <table className="fm-field-map__pinned-probe">
           <caption>Pinned planar probe</caption>
@@ -166,6 +235,32 @@ export default function FieldMapModule() {
         </table>
       ) : null}
     </section>
+  );
+}
+
+function FieldMapAuxiliaryDiagnostics({
+  layers,
+}: {
+  layers: readonly {
+    label: string;
+    requested: boolean;
+    resource: { data: ArrayBuffer | null; error: Error | null; status: "error" | "idle" | "loading" | "ready" | "stale" };
+  }[];
+}) {
+  const diagnostics = resolveFieldMapAuxiliaryDiagnostics(
+    layers.map(({ label, requested, resource }) => ({
+      errorMessage: resource.error?.message ?? null,
+      hasData: resource.data !== null,
+      label,
+      requested,
+      status: resource.status,
+    })),
+  );
+  if (diagnostics.length === 0) return null;
+  return (
+    <div className="fm-field-map__diagnostics" role="status" aria-label="Planar layer diagnostics">
+      {diagnostics.map((message) => <p key={message}>{message}</p>)}
+    </div>
   );
 }
 

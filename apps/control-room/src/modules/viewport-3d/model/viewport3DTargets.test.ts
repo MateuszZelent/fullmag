@@ -15,6 +15,7 @@ import {
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
   targetForMeshPart,
+  type FdmSelectionGrid,
 } from "./viewport3DTargets";
 
 function fieldVectorResourceRef(
@@ -28,8 +29,8 @@ function fieldVectorResourceRef(
 describe("viewport3DTargets", () => {
   it("maps the FDM structured domain to a stable object visualization target", () => {
     expect(targetForFdmDomain("current")).toEqual({
-      id: "object:current",
-      kind: "object",
+      id: "fdm-domain",
+      kind: "fdm-domain",
       label: "current",
     });
   });
@@ -424,5 +425,180 @@ describe("viewport3DTargets", () => {
       radius: 0.3,
       size: [0.6, 0.6, 0.6],
     });
+  });
+
+  it("fits an FDM grid node to structured-grid bounds without using FEM topology", () => {
+    const selection: Selection = {
+      kind: "mesh.grid.mask",
+      label: "Cell Mask",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:mask",
+      objectId: null,
+      ref: {
+        kind: "mesh.grid.mask",
+        nodeId: "model:mesh:mask",
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-domain",
+      },
+    };
+
+    const bounds = resolveViewport3DSelectionBounds(
+      selection,
+      {
+        airboxParts: [],
+        magneticParts: [],
+        magneticSurfacePartsByPartId: new Map(),
+        objectPartIds: new Map(),
+        partsById: new Map(),
+      },
+      {
+        center: [100, 100, 100],
+        radius: 100,
+        size: [200, 200, 200],
+      },
+      {
+        bounds: {
+          center: [1, 2, 3],
+          radius: Math.sqrt(29) / 2,
+          size: [2, 3, 4],
+        },
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid",
+        origin: [0, 0.5, 1],
+        shape: [2, 3, 4],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 24,
+        gridFingerprint: "grid-current",
+      },
+    );
+
+    expect(bounds).toEqual({
+      center: [1, 2, 3],
+      radius: Math.sqrt(29) / 2,
+      size: [2, 3, 4],
+    });
+  });
+
+  it("resolves an FDM cell to exact cell bounds only for the current grid fingerprint", () => {
+    const selection: Selection = {
+      kind: "fdm.cell",
+      label: "Cell 4",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        cellOrdinal: "4",
+        gridFingerprint: "grid-current",
+        ijk: [1, 1, 0],
+        kind: "fdm.cell",
+        maskState: "region",
+        membershipRevision: "11:12",
+        nodeId: "model:mesh:grid",
+        numericRegionId: 7,
+        regionId: "region:core",
+        type: "fdm-cell",
+        visualizationTargetId: "fdm-domain",
+      },
+    };
+    const grid: FdmSelectionGrid = {
+      bounds: {
+        center: [1.5, 1.5, 1.5],
+        radius: Math.sqrt(27) / 2,
+        size: [3, 3, 3],
+      },
+      displayCellBudget: 27,
+      displayCellCount: 27,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [3, 3, 3] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 1,
+      totalCells: 27,
+      gridFingerprint: "grid-current",
+    };
+
+    expect(
+      resolveViewport3DSelectionBounds(
+        selection,
+        {
+          airboxParts: [],
+          magneticParts: [],
+          magneticSurfacePartsByPartId: new Map(),
+          objectPartIds: new Map(),
+          partsById: new Map(),
+        },
+        {
+          center: [100, 100, 100],
+          radius: 100,
+          size: [200, 200, 200],
+        },
+        grid,
+      ),
+    ).toEqual({
+      center: [1.5, 1.5, 0.5],
+      radius: Math.sqrt(3) / 2,
+      size: [1, 1, 1],
+    });
+
+    expect(
+      resolveViewport3DSelectionBounds(
+        selection,
+        {
+          airboxParts: [],
+          magneticParts: [],
+          magneticSurfacePartsByPartId: new Map(),
+          objectPartIds: new Map(),
+          partsById: new Map(),
+        },
+        {
+          center: [100, 100, 100],
+          radius: 100,
+          size: [200, 200, 200],
+        },
+        { ...grid, gridFingerprint: "grid-stale" },
+      ),
+    ).toBeNull();
+  });
+
+  it("fails closed for an FDM cell when the structured grid is unavailable", () => {
+    const selection: Selection = {
+      kind: "fdm.cell",
+      label: "Cell 7",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        cellOrdinal: "7",
+        gridFingerprint: "grid-current",
+        ijk: [1, 1, 0],
+        kind: "fdm.cell",
+        maskState: "region",
+        membershipRevision: "11:12",
+        nodeId: "model:mesh:grid",
+        numericRegionId: 7,
+        regionId: "region:core",
+        type: "fdm-cell",
+        visualizationTargetId: "fdm-domain",
+      },
+    };
+    expect(
+      resolveViewport3DSelectionBounds(
+        selection,
+        {
+          airboxParts: [],
+          magneticParts: [],
+          magneticSurfacePartsByPartId: new Map(),
+          objectPartIds: new Map(),
+          partsById: new Map(),
+        },
+        {
+          center: [100, 100, 100],
+          radius: 100,
+          size: [200, 200, 200],
+        },
+      ),
+    ).toBeNull();
   });
 });

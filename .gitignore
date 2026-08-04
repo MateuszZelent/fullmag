@@ -107,3 +107,4 @@ apps/control-room/.next-audit/*
 .worktrees/
 
 public_docs/_build/
+tests/vlad/

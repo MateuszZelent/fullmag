@@ -5,10 +5,52 @@ import {
   viewportSelectionForDomain,
   viewportSelectionForObject,
   viewportSelectionForRegion,
+  viewportSelectionForFdmCell,
 } from "./viewport3dSelection";
+import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
 import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
 
 describe("viewport3dSelection", () => {
+  it("builds an identity-complete FDM cell selection", () => {
+    const membership: FdmRegionMembershipResource = {
+      binary_path: "fdm.bin",
+      cell_count: 8,
+      cell_m: [1, 1, 1],
+      counts: [2, 2, 2],
+      encoding: "u32le",
+      freshness: "current",
+      grid_fingerprint: "grid-7",
+      mesh_revision: 11,
+      origin_m: [0, 0, 0],
+      region_legend: [{ numeric_id: 7, object_id: "object:core", priority: 0, region_id: "region:core" }],
+      region_membership_revision: 12,
+      schema_version: "fdm_region_membership.v1",
+    };
+    const selection = viewportSelectionForFdmCell({
+      binary: {
+        counts: [2, 2, 2], cellCount: 8, gridFingerprint: "grid-7", legendCount: 1,
+        formatVersion: 2, payloadKind: 2, regionIds: new Uint32Array([0, 7, 0, 0, 0, 0, 0, 0]), semanticStatus: "canonical",
+      },
+      domainShape: [2, 2, 2],
+      instanceId: 0,
+      membership,
+      model: { cellIndices: new Uint32Array([1]), centers: new Float32Array(3), count: 1, gridShape: [2, 2, 2], cellSize: [1, 1, 1], regionIds: new Uint32Array([7]) },
+    });
+    expect(selection?.ref).toMatchObject({
+      type: "fdm-cell", cellOrdinal: "1", gridFingerprint: "grid-7", ijk: [1, 0, 0],
+      maskState: "region", numericRegionId: 7, regionId: "region:core", membershipRevision: "11:12",
+    });
+  });
+
+  it("fails closed for legacy or missing FDM membership identity", () => {
+    expect(viewportSelectionForFdmCell({
+      binary: null,
+      domainShape: [2, 2, 2],
+      instanceId: 0,
+      membership: null,
+      model: null,
+    })).toBeNull();
+  });
   it("maps a domain pick to the visible Universe Explorer node", () => {
     expect(viewportSelectionForDomain("fdm-domain")).toEqual({
       kind: "universe.root",

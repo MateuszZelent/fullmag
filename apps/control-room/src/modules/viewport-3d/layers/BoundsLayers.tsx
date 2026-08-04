@@ -46,6 +46,7 @@ import type {
 } from "../viewport3dRenderModel";
 import { buildLineIndexGeometry } from "../viewport3dSurfaceEdges";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -1021,6 +1022,34 @@ export const DomainBoxLayer = memo(function DomainBoxLayer({
     </mesh>
   );
 });
+
+/**
+ * FDM universe extent is a regular-grid context overlay, never a FEM Airbox
+ * topology layer. Its visibility is driven by an explicit semantic role from
+ * the domain presentation; inactive membership values are not interpreted.
+ */
+export const FdmUniverseOutsideSupportLayer = memo(
+  function FdmUniverseOutsideSupportLayer({
+    colors,
+    model,
+    tracker,
+  }: {
+    colors: Viewport3DColors;
+    model: FdmUniverseOutsideSupportOverlayModel | null;
+    tracker: Viewport3DResourceTracker;
+  }) {
+    if (!model) return null;
+    return (
+      <BoundsVolumeWireframe
+        bounds={model.universeBounds}
+        color={colors.accent}
+        opacity={0.55}
+        policySemantic="hiddenEdges"
+        tracker={tracker}
+      />
+    );
+  },
+);
 
 export function AirboxLayerContent({
   adoptionRegistry,

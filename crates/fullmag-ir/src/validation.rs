@@ -309,6 +309,35 @@ fn validate_field_spatial_profile(
                 );
             }
         }
+        FieldSpatialProfileIR::GaussianPlaneWave {
+            center_x_m,
+            center_y_m,
+            carrier_origin_x_m,
+            sigma_x_m,
+            sigma_y_m,
+            wavelength_m,
+            carrier_phase_rad,
+        } => {
+            for (name, value) in [
+                ("center_x_m", *center_x_m),
+                ("center_y_m", *center_y_m),
+                ("carrier_origin_x_m", *carrier_origin_x_m),
+                ("carrier_phase_rad", *carrier_phase_rad),
+            ] {
+                if !value.is_finite() {
+                    errors.push(format!("{label} {name} must be finite"));
+                }
+            }
+            for (name, value) in [
+                ("sigma_x_m", *sigma_x_m),
+                ("sigma_y_m", *sigma_y_m),
+                ("wavelength_m", *wavelength_m),
+            ] {
+                if !value.is_finite() || value <= 0.0 {
+                    errors.push(format!("{label} {name} must be finite and > 0"));
+                }
+            }
+        }
     }
 }
 

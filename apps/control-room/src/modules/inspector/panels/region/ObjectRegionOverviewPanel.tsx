@@ -3,6 +3,7 @@
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { ChangeEvent } from "react";
 import { FormField } from "../../primitives/FormField";
+import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionEditRealizationPolicy } from "../ObjectRegionsPanelModel";
 import {
@@ -20,6 +21,8 @@ export function ObjectRegionOverviewPanel({
   buildRegion,
   regionMeshLifecycle,
   canWriteRegion,
+  canWriteMeshRegion,
+  meshLane = "unknown",
   couplingDependencies,
   updateDraft,
   applyRegion,
@@ -30,16 +33,18 @@ export function ObjectRegionOverviewPanel({
 }: RegionSubPanelProps) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Region Identity">
-        <ObjectRegionInlineDiagnostics
-          capabilityGates={[
-            "regions.realized_materialization",
-            "regions.conformal_or_projected_boundary",
-          ]}
-          model={model}
-        />
+        {meshLane === "fdm" ? null : (
+          <ObjectRegionInlineDiagnostics
+            capabilityGates={[
+              "regions.realized_materialization",
+              "regions.conformal_or_projected_boundary",
+            ]}
+            model={model}
+          />
+        )}
         <FormField
           label="Region name"
           mono={false}
@@ -69,20 +74,27 @@ export function ObjectRegionOverviewPanel({
           <option value="object">Object</option>
           <option value="world">World</option>
         </FormField>
-        <FormField
-          label="Realization"
-          type="select"
-          value={draft.realizationPolicy}
-          onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-            updateDraft({
-              realizationPolicy: event.target.value as RegionEditRealizationPolicy,
-            })
-          }
-        >
-          <option value="inherit">Inherit</option>
-          <option value="conformal">Conformal</option>
-          <option value="project">Project</option>
-        </FormField>
+        {meshLane === "fdm" ? (
+          <FieldRow
+            label="Realization"
+            value="Not applicable for FDM structured-grid regions"
+          />
+        ) : (
+          <FormField
+            label="Realization"
+            type="select"
+            value={draft.realizationPolicy}
+            onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+              updateDraft({
+                realizationPolicy: event.target.value as RegionEditRealizationPolicy,
+              })
+            }
+          >
+            <option value="inherit">Inherit</option>
+            <option value="conformal">Conformal</option>
+            <option value="project">Project</option>
+          </FormField>
+        )}
       </InspectorGroup>
 
       <ObjectRegionActionsSection
@@ -91,6 +103,8 @@ export function ObjectRegionOverviewPanel({
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}
         canWriteRegion={canWriteRegion}
+        canWriteMeshRegion={canWriteMeshRegion}
+        meshLane={meshLane}
         couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}

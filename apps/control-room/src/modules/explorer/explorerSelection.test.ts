@@ -156,6 +156,82 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("preserves the dedicated FDM cell identity contract", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:mesh:grid:cell:7",
+      kind: "fdm.cell",
+      label: "Cell 7",
+      parentId: "model:mesh:grid",
+      cellOrdinal: "7",
+      cellIJK: [1, 1, 0],
+      cellMaskState: "region",
+      numericRegionId: 7,
+      regionId: "region:core",
+      gridFingerprint: "grid-7",
+      membershipRevision: "11:12",
+    };
+    selectExplorerNode(kernel, node, "explorer");
+    expect(kernel.selection.get().ref).toEqual({
+      cellOrdinal: "7",
+      gridFingerprint: "grid-7",
+      ijk: [1, 1, 0],
+      kind: "fdm.cell",
+      maskState: "region",
+      membershipRevision: "11:12",
+      nodeId: "model:mesh:grid",
+      numericRegionId: 7,
+      regionId: "region:core",
+      type: "fdm-cell",
+      visualizationTargetId: "fdm-domain",
+    });
+  });
+
+  it.each([
+    ["mesh.grid", "model:mesh"],
+    ["mesh.grid.descriptor", "model:mesh:grid"],
+    ["mesh.grid.magnetic-support", "model:mesh:magnetic-support"],
+    ["mesh.grid.active-unassigned", "model:mesh:active-unassigned"],
+    ["mesh.grid.mask", "model:mesh:mask"],
+    ["mesh.grid.provenance", "model:mesh:provenance"],
+    ["mesh.grid.region", "model:mesh:region:core"],
+    ["mesh.grid.universe-outside-support", "model:mesh:outside-support"],
+  ] as const)("maps %s to the canonical FDM domain target", (kind, id) => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id,
+      kind,
+      label: kind,
+      parentId: "model:mesh",
+      ...(kind === "mesh.grid.region" ? { regionId: "region:core" } : {}),
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind,
+      nodeId: id,
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-domain",
+    });
+  });
+
+  it("keeps the FEM unassigned parent on its exact legacy route", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:mesh:unassigned",
+      kind: "mesh.unassigned",
+      label: "Unassigned mesh parts",
+      parentId: "model:mesh",
+    }, "explorer");
+    expect(kernel.selection.get().ref).toMatchObject({
+      type: "mesh-part",
+      kind: "mesh-part",
+      nodeId: "model:mesh:unassigned",
+      visualizationTargetId: "mesh:unassigned",
+    });
+  });
+
   it("sets kernel selection and emits workspace selection change", () => {
     const kernel = makeKernel();
     const events: KernelEventMap["workspace:selection-changed"][] = [];

@@ -212,6 +212,16 @@ export function visualizationObjectIdForMeshPartLike(part: {
 }
 
 export type MeshElementFamily = "hex8" | "prism6" | "pyramid5" | "tet4";
+export type FdmCellMaskState = "inactive" | "active-unassigned" | "region";
+export type FdmDomainSelectionKind =
+  | "mesh.grid"
+  | "mesh.grid.descriptor"
+  | "mesh.grid.magnetic-support"
+  | "mesh.grid.active-unassigned"
+  | "mesh.grid.mask"
+  | "mesh.grid.provenance"
+  | "mesh.grid.region"
+  | "mesh.grid.universe-outside-support";
 
 export type SelectionRef =
   | LiveChartSelectionRef
@@ -222,6 +232,25 @@ export type SelectionRef =
       nodeId: string;
       type: "planar-monitor";
       visualizationTargetId: `planar-monitor:${string}`;
+    }
+  | {
+      kind: FdmDomainSelectionKind;
+      nodeId: string;
+      type: "fdm-domain";
+      visualizationTargetId: "fdm-domain";
+    }
+  | {
+      cellOrdinal: string;
+      gridFingerprint: string;
+      ijk: readonly [number, number, number];
+      kind: "fdm.cell";
+      maskState: FdmCellMaskState;
+      membershipRevision: string;
+      nodeId: "model:mesh:grid";
+      numericRegionId: number | null;
+      regionId: string | null;
+      type: "fdm-cell";
+      visualizationTargetId: "fdm-domain";
     }
   | {
       boundaryFaceIndex?: number | null;
@@ -576,6 +605,29 @@ export function selectionRefEquals(
         left.monitorId === right.monitorId &&
         left.nodeId === right.nodeId &&
         left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "fdm-domain":
+      return (
+        right.type === "fdm-domain" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "fdm-cell":
+      return (
+        right.type === "fdm-cell" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId &&
+        left.cellOrdinal === right.cellOrdinal &&
+        left.ijk[0] === right.ijk[0] &&
+        left.ijk[1] === right.ijk[1] &&
+        left.ijk[2] === right.ijk[2] &&
+        left.maskState === right.maskState &&
+        left.numericRegionId === right.numericRegionId &&
+        left.regionId === right.regionId &&
+        left.gridFingerprint === right.gridFingerprint &&
+        left.membershipRevision === right.membershipRevision
       );
     case "scene-object":
       return (

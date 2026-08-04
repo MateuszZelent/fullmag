@@ -1,5 +1,6 @@
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { isExplicitFdmStudy } from "../StudyGlobalAuthoringModel";
 
 export type AirboxInspectorRuntimeStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -42,6 +43,19 @@ export function airboxInspectorRuntimeStatusEquals(
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision
   );
+}
+
+/**
+ * Airbox mesh controls are FEM-only. FDM is selected only from an explicit
+ * current-session lane; missing or errored status must not be interpreted as
+ * FDM (or as a reason to hide FEM controls).
+ */
+export function isExplicitFdmAirboxRuntime(
+  status: AirboxInspectorRuntimeStatus | null | undefined,
+): boolean {
+  return isExplicitFdmStudy({
+    sessionDiscretization: status?.domain.discretization,
+  });
 }
 
 export function useAirboxInspectorRuntimeStatus() {

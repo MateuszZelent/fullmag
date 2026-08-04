@@ -48,6 +48,10 @@ export function objectVisualizationManifestStatusEquals(
 
 export const OBJECT_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
   "airbox",
+  // FDM domain is a viewport-local target. It is included so the shared
+  // target registry can resolve its controls, while the serialization bridge
+  // fail-closes and never emits an FEM VisualizationState scope for it.
+  "fdm-domain",
   "object",
   "part",
   "region",

@@ -15,7 +15,12 @@ import {
   type Selection,
 } from "../selection/selectionTypes";
 
-export type VisualizationTargetKind = "airbox" | "object" | "part" | "region";
+export type VisualizationTargetKind =
+  | "airbox"
+  | "fdm-domain"
+  | "object"
+  | "part"
+  | "region";
 export type VisualizationRenderMode =
   | "off"
   | "points"
@@ -733,7 +738,9 @@ export function resolveEffectiveTargetRegistryEntry(
   target: VisualizationTargetRef,
 ): EffectiveTargetRegistryEntry | null {
   const registry = state?.targets;
-  if (!registry || target.kind === "region") return null;
+  if (!registry || target.kind === "region" || target.kind === "fdm-domain") {
+    return null;
+  }
 
   const entries: readonly EffectiveTargetRegistryEntry[] =
     target.kind === "airbox"
@@ -754,6 +761,9 @@ function resolveVisualizationStateTargetOverride(
   state: VisualizationStateResource | null | undefined,
   target: VisualizationTargetRef,
 ): VisualizationStoredTargetPatch | null {
+  // FDM is a client-side structured-grid target. It has no FEM/object scope
+  // in the persisted visualization registry, so never serialize it as one.
+  if (target.kind === "fdm-domain") return null;
   const override = state?.overrides?.find((entry) =>
     visualizationStateOverrideMatchesTarget(entry, target),
   );
@@ -868,7 +878,12 @@ function resolveVisualizationStateTargetOverride(
 export function visualizationStateOverrideFromTargetPatch(
   target: VisualizationTargetRef,
   patch: VisualizationTargetPatch,
-): VisualizationStateResource["overrides"][number] {
+): VisualizationStateResource["overrides"][number] | null {
+  // The FDM domain target is owned by the viewport's structured-grid model.
+  // It is deliberately not a backend VisualizationState scope (the API only
+  // accepts full/magnetic/airbox/object/part/region/selection).  Callers that
+  // patch it must therefore fail closed instead of emitting invalid FEM data.
+  if (target.kind === "fdm-domain") return null;
   const normalized = normalizePatch(patch);
   const display = {
     ...(normalized.geometryScope === undefined
@@ -1014,6 +1029,9 @@ export function mergeVisualizationStateTargetOverride(
   patch: VisualizationTargetPatch,
 ): VisualizationStateResource["overrides"] {
   const next = visualizationStateOverrideFromTargetPatch(target, patch);
+  if (!next) {
+    return overrides.map(normalizeVisualizationStateOverride);
+  }
   const current = overrides.find((entry) =>
     visualizationStateOverrideMatchesTarget(entry, target),
   );
@@ -1363,6 +1381,12 @@ function resolveVisualizationBaseSettings(
 ): VisualizationTargetSettings {
   if (kind === "airbox") {
     return resolveAirboxVisualizationSettingsFromState(state);
+  }
+  // FDM is a client-side structured-grid target.  The backend visualization
+  // resource describes FEM/object layers, so it must never seed the FDM
+  // baseline (local FDM snapshot overrides/preferences still apply below).
+  if (kind === "fdm-domain") {
+    return DEFAULT_OBJECT_VISUALIZATION;
   }
   return resolveGlobalObjectVisualizationSettings(state);
 }
@@ -1751,6 +1775,17 @@ export function resolveVisualizationTargetFromSelection(
   selection: Pick<Selection, "kind" | "label" | "nodeId" | "objectId" | "ref">,
 ): VisualizationTargetRef | null {
   if (
+    selection.ref?.type === "fdm-cell" ||
+    selection.ref?.type === "fdm-domain"
+  ) {
+    return {
+      id: "fdm-domain",
+      kind: "fdm-domain",
+      label: selection.label,
+    };
+  }
+
+  if (
     selection.kind === "airbox.visualization" ||
     selection.kind === "airbox.visualization.debug" ||
     selection.kind === "mesh-part-airbox"
@@ -1795,6 +1830,7 @@ export function resolveVisualizationTargetFromSelection(
 
 export function visualizationTargetKey(target: VisualizationTargetRef): string {
   if (target.kind === "airbox") return "airbox";
+  if (target.kind === "fdm-domain") return "fdm-domain";
   return canonicalVisualizationTargetId(target);
 }
 

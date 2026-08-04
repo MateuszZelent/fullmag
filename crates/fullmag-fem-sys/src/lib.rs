@@ -13,7 +13,7 @@ pub const FULLMAG_FEM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FEM_ERR_UNAVAILABLE: i32 = -2;
 pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
-pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
 
@@ -200,6 +200,13 @@ pub struct fullmag_fem_spatial_profile_desc {
     pub sinc_width_m: f64,
     pub sinc_window: u32,
     pub geometry_mask: *const fullmag_fem_geometry_mask_desc,
+    pub gaussian_center_x_m: f64,
+    pub gaussian_center_y_m: f64,
+    pub gaussian_carrier_origin_x_m: f64,
+    pub gaussian_sigma_x_m: f64,
+    pub gaussian_sigma_y_m: f64,
+    pub gaussian_wavelength_m: f64,
+    pub gaussian_carrier_phase_rad: f64,
 }
 
 #[repr(C)]

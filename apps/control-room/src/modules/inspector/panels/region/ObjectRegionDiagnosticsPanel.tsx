@@ -8,17 +8,21 @@ import {
   type RegionSubPanelProps,
 } from "./shared";
 
-export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
+export function ObjectRegionDiagnosticsPanel({ model, meshLane = "unknown" }: RegionSubPanelProps) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Diagnostics">
         <FieldRow label="Mode" value={model.mode} />
         <FieldRow label="Source" value={model.source} />
         <FieldRow
           label="Realization policy"
-          value={model.realizationPolicy ?? "inherit"}
+          value={
+            meshLane === "fdm"
+              ? "Not applicable for FDM structured-grid regions"
+              : model.realizationPolicy ?? "inherit"
+          }
         />
         <FieldRow
           label="Realization status"

@@ -5,6 +5,17 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
+const FDM_DEMAG_REALIZATIONS = [
+  "auto",
+  "single_grid",
+  "multilayer_convolution",
+] as const;
+
+const FDM_ONLY_DEMAG_REALIZATIONS = [
+  "single_grid",
+  "multilayer_convolution",
+] as const;
+
 export interface StudyGlobalDraft {
   demagEnabled: boolean;
   demagRealization: string;
@@ -51,6 +62,29 @@ export interface StudySolverDraft {
 export interface StudyGlobalDraftValidation {
   message: string;
   severity: "error" | "warning";
+}
+
+export interface StudyExecutionDiscretizationContext {
+  requestedBackend?: string | null;
+  requestedDiscretization?: string | null;
+  sessionDiscretization?: string | null;
+}
+
+/**
+ * FDM-specific authoring is enabled only when the lane is explicit in the
+ * request or in the current session. An `auto` value never becomes FDM by
+ * inference; the current session may still report an explicit resolved lane.
+ */
+export function isExplicitFdmStudy({
+  requestedBackend,
+  requestedDiscretization,
+  sessionDiscretization,
+}: StudyExecutionDiscretizationContext): boolean {
+  return [
+    requestedBackend,
+    requestedDiscretization,
+    sessionDiscretization,
+  ].some((value) => normalizeDiscretization(value) === "fdm");
 }
 
 const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
@@ -104,7 +138,11 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
 
 export function validateStudyGlobalDraft(
   draft: StudyGlobalDraft,
-  capabilities?: { algorithmsAvailable?: readonly string[] },
+  capabilities?: {
+    algorithmsAvailable?: readonly string[];
+    requestedDiscretization?: string | null;
+    sessionDiscretization?: string | null;
+  },
 ): StudyGlobalDraftValidation[] {
   const issues: StudyGlobalDraftValidation[] = [];
   if (!draft.requestedBackend.trim()) {
@@ -135,20 +173,49 @@ export function validateStudyGlobalDraft(
     }
   }
   validateSolverDraft(issues, draft.solver, draft, capabilities);
-  validateOptionalJsonObject(
-    issues,
-    draft.femDemagSolverPolicy,
-    "FEM demag policy",
-  );
+  const explicitFdm = isExplicitFdmStudy({
+    requestedBackend: draft.requestedBackend,
+    requestedDiscretization: capabilities?.requestedDiscretization,
+    sessionDiscretization: capabilities?.sessionDiscretization,
+  });
+  if (explicitFdm) {
+    if (
+      !FDM_DEMAG_REALIZATIONS.includes(
+        normalizeDemagRealization(draft.demagRealization) as (typeof FDM_DEMAG_REALIZATIONS)[number],
+      )
+    ) {
+      issues.push({
+        message:
+          "FDM demag realization must be auto, single_grid, or multilayer_convolution.",
+        severity: "error",
+      });
+    }
+  } else {
+    validateOptionalJsonObject(
+      issues,
+      draft.femDemagSolverPolicy,
+      "FEM demag policy",
+    );
+  }
   return issues;
 }
 
 export function buildStudyGlobalMergePatch(
   draft: StudyGlobalDraft,
+  context: StudyExecutionDiscretizationContext = {},
 ): AuthoringTransactionRequest {
+  const laneContext = {
+    requestedBackend: context.requestedBackend ?? draft.requestedBackend,
+    requestedDiscretization: context.requestedDiscretization,
+    sessionDiscretization: context.sessionDiscretization,
+  } satisfies StudyExecutionDiscretizationContext;
+  const explicitFdm = isExplicitFdmStudy(laneContext);
   const study: JsonObject = {
     demag_enabled: draft.demagEnabled,
-    demag_realization: requiredText(draft.demagRealization, "auto"),
+    demag_realization: normalizeDemagRealizationForLane(
+      draft.demagRealization,
+      laneContext,
+    ),
     exchange_enabled: draft.exchangeEnabled,
     requested_backend: requiredText(draft.requestedBackend, "auto"),
     requested_device: requiredText(draft.requestedDevice, "auto"),
@@ -156,7 +223,9 @@ export function buildStudyGlobalMergePatch(
     requested_precision: requiredText(draft.requestedPrecision, "double"),
   };
   study.external_field = optionalVector3(draft.externalField);
-  study.fem_demag_solver_policy = optionalJsonObject(draft.femDemagSolverPolicy);
+  study.fem_demag_solver_policy = explicitFdm
+    ? null
+    : optionalJsonObject(draft.femDemagSolverPolicy);
   const requestedCpuThreads = optionalPositiveInteger(draft.requestedCpuThreads);
   study.requested_cpu_threads = requestedCpuThreads;
   study.solver = solverDraftToScene(draft.solver);
@@ -452,6 +521,40 @@ function vectorText(value: unknown, fallback: string): string {
 
 function requiredText(value: string, fallback: string): string {
   return value.trim() || fallback;
+}
+
+function normalizeDiscretization(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeDemagRealization(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Keep an FDM-only strategy from crossing into a FEM lane when a user changes
+ * backend/discretization in a staged draft. The UI and merge-patch builder
+ * share this canonicalization so a stale select value cannot be committed.
+ */
+export function normalizeDemagRealizationForLane(
+  value: string,
+  context: StudyExecutionDiscretizationContext,
+): string {
+  const normalized = normalizeDemagRealization(value);
+  if (!normalized) return "auto";
+  if (isExplicitFdmStudy(context)) {
+    return FDM_DEMAG_REALIZATIONS.includes(
+      normalized as (typeof FDM_DEMAG_REALIZATIONS)[number],
+    )
+      ? normalized
+      : "auto";
+  }
+  return FDM_ONLY_DEMAG_REALIZATIONS.includes(
+    normalized as (typeof FDM_ONLY_DEMAG_REALIZATIONS)[number],
+  )
+    ? "auto"
+    : normalized;
 }
 
 function optionalVector3(value: string): number[] | null {

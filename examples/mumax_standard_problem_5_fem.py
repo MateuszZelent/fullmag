@@ -21,6 +21,11 @@ changing the source contract:
     relaxation budget (default 10000).
 ``FULLMAG_SP5_FEM_RELAX_TOL_T``
     relaxation torque tolerance in tesla (default 1e-6 T).
+``FULLMAG_SP5_FEM_RELAX_ALGORITHM``
+    ``llg_overdamped`` (source-compatible default) or a FEM minimizer such as
+    ``projected_gradient_bb``.  The latter is useful for a converged FEM
+    equilibrium probe because it does not spend physical pseudo-time on the
+    damping trajectory.
 ``FULLMAG_SP5_FEM_FIXED_DT``
     optional fixed dynamics timestep; omitted means the native default.
 ``FULLMAG_SP5_FEM_RUN_UNTIL``
@@ -62,6 +67,15 @@ RELAX_MAX_STEPS = int(
 RELAX_TOL_T = float(
     os.environ.get("FULLMAG_SP5_FEM_RELAX_TOL_T", "1e-6")
 )
+RELAX_ALGORITHM = os.environ.get(
+    "FULLMAG_SP5_FEM_RELAX_ALGORITHM", "llg_overdamped"
+).strip().lower()
+DEMAG_RTOL = float(
+    os.environ.get(
+        "FULLMAG_SP5_FEM_DEMAG_RTOL",
+        "1e-12" if RELAX_ALGORITHM != "llg_overdamped" else "1e-10",
+    )
+)
 FIXED_DT_ENV = os.environ.get("FULLMAG_SP5_FEM_FIXED_DT", "").strip()
 FIXED_DT = float(FIXED_DT_ENV) if FIXED_DT_ENV else None
 
@@ -77,6 +91,13 @@ if RELAX_MAX_STEPS <= 0:
     raise ValueError("FULLMAG_SP5_FEM_RELAX_MAX_STEPS must be positive")
 if RELAX_TOL_T <= 0.0:
     raise ValueError("FULLMAG_SP5_FEM_RELAX_TOL_T must be positive")
+if not (0.0 < DEMAG_RTOL < 1.0):
+    raise ValueError("FULLMAG_SP5_FEM_DEMAG_RTOL must be between 0 and 1")
+if RELAX_ALGORITHM not in {"llg_overdamped", "projected_gradient_bb", "nonlinear_cg", "tangent_plane_implicit"}:
+    raise ValueError(
+        "FULLMAG_SP5_FEM_RELAX_ALGORITHM must be llg_overdamped, "
+        "projected_gradient_bb, nonlinear_cg, or tangent_plane_implicit"
+    )
 if FIXED_DT is not None and FIXED_DT <= 0.0:
     raise ValueError("FULLMAG_SP5_FEM_FIXED_DT must be positive")
 
@@ -118,7 +139,7 @@ study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
-    rtol=1e-10,
+    rtol=DEMAG_RTOL,
     max_iterations=500,
 )
 study.build_domain_mesh()
@@ -137,18 +158,26 @@ else:
 study.save("m", every=1e-10)
 study.save("H_demag", every=1e-10)
 
-relax_stage = study.stages.add_relax(
-    stage_id="relax",
-    algorithm="llg_overdamped",
-    tolT=RELAX_TOL_T,
-    max_steps=RELAX_MAX_STEPS,
-    relax_alpha=1.0,
-    solver="rk45",
-    dt="auto",
-    max_error=1e-5,
-    dt_min=1e-16,
-    dt_max=1e-11,
-)
+if RELAX_ALGORITHM == "llg_overdamped":
+    relax_stage = study.stages.add_relax(
+        stage_id="relax",
+        algorithm=RELAX_ALGORITHM,
+        tolT=RELAX_TOL_T,
+        max_steps=RELAX_MAX_STEPS,
+        relax_alpha=1.0,
+        solver="rk45",
+        dt="auto",
+        max_error=1e-5,
+        dt_min=1e-16,
+        dt_max=1e-11,
+    )
+else:
+    relax_stage = study.stages.add_relax(
+        stage_id="relax",
+        algorithm=RELAX_ALGORITHM,
+        tolT=RELAX_TOL_T,
+        max_steps=RELAX_MAX_STEPS,
+    )
 relax_stage.tableautosave(
     every_steps=1,
     quantities=["time", "step", "mx", "my", "mz", "E_total", "max_dm_dt"],

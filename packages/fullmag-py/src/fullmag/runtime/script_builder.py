@@ -24,6 +24,7 @@ from fullmag.model.antenna import (
     CPWAntenna,
     DriveActivation,
     FieldTarget,
+    GaussianPlaneWaveFieldProfile,
     GeometryMaskFieldProfile,
     MicrostripAntenna,
     RegionalFieldDrive,
@@ -2233,6 +2234,18 @@ def _render_spatial_profile_expr(profile: object) -> str:
         if profile.window != "none":
             kwargs.append(f"window={_py_repr(profile.window)}")
         return f"fm.SincFieldProfile({', '.join(kwargs)})"
+    if isinstance(profile, GaussianPlaneWaveFieldProfile):
+        kwargs = [
+            f"center_x_m={_py_number(profile.center_x_m)}",
+            f"center_y_m={_py_number(profile.center_y_m)}",
+            f"carrier_origin_x_m={_py_number(profile.carrier_origin_x_m)}",
+            f"sigma_x_m={_py_number(profile.sigma_x_m)}",
+            f"sigma_y_m={_py_number(profile.sigma_y_m)}",
+            f"wavelength_m={_py_number(profile.wavelength_m)}",
+        ]
+        if abs(profile.carrier_phase_rad) > 0.0:
+            kwargs.append(f"carrier_phase_rad={_py_number(profile.carrier_phase_rad)}")
+        return f"fm.GaussianPlaneWaveFieldProfile({', '.join(kwargs)})"
     if isinstance(profile, GeometryMaskFieldProfile):
         return (
             "fm.GeometryMaskFieldProfile("
@@ -2306,6 +2319,20 @@ def _render_regional_field_drive_payload_expr(drive: dict[str, object]) -> str:
             f"object_id={_py_repr(str(profile.get('object_id') or ''))}, "
             f"envelope={_render_field_profile_payload_expr(envelope)})"
         )
+    elif profile_kind == "gaussian_plane_wave":
+        profile_args = [
+            f"center_x_m={_py_number(float(profile.get('center_x_m', 0.0)))}",
+            f"center_y_m={_py_number(float(profile.get('center_y_m', 0.0)))}",
+            f"carrier_origin_x_m={_py_number(float(profile.get('carrier_origin_x_m', 0.0)))}",
+            f"sigma_x_m={_py_number(float(profile.get('sigma_x_m', 0.0)))}",
+            f"sigma_y_m={_py_number(float(profile.get('sigma_y_m', 0.0)))}",
+            f"wavelength_m={_py_number(float(profile.get('wavelength_m', 0.0)))}",
+        ]
+        if abs(float(profile.get("carrier_phase_rad", 0.0))) > 0.0:
+            profile_args.append(
+                f"carrier_phase_rad={_py_number(float(profile['carrier_phase_rad']))}"
+            )
+        profile_expr = f"fm.GaussianPlaneWaveFieldProfile({', '.join(profile_args)})"
     else:
         raise ValueError(f"unsupported field profile kind: {profile_kind}")
 
@@ -2357,6 +2384,20 @@ def _render_field_profile_payload_expr(profile: dict[str, object]) -> str:
         if profile.get("window") not in (None, "none"):
             args.append(f"window={_py_repr(str(profile['window']))}")
         return f"fm.SincFieldProfile({', '.join(args)})"
+    if kind == "gaussian_plane_wave":
+        args = [
+            f"center_x_m={_py_number(float(profile.get('center_x_m', 0.0)))}",
+            f"center_y_m={_py_number(float(profile.get('center_y_m', 0.0)))}",
+            f"carrier_origin_x_m={_py_number(float(profile.get('carrier_origin_x_m', 0.0)))}",
+            f"sigma_x_m={_py_number(float(profile.get('sigma_x_m', 0.0)))}",
+            f"sigma_y_m={_py_number(float(profile.get('sigma_y_m', 0.0)))}",
+            f"wavelength_m={_py_number(float(profile.get('wavelength_m', 0.0)))}",
+        ]
+        if abs(float(profile.get("carrier_phase_rad", 0.0))) > 0.0:
+            args.append(
+                f"carrier_phase_rad={_py_number(float(profile['carrier_phase_rad']))}"
+            )
+        return f"fm.GaussianPlaneWaveFieldProfile({', '.join(args)})"
     raise ValueError(f"unsupported field profile kind: {kind}")
 
 

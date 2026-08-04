@@ -101,6 +101,21 @@ export interface ObjectRegionDraft {
   shape: RegionShapeDraft;
 }
 
+export type ObjectRegionMeshPolicyLane = "fdm" | "fem" | "unknown";
+
+export interface BuildObjectRegionPatchOptions {
+  /**
+   * FEM mesh policy is the only lane that may serialize `mesh_policy`.
+   * FDM/unknown lanes still submit physical region edits, but never a FEM
+   * policy field.
+   */
+  meshPolicyLane?: ObjectRegionMeshPolicyLane;
+}
+
+export interface ValidateObjectRegionDraftOptions {
+  meshPolicyLane?: ObjectRegionMeshPolicyLane;
+}
+
 export interface RegionOwnerBounds {
   center: [number, number, number];
   size: [number, number, number];
@@ -781,7 +796,10 @@ export function objectRegionDraftDirty(
   return JSON.stringify(draft) !== JSON.stringify(baseDraft);
 }
 
-export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
+export function validateObjectRegionDraft(
+  draft: ObjectRegionDraft,
+  options: ValidateObjectRegionDraftOptions = {},
+): string[] {
   const errors: string[] = [];
   if (draft.name.trim().length === 0) {
     errors.push("Region name is required.");
@@ -812,7 +830,7 @@ export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
       errors.push("Axis must not be the zero vector.");
     }
   }
-  if (draft.meshPolicy.enabled) {
+  if ((options.meshPolicyLane ?? "fem") === "fem" && draft.meshPolicy.enabled) {
     if (!numberIsPositive(draft.meshPolicy.maximumElementSize)) {
       errors.push("Max element size must be greater than zero.");
     }
@@ -864,6 +882,7 @@ export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
 
 export function buildObjectRegionPatch(
   draft: ObjectRegionDraft,
+  options: BuildObjectRegionPatchOptions = {},
 ): components["schemas"]["SceneObjectRegionPatch"] {
   const clampedShape = clampObjectRegionDraftShapeToOwnerBounds(
     draft.shape,
@@ -914,14 +933,17 @@ export function buildObjectRegionPatch(
     };
   });
 
-  return {
+  const patch: components["schemas"]["SceneObjectRegionPatch"] = {
     enabled: draft.enabled,
     frame: draft.frame,
     material_overrides: materialOverrides,
-    mesh_policy: meshPolicy,
     name: draft.name.trim(),
     priority: draft.priority,
     realization_policy: draft.realizationPolicy,
     shape,
   };
+  if ((options.meshPolicyLane ?? "fem") === "fem") {
+    patch.mesh_policy = meshPolicy;
+  }
+  return patch;
 }

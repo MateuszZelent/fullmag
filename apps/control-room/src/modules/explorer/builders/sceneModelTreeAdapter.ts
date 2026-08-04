@@ -12,6 +12,7 @@ import type {
   SpinInterfaceListResource,
   SpinTorqueListResource,
   OerstedFieldListResource,
+  DomainMetaResource,
 } from "@/kernel/api/apiTypes";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
@@ -23,6 +24,7 @@ import { isUnsupportedSpinAuthoringResource } from "@/shared/domain/physics/spin
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
+import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
 import type {
   ExplorerNodeStatus,
@@ -54,6 +56,10 @@ type SceneMaterialParameterAssignment = NonNullable<
 >[number];
 
 interface ModelTreeResourceInputs {
+  domainMeta?: DomainMetaResource | null;
+  domainDiscretization?: "fdm" | "fem" | null;
+  domainPresentationStatus?: "idle" | "loading" | "ready" | "stale" | "error";
+  domainPresentation?: DomainPresentation | null;
   couplings?: CouplingListResource | null;
   currentTransports?: CurrentTransportListResource | null;
   meshManifest?: MeshSharedDomainManifestResource | null;
@@ -91,6 +97,14 @@ export function modelTreeSnapshotFromScene(
     resources.regionMemberships,
   );
   return {
+    domainMeta: resources.domainMeta ?? null,
+    domainPresentationStatus: resources.domainPresentationStatus ?? "idle",
+    domainDiscretization: resources.domainDiscretization ?? (resources.domainMeta?.discretization?.toLowerCase() === "fdm"
+      ? "fdm"
+      : resources.domainMeta?.discretization?.toLowerCase() === "fem"
+        ? "fem"
+        : null),
+    domainPresentation: resources.domainPresentation ?? null,
     couplings: couplingSnapshots(resources.couplings, scene),
     fieldDrives: fieldDriveSnapshots(scene?.field_drives),
     materials,

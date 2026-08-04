@@ -21,6 +21,7 @@ import {
   RestoreCheckpointDialog,
   StudyBoundarySection,
   StudyCommandButton,
+  StudyRuntimeSection,
   StudySelectedStageSection,
 } from "./StudyInspectorPanel";
 import {
@@ -54,6 +55,69 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("renders requested, resolved, and fallback runtime provenance rows", () => {
+    const html = renderToStaticMarkup(
+      <StudyRuntimeSection
+        commandDisabledReason={() => null}
+        model={{
+          runtime: {
+            activeStageLabel: "Relax 1",
+            commandBadge: "running",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 10,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "run-fdm",
+            runtimeProvenance: {
+              requested: {
+                backend: "fdm",
+                device: "auto",
+                mode: "strict",
+                precision: "double",
+              },
+              resolved: {
+                backend: "fdm",
+                device: "gpu",
+                mode: "strict",
+                precision: "double",
+                runtimeFamily: "fdm-cuda",
+                engine: "fdm_cuda",
+              },
+              fallback: {
+                status: "occurred",
+                originalEngine: "fdm_cuda",
+                fallbackEngine: "fdm_cpu_reference",
+                reason: "cuda_unavailable",
+                message: "CUDA device unavailable; using the reference CPU engine.",
+              },
+            },
+            state: "running",
+          },
+        } as never}
+        onOpenCommand={() => undefined}
+        runCommand={() => undefined}
+        stepValue={4}
+      />,
+    );
+
+    expect(html).toContain("Requested backend");
+    expect(html).toContain("fdm");
+    expect(html).toContain("Requested device");
+    expect(html).toContain("auto");
+    expect(html).toContain("Resolved runtime family");
+    expect(html).toContain("fdm-cuda");
+    expect(html).toContain("Resolved engine");
+    expect(html).toContain("fdm_cuda");
+    expect(html).toContain("Fallback status");
+    expect(html).toContain("occurred");
+    expect(html).toContain("cuda_unavailable");
+    expect(html).toContain("CUDA device unavailable; using the reference CPU engine.");
+  });
+
   it("renders global advanced adaptive guard controls", () => {
     const html = renderToStaticMarkup(
       <StudySolverPolicyFields
@@ -1039,7 +1103,7 @@ describe("StudyInspectorPanel", () => {
           authoringFeedback={null}
           draft={{
             demagEnabled: true,
-            demagRealization: "poisson_robin",
+            demagRealization: "multilayer_convolution",
             exchangeEnabled: true,
             externalField: "1e-3, 0, 0",
             femDemagSolverPolicy: '{"linear_solver":"cg"}',
@@ -1119,6 +1183,11 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Exchange enabled");
     expect(html).toContain("Demag enabled");
     expect(html).toContain("Poisson Robin");
+    const demagSelect = html.match(
+      /<select[^>]*aria-label="Demag"[^>]*>[\s\S]*?<\/select>/,
+    )?.[0];
+    expect(demagSelect).toContain('<option value="auto" selected="">Auto</option>');
+    expect(demagSelect).not.toContain("FDM multilayer convolution");
     expect(html).toContain("External field");
     expect(html).toContain("Timestep policy");
     expect(html).toContain("Maximum embedded vector error");
@@ -1130,6 +1199,83 @@ describe("StudyInspectorPanel", () => {
       "Adaptive execution is qualified only for double precision.",
     );
     expect(html).toContain("Save globals");
+  });
+
+  it("renders FDM demag controls and makes FEM policy read-only for an FDM session", () => {
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        algorithmsAvailable={[]}
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={{
+          demagEnabled: true,
+          demagRealization: "multilayer_convolution",
+          exchangeEnabled: true,
+          externalField: "",
+          femDemagSolverPolicy: '{"solver":"CG"}',
+          requestedBackend: "auto",
+          requestedCpuThreads: "",
+          requestedDevice: "auto",
+          requestedMode: "strict",
+          requestedPrecision: "double",
+          solver: {
+            adaptiveTimestep: null,
+            demagInterval: "",
+            dtInitial: "",
+            dtMax: "",
+            dtMin: "",
+            energyTolerance: "",
+            fixDt: "",
+            integrator: "",
+            maxErr: "",
+            maxRelaxSteps: "",
+            relaxAlgorithm: "",
+            timestepMode: "auto",
+            torqueTolerance: "",
+          },
+        }}
+        model={{
+          boundary: testBoundary({
+            demagRealization: "multilayer_convolution",
+            femDemagSolverPolicy: '{"solver":"CG"}',
+          }),
+          requested: testRequested(),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary({
+            demagRealization: "multilayer_convolution",
+            femDemagSolverPolicy: '{"solver":"CG"}',
+          }),
+          requested: testRequested(),
+          stages: [],
+        }}
+        onCommit={() => undefined}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("FDM demag");
+    expect(html).toContain("FDM multilayer convolution");
+    expect(html).toContain("Not applicable for an explicit FDM lane");
+    expect(html).not.toContain("FEM demag policy JSON object");
+    expect(html).not.toContain("Poisson Robin");
   });
 
   it("renders spectral stage authoring fields", () => {

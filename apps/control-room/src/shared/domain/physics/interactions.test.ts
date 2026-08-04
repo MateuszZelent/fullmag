@@ -6,6 +6,10 @@ import {
   buildStudyInteractionPatchFromDraft,
   defaultDraftForInteraction,
   findInteractionSpec,
+  interactionAvailabilityForDiscretization,
+  interactionSpecsForDiscretization,
+  normalizeInteractionDiscretization,
+  validateInteractionDraftForDiscretization,
   writableObjectInteractionIds,
 } from "./interactions";
 
@@ -68,6 +72,64 @@ describe("physics interaction catalog", () => {
       ],
       unit: null,
     });
+  });
+
+  it("filters demag methods by the resolved discretization lane", () => {
+    const fdmDemag = interactionSpecsForDiscretization("fdm").find(
+      (spec) => spec.id === "demag",
+    );
+    const femDemag = interactionSpecsForDiscretization("fem").find(
+      (spec) => spec.id === "demag",
+    );
+
+    expect(fdmDemag?.fields[0]?.options?.map((option) => option.value)).toEqual([
+      "auto",
+      "single_grid",
+      "multilayer_convolution",
+    ]);
+    expect(femDemag?.fields[0]?.options?.map((option) => option.value)).toEqual([
+      "auto",
+      "poisson_robin",
+      "poisson_dirichlet",
+      "bem",
+      "fredkin_koehler",
+      "fmm",
+    ]);
+    expect(interactionSpecsForDiscretization("unknown")).toEqual([]);
+  });
+
+  it("fails closed for unresolved lanes and rejects cross-lane demag patches", () => {
+    expect(normalizeInteractionDiscretization("FDM")).toBe("fdm");
+    expect(normalizeInteractionDiscretization("fem")).toBe("fem");
+    expect(normalizeInteractionDiscretization(undefined)).toBe("unknown");
+    expect(interactionAvailabilityForDiscretization("demag", "unknown")).toMatchObject({
+      status: "unresolved",
+    });
+    expect(
+      validateInteractionDraftForDiscretization(
+        {
+          enabled: true,
+          id: "demag",
+          present: true,
+          values: { method: "poisson_robin" },
+        },
+        "fdm",
+      ),
+    ).toEqual({
+      error:
+        "Demagnetization method 'poisson_robin' is not applicable to FDM; choose auto, single_grid, or multilayer_convolution.",
+    });
+    expect(
+      validateInteractionDraftForDiscretization(
+        {
+          enabled: true,
+          id: "demag",
+          present: true,
+          values: { method: "multilayer_convolution" },
+        },
+        "fdm",
+      ),
+    ).toBeNull();
   });
 
   it("builds typed object interaction patches without JSON parameter text", () => {

@@ -73,6 +73,7 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import type {
   Selection,
   VisualizationMeshPartLike,
@@ -102,7 +103,10 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
-import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
+import {
+  interactionSpecsForDiscretization,
+  type InteractionDiscretization,
+} from "@/shared/domain/physics/interactions";
 
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
@@ -196,10 +200,25 @@ const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
 
 // statusMenu and separator imported from ./ribbonCommon
 
-function physicsInteractionMenu(): RibbonMenuNode[] {
+function physicsInteractionMenu(
+  discretization: InteractionDiscretization,
+): RibbonMenuNode[] {
+  const specs = interactionSpecsForDiscretization(discretization);
+  if (specs.length === 0) {
+    return [
+      { type: "label", id: "physics-interactions:label", label: "Interactions" },
+      {
+        type: "status",
+        id: "physics-interactions:unresolved",
+        label: "Lane",
+        value: "Discretization unresolved; FDM/FEM controls are unavailable",
+        tone: "warning",
+      },
+    ];
+  }
   return [
     { type: "label", id: "physics-interactions:label", label: "Interactions" },
-    ...allInteractionSpecs().map((spec) => ({
+    ...specs.map((spec) => ({
       type: "item" as const,
       id: `physics-interactions:${spec.id}`,
       label: spec.label,
@@ -407,7 +426,7 @@ const physicsTab: RibbonTabContent = {
       subtitle: "interactions",
       tone: "neutral",
       actions: [
-        { id: "physics-interactions", icon: icon(Magnet), label: "Interactions", iconColor: "text-violet-400", menu: physicsInteractionMenu() },
+        { id: "physics-interactions", icon: icon(Magnet), label: "Interactions", iconColor: "text-violet-400", menu: physicsInteractionMenu("unknown") },
         { id: "physics-global", icon: icon(Cog),    label: "Global Physics", disabled: true, iconColor: "text-muted-foreground" },
       ],
     },
@@ -670,6 +689,7 @@ const automationTab: RibbonTabContent = {
 };
 
 type RibbonSessionStatus = {
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
     "field_revision" | "fields_revision"
@@ -693,6 +713,69 @@ export interface RibbonBuildContext {
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
   visualizationState?: VisualizationStateResource | null;
+}
+
+type RibbonDiscretization = "fdm" | "fem" | "unknown";
+
+function ribbonDiscretization(context: RibbonBuildContext): RibbonDiscretization {
+  // Older embedders built ribbon content without passing session status. Keep
+  // those pure view tests/renderers on the FEM-compatible static catalog; the
+  // live RibbonModule always passes an explicit resource result (including
+  // null while unresolved), which then fails closed below.
+  if (context.sessionStatus === undefined) return "fem";
+  if (context.sessionStatus === null) return "unknown";
+  const value = context.sessionStatus.domain?.discretization
+    ?.trim()
+    .toLowerCase();
+  if (value === "fdm") return "fdm";
+  if (value === "fem") return "fem";
+  return "unknown";
+}
+
+function buildGeometryTabContent(
+  content: RibbonTabContent,
+  context: RibbonBuildContext,
+): RibbonTabContent {
+  const discretization = ribbonDiscretization(context);
+  if (discretization === "fem") return content;
+
+  return {
+    ...content,
+    groups: content.groups.map((group) =>
+      group.id === "builder-lifecycle"
+        ? {
+            ...group,
+            // `mesh.build-selected` submits an object_mesh FEM command. Keep
+            // it out of FDM and unresolved sessions instead of relabelling it.
+            actions: group.actions.filter(
+              (action) => action.id !== "mesh.build-selected",
+            ),
+          }
+        : group,
+    ),
+  };
+}
+
+function buildPhysicsTabContent(
+  content: RibbonTabContent,
+  context: RibbonBuildContext,
+): RibbonTabContent {
+  const discretization = ribbonDiscretization(context);
+  return {
+    ...content,
+    groups: content.groups.map((group) =>
+      group.id === "physics-core"
+        ? {
+            ...group,
+            actions: group.actions.map((action) =>
+              action.id === "physics-interactions"
+                ? { ...action, menu: physicsInteractionMenu(discretization) }
+                : action,
+            ),
+          }
+        : group,
+    ),
+  };
 }
 
 export function resolveRibbonVisualizationTarget({
@@ -829,6 +912,14 @@ export function buildRibbonTabContent(
     };
   }
 
+  if (tabId === "geometry" && context) {
+    resolvedContent = buildGeometryTabContent(content, context);
+  }
+
+  if (tabId === "physics" && context) {
+    resolvedContent = buildPhysicsTabContent(content, context);
+  }
+
   if (tabId === "results" && context) {
     resolvedContent = {
       ...content,
@@ -911,10 +1002,58 @@ function meshBuildStatus(context: RibbonBuildContext): {
   return { label: "not built", tone: "warning" };
 }
 
+function buildNonFemMeshTabContent(
+  content: RibbonTabContent,
+  discretization: Exclude<RibbonDiscretization, "fem">,
+): RibbonTabContent {
+  const overviewLabel =
+    discretization === "fdm" ? "Open grid overview" : "Open mesh/grid overview";
+  const viewGroup = content.groups.find((group) => group.id === "mesh-view");
+  if (!viewGroup) return { ...content, groups: [] };
+
+  return {
+    ...content,
+    groups: [
+      {
+        ...viewGroup,
+        title: discretization === "fdm" ? "Grid" : "Mesh / Grid",
+        actions: viewGroup.actions
+          .map((action) => {
+            if (action.id === "mesh-inspector") {
+              return {
+                ...action,
+                id: "mesh.open-overview",
+                label: discretization === "fdm" ? "Grid overview" : "Overview",
+                menu: [
+                  {
+                    type: "item" as const,
+                    id: "mesh.open-overview:grid",
+                    label: overviewLabel,
+                    commandId: "mesh.open-overview",
+                  },
+                ] satisfies RibbonMenuNode[],
+              };
+            }
+            // The build pipeline is FEM-only. Do not leave a navigational
+            // affordance that can later submit an object_mesh command.
+            if (action.id === "mesh-pipeline") return null;
+            return action;
+          })
+          .filter((action): action is NonNullable<typeof action> => action !== null),
+      },
+    ],
+  };
+}
+
 function buildMeshTabContent(
   content: RibbonTabContent,
   context: RibbonBuildContext,
 ): RibbonTabContent {
+  const discretization = ribbonDiscretization(context);
+  if (discretization !== "fem") {
+    return buildNonFemMeshTabContent(content, discretization);
+  }
+
   const status = meshBuildStatus(context);
   const summary = asRecord(context.meshSummary?.mesh_summary);
   const solverMesh = context.meshSemantics?.solver_mesh;
@@ -981,7 +1120,7 @@ function buildMeshTabContent(
                     label: "Open build pipeline",
                     commandId: "mesh.open-builds",
                   },
-                ],
+                ] satisfies RibbonMenuNode[],
               };
             }
             if (action.id === "mesh-stats") {
@@ -1008,7 +1147,7 @@ function buildMeshTabContent(
                     label: "Open mesh overview",
                     commandId: "mesh.open-overview",
                   },
-                ],
+                ] satisfies RibbonMenuNode[],
               };
             }
             return action;
@@ -1042,7 +1181,7 @@ function buildMeshTabContent(
                       label: "Open mesh semantics",
                       commandId: "mesh.open-overview",
                     },
-                  ],
+                  ] satisfies RibbonMenuNode[],
                 }
               : action,
           ),
@@ -1070,7 +1209,7 @@ function buildMeshTabContent(
                       label: "Open quality gates",
                       commandId: "mesh.open-quality",
                     },
-                  ],
+                  ] satisfies RibbonMenuNode[],
                 }
               : action,
           ),
@@ -1086,24 +1225,24 @@ function buildMeshTabContent(
                 id: "mesh.open-overview",
                 menu: [
                   {
-                    type: "item",
+                    type: "item" as const,
                     id: "mesh.open-shared-domain:item",
                     label: "Shared-domain mesh",
                     commandId: "mesh.open-shared-domain",
                   },
                   {
-                    type: "item",
+                    type: "item" as const,
                     id: "mesh.open-regions:item",
                     label: "Regions and mesh parts",
                     commandId: "mesh.open-regions",
                   },
                   {
-                    type: "item",
+                    type: "item" as const,
                     id: "mesh.open-quality:item",
                     label: "Quality gates",
                     commandId: "mesh.open-quality",
                   },
-                ],
+                ] satisfies RibbonMenuNode[],
               };
             }
             if (action.id === "mesh-pipeline") {
@@ -1186,8 +1325,13 @@ function shouldDisableMissingCommand(
 function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
   const base = context.commandContext ?? { source: "ribbon" as const };
   const resourceData =
-    context.visualizationState || context.meshCapabilities !== undefined
+    context.visualizationState ||
+    context.meshCapabilities !== undefined ||
+    context.sessionStatus !== undefined
     ? {
+        ...(context.sessionStatus !== undefined
+          ? { [SESSION_STATUS_RESOURCE_KEY]: context.sessionStatus }
+          : {}),
         ...(context.visualizationState
           ? { [VISUALIZATION_STATE_PATH]: context.visualizationState }
           : {}),
@@ -1347,15 +1491,23 @@ function buildViewGlobalDisplayGroup(
 ): RibbonTabContent["groups"][number] {
   return {
     ...group,
-    actions: group.actions.map((action) => {
-      if (action.id === "view-surface") return buildSurfaceAction(context);
-      if (action.id === "view-texture") return buildTextureAction(context);
-      if (action.id === "view-quantity") return buildQuantityAction(context);
-      if (action.id === "view-vectors") return buildVectorsAction(context);
-      if (action.id === "view-airbox") return buildAirboxAction(context);
-      if (action.id === "view-render-quality") return buildRenderQualityAction(context);
-      if (action.id === "view-render-layers") return buildMeshViewAction(context);
-      return action;
+    actions: group.actions.flatMap((action) => {
+      if (action.id === "view-airbox") {
+        // The FEM airbox visualization target/state is not the FDM universe
+        // extent. FDM exposes its structured-grid extent from Grid/Inspector.
+        return ribbonDiscretization(context) === "fem"
+          ? [buildAirboxAction(context)]
+          : [];
+      }
+      if (action.id === "view-surface") return [buildSurfaceAction(context)];
+      if (action.id === "view-texture") return [buildTextureAction(context)];
+      if (action.id === "view-quantity") return [buildQuantityAction(context)];
+      if (action.id === "view-vectors") return [buildVectorsAction(context)];
+      if (action.id === "view-render-quality") {
+        return [buildRenderQualityAction(context)];
+      }
+      if (action.id === "view-render-layers") return [buildMeshViewAction(context)];
+      return [action];
     }),
   };
 }

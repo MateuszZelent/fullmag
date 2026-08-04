@@ -81,7 +81,10 @@ import {
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   type ApplyGlobalQuantityInput,
 } from "./ribbonCommands";
-import { ribbonTabNeedsRuntimeResources } from "./ribbonResourcePolicy";
+import {
+  ribbonTabNeedsRuntimeResources,
+  ribbonTabNeedsSessionStatusResources,
+} from "./ribbonResourcePolicy";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
 import { RIBBON_TABS } from "./ribbonTypes";
@@ -193,7 +196,10 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const geometryValidation = useGeometryValidationResource({
     enabled: needsGeometryResources || needsRuntimeResources,
   });
-  const needsSessionStatusResources = needsMeshResources || needsRuntimeResources;
+  const needsSessionStatusResources = ribbonTabNeedsSessionStatusResources(
+    activeTab,
+    needsMeshResources,
+  );
   const sessionStatusData = useSessionStatusSelector(
     selectRibbonRuntimeStatus,
     {
@@ -300,7 +306,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [SIMULATION_STAGES_EXECUTION_PATH]: needsRuntimeResources
             ? stageExecution.data
             : null,
-          [SESSION_STATUS_RESOURCE_KEY]: needsRuntimeResources
+          [SESSION_STATUS_RESOURCE_KEY]: needsSessionStatusResources
             ? sessionStatusData
             : null,
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
@@ -321,6 +327,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshCapabilities.data,
       meshManifest.data,
       meshSummary.data,
+      needsSessionStatusResources,
       sessionStatusData,
       solverStatus.data,
       stageExecution.data,

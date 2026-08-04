@@ -918,6 +918,13 @@ fn pack_native_regional_field_drives(
                 sinc_width_m: 0.0,
                 sinc_window: 0,
                 geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: 0.0,
+                gaussian_center_y_m: 0.0,
+                gaussian_carrier_origin_x_m: 0.0,
+                gaussian_sigma_x_m: 0.0,
+                gaussian_sigma_y_m: 0.0,
+                gaussian_wavelength_m: 0.0,
+                gaussian_carrier_phase_rad: 0.0,
             },
             FieldSpatialProfileIR::Sinc {
                 axis,
@@ -935,6 +942,13 @@ fn pack_native_regional_field_drives(
                 sinc_width_m: width_m.unwrap_or(0.0),
                 sinc_window: if window == "hann" { 1 } else { 0 },
                 geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: 0.0,
+                gaussian_center_y_m: 0.0,
+                gaussian_carrier_origin_x_m: 0.0,
+                gaussian_sigma_x_m: 0.0,
+                gaussian_sigma_y_m: 0.0,
+                gaussian_wavelength_m: 0.0,
+                gaussian_carrier_phase_rad: 0.0,
             },
             FieldSpatialProfileIR::GeometryMask { envelope, .. } => {
                 let (axis, period, center, width, window) = match envelope {
@@ -966,8 +980,41 @@ fn pack_native_regional_field_drives(
                     geometry_mask: geometry_desc_storage[index]
                         .as_ref()
                         .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
+                    gaussian_center_x_m: 0.0,
+                    gaussian_center_y_m: 0.0,
+                    gaussian_carrier_origin_x_m: 0.0,
+                    gaussian_sigma_x_m: 0.0,
+                    gaussian_sigma_y_m: 0.0,
+                    gaussian_wavelength_m: 0.0,
+                    gaussian_carrier_phase_rad: 0.0,
                 }
             }
+            FieldSpatialProfileIR::GaussianPlaneWave {
+                center_x_m,
+                center_y_m,
+                carrier_origin_x_m,
+                sigma_x_m,
+                sigma_y_m,
+                wavelength_m,
+                carrier_phase_rad,
+            } => ffi::fullmag_fem_spatial_profile_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+                kind: 3,
+                sinc_axis: [0.0; 3],
+                sinc_period_m: 0.0,
+                sinc_center_m: 0.0,
+                sinc_width_m: 0.0,
+                sinc_window: 0,
+                geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: *center_x_m,
+                gaussian_center_y_m: *center_y_m,
+                gaussian_carrier_origin_x_m: *carrier_origin_x_m,
+                gaussian_sigma_x_m: *sigma_x_m,
+                gaussian_sigma_y_m: *sigma_y_m,
+                gaussian_wavelength_m: *wavelength_m,
+                gaussian_carrier_phase_rad: *carrier_phase_rad,
+            },
         };
         let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
             sinusoidal: ffi::fullmag_fem_sinusoidal_time_desc {

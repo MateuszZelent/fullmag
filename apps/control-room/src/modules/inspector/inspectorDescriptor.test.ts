@@ -129,4 +129,66 @@ describe("resolveInspectorDescriptor", () => {
       selection: { kind: "airbox.root", nodeId: "model:airbox" },
     });
   });
+
+  it("uses object.root for an object breadcrumb instead of an unregistered generic kind", () => {
+    const descriptor = resolveInspectorDescriptor(
+      selection("object.material", "Film"),
+    );
+
+    expect(descriptor.breadcrumbs[0]).toMatchObject({
+      label: "Film",
+      selection: { kind: "object.root", nodeId: "model:object:film" },
+    });
+  });
+
+  it("describes FDM grid selections without FEM mesh tabs", () => {
+    const descriptor = resolveInspectorDescriptor({
+      kind: "mesh.grid.descriptor",
+      label: "Structured Grid",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: null,
+    });
+
+    expect(descriptor.typeLabel).toBe("FDM grid");
+    expect(descriptor.tabs).toEqual([]);
+  });
+
+  it("exposes FDM cell identity metadata instead of FEM element fields", () => {
+    const descriptor = resolveInspectorDescriptor({
+      kind: "fdm.cell",
+      label: "Cell 17",
+      moduleSource: "viewport-3d",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        cellOrdinal: "17",
+        gridFingerprint: "grid-fingerprint-7",
+        ijk: [1, 2, 3],
+        kind: "fdm.cell",
+        maskState: "active-unassigned",
+        membershipRevision: "generation-7:11:12",
+        nodeId: "model:mesh:grid",
+        numericRegionId: 8,
+        regionId: null,
+        type: "fdm-cell",
+        visualizationTargetId: "fdm-domain",
+      },
+    });
+
+    expect(descriptor.metadata).toEqual(
+      expect.arrayContaining([
+        { label: "Cell IJK", value: "[1, 2, 3]" },
+        { label: "Mask", value: "active-unassigned" },
+        { label: "Grid fingerprint", value: "grid-fingerprint-7" },
+        { label: "Membership revision", value: "generation-7:11:12" },
+      ]),
+    );
+    expect(descriptor.metadata).not.toEqual(
+      expect.arrayContaining([
+        { label: "Element family", value: expect.any(String) },
+      ]),
+    );
+  });
 });

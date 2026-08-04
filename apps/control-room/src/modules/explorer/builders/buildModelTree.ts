@@ -7,6 +7,8 @@ import type {
   ModelTreeCouplingSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
+import type { DomainMetaResource } from "@/kernel/api/apiTypes";
+import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
 import {
@@ -34,6 +36,7 @@ import {
   resolveMeshBuildFreshness,
   type MeshFreshnessState,
 } from "@/shared/domain/mesh/meshBuildFreshness";
+import { isFdmDomain } from "@/shared/domain/mesh/domainPresentation";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -1019,6 +1022,126 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   };
 }
 
+function fdmMeshPolicyNodes(
+  presentation: FdmDomainPresentation | null,
+  domainMeta: DomainMetaResource | null | undefined,
+  presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",
+): ExplorerNode {
+  const fallbackShape = (domainMeta?.grid?.shape ?? [0, 0, 0]) as [number, number, number];
+  const fallbackOrigin = (domainMeta?.grid?.origin ?? [0, 0, 0]) as [number, number, number];
+  const fallbackSpacing = (domainMeta?.grid?.spacing ?? [0, 0, 0]) as [number, number, number];
+  const grid = presentation?.fdmGrid ?? {
+    descriptor: domainMeta?.grid ?? { origin: fallbackOrigin, shape: fallbackShape, spacing: fallbackSpacing },
+    gridFingerprint: null,
+    membership: null,
+    membershipStatus:
+      presentationStatus === "error" ? "error" : presentationStatus === "loading" ? "loading" : presentationStatus === "stale" ? "stale" : "missing",
+    origin: fallbackOrigin,
+    shape: fallbackShape,
+    spacing: fallbackSpacing,
+    totalCells: fallbackShape.reduce((product, value) => product * value, 1),
+  };
+  const membership = grid.membership;
+  const resolvedStatus = presentation?.resourceStatus ?? grid.membershipStatus;
+  const status: ExplorerNodeStatus =
+    !presentation && presentationStatus === "error"
+      ? "degraded"
+      : resolvedStatus === "realized"
+      ? "mesh-ready"
+      : resolvedStatus === "error"
+        ? "mesh-failed"
+        : resolvedStatus === "loading"
+          ? "mesh-building"
+          : resolvedStatus === "stale" || resolvedStatus === "incompatible"
+            ? "mesh-stale"
+            : presentationStatus === "error"
+              ? "degraded"
+              : presentationStatus === "loading"
+                ? "mesh-building"
+                : "ready";
+  const cellCount = grid.totalCells;
+  const regionNodes = (membership?.region_legend ?? []).map((entry) => ({
+    id: `model:mesh:region:${encodeURIComponent(entry.region_id)}`,
+    kind: "mesh.grid.region" as const,
+    label: entry.region_id,
+    parentId: "model:mesh",
+    regionId: entry.region_id,
+    badge: `${entry.numeric_id}`,
+    icon: "layers" as const,
+    status: "ready" as const,
+  }));
+  const children: ExplorerNode[] = [
+    {
+      id: "model:mesh:grid",
+      kind: "mesh.grid.descriptor",
+      label: "Structured Grid",
+      parentId: "model:mesh",
+      badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
+      icon: "mesh",
+      status,
+    },
+    {
+      id: "model:mesh:magnetic-support",
+      kind: "mesh.grid.magnetic-support",
+      label: "Structured Grid Extent",
+      parentId: "model:mesh",
+      badge: `${grid.shape.join(" × ")} cells`,
+      icon: "layers",
+      status,
+    },
+    {
+      id: "model:mesh:active-unassigned",
+      kind: "mesh.grid.active-unassigned",
+      label: "Active / Unassigned Cells",
+      parentId: "model:mesh",
+      badge: "FDM membership",
+      icon: "layers",
+      status: membership ? "ready" : "stale",
+    },
+    {
+      id: "model:mesh:mask",
+      kind: "mesh.grid.mask",
+      label: "Cell Mask",
+      parentId: "model:mesh",
+      badge: membership ? membership.encoding : "pending",
+      icon: "shield",
+      status,
+    },
+    {
+      id: "model:mesh:provenance",
+      kind: "mesh.grid.provenance",
+      label: "Grid Provenance",
+      parentId: "model:mesh",
+      badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "pending",
+      icon: "activity",
+      status: "ready",
+    },
+    ...regionNodes,
+  ];
+  if (presentation?.universeOutsideMagneticSupport) {
+    children.push({
+      id: "model:mesh:outside-support",
+      kind: "mesh.grid.universe-outside-support",
+      label: "Universe Outside Magnetic Support",
+      parentId: "model:mesh",
+      badge: "explicit universe extent",
+      icon: "shield",
+      status: "ready",
+    });
+  }
+  return {
+    id: "model:mesh",
+    kind: "mesh.grid",
+    label: "FDM Grid",
+    parentId: "model:session",
+    badge: `${grid.shape.join(" × ")} / ${cellCount}`,
+    icon: "mesh",
+    status,
+    contextCommands: ["workspace.focus-selection"],
+    children,
+  };
+}
+
 function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): ExplorerNode | null {
   if (couplings.length === 0) return null;
   return {
@@ -1181,6 +1304,11 @@ export function buildModelTree(
   const objects = (snapshot?.objects ?? []).filter(
     (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
   );
+  const fdmDomain =
+    isFdmDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fdm";
+  const fdmPresentation = isFdmDomain(snapshot?.domainPresentation)
+    ? snapshot.domainPresentation
+    : null;
   const boundaryFacesStatus: ExplorerNodeStatus =
     (snapshot?.mesh?.outerBoundaryPartCount ?? 0) > 0
       ? meshFreshnessStatus(
@@ -1212,7 +1340,28 @@ export function buildModelTree(
       badge: formatSize(universe.size),
       icon: "shield",
       status: "ready",
-      children: [
+      children: fdmDomain ? [
+        ...(fdmPresentation?.universeOutsideMagneticSupport
+          ? [{
+              id: "model:universe:grid",
+              kind: "mesh.grid.descriptor" as const,
+              label: "Structured Grid Universe",
+              parentId: "model:universe",
+              badge: "explicit extent",
+              icon: "mesh" as const,
+              status: "ready" as const,
+              children: [{
+                id: "model:universe:grid:outside-support",
+                kind: "mesh.grid.universe-outside-support" as const,
+                label: "Universe Outside Magnetic Support",
+                parentId: "model:universe:grid",
+                badge: "summary",
+                icon: "shield" as const,
+                status: "ready" as const,
+              }],
+            }]
+          : []),
+      ] : [
         {
           id: "model:airbox",
           kind: "airbox.root",
@@ -1338,7 +1487,9 @@ export function buildModelTree(
   sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
 
   sessionChildren.push(
-    meshPolicyNodes(snapshot?.mesh ?? null),
+    fdmDomain
+      ? fdmMeshPolicyNodes(fdmPresentation, snapshot?.domainMeta, snapshot?.domainPresentationStatus)
+      : meshPolicyNodes(snapshot?.mesh ?? null),
     buildStudyNodes(snapshot?.study ?? null),
   );
 

@@ -1,6 +1,8 @@
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type {
+  DomainMetaResource,
   FieldCatalogResource,
+  FdmRegionMembershipResource,
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
   MeshRegionMembershipResource,
@@ -34,6 +36,8 @@ import {
 } from "@/shared/domain/mesh/visualizationNodeSelection";
 import {
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
+  visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
   renderModePatch,
@@ -48,6 +52,7 @@ import {
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
+  type ViewportTargetRenderingPreferences,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   resolveVisualizationTopologyFreshness,
@@ -56,6 +61,65 @@ import {
 export {
   resolveVisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
+
+type AppliedVisualizationBaselineTarget = {
+  preferences: ViewportTargetRenderingPreferences | null;
+  settings: VisualizationTargetSettings;
+  target: VisualizationTargetRef;
+};
+
+/**
+ * Restore the inspector's applied baseline without serializing a viewport-only
+ * FDM target into the FEM VisualizationState resource. FDM targets are local
+ * controller state; FEM targets retain the existing backend override restore.
+ */
+export function restoreVisualizationAppliedBaseline({
+  baseline,
+  currentOverrides,
+  queuePatch,
+  visualization,
+}: {
+  baseline: {
+    overrides: VisualizationStateResource["overrides"];
+    targets: readonly AppliedVisualizationBaselineTarget[];
+  };
+  currentOverrides: VisualizationStateResource["overrides"];
+  queuePatch: (patch: VisualizationStatePatch) => void;
+  visualization: Pick<
+    ObjectVisualizationController,
+    "clearTarget" | "patchTarget" | "patchViewportPreferences"
+  >;
+}): void {
+  const isFdmBaseline =
+    baseline.targets.length > 0 &&
+    baseline.targets.every(({ target }) => target.kind === "fdm-domain");
+
+  if (!isFdmBaseline) {
+    const baselineTargets = baseline.targets.map((entry) => entry.target);
+    const retainedOverrides = currentOverrides.filter(
+      (entry) =>
+        !baselineTargets.some((baselineTarget) =>
+          visualizationStateOverrideMatchesTarget(entry, baselineTarget),
+        ),
+    );
+    queuePatch({
+      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+    });
+  }
+
+  for (const { preferences, settings, target } of baseline.targets) {
+    visualization.clearTarget(target);
+    if (isFdmBaseline) {
+      const localPatch = persistentVisualizationTargetPatch(settings);
+      if (Object.keys(localPatch).length > 0) {
+        visualization.patchTarget(target, localPatch);
+      }
+    }
+    if (preferences) {
+      visualization.patchViewportPreferences(target, preferences);
+    }
+  }
+}
 
 export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   label: string;
@@ -248,6 +312,10 @@ export function fieldMetaScopeQueryForVisualizationTarget(
       return { scope_id: target.id, scope_kind: "part" };
     case "airbox":
       return { scope_id: null, scope_kind: "airbox" };
+    case "fdm-domain":
+      // FDM-domain is a viewport-local structured-grid target.  It has no
+      // FEM VisualizationState scope and must never be serialized as one.
+      return { scope_id: null, scope_kind: null };
     case "region":
       if (carrier?.kind === "mesh-parts" && carrier.partIds.length === 1) {
         return { scope_id: carrier.partIds[0] ?? null, scope_kind: "part" };
@@ -256,6 +324,146 @@ export function fieldMetaScopeQueryForVisualizationTarget(
     case undefined:
       return { scope_id: null, scope_kind: null };
   }
+}
+
+/**
+ * FDM visualization is backed by the structured-grid contract, not the FEM
+ * shared-domain manifest. Keep this predicate at the panel boundary so a
+ * missing/empty manifest can never be mistaken for an FDM resource state.
+ */
+export function isFdmVisualizationTarget(
+  target: VisualizationTargetRef | null | undefined,
+): boolean {
+  return target?.kind === "fdm-domain";
+}
+
+export type ObjectVisualizationLane = "fdm" | "fem" | "unresolved";
+
+export function resolveObjectVisualizationLane(
+  discretization: string | null | undefined,
+): ObjectVisualizationLane {
+  const normalized = discretization?.trim().toLowerCase();
+  if (normalized === "fdm") return "fdm";
+  if (normalized === "fem") return "fem";
+  return "unresolved";
+}
+
+/**
+ * Resolve the actual visualization target only after the session lane is
+ * explicit. This prevents the initial status-loading render from treating a
+ * structured-grid selection as a FEM scene object.
+ */
+export function resolveObjectVisualizationTargetForLane({
+  lane,
+  selection,
+  selectionTarget,
+}: {
+  lane: ObjectVisualizationLane;
+  selection: Selection;
+  selectionTarget: VisualizationTargetRef | null;
+}): VisualizationTargetRef | null {
+  if (lane === "unresolved") return null;
+  if (selection.ref?.type === "fdm-cell") {
+    return lane === "fdm"
+      ? { id: "fdm-domain", kind: "fdm-domain", label: selection.label }
+      : null;
+  }
+  if (lane === "fem") {
+    return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
+  }
+
+  const fdmVisualizationSelection =
+    selection.kind === "object.visualization" ||
+    selection.kind === "object.visualization.debug" ||
+    selection.kind === "object.region.visualization" ||
+    selection.kind === "object.region.visualization.debug" ||
+    selection.kind === "airbox.visualization" ||
+    selection.kind === "airbox.visualization.debug";
+  if (!fdmVisualizationSelection) return null;
+  return { id: "fdm-domain", kind: "fdm-domain", label: selection.label };
+}
+
+export function resolveObjectVisualizationResourceGates({
+  lane,
+  target,
+}: {
+  lane: ObjectVisualizationLane;
+  target: VisualizationTargetRef | null;
+}): { fdm: boolean; fem: boolean } {
+  return {
+    fdm: lane === "fdm" && target?.kind === "fdm-domain",
+    fem: lane === "fem" && target !== null && target.kind !== "fdm-domain",
+  };
+}
+
+export function fdmGridCellCount(
+  domain: DomainMetaResource | null | undefined,
+): number | null {
+  if (domain?.discretization.toLowerCase() !== "fdm") return null;
+  const shape = domain.grid?.shape;
+  if (!shape || shape.length < 3) return null;
+  const counts = shape.slice(0, 3);
+  if (
+    counts.some(
+      (value) => !Number.isInteger(value) || value < 0,
+    )
+  ) {
+    return null;
+  }
+  const cellCount = counts.reduce((total, value) => total * value, 1);
+  return Number.isSafeInteger(cellCount) ? cellCount : null;
+}
+
+/** Return a bounded, explicit resource state for the FDM visualization panel. */
+export function fdmVisualizationResourceNotice({
+  domain,
+  domainError,
+  domainStatus,
+  membership,
+  membershipError,
+  membershipStatus,
+}: {
+  domain: DomainMetaResource | null | undefined;
+  domainError?: Error | null;
+  domainStatus: string;
+  membership: FdmRegionMembershipResource | null | undefined;
+  membershipError?: Error | null;
+  membershipStatus: string;
+}): string | null {
+  if (domainError || domainStatus === "error") {
+    return `FDM grid descriptor could not be loaded${domainError?.message ? `: ${domainError.message}` : "."}`;
+  }
+  if (!domain) {
+    return domainStatus === "loading"
+      ? "Loading the FDM structured-grid descriptor."
+      : "FDM DomainMeta is not materialized; grid rendering is unavailable.";
+  }
+  if (domain.discretization.toLowerCase() !== "fdm") {
+    return "The selected visualization target is FDM-only, but the current domain is not FDM.";
+  }
+  if (!domain.grid) {
+    return "FDM DomainMeta has no structured-grid descriptor.";
+  }
+  if (membershipError || membershipStatus === "error") {
+    return `FDM cell membership could not be loaded${membershipError?.message ? `: ${membershipError.message}` : ". Grid geometry remains available."}`;
+  }
+  if (membershipStatus === "loading") {
+    return "Loading FDM cell membership; field overlays remain revision-gated.";
+  }
+  if (!membership) {
+    return "FDM grid geometry is available; cell membership/field overlays are not materialized.";
+  }
+  if (membership.freshness.toLowerCase() !== "current") {
+    return "FDM cell membership is stale; grid geometry remains visible, but mask-dependent overlays are unavailable.";
+  }
+  const expectedCellCount = fdmGridCellCount(domain);
+  if (
+    expectedCellCount !== null &&
+    membership.cell_count !== expectedCellCount
+  ) {
+    return "FDM cell membership does not match the current structured-grid descriptor.";
+  }
+  return null;
 }
 
 export function resolveObjectVisualizationPanelTarget({
@@ -342,6 +550,7 @@ export function resolveSelectedTargetVectorMeshParts({
   visualizationState: VisualizationStateResource | null | undefined;
 }): MeshPart[] {
   if (!target || !meshParts?.length) return [];
+  if (isFdmVisualizationTarget(target)) return [];
 
   if (target.kind === "airbox") {
     return meshParts.filter(isVisualizationAirboxIdentity);
@@ -460,11 +669,13 @@ const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
   scene,
+  targetKind,
 }: {
   manifest: unknown;
   scene: unknown;
   targetKind: VisualizationTargetKind;
 }): VisualizationTopologyFreshness | null {
+  if (targetKind === "fdm-domain") return null;
   return scene && manifest
     ? resolveVisualizationTopologyFreshness(scene, manifest)
     : null;
@@ -662,18 +873,38 @@ export function resolveVisualizationVectorAccounting({
 }
 
 export function resolveVisualizationVectorBudgetRange({
+  fdmCellCount: structuredGridCellCount,
   geometryScope = "full",
   manifestRegions,
   memberships,
   meshParts,
   target,
 }: {
+  fdmCellCount?: number | null;
   geometryScope?: VisualizationGeometryScope;
   manifestRegions?: readonly MeshRegion[] | null | undefined;
   memberships?: readonly MeshRegionMembershipResource[] | null | undefined;
   meshParts: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
+  if (target?.kind === "fdm-domain") {
+    const cellCount = structuredGridCellCount;
+    if (
+      cellCount !== null &&
+      cellCount !== undefined &&
+      Number.isSafeInteger(cellCount) &&
+      cellCount >= 0
+    ) {
+      return {
+        availableNodeCount: cellCount,
+        exact: true,
+        max: cellCount,
+        min: 0,
+        step: 1,
+      };
+    }
+    return fallbackVisualizationVectorBudgetRange();
+  }
   if (!target || !meshParts || meshParts.length === 0) {
     return fallbackVisualizationVectorBudgetRange();
   }

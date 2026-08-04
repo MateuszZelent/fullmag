@@ -1,12 +1,14 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import { AirboxOverviewPanel } from "./panels/airbox/AirboxOverviewPanel";
-import { AirboxMeshBuildPanel } from "./panels/airbox/AirboxMeshBuildPanel";
-import { AirboxMeshOverviewPanel } from "./panels/airbox/AirboxMeshOverviewPanel";
-import { AirboxMeshParametersPanel } from "./panels/airbox/AirboxMeshParametersPanel";
-import { AirboxMeshQualityGatesPanel } from "./panels/airbox/AirboxMeshQualityGatesPanel";
-import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsPanel";
-import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
+import {
+  AirboxMeshBuildLanePanel,
+  AirboxMeshOverviewLanePanel,
+  AirboxMeshParametersLanePanel,
+  AirboxMeshQualityGatesLanePanel,
+  AirboxMeshStatisticsLanePanel,
+  AirboxMeshTopologyLanePanel,
+  AirboxOverviewLanePanel,
+} from "./panels/airbox/AirboxInspectorLanePanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { LiveChartInspectorPanel } from "./panels/LiveChartInspectorPanel";
@@ -89,6 +91,7 @@ import {
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
+import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import { ModeVisualizationInspectorPanel } from "./panels/ModeVisualizationInspectorPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
@@ -510,7 +513,7 @@ const PANELS: InspectorPanelContribution[] = [
     id: "airbox-overview",
     title: "Airbox Overview",
     selectionKinds: ["airbox.root"],
-    component: AirboxOverviewPanel,
+    component: AirboxOverviewLanePanel,
   },
   {
     id: "boundary-faces-overview",
@@ -676,37 +679,37 @@ const PANELS: InspectorPanelContribution[] = [
     id: "airbox-mesh-overview",
     title: "Airbox Mesh Overview",
     selectionKinds: ["airbox.mesh"],
-    component: AirboxMeshOverviewPanel,
+    component: AirboxMeshOverviewLanePanel,
   },
   {
     id: "airbox-mesh-parameters",
     title: "Airbox Mesh Parameters",
     selectionKinds: ["airbox.mesh.parameters"],
-    component: AirboxMeshParametersPanel,
+    component: AirboxMeshParametersLanePanel,
   },
   {
     id: "airbox-mesh-quality-gates",
     title: "Airbox Mesh Quality Gates",
     selectionKinds: ["airbox.mesh.quality-gates"],
-    component: AirboxMeshQualityGatesPanel,
+    component: AirboxMeshQualityGatesLanePanel,
   },
   {
     id: "airbox-mesh-statistics",
     title: "Airbox Mesh Statistics",
     selectionKinds: ["airbox.mesh.statistics"],
-    component: AirboxMeshStatisticsPanel,
+    component: AirboxMeshStatisticsLanePanel,
   },
   {
     id: "airbox-mesh-topology",
     title: "Airbox Mesh Topology",
     selectionKinds: ["airbox.mesh.topology"],
-    component: AirboxMeshTopologyPanel,
+    component: AirboxMeshTopologyLanePanel,
   },
   {
     id: "airbox-mesh-build",
     title: "Airbox Mesh Build",
     selectionKinds: ["airbox.mesh.build"],
-    component: AirboxMeshBuildPanel,
+    component: AirboxMeshBuildLanePanel,
   },
   {
     id: "object-mesh-policy",
@@ -733,6 +736,22 @@ const PANELS: InspectorPanelContribution[] = [
       "resources.mesh",
     ],
     component: MeshDetailsPanel,
+  },
+  {
+    id: "fdm-grid",
+    title: "FDM Grid",
+    selectionKinds: [
+      "mesh.grid",
+      "mesh.grid.descriptor",
+      "mesh.grid.magnetic-support",
+      "mesh.grid.active-unassigned",
+      "mesh.grid.mask",
+      "mesh.grid.provenance",
+      "mesh.grid.region",
+      "mesh.grid.universe-outside-support",
+      "fdm.cell",
+    ],
+    component: FdmGridInspectorPanel,
   },
   {
     id: "cross-section",
@@ -780,6 +799,10 @@ export function resolveInspectorPanel(
   selection: Pick<Selection, "kind">,
 ): InspectorPanelContribution | null {
   if (!selection.kind) return null;
+
+  if (selection.kind === "fdm.cell" || selection.kind.startsWith("mesh.grid.")) {
+    return PANELS.find((panel) => panel.id === "fdm-grid") ?? null;
+  }
 
   return (
     PANELS.find((panel) => panel.selectionKinds.includes(selection.kind!)) ??

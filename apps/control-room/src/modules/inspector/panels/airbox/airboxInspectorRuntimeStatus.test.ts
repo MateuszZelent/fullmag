@@ -6,6 +6,7 @@ import {
 
 import {
   airboxInspectorRuntimeStatusEquals,
+  isExplicitFdmAirboxRuntime,
   selectAirboxInspectorRuntimeStatus,
 } from "./airboxInspectorRuntimeStatus";
 
@@ -40,7 +41,7 @@ describe("airboxInspectorRuntimeStatus", () => {
       airboxInspectorRuntimeStatusEquals(left, {
         ...left!,
         domain: { discretization: "fem" },
-      }),
+      } as never),
     ).toBe(false);
   });
 
@@ -62,5 +63,23 @@ describe("airboxInspectorRuntimeStatus", () => {
     };
     expect(shouldLoadRuntimeMeshSummary(true, available)).toBe(true);
     expect(shouldLoadRuntimeMeshManifest(true, available)).toBe(true);
+  });
+
+  it("treats only an explicit current FDM lane as FDM Airbox semantics", () => {
+    expect(isExplicitFdmAirboxRuntime(null)).toBe(false);
+    expect(
+      isExplicitFdmAirboxRuntime({
+        capabilities: { explicit_topology: false },
+        domain: { discretization: "" },
+        resources: { mesh_build_revision: null, mesh_revision: null },
+      } as never),
+    ).toBe(false);
+    expect(
+      isExplicitFdmAirboxRuntime({
+        capabilities: { explicit_topology: true },
+        domain: { discretization: "FDM" },
+        resources: { mesh_build_revision: 4, mesh_revision: 5 },
+      }),
+    ).toBe(true);
   });
 });

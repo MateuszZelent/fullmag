@@ -8,15 +8,18 @@ import {
   ObjectRegionTexturePanel,
   ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
-import { AirboxOverviewPanel } from "./panels/airbox/AirboxOverviewPanel";
-import { AirboxMeshBuildPanel } from "./panels/airbox/AirboxMeshBuildPanel";
-import { AirboxMeshOverviewPanel } from "./panels/airbox/AirboxMeshOverviewPanel";
-import { AirboxMeshParametersPanel } from "./panels/airbox/AirboxMeshParametersPanel";
-import { AirboxMeshQualityGatesPanel } from "./panels/airbox/AirboxMeshQualityGatesPanel";
-import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsPanel";
-import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
+import {
+  AirboxMeshBuildLanePanel,
+  AirboxMeshOverviewLanePanel,
+  AirboxMeshParametersLanePanel,
+  AirboxMeshQualityGatesLanePanel,
+  AirboxMeshStatisticsLanePanel,
+  AirboxMeshTopologyLanePanel,
+  AirboxOverviewLanePanel,
+} from "./panels/airbox/AirboxInspectorLanePanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
+import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import {
   EigenModeInspectorPanel,
   EigenBranchInspectorPanel,
@@ -248,6 +251,36 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("routes every structured FDM grid node and FDM cell to the dedicated grid inspector", () => {
+    const kinds = [
+      "mesh.grid",
+      "mesh.grid.descriptor",
+      "mesh.grid.magnetic-support",
+      "mesh.grid.active-unassigned",
+      "mesh.grid.mask",
+      "mesh.grid.provenance",
+      "mesh.grid.region",
+      "mesh.grid.universe-outside-support",
+      "fdm.cell",
+    ] as const;
+
+    const panels = kinds.map((kind) => resolveInspectorPanel({ kind }));
+
+    expect(panels.map((panel) => panel?.id)).toEqual(
+      kinds.map(() => "fdm-grid"),
+    );
+    expect(panels.every((panel) => panel?.component === FdmGridInspectorPanel)).toBe(
+      true,
+    );
+    expect(panels.every((panel) => panel?.id !== "placeholder")).toBe(true);
+  });
+
+  it("does not route a future structured-grid node to the generic placeholder", () => {
+    expect(resolveInspectorPanel({ kind: "mesh.grid.future-detail" })?.id).toBe(
+      "fdm-grid",
+    );
+  });
+
   it("falls back to the placeholder panel for known but unsupported selections", () => {
     expect(resolveInspectorPanel({ kind: "results.field_quantity" })?.id).toBe(
       "placeholder",
@@ -268,25 +301,25 @@ describe("inspectorRegistry", () => {
 
   it("gives every Airbox mesh branch a distinct single-purpose panel", () => {
     const expected = [
-      ["airbox.root", "airbox-overview", AirboxOverviewPanel],
-      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshOverviewPanel],
+      ["airbox.root", "airbox-overview", AirboxOverviewLanePanel],
+      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshOverviewLanePanel],
       [
         "airbox.mesh.parameters",
         "airbox-mesh-parameters",
-        AirboxMeshParametersPanel,
+        AirboxMeshParametersLanePanel,
       ],
       [
         "airbox.mesh.quality-gates",
         "airbox-mesh-quality-gates",
-        AirboxMeshQualityGatesPanel,
+        AirboxMeshQualityGatesLanePanel,
       ],
       [
         "airbox.mesh.statistics",
         "airbox-mesh-statistics",
-        AirboxMeshStatisticsPanel,
+        AirboxMeshStatisticsLanePanel,
       ],
-      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyPanel],
-      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildPanel],
+      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyLanePanel],
+      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildLanePanel],
     ] as const;
 
     for (const [kind, panelId, component] of expected) {

@@ -1,4 +1,7 @@
-import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import type {
+  FdmDomainSelectionKind,
+  SelectionRef,
+} from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
@@ -47,6 +50,23 @@ const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.change_device",
   "study.stage.save_state",
 ]);
+
+const FDM_DOMAIN_SELECTION_KINDS = new Set<FdmDomainSelectionKind>([
+  "mesh.grid",
+  "mesh.grid.descriptor",
+  "mesh.grid.magnetic-support",
+  "mesh.grid.active-unassigned",
+  "mesh.grid.mask",
+  "mesh.grid.provenance",
+  "mesh.grid.region",
+  "mesh.grid.universe-outside-support",
+]);
+
+function isFdmDomainSelectionKind(
+  kind: ExplorerNode["kind"],
+): kind is FdmDomainSelectionKind {
+  return FDM_DOMAIN_SELECTION_KINDS.has(kind as FdmDomainSelectionKind);
+}
 
 function isStudyStageSelectionKind(
   kind: ExplorerNode["kind"],
@@ -114,6 +134,48 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       type: "mesh-part",
       visualizationTargetId:
         node.visualizationTargetId ?? node.meshPartId,
+    };
+  }
+
+  if (isFdmDomainSelectionKind(node.kind)) {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-domain",
+    };
+  }
+
+  if (
+    node.kind === "fdm.cell" &&
+    node.cellOrdinal &&
+    node.cellIJK &&
+    node.gridFingerprint &&
+    node.membershipRevision &&
+    node.cellMaskState
+  ) {
+    return {
+      cellOrdinal: node.cellOrdinal,
+      gridFingerprint: node.gridFingerprint,
+      ijk: node.cellIJK,
+      kind: "fdm.cell",
+      maskState: node.cellMaskState,
+      membershipRevision: node.membershipRevision,
+      nodeId: "model:mesh:grid",
+      numericRegionId: node.numericRegionId ?? null,
+      regionId: node.regionId ?? null,
+      type: "fdm-cell",
+      visualizationTargetId: "fdm-domain",
+    };
+  }
+
+  if (node.kind === "mesh.unassigned") {
+    return {
+      kind: "mesh-part",
+      nodeId: "model:mesh:unassigned",
+      objectId: null,
+      type: "mesh-part",
+      visualizationTargetId: "mesh:unassigned",
     };
   }
 

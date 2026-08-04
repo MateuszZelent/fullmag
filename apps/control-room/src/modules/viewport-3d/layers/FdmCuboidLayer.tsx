@@ -851,6 +851,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   colors,
   materialProfile,
   onSelectDomain,
+  onSelectFdmCell,
   onSelectRegion,
   regionOverlays,
   settings,
@@ -881,6 +882,8 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     screenPosition: Viewport3DInspectScreenPosition,
   ) => void;
   onSelectDomain: () => void;
+  /** Optional identity-gated cell selection; absent means fail closed. */
+  onSelectFdmCell?: (instanceId: number) => void;
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
   regionOverlays?: readonly RegionOverlayInput[];
   selectedObjectId?: string | null;
@@ -1053,6 +1056,11 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     if (pickedRegion) {
       event.stopPropagation();
       onSelectRegion?.(pickedRegion);
+      return;
+    }
+    if (Number.isInteger(event.instanceId) && onSelectFdmCell) {
+      event.stopPropagation();
+      onSelectFdmCell(event.instanceId as number);
       return;
     }
     onSelectDomain();

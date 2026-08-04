@@ -14,7 +14,7 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
-#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 1u
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 2u
 
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
@@ -122,6 +122,7 @@ typedef enum {
     FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM = 0,
     FULLMAG_FEM_SPATIAL_PROFILE_SINC = 1,
     FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK = 2,
+    FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE = 3,
 } fullmag_fem_spatial_profile_kind;
 
 typedef enum {
@@ -213,6 +214,13 @@ typedef struct {
     double sinc_width_m;
     uint32_t sinc_window;
     const fullmag_fem_geometry_mask_desc *geometry_mask;
+    double gaussian_center_x_m;
+    double gaussian_center_y_m;
+    double gaussian_carrier_origin_x_m;
+    double gaussian_sigma_x_m;
+    double gaussian_sigma_y_m;
+    double gaussian_wavelength_m;
+    double gaussian_carrier_phase_rad;
 } fullmag_fem_spatial_profile_desc;
 
 typedef struct {

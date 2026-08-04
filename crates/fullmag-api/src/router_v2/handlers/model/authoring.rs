@@ -5114,4 +5114,22 @@ mod regional_field_drive_tests {
         assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
         assert!(scene.field_drives.drives.is_empty());
     }
+
+    #[test]
+    fn gaussian_plane_wave_profile_round_trips_through_resource_schema() {
+        let mut source = drive("gaussian");
+        source.spatial_profile = FieldSpatialProfileIR::GaussianPlaneWave {
+            center_x_m: -1.0e-6,
+            center_y_m: 0.0,
+            carrier_origin_x_m: 0.0,
+            sigma_x_m: 196.0e-9,
+            sigma_y_m: 186.8507960633642e-9,
+            wavelength_m: 196.0e-9,
+            carrier_phase_rad: -std::f64::consts::FRAC_PI_2,
+        };
+
+        let resource = RegionalFieldDriveResource::from_ir(source.clone()).expect("resource");
+        let round_tripped = resource.into_ir().expect("IR");
+        assert_eq!(round_tripped.spatial_profile, source.spatial_profile);
+    }
 }

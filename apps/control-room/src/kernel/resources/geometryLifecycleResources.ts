@@ -6,6 +6,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
+  DATA_DOMAIN_META_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -980,6 +981,25 @@ export function useFdmRegionMembershipResource(
   });
 }
 
+function resolveDomainMetaRevision(meta: DomainMetaResource | null): ResourceRevision | null {
+  return meta?.generation_id ?? null;
+}
+
+/** Shared DomainMeta ownership for Explorer and other non-viewport consumers. */
+export function useDomainMetaResource(options: ResourceHookOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.data.domain.meta({ signal }),
+    [api],
+  );
+  return useResource<DomainMetaResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveDomainMetaRevision,
+    resourceKey: DATA_DOMAIN_META_PATH,
+  });
+}
+
 export function useFdmRegionMembershipBinaryResource(
   regionId?: string | null,
   options: ResourceHookOptions = {},
@@ -1082,8 +1102,12 @@ export function useMeshUniverseQualityResource(
   });
 }
 
-export function useObjectTopologyResource(objectId: string | null | undefined) {
+export function useObjectTopologyResource(
+  objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectTopologyResourceKey(objectId)
     : MESHING_OBJECT_TOPOLOGY_PATH;
@@ -1099,6 +1123,7 @@ export function useObjectTopologyResource(objectId: string | null | undefined) {
   );
 
   return useResource<DecodedTopology | null>({
+    enabled,
     load,
     resourceKey,
   });
@@ -1106,8 +1131,10 @@ export function useObjectTopologyResource(objectId: string | null | undefined) {
 
 export function useObjectMeshReportResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectMeshReportResourceKey(objectId)
     : MESHING_OBJECT_REPORT_PATH;
@@ -1120,6 +1147,7 @@ export function useObjectMeshReportResource(
   );
 
   return useResource<MeshObjectReportResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
@@ -1128,8 +1156,10 @@ export function useObjectMeshReportResource(
 
 export function useObjectMeshQualityResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectMeshQualityResourceKey(objectId)
     : MESHING_OBJECT_QUALITY_PATH;
@@ -1142,6 +1172,7 @@ export function useObjectMeshQualityResource(
   );
 
   return useResource<MeshObjectQualityResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
@@ -1175,8 +1206,10 @@ export function useMeshRegionQualityResource(
 
 export function useObjectMeshSizeFieldResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? MESHING_OBJECT_SIZE_FIELD_PATH.replace(
         "{object_id}",
@@ -1192,6 +1225,7 @@ export function useObjectMeshSizeFieldResource(
   );
 
   return useResource<MeshObjectSizeFieldResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
@@ -1200,8 +1234,10 @@ export function useObjectMeshSizeFieldResource(
 
 export function useObjectMeshPolicyResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectMeshPolicyResourceKey(objectId)
     : MESHING_OBJECT_POLICY_PATH;
@@ -1214,13 +1250,14 @@ export function useObjectMeshPolicyResource(
   );
 
   return useResource<MeshObjectConfigResource>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
   });
 }
 
-export function useUniverseMeshPolicyResource() {
+export function useUniverseMeshPolicyResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -1229,6 +1266,7 @@ export function useUniverseMeshPolicyResource() {
   );
 
   return useResource<MeshUniverseConfigResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_UNIVERSE_POLICY_RESOURCE_KEY,

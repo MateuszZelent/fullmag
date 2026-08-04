@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   FieldCatalogResource,
@@ -42,6 +42,7 @@ import {
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  restoreVisualizationAppliedBaseline,
   resolveVisualizationVectorAccounting,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -61,11 +62,264 @@ import {
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
   visualizationResetActionLabel,
+  fdmGridCellCount,
+  fdmVisualizationResourceNotice,
+  isFdmVisualizationTarget,
+  resolveObjectVisualizationLane,
+  resolveObjectVisualizationResourceGates,
+  resolveObjectVisualizationTargetForLane,
 } from "./ObjectVisualizationPanelModel";
+import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
+import { OBJECT_VISUALIZATION_TARGET_KINDS } from "./ObjectVisualizationHelpers";
 
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("routes an explicit-FDM object visualization selection to the structured-grid target", () => {
+    const selection = {
+      kind: "object.visualization",
+      label: "Film visualization",
+      moduleSource: "inspector",
+      nodeId: "model:object:film:visualization",
+      objectId: "film",
+      ref: {
+        kind: "object.visualization",
+        nodeId: "model:object:film:visualization",
+        objectId: "film",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    expect(selectionTarget).toEqual({
+      id: "object:film",
+      kind: "object",
+      label: "Film visualization",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fdm",
+        selection,
+        selectionTarget,
+      }),
+    ).toEqual({
+      id: "fdm-domain",
+      kind: "fdm-domain",
+      label: "Film visualization",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fem",
+        selection,
+        selectionTarget,
+      }),
+    ).toEqual(selectionTarget);
+  });
+
+  it("withholds visualization targets and FEM resources until the lane is explicit", () => {
+    const selection = {
+      kind: "object.visualization",
+      label: "Film visualization",
+      moduleSource: "inspector",
+      nodeId: "model:object:film:visualization",
+      objectId: "film",
+      ref: null,
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    expect(resolveObjectVisualizationLane(undefined)).toBe("unresolved");
+    const unresolvedTarget = resolveObjectVisualizationTargetForLane({
+      lane: "unresolved",
+      selection,
+      selectionTarget,
+    });
+    expect(unresolvedTarget).toBeNull();
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "unresolved",
+        target: unresolvedTarget,
+      }),
+    ).toEqual({ fdm: false, fem: false });
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "fdm",
+        target: { id: "fdm-domain", kind: "fdm-domain" },
+      }),
+    ).toEqual({ fdm: true, fem: false });
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "fem",
+        target: selectionTarget,
+      }),
+    ).toEqual({ fdm: false, fem: true });
+  });
+
+  it("routes FDM region and airbox visualization selections to the same grid target", () => {
+    for (const kind of [
+      "object.region.visualization",
+      "airbox.visualization",
+    ]) {
+      const selection = {
+        kind,
+        label: "FDM visualization",
+        moduleSource: "inspector",
+        nodeId: `model:${kind}`,
+        objectId: "film",
+        ref: null,
+      } as const;
+      const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+      expect(
+        resolveObjectVisualizationTargetForLane({
+          lane: "fdm",
+          selection,
+          selectionTarget,
+        }),
+      ).toMatchObject({ id: "fdm-domain", kind: "fdm-domain" });
+    }
+  });
+
+  it("restores an FDM baseline locally without queueing FEM VisualizationState", () => {
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const visualization = {
+      clearTarget: vi.fn(),
+      patchTarget: vi.fn(),
+      patchViewportPreferences: vi.fn(),
+    };
+    const queuePatch = vi.fn();
+    const settings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      visible: true,
+      shaderVisible: true,
+    };
+
+    restoreVisualizationAppliedBaseline({
+      baseline: {
+        overrides: [],
+        targets: [
+          {
+            preferences: { primitiveVisible: true },
+            settings,
+            target,
+          },
+        ],
+      },
+      currentOverrides: [],
+      queuePatch,
+      visualization,
+    });
+
+    expect(queuePatch).not.toHaveBeenCalled();
+    expect(visualization.clearTarget).toHaveBeenCalledWith(target);
+    expect(visualization.patchTarget).toHaveBeenCalledWith(
+      target,
+      expect.objectContaining({ visible: true, shaderVisible: true }),
+    );
+    expect(visualization.patchViewportPreferences).toHaveBeenCalledWith(target, {
+      primitiveVisible: true,
+    });
+  });
+
+  it("keeps FEM baseline restoration on the backend queue path", () => {
+    const target = { id: "object:sample", kind: "object" as const };
+    const visualization = {
+      clearTarget: vi.fn(),
+      patchTarget: vi.fn(),
+      patchViewportPreferences: vi.fn(),
+    };
+    const queuePatch = vi.fn();
+
+    restoreVisualizationAppliedBaseline({
+      baseline: {
+        overrides: [{ scope: "object", scope_id: "sample", visible: true }],
+        targets: [
+          {
+            preferences: null,
+            settings: DEFAULT_OBJECT_VISUALIZATION,
+            target,
+          },
+        ],
+      },
+      currentOverrides: [],
+      queuePatch,
+      visualization,
+    });
+
+    expect(queuePatch).toHaveBeenCalledWith({
+      overrides: [{ scope: "object", scope_id: "sample", visible: true }],
+    });
+    expect(visualization.clearTarget).toHaveBeenCalledWith(target);
+    expect(visualization.patchTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps the FDM domain in the shared target registry without an API scope", () => {
+    expect(OBJECT_VISUALIZATION_TARGET_KINDS).toContain("fdm-domain");
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "fdm-domain",
+        kind: "fdm-domain",
+      }),
+    ).toEqual({ scope_id: null, scope_kind: null });
+  });
+
+  it("uses the structured-grid descriptor for FDM visualization capacity", () => {
+    const domain = {
+      domain_id: "domain-1",
+      generation_id: "generation-1",
+      discretization: "fdm",
+      bounds: { min: [0, 0, 0], max: [4, 3, 2] },
+      units: { length: "m" },
+      grid: {
+        shape: [4, 3, 2],
+        origin: [0, 0, 0],
+        spacing: [1, 1, 1],
+      },
+    } as never;
+
+    expect(isFdmVisualizationTarget({ id: "fdm-domain", kind: "fdm-domain" })).toBe(
+      true,
+    );
+    expect(fdmGridCellCount(domain)).toBe(24);
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        fdmCellCount: fdmGridCellCount(domain),
+        meshParts: null,
+        target: { id: "fdm-domain", kind: "fdm-domain" },
+      }),
+    ).toEqual({
+      availableNodeCount: 24,
+      exact: true,
+      max: 24,
+      min: 0,
+      step: 1,
+    });
+  });
+
+  it("reports FDM resource state without inventing FEM airbox errors", () => {
+    const notice = fdmVisualizationResourceNotice({
+      domain: {
+        domain_id: "domain-1",
+        generation_id: "generation-1",
+        discretization: "fdm",
+        bounds: { min: [0, 0, 0], max: [4, 3, 2] },
+        units: { length: "m" },
+        grid: {
+          shape: [4, 3, 2],
+          origin: [0, 0, 0],
+          spacing: [1, 1, 1],
+        },
+      } as never,
+      domainStatus: "ready",
+      membership: null,
+      membershipStatus: "ready",
+    });
+
+    expect(notice).toContain("cell membership/field overlays are not materialized");
+    expect(notice).not.toContain("airbox mesh part");
+    expect(notice).not.toContain("shared-domain manifest");
+  });
+
   it("reports decoded and adopted vector counts only for matching identities", () => {
     const snapshot = {
       capturedAtMs: 10,
@@ -391,6 +645,21 @@ describe("ObjectVisualizationPanelModel", () => {
         visualizationState: null,
       }).map((part) => part.id),
     ).toEqual(["part-air"]);
+  });
+
+  it("does not expose FEM mesh-part rows for the FDM domain target", () => {
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts: [
+          { id: "part-air", label: "Air", role: "air" },
+          { id: "part-object", label: "Object", object_id: "object-a", role: "object" },
+        ] as MeshPart[],
+        manifestRegions: [],
+        sceneObjectIds: new Set(["object-a"]),
+        target: { id: "fdm-domain", kind: "fdm-domain" },
+        visualizationState: null,
+      }),
+    ).toEqual([]);
   });
 
   it("labels every multi-carrier region and airbox row with its selected target", () => {
@@ -725,6 +994,13 @@ describe("ObjectVisualizationPanelModel", () => {
         label: "Airbox",
       }),
     ).toEqual({ scope_id: null, scope_kind: "airbox" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "fdm-domain",
+        kind: "fdm-domain",
+        label: "FDM domain",
+      }),
+    ).toEqual({ scope_id: null, scope_kind: null });
     expect(
       fieldMetaScopeQueryForVisualizationTarget({
         id: "region-a",

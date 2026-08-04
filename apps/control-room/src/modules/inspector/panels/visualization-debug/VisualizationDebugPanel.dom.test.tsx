@@ -80,6 +80,10 @@ describe("VisualizationDebugPanel mounted interaction", () => {
           />
         </KernelContext.Provider>,
       );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await vi.runOnlyPendingTimersAsync();
+        await Promise.resolve();
+      }
     });
     expect(kernel.visualizationDebug.getDemandSnapshot("object:magnet").expanded).toBe(true);
 
@@ -312,7 +316,10 @@ function makeKernel(): KernelApi {
       },
       sessions: {
         current: {
-          status: () => new Promise(() => undefined),
+          status: async () => ({
+            domain: { discretization: "fem" },
+            resources: {},
+          }),
         },
       },
       visualization: {

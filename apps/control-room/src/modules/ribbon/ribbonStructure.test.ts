@@ -14,8 +14,11 @@ import {
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
+  RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
+  isVisualizationTargetKind,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
 import {
@@ -105,6 +108,13 @@ function selectedMeshObject() {
       type: "scene-object" as const,
       visualizationTargetId: visualizationTargetIdForSceneObject("box"),
     },
+  };
+}
+
+function femRibbonSessionStatus() {
+  return {
+    domain: { discretization: "fem" as const },
+    resources: { field_revision: 1, fields_revision: 1 },
   };
 }
 
@@ -247,6 +257,11 @@ function clickableRibbonMenuCommandGaps(
 }
 
 describe("ribbon structure", () => {
+  it("accepts the FDM domain only as a viewport-local visualization target kind", () => {
+    expect(isVisualizationTargetKind("fdm-domain")).toBe(true);
+    expect(isVisualizationTargetKind("not-a-target")).toBe(false);
+  });
+
   it("routes selected mesh parts through the canonical visualization target resolver", () => {
     const target = resolveRibbonVisualizationTarget({
       sceneObjectIds: new Set(),
@@ -1438,6 +1453,10 @@ describe("ribbon structure", () => {
   it("routes physics interaction choices through the command registry", async () => {
     const content = buildRibbonTabContent("physics", {
       commands: createRibbonCommandRegistry(),
+      sessionStatus: {
+        domain: { discretization: "fem" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
       selection: {
         kind: "object.physics",
         label: "Free layer physics",
@@ -1501,6 +1520,88 @@ describe("ribbon structure", () => {
         objectId: "free-layer",
       }),
     ]);
+  });
+
+  it("fails closed for unresolved physics lanes and hides FEM airbox controls from FDM", () => {
+    const baseContext = {
+      commands: createRibbonCommandRegistry(),
+      sessionStatus: null,
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: "test" as const,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    };
+    const unresolvedPhysics = buildRibbonTabContent("physics", baseContext);
+    const unresolvedMenu = unresolvedPhysics?.groups
+      .find((group) => group.id === "physics-core")
+      ?.actions.find((action) => action.id === "physics-interactions")?.menu;
+    expect(unresolvedMenu).toEqual([
+      expect.objectContaining({ type: "label" }),
+      expect.objectContaining({
+        type: "status",
+        value: expect.stringMatching(/unresolved/i),
+      }),
+    ]);
+
+    const fdmView = buildRibbonTabContent("view", {
+      ...baseContext,
+      sessionStatus: {
+        domain: { discretization: "fdm" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+    });
+    expect(
+      fdmView?.groups
+        .find((group) => group.id === "view-global-display")
+        ?.actions.some((action) => action.id === "view-airbox"),
+    ).toBe(false);
+  });
+
+  it("rejects every FEM airbox command in an explicit FDM lane", async () => {
+    const visualization = new ObjectVisualizationController();
+    const before = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
+    const patches: VisualizationStatePatch[] = [];
+    const commandContext = {
+      api: {
+        visualization: {
+          patch: async (patch: VisualizationStatePatch) => {
+            patches.push(patch);
+            return { revision: 2 } as VisualizationStateResource;
+          },
+        },
+      },
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          data: { domain: { discretization: "fdm" } },
+        },
+      },
+      selection: {
+        get: () => ({ objectId: null }),
+        set: vi.fn(),
+      },
+      source: "test" as const,
+      visualization,
+    } as unknown as CommandContext;
+    const registry = createRibbonCommandRegistry();
+
+    for (const [commandId, input] of [
+      [RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND, { visible: false }],
+      [RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND, undefined],
+      [RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND, undefined],
+    ] as const) {
+      const result = await registry.execute(commandId, commandContext, input);
+      expect(result).toMatchObject({ status: "failed" });
+      expect(result.message).toMatch(/FDM|not applicable|unresolved/i);
+    }
+
+    expect(patches).toEqual([]);
+    expect(visualization.getSettings(AIRBOX_VISUALIZATION_TARGET)).toEqual(before);
   });
 
   it("keeps unsupported Physics shell workflows disabled", () => {
@@ -3267,6 +3368,7 @@ describe("ribbon structure", () => {
         objectId: null,
         ref: null,
       },
+      sessionStatus: femRibbonSessionStatus(),
       visualization: new ObjectVisualizationController(),
       visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
     });
@@ -3295,6 +3397,7 @@ describe("ribbon structure", () => {
         objectId: null,
         ref: null,
       },
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });
@@ -3323,6 +3426,179 @@ describe("ribbon structure", () => {
     });
   });
 
+  it("fails closed to the grid overview for an explicit FDM session", () => {
+    const visualization = new ObjectVisualizationController();
+    const sessionStatus = {
+      domain: { discretization: "fdm" },
+      resources: { field_revision: 1, fields_revision: 1 },
+    } as const;
+    const context = {
+      commandContext: { source: "test" as const },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", context);
+    const geometryBuildAction = geometry?.groups
+      .find((group) => group.id === "builder-lifecycle")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+    expect(geometryBuildAction).toBeUndefined();
+
+    const mesh = buildRibbonTabContent("mesh", {
+      ...context,
+      meshBuildCurrent: {
+        active_build: { phase: "running" },
+        mesh_pipeline_status: "running",
+      } as never,
+      meshBuildLatest: {
+        last_success: { revision: 7 },
+      } as never,
+      meshSemantics: {
+        solver_mesh: { mesh_name: "fem-mesh" },
+        object_configs: [{ object_id: "obj-1" }],
+      } as never,
+      meshSummary: {
+        mesh_summary: { node_count: 9, element_count: 8 },
+      } as never,
+    });
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+    expect(mesh?.groups.find((group) => group.id === "build")).toBeUndefined();
+    expect(mesh?.groups.find((group) => group.id === "method")).toBeUndefined();
+    expect(mesh?.groups.find((group) => group.id === "size")).toBeUndefined();
+    const inspectorAction = mesh?.groups
+      .find((group) => group.id === "mesh-view")
+      ?.actions.find((action) => action.id === "mesh.open-overview");
+    expect(inspectorAction?.menu).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Open grid overview" }),
+      ]),
+    );
+    expect(inspectorAction?.menu).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Shared-domain mesh" }),
+        expect.objectContaining({ label: "Quality gates" }),
+      ]),
+    );
+    const fdmCommandIds = mesh?.groups.flatMap((group) =>
+      group.actions.flatMap((action) => [
+        action.commandId,
+        ...(action.menu ?? []).flatMap((node) =>
+          node.type === "item" || node.type === "checkbox" || node.type === "radio-group"
+            ? [node.commandId]
+            : [],
+        ),
+      ]),
+    );
+    expect(fdmCommandIds).not.toContain("mesh.build-selected");
+    expect(fdmCommandIds).not.toContain("mesh.build-shared-domain");
+    expect(fdmCommandIds).not.toContain("mesh.open-builds");
+    expect(mesh).not.toEqual(
+      expect.objectContaining({
+        groups: expect.arrayContaining([
+          expect.objectContaining({
+            actions: expect.arrayContaining([
+              expect.objectContaining({ label: "Object policies" }),
+              expect.objectContaining({ label: "Solver mesh" }),
+            ]),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("does not flash FEM mesh actions while the session lane is unresolved", () => {
+    const visualization = new ObjectVisualizationController();
+    const context = {
+      commandContext: { source: "test" as const },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus: null,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", context);
+    expect(
+      geometry?.groups
+        .find((group) => group.id === "builder-lifecycle")
+        ?.actions.find((action) => action.id === "mesh.build-selected"),
+    ).toBeUndefined();
+    const mesh = buildRibbonTabContent("mesh", context);
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+    expect(
+      mesh?.groups.flatMap((group) =>
+        group.actions.flatMap((action) =>
+          action.menu?.flatMap((node) =>
+            node.type === "item" ? [node.commandId] : [],
+          ) ?? [],
+        ),
+      ),
+    ).toEqual(["mesh.open-overview"]);
+  });
+
+  it("preserves FEM mesh ribbon copy for an explicit FEM session", () => {
+    const visualization = new ObjectVisualizationController();
+    const context = {
+      commandContext: { source: "test" as const },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus: {
+        domain: { discretization: "fem" },
+        resources: { field_revision: 1, fields_revision: 1 },
+      } as const,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", context);
+    const geometryBuildAction = geometry?.groups
+      .find((group) => group.id === "builder-lifecycle")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+    expect(geometryBuildAction?.label).toBe("Build FEM Mesh");
+
+    const mesh = buildRibbonTabContent("mesh", context);
+    const buildGroup = mesh?.groups.find((group) => group.id === "build");
+    expect(
+      buildGroup?.actions.find(
+        (action) => action.id === "mesh.build-shared-domain",
+      ),
+    ).toMatchObject({ label: "Build All" });
+    const methodGroup = mesh?.groups.find((group) => group.id === "method");
+    expect(
+      methodGroup?.actions.find((action) => action.id === "mesh.open-quality"),
+    ).toBeDefined();
+    const inspectorAction = mesh?.groups
+      .find((group) => group.id === "mesh-view")
+      ?.actions.find((action) => action.id === "mesh.open-overview");
+    expect(inspectorAction?.menu).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Shared-domain mesh" }),
+        expect.objectContaining({ label: "Quality gates" }),
+      ]),
+    );
+  });
+
   it("shows the server capability reason on mesh build actions", () => {
     const commands = createControlRoomCommandRegistry();
     const visualization = new ObjectVisualizationController();
@@ -3347,6 +3623,7 @@ describe("ribbon structure", () => {
         objectId: null,
         ref: null,
       },
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });
@@ -3386,6 +3663,7 @@ describe("ribbon structure", () => {
       },
       resources: { invalidate: vi.fn() },
       selection: selectedMeshObject(),
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });
@@ -3425,6 +3703,7 @@ describe("ribbon structure", () => {
       },
       resources: { invalidate: vi.fn() },
       selection: selectedMeshObject(),
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });

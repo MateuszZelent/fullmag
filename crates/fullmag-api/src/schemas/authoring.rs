@@ -343,6 +343,15 @@ pub enum FieldSpatialProfileResource {
         object_id: String,
         envelope: FieldEnvelopeResource,
     },
+    GaussianPlaneWave {
+        center_x_m: f64,
+        center_y_m: f64,
+        carrier_origin_x_m: f64,
+        sigma_x_m: f64,
+        sigma_y_m: f64,
+        wavelength_m: f64,
+        carrier_phase_rad: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

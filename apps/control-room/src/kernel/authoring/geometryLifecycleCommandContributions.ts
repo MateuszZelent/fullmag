@@ -56,6 +56,40 @@ function resourceData(context: CommandContext, resourceKey: string): unknown {
   return context.resourceData?.[resourceKey] ?? null;
 }
 
+export type MeshCommandLane = "fdm" | "fem" | "unknown";
+
+export const FDM_MESH_COMMAND_NOT_APPLICABLE_REASON =
+  "FEM mesh commands are not applicable to an FDM structured-grid session.";
+
+export const UNKNOWN_MESH_COMMAND_LANE_REASON =
+  "Session discretization is unresolved; FEM mesh commands remain unavailable until an explicit FEM lane is published.";
+
+/**
+ * Resolve the current command lane from the session-status resource only.
+ * Missing, auto, or malformed status must never fall through to FEM.
+ */
+export function resolveMeshCommandLane(
+  discretization: unknown,
+): MeshCommandLane {
+  if (typeof discretization !== "string") return "unknown";
+  const normalized = discretization.trim().toLowerCase();
+  if (normalized === "fdm") return "fdm";
+  if (normalized === "fem") return "fem";
+  return "unknown";
+}
+
+function meshCommandLane(context: CommandContext): MeshCommandLane {
+  const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
+  return resolveMeshCommandLane(asRecord(status?.domain)?.discretization);
+}
+
+function femMeshCommandDisabledReason(context: CommandContext): string | null {
+  const lane = meshCommandLane(context);
+  if (lane === "fdm") return FDM_MESH_COMMAND_NOT_APPLICABLE_REASON;
+  if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
+  return null;
+}
+
 function selectedObjectId(context: Pick<CommandContext, "selection">): string | null {
   const selection = context.selection?.get();
   return selection?.ref?.type === "scene-object"
@@ -240,6 +274,8 @@ function isSharedDomainMeshBuildRunning(context: CommandContext): boolean {
 }
 
 function selectedObjectMeshDisabledReason(context: CommandContext): string | null {
+  const laneReason = femMeshCommandDisabledReason(context);
+  if (laneReason) return laneReason;
   const capabilityReason = meshCapabilityDisabledReason(context, "fem");
   if (capabilityReason) return capabilityReason;
   const objectId = selectedObjectId(context);
@@ -257,6 +293,8 @@ function meshCapabilityDisabledReason(
   context: CommandContext,
   capability: "fem",
 ): string | null {
+  const laneReason = femMeshCommandDisabledReason(context);
+  if (laneReason) return laneReason;
   if (!context.resourceData || !(MESHING_CAPABILITIES_PATH in context.resourceData)) {
     return null;
   }
@@ -608,7 +646,13 @@ function meshNavigationCommand(
     category: "Mesh",
     group: "mesh",
     scope: "workspace",
+    isEnabled: (context) => femMeshCommandDisabledReason(context) === null,
+    disabledReason: femMeshCommandDisabledReason,
     run: (context) => {
+      const laneReason = femMeshCommandDisabledReason(context);
+      if (laneReason) {
+        return { message: laneReason, status: "failed" };
+      }
       selectMeshNode(context, kind, nodeId, label);
       return { status: "completed" };
     },
@@ -770,6 +814,10 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => selectedObjectMeshDisabledReason(context) === null,
     disabledReason: selectedObjectMeshDisabledReason,
     run: async (context) => {
+      const laneReason = femMeshCommandDisabledReason(context);
+      if (laneReason) {
+        return { message: laneReason, status: "failed" };
+      }
       const objectId = selectedObjectId(context);
       if (!objectId) {
         return { message: "No scene object selected.", status: "failed" };
@@ -818,6 +866,10 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => meshCapabilityDisabledReason(context, "fem") === null,
     disabledReason: (context) => meshCapabilityDisabledReason(context, "fem"),
     run: async (context) => {
+      const laneReason = femMeshCommandDisabledReason(context);
+      if (laneReason) {
+        return { message: laneReason, status: "failed" };
+      }
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
@@ -857,15 +909,22 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     group: "mesh",
     scope: "workspace",
     isEnabled: (context) =>
+      meshCapabilityDisabledReason(context, "fem") === null &&
       !isSharedDomainMeshBuildRunning(context) &&
       qualityRefinementMeshOptions(context.input) !== null,
     disabledReason: (context) => {
+      const capabilityReason = meshCapabilityDisabledReason(context, "fem");
+      if (capabilityReason) return capabilityReason;
       if (isSharedDomainMeshBuildRunning(context)) {
         return "A shared-domain mesh build is already running.";
       }
       return "Open Mesh Quality and choose a refinement action.";
     },
     run: async (context) => {
+      const laneReason = femMeshCommandDisabledReason(context);
+      if (laneReason) {
+        return { message: laneReason, status: "failed" };
+      }
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
@@ -949,9 +1008,16 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     category: "Mesh",
     group: "mesh",
     scope: "selection",
-    isEnabled: (context) => Boolean(selectedObjectId(context)),
-    disabledReason: selectedObjectDisabledReason,
+    isEnabled: (context) =>
+      femMeshCommandDisabledReason(context) === null &&
+      Boolean(selectedObjectId(context)),
+    disabledReason: (context) =>
+      femMeshCommandDisabledReason(context) ?? selectedObjectDisabledReason(context),
     run: (context) => {
+      const laneReason = femMeshCommandDisabledReason(context);
+      if (laneReason) {
+        return { message: laneReason, status: "failed" };
+      }
       const objectId = selectedObjectId(context);
       if (!objectId) {
         return { message: "No scene object selected.", status: "failed" };

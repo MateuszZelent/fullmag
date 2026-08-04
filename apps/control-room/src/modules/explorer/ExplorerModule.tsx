@@ -20,11 +20,14 @@ import {
   useMeshSharedDomainQualityGatesResource,
   useMeshSharedDomainRealizedSizeFieldsResource,
   useMeshSummaryResource,
+  useDomainMetaResource,
+  useFdmRegionMembershipResource,
   useModelCouplingsResource,
   useModelMaterialFieldsResource,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 import {
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
@@ -237,6 +240,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
+  const domainMeta = useDomainMetaResource({ enabled: modelTabActive });
+  const fdmRegionMembership = useFdmRegionMembershipResource({
+    enabled:
+      modelTabActive && sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
+  });
   const modelRegions = useModelRegionsResource({ enabled: modelTabActive });
   const regionIds = useMemo(
     () => (modelRegions.data?.regions ?? []).map((region) => region.region_id),
@@ -320,6 +328,21 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     });
 
   const nodes = useMemo(() => {
+    let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
+    let domainPresentationStatus = domainMeta.status;
+    if (domainMeta.data) {
+      try {
+        domainPresentation = buildDomainPresentation({
+          domainMeta: domainMeta.data,
+          fdmMembership: fdmRegionMembership.data,
+          fdmMembershipStatus: fdmRegionMembership.status,
+        });
+      } catch {
+        // Keep DomainMeta's discretization visible to the Explorer. A failed
+        // derived presentation must never fall through to FEM controls.
+        domainPresentationStatus = "error";
+      }
+    }
     const modelSnapshot = modelTreeSnapshotWithHysteresisExecutionTree(
       modelTreeSnapshotWithStageExecution(
         modelTreeSnapshotFromScene(modelResource.data, {
@@ -333,6 +356,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           oerstedFields: oerstedFields.data,
           spinTransports: spinTransports.data,
           meshManifest: manifest.data,
+          domainMeta: domainMeta.data,
+          domainDiscretization:
+            sessionStatusData?.domain.discretization.toLowerCase() === "fdm"
+              ? "fdm"
+              : sessionStatusData?.domain.discretization.toLowerCase() === "fem"
+                ? "fem"
+                : null,
+          domainPresentationStatus,
+          domainPresentation,
         }),
         stageExecution.data,
       ),
@@ -400,7 +432,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
-            { ...modelSnapshot, crossSections, mesh, objects },
+            { ...modelSnapshot, crossSections, mesh, objects, domainPresentation },
             {
               activeAnalysisFieldOverlay,
               frequencyDomainManifest: frequencyDomainManifest.data,
@@ -432,6 +464,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     manifest.data,
     meshSummary.data,
     modelResource.data,
+    domainMeta.data,
+    fdmRegionMembership.data,
+    fdmRegionMembership.status,
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,

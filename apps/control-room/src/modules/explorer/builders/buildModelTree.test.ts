@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  DomainMetaResource,
+  FdmRegionMembershipResource,
   FrequencyDomainManifestResource,
   FrequencyDomainSweepProgressResource,
   HysteresisExecutionTreeResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
+import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 import {
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -47,6 +51,18 @@ const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 const RESPONSE_MAP_RESOURCE_KEY = "analysis:frequency-domain:response-map.v2";
 
 const capability = (status: string, reason = "test fixture") => ({ status, reason });
+
+function fdmExplorerPresentation() {
+  const domainMeta: DomainMetaResource = {
+    bounds: { min: [0, 0, 0], max: [4, 2, 1] }, coordinate_system: "cartesian",
+    counts: { cells: 8 }, dimension: 3, discretization: "fdm", domain_id: "domain:fdm",
+    generation_id: "generation-7", grid: { origin: [0, 0, 0], shape: [2, 2, 2], spacing: [2, 1, 0.5] }, units: { length: "m" },
+  };
+  const membership: FdmRegionMembershipResource = {
+    binary_path: "fdm.bin", cell_count: 8, cell_m: [2, 1, 0.5], counts: [2, 2, 2], encoding: "u32le", freshness: "current", grid_fingerprint: "grid-7", mesh_revision: 11, origin_m: [0, 0, 0], region_legend: [{ numeric_id: 7, object_id: "object:core", priority: 0, region_id: "region:core" }], region_membership_revision: 12, schema_version: "fdm_region_membership.v1",
+  };
+  return buildDomainPresentation({ domainMeta, fdmMembership: membership, fdmMembershipStatus: "ready" });
+}
 
 function snapshotVectorResourceKey(snapshotId: string): string {
   return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
@@ -4470,5 +4486,94 @@ describe("buildModelTree", () => {
       badge: "read-only",
       status: "unsupported",
     });
+  });
+
+  it("builds an FDM grid tree without FEM mesh, airbox, or boundary nodes", () => {
+    const nodes = flattenExplorerNodes(
+      buildModelTree({ domainPresentation: fdmExplorerPresentation() }),
+    );
+    expect(nodes.find((node) => node.id === "model:mesh")?.kind).toBe("mesh.grid");
+    expect(nodes.map((node) => node.kind)).toEqual(
+      expect.not.arrayContaining([
+        "mesh.shared-domain", "mesh.builds", "mesh.quality", "mesh.size-fields",
+        "mesh.regions", "mesh.unassigned", "airbox.root", "boundary-faces.root",
+      ]),
+    );
+    expect(nodes.map((node) => node.id)).toEqual(expect.arrayContaining([
+      "model:mesh:grid", "model:mesh:magnetic-support", "model:mesh:active-unassigned",
+      "model:mesh:mask", "model:mesh:provenance", "model:mesh:region:region%3Acore",
+    ]));
+    expect(nodes.find((node) => node.id === "model:mesh")?.contextCommands).toEqual([
+      "workspace.focus-selection",
+    ]);
+    expect(nodes.find((node) => node.id === "model:mesh:magnetic-support")?.label).toBe(
+      "Structured Grid Extent",
+    );
+  });
+
+  it("keeps a degraded FDM tree when DomainMeta presentation construction fails", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fdm",
+      domainMeta: {
+        bounds: { min: [0, 0, 0], max: [2, 2, 2] }, coordinate_system: "cartesian",
+        counts: { cells: 8 }, dimension: 3, discretization: "fdm", domain_id: "domain:fdm",
+        generation_id: "generation-8", grid: { origin: [0, 0, 0], shape: [2, 2, 2], spacing: [1, 1, 1] }, units: { length: "m" },
+      },
+      domainPresentation: null,
+      domainPresentationStatus: "error",
+    }));
+    expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
+      kind: "mesh.grid", status: "degraded", contextCommands: ["workspace.focus-selection"],
+    });
+    expect(nodes.map((node) => node.kind)).not.toEqual(expect.arrayContaining([
+      "mesh.shared-domain", "mesh.builds", "mesh.quality", "airbox.root", "boundary-faces.root",
+    ]));
+  });
+
+  it("adds only an explicit FDM universe summary, never a FEM Airbox subtree", () => {
+    const withUniverse: FdmDomainPresentation = {
+      ...(fdmExplorerPresentation() as FdmDomainPresentation),
+      universeOutsideMagneticSupport: {
+        bounds: { min: [0, 0, 0] as const, max: [8, 4, 2] as const },
+        kind: "universe-outside-magnetic-support" as const,
+        reason: "explicit fixture extent",
+      },
+    };
+    const nodes = flattenExplorerNodes(buildModelTree({ domainPresentation: withUniverse }));
+    expect(nodes.find((node) => node.id === "model:universe:grid")).toMatchObject({
+      kind: "mesh.grid.descriptor", label: "Structured Grid Universe",
+    });
+    expect(nodes.find((node) => node.id === "model:universe:grid:outside-support")?.kind).toBe(
+      "mesh.grid.universe-outside-support",
+    );
+    expect(nodes.map((node) => node.kind)).not.toContain("airbox.root");
+  });
+
+  it("does not expose FEM visualization-debug nodes in an FDM model tree", () => {
+    const nodes = flattenExplorerNodes(
+      buildModelTree({
+        domainPresentation: fdmExplorerPresentation(),
+        objects: [
+          {
+            id: "film",
+            label: "Film",
+            regions: [
+              {
+                id: "core",
+                label: "Core",
+              },
+            ],
+          } as never,
+        ] as never,
+      }),
+    );
+
+    expect(nodes.map((node) => node.kind)).not.toEqual(
+      expect.arrayContaining([
+        "object.visualization.debug",
+        "object.region.visualization.debug",
+        "airbox.visualization.debug",
+      ]),
+    );
   });
 });
