@@ -3048,6 +3048,30 @@ mod tests {
     }
 
     #[test]
+    fn fem_gpu_transport_request_fails_closed_without_cpu_rebinding() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        problem.spin_transport_modules[0].requested_execution.device = ExecutionDevice::Gpu;
+        let requested_device = problem.spin_transport_modules[0].requested_execution.device;
+
+        let error = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect_err("unqualified FEM GPU transport must be rejected");
+
+        assert_eq!(requested_device, ExecutionDevice::Gpu);
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("requested GPU") && reason.contains("cannot fall back silently")
+        }));
+    }
+
+    #[test]
     fn fem_mapping_rejects_gpu_mixing_and_unimplemented_stage_coupling() {
         let (mesh, segments, parts) = fem_mesh_fixture();
         let assert_rejected = |problem: ProblemIR, needle: &str| {

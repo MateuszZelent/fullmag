@@ -1,0 +1,104 @@
+{
+  "current_modules": [
+    {
+      "kind": "current_transport",
+      "name": "charge",
+      "model": "ohmic_poisson",
+      "coupling": "one_way",
+      "domain": [{"object_id": "strip"}],
+      "materials": [
+        {
+          "region": {"object_id": "strip"},
+          "material": {"sigma_Spm": 4000000.0}
+        }
+      ],
+      "boundaries": [
+        {
+          "kind": "voltage_electrode",
+          "id": "ground",
+          "surfaces": [
+            {
+              "object_id": "strip",
+              "surface_id": "x_min",
+              "orientation": [-1.0, 0.0, 0.0]
+            }
+          ],
+          "potential_V": 0.0
+        },
+        {
+          "kind": "voltage_electrode",
+          "id": "drive",
+          "surfaces": [
+            {
+              "object_id": "strip",
+              "surface_id": "x_max",
+              "orientation": [1.0, 0.0, 0.0]
+            }
+          ],
+          "potential_V": 0.1
+        }
+      ],
+      "gauge": "dirichlet_reference",
+      "solver": {
+        "engine": "cg",
+        "linear": {
+          "relative_tolerance": 1e-10,
+          "absolute_tolerance": 0.0,
+          "max_iterations": 1000
+        },
+        "physical_residual_version": "charge_balance_integrated_l2.v1",
+        "operator_version": "fv_charge_harmonic_v1"
+      }
+    }
+  ],
+  "spin_transport_modules": [
+    {
+      "schema_version": "spin_transport.v1",
+      "id": "spin_solve",
+      "current_source_id": "charge",
+      "mode": "steady",
+      "domain": [{"object_id": "strip"}],
+      "materials": [
+        {
+          "region": {"object_id": "strip"},
+          "material": {
+            "sigma_s_Spm": 5000000.0,
+            "polarization_p": 0.4,
+            "theta_sh": 0.1,
+            "lambda_sf_m": 5e-9,
+            "lambda_j_m": 1e-9,
+            "lambda_phi_m": "disabled"
+          }
+        }
+      ],
+      "solver": {
+        "engine": "auto",
+        "linear": {
+          "relative_tolerance": 1e-8,
+          "absolute_tolerance": 0.0,
+          "max_iterations": 500
+        },
+        "physical_residual_version": "transport_balance_integrated_l2.v1",
+        "operator_version": "fv_spin_upwind_v1",
+        "default_external_boundary": "spin_insulating"
+      },
+      "requested_execution": {
+        "discretization": "fdm",
+        "device": "cpu",
+        "precision": "double",
+        "execution_mode": "strict"
+      },
+      "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+    }
+  ],
+  "spin_torque_modules": [
+    {
+      "kind": "drift_diffusion_spin_torque",
+      "schema_version": "drift_diffusion_spin_torque.v1",
+      "id": "tr",
+      "solve_id": "spin_solve",
+      "target": {"object_id": "strip"},
+      "formula_version": "transport_torque_angular_momentum.fullmag.v1"
+    }
+  ]
+}

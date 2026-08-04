@@ -846,6 +846,37 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
 }
 
 #[test]
+fn checked_in_spin_transport_authoring_fixture_round_trips_problem_ir() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../scripts/fixtures/spin_transport_authoring_parity.json"
+    ))
+    .expect("spin transport authoring fixture must be valid JSON");
+    let mut value = problem_ir_value_with_version(CURRENT_IR_VERSION);
+    for key in [
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+    ] {
+        value[key] = fixture[key].clone();
+    }
+
+    let decoded: ProblemIR =
+        serde_json::from_value(value).expect("fixture must decode as ProblemIR");
+    decoded
+        .validate()
+        .expect("fixture must pass ProblemIR validation");
+    let encoded = serde_json::to_value(decoded).expect("fixture must encode as ProblemIR");
+
+    for key in [
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+    ] {
+        assert_eq!(encoded[key], fixture[key], "ProblemIR drift in {key}");
+    }
+}
+
+#[test]
 fn current_ir_version_is_supported_for_read() {
     assert!(is_supported_ir_version_for_read(CURRENT_IR_VERSION));
     assert!(!requires_ir_migration(CURRENT_IR_VERSION));
