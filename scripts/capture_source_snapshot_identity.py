@@ -26,6 +26,10 @@ NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".codex/",
     ".github/",
+    # The managed native FEM bundle does not compile the browser application.
+    # Keep dirty Control Room edits out of the native source identity so a
+    # frontend-only change cannot force (or break) a FEM rebuild.
+    "apps/control-room/",
     "docs/",
     "public_docs/",
     "scripts/test_",
