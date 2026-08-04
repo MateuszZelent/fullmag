@@ -5920,3 +5920,57 @@ FDM/MuMax3/BORIS, nonlinearnego sweepu prądu ani produkcyjnej kwalifikacji
 FEM GPU. Capability pozostaje `reference_executable`, a
 `validated_workloads` pozostaje puste. Szeroka ocena celu pozostaje
 **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.47. Izolowana brama skalowania prądu Slonczewskiego v2 FEM CPU↔GPU (2026-08-04)
+
+### 32.47.1. Zakres fizyczny i korekta RED
+
+Po zamknięciu ośmiokrokowej trajektorii FEM dodano osobną bramę odpowiedzi na
+skalowanie prądu. Test
+`native_fem::tests::native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available`
+wykonuje niezależnie CPU i CUDA dla `0x`, `0.5x`, `1x` i `2x` prądu bazowego
+`J_c=(2.4e13,0,0) A/m^2`, przy `dt=1e-15 s`,
+`n_stack=(2,0,0)`, `P=0.62`, `Lambda=1.8`, `epsilon_prime=0.03`,
+`t_F=1e-9 m`, tej samej masce węzłów oraz włączonej wymianie. Demag i pole
+zewnętrzne są wyłączone, aby izolować kanoniczny lokalny tor
+Slonczewskiego.
+
+Pierwsza wersja testu była RED, ponieważ porównywała surowy przyrost
+znormalizowanego `m`. Jego składowa radialna jest korektą normalizacji i ma
+rzędowość kwadratową względem pierwszorzędowego momentu obrotowego. Kryterium
+zostało więc sformułowane na przyroście względem stanu `0x`, po projekcji na
+płaszczyznę styczną do początkowego `m`. To jest właściwy obserwabl fizyczny
+dla małokrokowej liniowej odpowiedzi źródła; nie jest to rozluźnienie tolerancji
+ani zmiana równania solvera.
+
+### 32.47.2. Dowód RED → GREEN
+
+Receptura zarządzana `just verify-fem-stt-native-contract` uruchamia tę bramę
+po budowie `fullmag_fem`, natywnym kontrakcie CUDA, teście ABI oraz testach
+planera i trajektorii. Wynik końcowy:
+
+```text
+FEM CUDA Slonczewski v2 numeric contract PASS
+auto_fem_canonical_slonczewski_v2_remains_gpu_eligible ... ok
+strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation ... ok
+native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available ... ok
+native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available ... ok
+test result: ok; 1 passed for each filtered Rust contract
+```
+
+Kryteria to `1x=2*0.5x` z błędem względnym `<=0.5%` i
+`2x=4*0.5x` z błędem `<=1%`, dla stycznej składowej odpowiedzi w każdym
+węźle i obu realizacjach. Brama jest wykonywalna w zarządzanym kontenerze
+CUDA, ale nie zmienia capability: FEM GPU pozostaje
+`reference_executable`, a `validated_workloads` pozostaje puste.
+
+### 32.47.3. Granica kwalifikacji i następne P0
+
+Dowód zamyka wyłącznie bounded FP64 one-step tangential current scaling dla
+małego workloadu FEM CPU/GPU. Nie zamyka nieliniowego sweepu prądu,
+zbieżności `dt`/siatki, FP32, pełnej rodziny integratorów, długiej trajektorii,
+demaga, cross-backend parity z FDM/MuMax3/BORIS ani produkcyjnej kwalifikacji.
+Szeroka ocena pozostaje konserwatywnie **86% implementacji / 60% gotowości
+produkcyjnej**. Kolejne P0 to cross-backend STT/current sweep, SHE/BORIS i
+wzajemność, RT0/KKT Oersteda, DOS→`C_s`, SML v2, skin/MQS oraz pełny
+Python/OpenAPI/UI round-trip i browser evidence.

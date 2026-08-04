@@ -8564,4 +8564,99 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.enable_exchange = true;
+        plan.external_field = None;
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.current_density = Some([0.0, 0.0, 0.0]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.8);
+        plan.stt_epsilon_prime = Some(0.03);
+        plan.stt_thickness = Some(1.0e-9);
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            operator_version: None,
+            realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: None,
+            stack_normal: Some([2.0, 0.0, 0.0]),
+            lande_g: None,
+            active_node_mask: Some(vec![true, true, false, true, true]),
+            active_element_mask: None,
+        });
+
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let initial = plan.initial_magnetization.clone();
+        let run = |device: &str, current_scale: f64| -> Vec<[f64; 3]> {
+            let mut scaled_plan = native_plan_for_device(&plan, device);
+            scaled_plan.current_density = Some([2.4e13 * current_scale, 0.0, 0.0]);
+            let mut backend = NativeFemBackend::create(&scaled_plan)
+                .expect("native FEM Slonczewski current-scaling create");
+            backend
+                .step(dt)
+                .expect("native FEM Slonczewski current-scaling step");
+            backend
+                .copy_m(scaled_plan.mesh.nodes.len())
+                .expect("copy current-scaling magnetization")
+        };
+
+        for device in ["cpu", "cuda"] {
+            let zero = run(device, 0.0);
+            let half = run(device, 0.5);
+            let one = run(device, 1.0);
+            let double = run(device, 2.0);
+
+            for (node, (m0, (((zero, half), one), double))) in initial
+                .iter()
+                .zip(zero.iter().zip(half.iter()).zip(one.iter()).zip(double.iter()))
+                .enumerate()
+            {
+                let project_tangent = |state: &[f64; 3], reference: &[f64; 3]| {
+                    let delta = [
+                        state[0] - reference[0],
+                        state[1] - reference[1],
+                        state[2] - reference[2],
+                    ];
+                    let radial = delta[0] * m0[0] + delta[1] * m0[1] + delta[2] * m0[2];
+                    [
+                        delta[0] - radial * m0[0],
+                        delta[1] - radial * m0[1],
+                        delta[2] - radial * m0[2],
+                    ]
+                };
+                let t_half = project_tangent(half, zero);
+                let t_one = project_tangent(one, zero);
+                let t_double = project_tangent(double, zero);
+                let mut one_error_sq = 0.0;
+                let mut double_error_sq = 0.0;
+                let mut scale_sq: f64 = 1e-28;
+                for component in 0..3 {
+                    let one_error = t_one[component] - 2.0 * t_half[component];
+                    let double_error = t_double[component] - 4.0 * t_half[component];
+                    one_error_sq += one_error * one_error;
+                    double_error_sq += double_error * double_error;
+                    scale_sq = scale_sq
+                        .max(t_half[component] * t_half[component])
+                        .max(t_one[component] * t_one[component])
+                        .max(t_double[component] * t_double[component]);
+                }
+                let scale = scale_sq.sqrt();
+                assert!(
+                    one_error_sq.sqrt() <= 5e-3 * scale,
+                    "{device} Slonczewski tangential 1x response is not 2x 0.5x at node {node}: half={t_half:?} one={t_one:?}"
+                );
+                assert!(
+                    double_error_sq.sqrt() <= 1e-2 * scale,
+                    "{device} Slonczewski tangential 2x response is not 4x 0.5x at node {node}: half={t_half:?} double={t_double:?}"
+                );
+            }
+        }
+    }
 }

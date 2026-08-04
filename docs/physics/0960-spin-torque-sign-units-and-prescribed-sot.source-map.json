@@ -13,7 +13,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "reference_executable",
-      "reason": "Managed CUDA one-step and bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask, and current-reversal contracts pass; full integrator-family, multi-grid, and cross-backend qualification remain open."
+      "reason": "Managed CUDA one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, and isolated 0.5x/1x/2x tangential current-scaling contracts pass; full integrator-family, multi-grid, and cross-backend qualification remain open."
     },
     {
       "solver": "FDM",
@@ -98,6 +98,7 @@
     {"id": "fdm-cuda-slonczewski-trajectory", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Managed eight-step FP64 FDM CUDA trajectory parity against independent CPU reference prefixes."},
     {"id": "fdm-cuda-slonczewski-current-scaling", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available", "responsibility": "Managed isolated FP64 0.5x/1x/2x signed-current increment-scaling contract."},
     {"id": "fem-cuda-slonczewski-trajectory", "path": "crates/fullmag-runner/src/native_fem.rs", "symbol": "native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available", "responsibility": "Managed eight-step FP64 FEM CPU↔GPU Heun trajectory parity with canonical descriptor and target mask."},
+    {"id": "fem-cuda-slonczewski-current-scaling", "path": "crates/fullmag-runner/src/native_fem.rs", "symbol": "native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available", "responsibility": "Managed isolated FP64 0.5x/1x/2x signed-current scaling after tangential projection for FEM CPU and GPU."},
     {"id": "stt-source-contract", "path": "backends/fem/tests/stt_contract.cpp", "symbol": "main", "responsibility": "Source ownership and descriptor-completeness contract."}
   ],
   "public_api": {

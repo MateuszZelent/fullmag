@@ -321,6 +321,19 @@ of the device-resident GPU RK lane, while demag and external field are disabled;
 the result is temporal CPU↔GPU parity for this FP64 workload, not qualification
 of the full integrator family, multi-grid convergence, long-time stability,
 cross-backend continuum agreement, or production status.
+The same managed FEM CPU/GPU lane now has a bounded isolated current-scaling
+contract. With demag and external field disabled, one fixed Heun step at
+`dt=1e-15 s` is evaluated independently at `0.5x`, `1x`, and `2x` of the
+signed stack-normal current (the base magnitude is `2.4e13 A/m^2`), for both
+the CPU and CUDA realizations. The response is measured as the increment from
+the zero-current state after projection onto the tangent plane of the initial
+unit magnetization. This projection is required physically: normalization of
+`m` creates a radial correction quadratic in a first-order torque, so checking
+the raw radial component would falsely reject a linear current-response
+contract. The bounded tolerances are `0.5%` for the `1x=2*0.5x` relation and
+`1%` for the `2x=4*0.5x` relation. This is FP64 small-step evidence for signed-current
+scaling in each FEM lane, not nonlinear sweep, mesh convergence, long-time
+stability, demag, or production qualification.
 The managed FDM-CUDA lane additionally has a bounded eight-step fixed-step
 trajectory contract: after every accepted Heun step, the complete magnetization
 is compared with an independently executed CPU reference prefix using the same
@@ -601,6 +614,7 @@ hidden change to `alpha`.
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA trajectory parity against CPU reference prefixes |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated 0.5×/1×/2× signed-current increment-scaling contract |
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available` | Managed eight-step FP64 FEM CPU↔GPU Heun trajectory parity with canonical descriptor and target mask |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available` | Managed isolated FP64 0.5×/1×/2× signed-current scaling after tangential projection for FEM CPU and GPU |
 | `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
 
 ```{math}
