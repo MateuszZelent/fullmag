@@ -1,8 +1,8 @@
 {
   "document": {"path": "docs/physics/0990-mumax-standard-problem-5-fdm-validation.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "The source workload is a regular-grid FDM contract; no FEM realization is claimed."},
-    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No FEM SP5 mesh, demagnetization, or executed-device qualification exists."},
+    {"solver": "FEM", "device": "CPU", "status": "reference-executable-bounded", "reason": "A managed CPU-double FEM counterpart executes a shared-domain SP5 mesh and 1 ps Zhang--Li probe; full relaxation, 1 ns trajectory, and h/dt convergence remain open."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "The FEM fixture is CPU-only for canonical zhang_li.fullmag.v1; no FEM GPU SP5 execution or qualification exists."},
     {"solver": "FDM", "device": "CPU", "status": "reference-executable", "reason": "The Python/IR path is executable; the full adaptive trajectory and scalar artifact gate remain open."},
     {"solver": "FDM", "device": "GPU", "status": "diagnostic-unqualified", "reason": "Only fixed-step CUDA diagnostics exist; adaptive capability identity and parity are open."}
   ],
@@ -53,7 +53,10 @@
     {"id": "sp5-cpu-mumax3", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "zhang_li_mumax3_torque_at", "responsibility": "Execute the versioned MuMax3 operator in the FDM CPU reference lane."},
     {"id": "sp5-cuda-mumax3", "path": "backends/fdm/gpu/cuda/integrators/llg_fp64.cu", "symbol": "zhang_li_neighbor_index", "responsibility": "Execute the versioned MuMax3 central stencil in native CUDA FP64/FP32 kernels."},
     {"id": "sp5-cuda-cpu-parity-test", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available", "responsibility": "Execute the managed FP64 one-step CPU↔CUDA operator parity gate."},
-    {"id": "sp5-ir-mumax3", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Carry formula, operator, target, and Landé provenance through FdmPlanIR."}
+    {"id": "sp5-ir-mumax3", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Carry formula, operator, target, and Landé provenance through FdmPlanIR."},
+    {"id": "sp5-fem-fixture", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class ZhangLiSTT", "responsibility": "Provide the canonical Zhang--Li class used by the FEM counterpart fixture."},
+    {"id": "sp5-fem-demag-runtime", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp", "symbol": "context_compute_demag_poisson", "responsibility": "Execute the FEM Poisson--Robin demagnetization realization and volume-weighted observables."},
+    {"id": "sp5-fem-zhangli-provenance", "path": "crates/fullmag-runner/src/artifacts.rs", "symbol": "fem_spin_torque_provenance", "responsibility": "Record resolved FEM CPU engine and versioned Zhang--Li provenance."}
   ],
   "public_api": {"parameters": [
     {"python": "study.engine", "type": "str", "default": "required", "si_unit": "1", "validation": "`fdm` for this contract", "meaning": "requested solver family", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_selection.backend"},
@@ -63,13 +66,13 @@
     {"python": "plate.Ms", "type": "float", "default": "required", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "positive finite", "meaning": "saturation magnetization", "backend_support": "FDM CPU/GPU", "problem_ir": "materials[].saturation_magnetisation"},
     {"python": "plate.Aex", "type": "float", "default": "required", "si_unit": "\\mathrm{J\\,m^{-1}}", "validation": "positive finite", "meaning": "exchange stiffness", "backend_support": "FDM CPU/GPU", "problem_ir": "materials[].exchange_stiffness"},
     {"python": "plate.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "non-negative finite", "meaning": "physical Gilbert damping", "backend_support": "FDM CPU/GPU", "problem_ir": "materials[].damping"},
-    {"python": "ZhangLiSTT.current_density", "type": "vec3", "default": "required", "si_unit": "\\mathrm{A\\,m^{-2}}", "validation": "finite signed vector", "meaning": "CIP charge current", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].current_density"},
-    {"python": "ZhangLiSTT.degree", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite polarization degree", "meaning": "current polarization", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].degree"},
-    {"python": "ZhangLiSTT.xi", "type": "float", "default": "required", "si_unit": "1", "validation": "finite; alias of beta", "meaning": "non-adiabaticity", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].beta"},
-    {"python": "ZhangLiSTT.id", "type": "str", "default": "required for canonical operator", "si_unit": "1", "validation": "non-empty", "meaning": "torque identity", "backend_support": "FDM CPU/GPU MuMax3; FEM rejects MuMax3", "problem_ir": "spin_torque_modules[].id"},
+    {"python": "ZhangLiSTT.current_density", "type": "vec3", "default": "required", "si_unit": "\\mathrm{A\\,m^{-2}}", "validation": "finite signed vector", "meaning": "CIP charge current", "backend_support": "FDM CPU reference; FEM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].current_density"},
+    {"python": "ZhangLiSTT.degree", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite polarization degree", "meaning": "current polarization", "backend_support": "FDM CPU reference; FEM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].degree"},
+    {"python": "ZhangLiSTT.xi", "type": "float", "default": "required", "si_unit": "1", "validation": "finite; alias of beta", "meaning": "non-adiabaticity", "backend_support": "FDM CPU reference; FEM CPU reference; GPU diagnostic", "problem_ir": "spin_torque_modules[].beta"},
+    {"python": "ZhangLiSTT.id", "type": "str", "default": "required for canonical operator", "si_unit": "1", "validation": "non-empty", "meaning": "torque identity", "backend_support": "FDM CPU/GPU MuMax3; FEM canonical reference", "problem_ir": "spin_torque_modules[].id"},
     {"python": "ZhangLiSTT.target", "type": "RegionRef", "default": "required for canonical operator", "si_unit": "1", "validation": "existing object/region", "meaning": "target mask ownership", "backend_support": "FDM CPU/GPU MuMax3; FEM central reference", "problem_ir": "spin_torque_modules[].target"},
     {"python": "ZhangLiSTT.lande_g", "type": "float", "default": "required for canonical operator", "si_unit": "1", "validation": "exactly `2.0` for `zhang_li.mumax3.v1`; finite and positive for `zhang_li.fullmag.v1`", "meaning": "explicit Landé-factor provenance", "backend_support": "FDM CPU/GPU MuMax3 source identity; FEM central reference", "problem_ir": "spin_torque_modules[].lande_g"},
-    {"python": "ZhangLiSTT.operator_version", "type": "str", "default": "zl_mumax3_central_v1", "si_unit": "1", "validation": "zl_mumax3_central_v1", "meaning": "spatial/formula realization", "backend_support": "FDM CPU/GPU", "problem_ir": "spin_torque_modules[].operator_version"},
+    {"python": "ZhangLiSTT.operator_version", "type": "str", "default": "zl_mumax3_central_v1 for FDM; zl_central_reference_v1 for FEM", "si_unit": "1", "validation": "versioned operator compatible with the selected backend", "meaning": "spatial/formula realization", "backend_support": "FDM CPU/GPU; FEM CPU reference", "problem_ir": "spin_torque_modules[].operator_version"},
     {"python": "add_relax.tolT", "type": "float", "default": "1e-6", "si_unit": "\\mathrm T", "validation": "positive finite; exclusive with `tolA`", "meaning": "maximum relaxation torque", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "study.stop.torque_tolerance_apm"},
     {"python": "add_run.until", "type": "float", "default": "required", "si_unit": "\\mathrm s", "validation": "positive finite", "meaning": "physical observation horizon", "backend_support": "FDM CPU reference; GPU diagnostic", "problem_ir": "stage.default_until_seconds"}
   ]}

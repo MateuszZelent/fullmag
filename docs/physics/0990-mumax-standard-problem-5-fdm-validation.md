@@ -183,13 +183,13 @@ switch, not a production qualification setting.
 | `plate.Ms` | `float` | required | $\mathrm{A\,m^{-1}}$ | positive finite | saturation magnetization | FDM CPU/GPU | `materials[].saturation_magnetisation` |
 | `plate.Aex` | `float` | required | $\mathrm{J\,m^{-1}}$ | positive finite | exchange stiffness | FDM CPU/GPU | `materials[].exchange_stiffness` |
 | `plate.alpha` | `float` | required | $1$ | non-negative finite | physical Gilbert damping | FDM CPU/GPU | `materials[].damping` |
-| `ZhangLiSTT.current_density` | `vec3` | required | $\mathrm{A\,m^{-2}}$ | finite signed vector | CIP charge current | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].current_density` |
-| `ZhangLiSTT.degree` | `float` | `1.0` | $1$ | finite polarization degree | current polarization | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].degree` |
-| `ZhangLiSTT.xi` | `float` | required | $1$ | finite; alias of beta | non-adiabaticity | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].beta` |
-| `ZhangLiSTT.id` | `str` | required for canonical operator | $1$ | non-empty | torque identity | FDM CPU/GPU MuMax3; FEM rejects MuMax3 | `spin_torque_modules[].id` |
+| `ZhangLiSTT.current_density` | `vec3` | required | $\mathrm{A\,m^{-2}}$ | finite signed vector | CIP charge current | FDM CPU reference; FEM CPU reference; GPU diagnostic | `spin_torque_modules[].current_density` |
+| `ZhangLiSTT.degree` | `float` | `1.0` | $1$ | finite polarization degree | current polarization | FDM CPU reference; FEM CPU reference; GPU diagnostic | `spin_torque_modules[].degree` |
+| `ZhangLiSTT.xi` | `float` | required | $1$ | finite; alias of beta | non-adiabaticity | FDM CPU reference; FEM CPU reference; GPU diagnostic | `spin_torque_modules[].beta` |
+| `ZhangLiSTT.id` | `str` | required for canonical operator | $1$ | non-empty | torque identity | FDM CPU/GPU MuMax3; FEM canonical reference | `spin_torque_modules[].id` |
 | `ZhangLiSTT.target` | `RegionRef` | required for canonical operator | $1$ | existing object/region | target mask ownership | FDM CPU/GPU MuMax3; FEM central reference | `spin_torque_modules[].target` |
 | `ZhangLiSTT.lande_g` | `float` | required for canonical operator | $1$ | exactly `2.0` for `zhang_li.mumax3.v1`; finite and positive for `zhang_li.fullmag.v1` | explicit Landé-factor provenance | FDM CPU/GPU MuMax3 source identity; FEM central reference | `spin_torque_modules[].lande_g` |
-| `ZhangLiSTT.operator_version` | `str` | `zl_mumax3_central_v1` for SP5 | $1$ | `zl_mumax3_central_v1` | spatial/formula realization | FDM CPU/GPU | `spin_torque_modules[].operator_version` |
+| `ZhangLiSTT.operator_version` | `str` | `zl_mumax3_central_v1 for FDM; zl_central_reference_v1 for FEM` | $1$ | versioned operator compatible with the selected backend | spatial/formula realization | FDM CPU/GPU; FEM CPU reference | `spin_torque_modules[].operator_version` |
 | `add_relax.tolT` | `float` | `1e-6` | $\mathrm T$ | positive finite; exclusive with `tolA` | maximum relaxation torque | FDM CPU reference; GPU diagnostic | `study.stop.torque_tolerance_apm` |
 | `add_run.until` | `float` | required | $\mathrm s$ | positive finite | physical observation horizon | FDM CPU reference; GPU diagnostic | `stage.default_until_seconds` |
 
@@ -325,10 +325,31 @@ SP5 trajectory.
 
 ### 6.3 FEM
 
-No FEM SP5 reproduction is claimed. A FEM comparison would require an explicit
-shared-domain or conforming magnetic mesh, a declared demagnetization
-realization, and a spatial convergence table before its mean magnetization
-could be compared with the FDM source result.
+The repository now contains an explicit FEM counterpart in
+`examples/mumax_standard_problem_5_fem.py`. It uses the same physical body,
+material constants, vortex preset, current density, and stage separation as the
+source, but it is not the MuMax3-compatible FDM operator: FEM records
+`zhang_li.fullmag.v1` with `zl_central_reference_v1`, while the FDM source lane
+records `zhang_li.mumax3.v1` with `zl_mumax3_central_v1`.
+
+A managed CPU-double bounded probe completed the FEM materialization,
+Poisson--Robin demagnetization, one-step overdamped relaxation stage, and
+15-step adaptive RK45 Zhang--Li stage to `t=1 ps` on a shared-domain mesh
+(1968 tetrahedra, 383 nodes, 699 active plate elements, FE order 1). The
+terminal volume-weighted mean was
+$(\bar m_x,\bar m_y,\bar m_z)=(1.076279519078731\times10^{-4},
+-1.162322864486359\times10^{-3},1.134078912052475\times10^{-3})$.
+The artifact is archived under
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-probe-20260804-cpu-fixed-v2`.
+
+This is an executable FEM smoke probe, not a FEM--FDM accuracy result. The
+relaxation was deliberately bounded to one step and the FEM horizon is `1 ps`,
+whereas the FDM source diagnostic reports `t=1 ns`. A quantitative comparison
+requires the same relaxed state and observation times, at least three FEM
+spatial refinements, controlled `dt` refinement, field and volume-mean metrics,
+and an independent sign/scale audit of the two versioned Zhang--Li operators.
+Until those gates pass, the FEM result remains `reference-executable/bounded`
+and `validated_workloads` must not be advanced.
 
 ### 6.4 Observables and artifact semantics
 
@@ -361,9 +382,10 @@ The native CUDA one-step parity test is kept in the active inline CUDA test
 module in `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`; the historical
 orphan `native/tests.rs` file is not runtime evidence.
 
-No native FEM or GPU code is inferred from the Python presence. Source-visible,
-compiled, executed-device, parity, and scientific qualification statuses remain
-separate evidence levels.
+The FEM counterpart is intentionally mapped separately from the FDM source
+contract. Source-visible, compiled, executed-device, parity, and scientific
+qualification statuses remain separate evidence levels; the bounded managed
+probe does not imply FEM GPU support or cross-backend equivalence.
 
 (validation)=
 ## 8. Validation strategy and current result
@@ -467,3 +489,6 @@ requirements.
 | `sp5-cuda-mumax3` | `backends/fdm/gpu/cuda/integrators/llg_fp64.cu` | `zhang_li_neighbor_index` | native CUDA central/PBC neighbour realization |
 | `sp5-cuda-cpu-parity-test` | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available` | managed FP64 one-step CPU↔CUDA operator gate |
 | `sp5-ir-mumax3` | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | execution provenance fields for formula/operator/target/Landé |
+| `sp5-fem-fixture` | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class ZhangLiSTT` | canonical Zhang--Li class used by the FEM counterpart fixture |
+| `sp5-fem-demag-runtime` | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` | `context_compute_demag_poisson` | FEM Poisson--Robin demagnetization realization and volume-weighted observables |
+| `sp5-fem-zhangli-provenance` | `crates/fullmag-runner/src/artifacts.rs` | `fem_spin_torque_provenance` | resolved FEM CPU engine and versioned Zhang--Li provenance |

@@ -6855,8 +6855,8 @@ bounded CPU--CUDA/common-limit evidence, ale nie awansuje `SP5` ani
 refinementem, inicjalizacji vortex, relaksacji z demagiem FEM, Zhang--Li przez
 `1 ns`, zgodności obserwabli `avg(m)` i trajektorii z MuMax3 oraz raportu
 zbieżności `h`/`dt`. Dopiero taki przebieg może być porównaniem FEM do
-wcześniejszego FDM SP5; obecny status pozostaje **FDM SP5: diagnostyczny,
-FEM SP5: nieuruchomiony**.
+wcześniejszego FDM SP5; status po bramie opisanej w §32.65 jest **FDM SP5:
+diagnostyczny, FEM SP5: bounded smoke probe, bez kwalifikacji**.
 
 ## 32.64. DomainPresentation i odcięcie FDM field-demand od FEM topology (2026-08-04)
 
@@ -6904,3 +6904,71 @@ FDM layer. Nie wykonano jeszcze browser/WebGL smoke na rzeczywistym payloadzie,
 pełnego Explorer/Inspector round-trip, aktualizacji capability matrix ani
 kwalifikacji `validated_workloads`. Ocena pozostaje **86% implementacji /
 60% gotowości produkcyjnej**.
+
+## 32.65. Pierwszy wykonywalny FEM SP5 probe po korekcie planowania CPU (2026-08-04)
+
+### 32.65.1. Zakres i reprodukowalność
+
+Po wcześniejszej próbie wykryto błąd w dispatchu: jawne `device=cpu` było
+traktowane jako wymuszenie GPU i blokowało CPU-only canonical
+`zhang_li.fullmag.v1`. Korekta `394c046d8` ogranicza wymuszenie GPU do wartości
+`gpu`/`all_in_gpu` i ma regresję jednostkową dla CPU STT. Managed runtime FEM
+został ponownie zbudowany przez `just ensure-managed-fem-runtime`; manifest
+schema 3 wskazuje commit `394c046d8`, ale także `worktree_state=dirty`, więc
+ten przebieg jest dowodem diagnostycznym, nie reprodukowalnym release'em.
+
+Fixture `examples/mumax_standard_problem_5_fem.py` zachowuje fizyczne
+parametry źródła `external_solvers/3/test/standardproblem5.mx3`: body
+`100 nm x 100 nm x 10 nm`, `M_s=800 kA/m`, `A_ex=13 pJ/m`, `alpha=0.1`, vortex
+o cyrkulacji i polaryzacji `+1`, `J_c=(10^12,0,0) A/m^2`, `xi=0.05`. FEM używa
+własnego, jawnie oznaczonego `zhang_li.fullmag.v1`/`zl_central_reference_v1`;
+operator `zhang_li.mumax3.v1` nie jest po cichu podstawiany.
+
+Probe wykonano na shared-domain mesh z airboxem: `160 x 160 x 70 nm`,
+`1968` tetraedrów, `383` węzły, `699` elementów aktywnej płytki, FE order 1,
+`hmax=12 nm`, `hmin=6 nm`, airbox `hmax=40 nm`. Demagnetyzacja była liczona
+przez FEM Poisson--Robin, CG+AMG, `rtol=1e-10`, limit `500` iteracji, CPU
+double. Etap relaksacji zachowano jako osobny etap, lecz celowo ograniczono
+do `1` kroku; etap STT wykonano do `1 ps` (`15` zaakceptowanych kroków,
+adaptive RK45). To jest bounded smoke probe, nie pełny odpowiednik `relax();
+run(1 ns)`.
+
+### 32.65.2. Wynik wykonawczy
+
+Oba etapy zakończyły się `status=completed`, bez fallbacku. Artifact
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-probe-20260804-cpu-fixed-v2`
+zawiera m.in. `physics/spin_torque_provenance.v1.json`, w którym zapisano
+`resolved_execution_engine=fem_cpu_native`, aktywną maskę `699` elementów /
+`256` węzłów, `formula_version=zhang_li.fullmag.v1` oraz
+`operator_version=zl_central_reference_v1`. Końcowy solver/Poisson stanowi:
+
+| obserwabla | FEM probe, `t=1 ps` |
+|---|---:|
+| `avg(m_x)` | `1.076279519078731e-4` |
+| `avg(m_y)` | `-1.162322864486359e-3` |
+| `avg(m_z)` | `1.134078912052475e-3` |
+| `E_ex` | `2.849608399734903e-18 J` |
+| `E_demag` | `7.229261107288929e-19 J` |
+| `max torque` | `2.185113915310145e-1 T` |
+
+`avg(m)` jest redukcją objętościową FEM z tego samego końcowego snapshotu,
+nie średnią arytmetyczną po węzłach. Residual Poissona wyniósł
+`6.35e-11`, a solver wykonał jedną iterację dla tego małego testu.
+
+### 32.65.3. Porównanie FDM--FEM i granica twierdzenia
+
+To potwierdza, że ścieżka Python → ProblemIR → planner → managed FEM CPU →
+demag → canonical Zhang--Li → artefakt działa dla geometrii SP5. Nie jest
+to jeszcze ilościowe porównanie z wcześniejszym FDM SP5: FDM ma wynik `t=1 ns`,
+natomiast FEM probe ma `t=1 ps`, a oba backendy używają różnych operatorów
+Zhang--Li (`zhang_li.mumax3.v1` kontra `zhang_li.fullmag.v1`) oraz różnych
+reprezentacji przestrzennych. Nie wolno z tych liczb wyprowadzać błędu
+solvera ani awansować `validated_workloads`.
+
+Brakuje nadal: (1) wspólnego stanu po rzeczywistej relaksacji FEM i FDM,
+(2) pełnej trajektorii do `1 ns`, (3) co najmniej trzech poziomów `h` dla FEM
+i kontrolowanego `dt`, (4) porównania pól i `avg(m)` w tych samych czasach,
+(5) niezależnego audytu znaku/skalowania obu operatorów oraz (6) kwalifikacji
+FEM GPU. Do czasu wykonania tych bram status pozostaje **FEM SP5:
+reference-executable/bounded diagnostic; FDM SP5: diagnostic-unqualified;
+FDM↔FEM equivalence: not established**.
