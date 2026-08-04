@@ -494,6 +494,13 @@ demag/RK control decisions are unchanged; only overlap between copy and host
 execution may be lost. Any other CUDA allocation error remains fatal. The
 fallback is therefore a resource-degraded transfer realization, never a demag
 solver or physics fallback, and it must be reported as such in runtime logs.
+For deterministic managed qualification, the CUDA-only test hook
+`FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1` selects the same branch without
+spoofing a solver result; it is unset in production and is not a capability
+fallback. The executable contract verifies allocation, asynchronous device to
+host copy, synchronization, numerical value preservation, and cleanup without
+calling `cudaFreeHost` on the pageable array. Readback diagnostics therefore
+refer to generic scalar host staging, not exclusively to pinned memory.
 
 Update 2026-06-05 solver-mesh size gate: the managed production relaxation
 benchmark now requires completed rows to report at least

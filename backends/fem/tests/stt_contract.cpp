@@ -93,6 +93,44 @@ void slonczewski_cpp_is_owned_by_slonczewski_module() {
         "Slonczewski module header must document its physical contract");
 }
 
+void canonical_slonczewski_gpu_descriptor_contract_is_source_visible() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string kernels = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "stt" / "stt_kernels.cu");
+    const std::string header = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "stt" / "stt_kernels.hpp");
+    const std::string torque = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_slonczewski_torque.cu");
+    const std::string mesh_regions = read_text_file(
+        root / "gpu" / "cuda" / "mesh" / "mesh_regions_state.hpp");
+    const std::string runtime = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
+
+    check(
+        header.find("formula_version") != std::string::npos &&
+            header.find("current_density_x") != std::string::npos &&
+            header.find("stack_normal_x") != std::string::npos &&
+            header.find("active_node_mask") != std::string::npos,
+        "FEM GPU Slonczewski descriptor must carry formula version, vector current, stack normal, and target mask");
+    check(
+        kernels.find("FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2") != std::string::npos &&
+            kernels.find("kExactElectronCharge") != std::string::npos &&
+            kernels.find("current_density_x") != std::string::npos &&
+            kernels.find("stack_normal_x") != std::string::npos,
+        "FEM GPU Slonczewski kernel must implement the canonical v2 signed-current branch");
+    check(
+        torque.find("ctx.stt.formula_version") != std::string::npos &&
+            torque.find("ctx.stt.stack_normal") != std::string::npos &&
+            torque.find("stt_active_node_mask") != std::string::npos,
+        "FEM GPU RK torque wrapper must forward the canonical descriptor and target mask");
+    check(
+        mesh_regions.find("stt_active_node_mask") != std::string::npos,
+        "FEM GPU mesh-region state must own the optional STT target mask");
+    check(
+        runtime.find("gpu_state_upload_stt_target_mask") != std::string::npos,
+        "FEM GPU bootstrap must upload the STT target mask through the state module");
+}
+
 void zhang_li_cip_is_owned_by_zhang_li_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string stt =
@@ -895,7 +933,7 @@ void canonical_stt_plan_import_rejects_read_only_slonczewski_v1() {
     check(error.find("read-only provenance") != std::string::npos, "Slonczewski v1 error identifies read-only provenance");
 }
 
-void canonical_stt_gpu_plan_fails_closed_before_device_provenance() {
+void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualification() {
     auto slonczewski = make_slonczewski_context();
     slonczewski.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
     std::string reason;
@@ -903,9 +941,9 @@ void canonical_stt_gpu_plan_fails_closed_before_device_provenance() {
         fullmag::fem::gpu_rk_plan_device_resident(slonczewski, reason);
     check(!slonczewski_plan.enabled, "canonical Slonczewski GPU plan must be disabled");
     check(
-        reason.find("canonical Slonczewski") != std::string::npos &&
-            reason.find("not qualified") != std::string::npos,
-        "canonical Slonczewski GPU fail-closed reason must precede device prerequisites");
+        reason.find("FemGpuState") != std::string::npos &&
+            reason.find("device-resident") != std::string::npos,
+        "canonical Slonczewski GPU plan must reach device prerequisites after formula qualification");
 
     auto zhang_li = make_zhang_li_context();
     zhang_li.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
@@ -922,6 +960,7 @@ void canonical_stt_gpu_plan_fails_closed_before_device_provenance() {
 
 int main() {
     slonczewski_cpp_is_owned_by_slonczewski_module();
+    canonical_slonczewski_gpu_descriptor_contract_is_source_visible();
     zhang_li_cip_is_owned_by_zhang_li_module();
     stt_plan_fields_are_owned_by_stt_module();
     stt_aggregate_header_documents_submodule_boundaries();
@@ -944,6 +983,6 @@ int main() {
     stt_plan_import_copies_parameters_and_validates_family();
     canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_data();
     canonical_stt_plan_import_rejects_read_only_slonczewski_v1();
-    canonical_stt_gpu_plan_fails_closed_before_device_provenance();
+    canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualification();
     return 0;
 }

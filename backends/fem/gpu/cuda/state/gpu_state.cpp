@@ -32,6 +32,10 @@
 #include <limits>
 #include <vector>
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
+
 namespace fullmag::fem {
 
 namespace {
@@ -62,6 +66,8 @@ void reset_metadata(FemGpuState &state)
     state.mesh_metrics.device_bytes = 0;
     state.mesh_regions.node_count = 0;
     state.mesh_regions.has_periodic_reduced_nodes = false;
+    state.mesh_regions.stt_active_node_mask = nullptr;
+    state.mesh_regions.stt_active_node_count = 0;
     state.magnetoelastic.strain_voigt_len = 0;
     state.magnetoelastic.strain_uploaded = false;
     state.mesh_geometry.element_count = 0;
@@ -380,6 +386,77 @@ bool gpu_state_upload_runtime_coefficients(
         periodic_representative_nodes_len,
         audit,
         error);
+}
+
+bool gpu_state_upload_stt_target_mask(
+    FemGpuState &state,
+    const uint8_t *active_node_mask,
+    uint64_t active_node_mask_len,
+    TransferAudit &audit,
+    std::string &error)
+{
+    if ((active_node_mask == nullptr) != (active_node_mask_len == 0)) {
+        error = "FEM GPU STT target mask requires a pointer and non-zero length together";
+        return false;
+    }
+    if (active_node_mask_len != 0 &&
+        active_node_mask_len != state.lifecycle.node_count) {
+        error = "FEM GPU STT target mask length must match FEM node count";
+        return false;
+    }
+    if (active_node_mask_len > std::numeric_limits<size_t>::max()) {
+        error = "FEM GPU STT target mask is too large for device allocation";
+        return false;
+    }
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    auto &mesh_regions = state.mesh_regions;
+    if (mesh_regions.stt_active_node_mask != nullptr) {
+        const uint64_t old_bytes = mesh_regions.stt_active_node_count;
+        gpu_device_free_u8(mesh_regions.stt_active_node_mask);
+        state.lifecycle.device_bytes =
+            old_bytes <= state.lifecycle.device_bytes
+                ? state.lifecycle.device_bytes - old_bytes
+                : 0;
+        mesh_regions.stt_active_node_count = 0;
+    }
+    if (active_node_mask == nullptr) {
+        return true;
+    }
+
+    uint8_t *device_mask = nullptr;
+    if (!gpu_device_allocate_u8(
+            device_mask,
+            active_node_mask_len,
+            state.lifecycle.device_bytes,
+            error)) {
+        return false;
+    }
+    if (cudaMemcpy(
+            device_mask,
+            active_node_mask,
+            static_cast<size_t>(active_node_mask_len),
+            cudaMemcpyHostToDevice) != cudaSuccess) {
+        gpu_device_free_u8(device_mask);
+        state.lifecycle.device_bytes =
+            active_node_mask_len <= state.lifecycle.device_bytes
+                ? state.lifecycle.device_bytes - active_node_mask_len
+                : 0;
+        error = "cudaMemcpy FemGpuState STT target mask host->device failed";
+        return false;
+    }
+    record_host_to_device(audit, active_node_mask_len);
+    mesh_regions.stt_active_node_mask = device_mask;
+    mesh_regions.stt_active_node_count = active_node_mask_len;
+    return true;
+#else
+    (void)audit;
+    error = "FEM GPU STT target mask upload requires CUDA runtime support";
+    return false;
+#endif
 }
 
 bool gpu_state_upload_exchange_legacy_sparse(

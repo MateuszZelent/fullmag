@@ -6722,13 +6722,56 @@ mod tests {
                     None
                 },
                 slonczewski_stt: if has_slonczewski_stt(plan) {
+                    let (current_density_magnitude, current_sign) =
+                        if stt_contract.is_some_and(|contract| {
+                            contract.formula_version == "slonczewski.fullmag.v2"
+                        }) {
+                            let contract = stt_contract.expect("canonical Slonczewski contract");
+                            let normal = contract
+                                .stack_normal
+                                .expect("canonical Slonczewski stack normal");
+                            let normal_norm = (normal[0] * normal[0]
+                                + normal[1] * normal[1]
+                                + normal[2] * normal[2])
+                                .sqrt();
+                            let current = plan.current_density.expect("current density");
+                            let signed_normal_current = (current[0] * normal[0]
+                                + current[1] * normal[1]
+                                + current[2] * normal[2])
+                                / normal_norm;
+                            (
+                                signed_normal_current.abs(),
+                                if signed_normal_current.is_sign_negative() {
+                                    -1.0
+                                } else {
+                                    1.0
+                                },
+                            )
+                        } else {
+                            let current = plan.current_density.expect("current density");
+                            (
+                                (current[0] * current[0]
+                                    + current[1] * current[1]
+                                    + current[2] * current[2])
+                                    .sqrt(),
+                                match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
+                                    "bottom" => -1.0,
+                                    _ => 1.0,
+                                },
+                            )
+                        };
                     Some(fullmag_engine::SlonczewskiSttConfig {
-                        active_mask: None,
-                        formula: fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
-                        current_density_magnitude: {
-                            let j = plan.current_density.expect("current density");
-                            (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt()
+                        active_mask: stt_contract
+                            .and_then(|contract| contract.active_node_mask.clone()),
+                        formula: match stt_contract
+                            .map(|contract| contract.formula_version.as_str())
+                        {
+                            Some("slonczewski.fullmag.v2") => {
+                                fullmag_engine::SlonczewskiFormula::FullmagV2
+                            }
+                            _ => fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
                         },
+                        current_density_magnitude,
                         spin_polarization_axis: plan
                             .stt_spin_polarization
                             .expect("stt spin polarization"),
@@ -6738,14 +6781,7 @@ mod tests {
                         thickness: plan
                             .stt_thickness
                             .unwrap_or_else(|| effective_magnetic_thickness(&plan.mesh)),
-                        current_sign: match plan
-                            .stt_fixed_layer_position
-                            .as_deref()
-                            .unwrap_or("top")
-                        {
-                            "bottom" => -1.0,
-                            _ => 1.0,
-                        },
+                        current_sign,
                     })
                 } else {
                     None
@@ -8473,5 +8509,60 @@ mod tests {
             5e-8,
             1e-9,
         );
+    }
+
+    #[test]
+    fn native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.enable_exchange = true;
+        plan.external_field = None;
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.current_density = Some([1.4e11, 0.0, 0.0]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.8);
+        plan.stt_epsilon_prime = Some(0.03);
+        plan.stt_thickness = Some(1.0e-9);
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            operator_version: None,
+            realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: None,
+            stack_normal: Some([2.0, 0.0, 0.0]),
+            lande_g: None,
+            active_node_mask: Some(vec![true, true, false, true, true]),
+            active_element_mask: None,
+        });
+
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let mut cpu = NativeFemBackend::create(&cpu_plan).expect("native FEM canonical CPU create");
+        let mut gpu = NativeFemBackend::create(&gpu_plan).expect("native FEM canonical GPU create");
+
+        for step in 1..=8 {
+            cpu.step(dt)
+                .expect("native FEM canonical CPU trajectory step");
+            gpu.step(dt)
+                .expect("native FEM canonical GPU trajectory step");
+            let cpu_m = cpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy canonical CPU m");
+            let gpu_m = gpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy canonical GPU m");
+            assert_vector_field_close(
+                &format!("canonical FEM Slonczewski trajectory step {step}"),
+                &gpu_m,
+                &cpu_m,
+                5e-7,
+                1e-10,
+            );
+        }
     }
 }

@@ -5258,6 +5258,112 @@ i pełny Python/UI round-trip pozostają otwarte. Zapisany zakres poprawia
 wiarygodność diagnostyki BORIS, ale nie zwiększa oceny produkcyjnej: nadal
 **86% implementacji / 60% gotowości produkcyjnej**.
 
+## 32.45. Stałokrokowa trajektoria i skalowanie kanonicznego SOT v1 FDM CUDA (2026-08-04)
+
+### 32.45.1. Zakres fizyczny i kontrakt wejściowy
+
+Po zamknięciu bram Slonczewskiego dodano analogiczną, ale odrębną bramę dla
+`prescribed_sot.fullmag.v1`. Test nie używa legacy `|J|`: przekazuje signed
+`J_signed=-4e11 A/m^2`, `xi_DL=0.12`, `xi_FL=-0.03`,
+`sigma_hat=(0,1,0)`, `t_F=1.5e-9 m`, jawny `sot_target`,
+`PrescribedSotV1DriveIR::SignedScalar` oraz maskę celu, która wybiera tylko
+aktywne komórki. Wymiana, demag i pole zewnętrzne są wyłączone, a `dt=1e-15 s`
+utrzymuje pomiar w małym, stabilnym envelope Heuna. CPU reference korzysta z
+niezależnego `prescribed_sot_scales` i tej samej jednej konwersji Gilberta co
+opis fizyczny:
+
+```text
+Omega = gamma_e hbar J_signed/(2 e M_s t_F)
+T_G = Omega [xi_DL m x (sigma x m) + xi_FL m x sigma]
+T_explicit = [T_G + alpha m x T_G]/(1+alpha^2)
+```
+
+### 32.45.2. Implementacja i dowód RED → GREEN
+
+Dodano testy w rzeczywistym module `fdm::gpu::cuda::native::tests`:
+
+```text
+native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available
+native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available
+```
+
+Pierwszy test wykonuje osiem kolejnych kroków CUDA FP64 i po każdym kroku
+porównuje pełny wektor `m` z CPU-reference uruchomionym do tego samego
+prefiksu czasu. Drugi uruchamia `0.5x`, `1x` i `2x` signed current względem
+tego samego stanu bazowego; aktywne i wskazane komórki muszą mieć odpowiedź
+`1:2:4`, a komórki nieaktywne lub niewskazane nie mogą reagować.
+
+Receptura `just verify-fdm-prescribed-sot-native-contract` została rozszerzona
+o pełny managed `fullmag_fdm`, kontrakt algebraiczny, runtime CUDA FP64/FP32 i
+oba testy Rust. Wynik:
+
+```text
+prescribed SOT algebra contract: PASS
+prescribed SOT CUDA fp64/fp32 runtime: PASS
+running 2 tests
+...native_fdm_prescribed_sot_has_bounded_current_scaling... ok
+...native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 784 filtered out
+```
+
+Sprawdzono również publiczny round-trip Python/SceneDocument/script export:
+`TMPDIR=/tmp/fullmag-zfn2-build/python-sot-tests PYTHONPATH=packages/fullmag-py/src
+python3 -m pytest -q packages/fullmag-py/tests/test_prescribed_sot.py
+packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` dał
+`44 passed, 2 warnings, 88 subtests passed`. Pierwsza próba bez ustawionego
+`TMPDIR` była wyłącznie błędem hostowego pytest capture (`FileNotFoundError`,
+zero testów); nie zmienia to dowodu po powtórzeniu w prawidłowym katalogu.
+
+Pierwsze czerwone uruchomienia zatrzymały się na brakującym `sot_target` /
+`sot_drive`, a następnie na masce wskazującej nieaktywną komórkę. Oba błędy
+pochodziły z zamierzonego fail-closed walidatora planu; fixture uzupełniono do
+pełnego kontraktu zamiast osłabiać walidację.
+
+### 32.45.3. Granica kwalifikacji
+
+Zamknięto wyłącznie bounded FP64 FDM CUDA descriptor/trajectory/mask/current
+scaling evidence dla małego fixed-step workloadu. Nie zamyka to FEM SOT,
+FP32 error envelope, nieliniowego sweepu prądu, stage-time envelope,
+zbieżności `dt`/siatki, cross-backend parity, bezpośredniego lub odwrotnego
+SHE, ani produkcyjnej kwalifikacji. Canonical SOT pozostaje
+`semantic_only` we wszystkich czterech publicznych lane'ach; capability matrix
+opisuje nowy dowód, ale `validated_workloads` pozostaje puste. Szeroka ocena
+celu pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.46. Pull `origin/master` i ponowna brama demaga (2026-08-04)
+
+Wykonano:
+
+```text
+git pull --ff-only origin master
+Already up to date.
+```
+
+Branch jest `master`, lokalny HEAD `427aa79fe`, a `origin/master` wskazuje
+`b3c839b9c`; lokalne cztery commity implementacyjne pozostają jeszcze
+niepushowane. W historii są wcześniejsze poprawki/proweniencja demaga:
+`34cf6a9da` (degradacja pageable scalar staging), `02f7bf813` i `b3c839b9c`
+(udokumentowana synchronizacja pull). Niezależne lokalne usunięcia debugów
+`apps/legacy_web` oraz modyfikacja `external_solvers/3` pozostały poza zmianą.
+
+Po pullu uruchomiono managed:
+
+```text
+just verify-fem-demag-poisson-contract-focused
+```
+
+Receptura skonfigurowała CUDA/MFEM/Hypre i zbudowała oraz uruchomiła wszystkie
+sześć kontraktów: `fem_demag_poisson_contract`,
+`fem_demag_delta_potential_contract`, `fem_demag_fem_bem_contract`,
+`fem_cuda_demag_timing_contract`, `fem_cuda_periodic_demag_contract` i
+`fem_cuda_periodic_exchange_contract`; zakończyła się kodem `0`. Komunikaty
+`PCG: Number of iterations: 1 / No convergence!` pochodzą z fixture testującej
+odrzucenie niezbiegniętego kandydata i nie są dowodem zbieżności produkcyjnego
+przebiegu. Brama potwierdza poprawność kontraktów i fail-closed demaga po
+pullu, ale nie zamyka jeszcze pełnej kwalifikacji fizycznej: pozostają
+medium/fine convergence, airbox/RT0/KKT, MPI scaling, długi runtime i
+cross-backend demag parity. Szeroka ocena celu pozostaje **86% / 60%**.
+
 ## 32.36. Ujednolicenie walidacji objętości OCC z kontraktem Rust (2026-08-03)
 
 ### 32.36.1. Synchronizacja z `master`
@@ -5519,3 +5625,298 @@ mapy przestrzenne i cross-backend parity pozostają otwarte. Pełna suita Python
 pozostaje niezielona (`1406 passed, 49 failed, 3 skipped` w bieżącym rerunie),
 więc nie zmieniam szerokiej oceny **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.40. Kontrolowana kwalifikacja pageable scalar readback GPU (2026-08-03)
+
+Zamknięto wcześniej otwartą bramę testowalności fallbacku stagingu scalarów
+GPU. Sam obserwowany SP4 nadal używa pinned path, dlatego nie wolno było
+udawać, że przypadkowe obciążenie hosta jest deterministycznym testem. Dodano
+wyłącznie kwalifikacyjny hook środowiskowy
+`FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1`; domyślna produkcyjna ścieżka
+nadal próbuje `cudaHostAlloc`, a każdy błąd inny niż
+`cudaErrorMemoryAllocation` pozostaje fatalny.
+
+Zakres zmiany:
+
+- `backends/fem/gpu/cuda/reductions/reduction_workspace_memory.cpp` wybiera
+  fixed 32-slot pageable array tylko dla kontrolowanego hooka albo rzeczywistego
+  `cudaErrorMemoryAllocation`; nie zmienia żadnego równania, redukcji ani
+  kryterium solvera;
+- `backends/fem/gpu/cuda/integrators/rk/rk_scalar_readback.cu` opisuje teraz
+  scalar host staging, ponieważ zarówno pinned, jak i pageable destination
+  korzysta z tego samego `cudaMemcpyAsync` i stream fence;
+- `backends/fem/tests/gpu_pageable_scalar_readback_contract.cpp` jest
+  wykonywalnym testem CUDA, nie testem tekstowym: alokuje workspace, sprawdza
+  `scalar_result_pinned=false`, wykonuje D2H na urządzeniu, synchronizuje,
+  sprawdza wartość `3.25` i weryfikuje bezpieczny cleanup;
+- `just verify-fem-time-domain-native-contract` buduje i uruchamia ten target
+  w zarządzanym kontenerze, bez hooka w normalnym runtime.
+
+Świeży managed wynik:
+
+```text
+just verify-fem-time-domain-native-contract: PASS
+pageable scalar readback: forced qualification branch, warning emitted,
+  async D2H + synchronization + numeric preservation + cleanup: PASS
+fullmag-fem-sys ABI: 35 passed; 0 failed
+```
+
+To zamyka bramę **kontrolowanego runtime fallbacku**, ale nie awansuje SP4 do
+`validated`: pełne medium/fine, mapy przestrzenne, CPU/GPU parity i fizyczna
+kwalifikacja cross-backend nadal są wymagane. Nie zmieniam szerokiej oceny
+**86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.41. Kanoniczny Slonczewski v2 FEM GPU: descriptor, maska i kontrakt FP64 (2026-08-04)
+
+### 32.41.1. Zakres i decyzja fizyczna
+
+Po zamknięciu obserwowanej bramy demaga wybrano następną bramę P0: usunięcie
+nieuzasadnionego blokowania `slonczewski.fullmag.v2` na FEM GPU, ale tylko po
+przeniesieniu pełnego deskryptora fizycznego. Implementacja nie wraca do
+legacy `|J|` ani do `current_sign` jako substytutu orientacji. Kernel v2
+otrzymuje wektor `J_c`, znormalizowaną normalną `n_stack`, dokładną wartość
+`e=1.602176634e-19 C`, niezależne `epsilon_prime`, `t_F`, `M_s`, `alpha`,
+polaryzację i opcjonalną maskę aktywnego celu. Wzór pozostaje:
+
+```text
+J_n = J_c · n_stack
+Omega_J = gamma_e hbar J_n / (e M_s t_F)
+T_explicit = Omega_J [ (epsilon + alpha epsilon_prime) D
+                      + (epsilon_prime - alpha epsilon) C ]/(1+alpha^2)
+```
+
+gdzie `D=m×(m×p)` i `C=m×p`. Maska jest opcjonalnym stanem urządzenia w
+`FemGpuMeshRegionDeviceState`; jej brak oznacza wszystkie węzły magnetyczne,
+a jej obecność wymaga długości równej liczbie węzłów. Nie dodano nowej fizyki
+do `Context` ani do `mfem_bridge.cpp`.
+
+### 32.41.2. Zmiany wykonawcze
+
+- `stt_kernels.cu/.hpp` rozdziela gałąź legacy od canonical v2 i zachowuje
+  zgodność legacy, ale v2 korzysta z `J_c·n_stack`, bez czynnika `2` i bez
+  faktoryzowania `epsilon_prime` przez `epsilon(c)`;
+- `rk_slonczewski_torque.cu` przekazuje pełny deskryptor z `Context`,
+  `rk_plan.cpp` usuwa blokadę wersji v2 i pozostawia fail-closed dla brakującej
+  rezydencji urządzenia lub niezaładowanej maski;
+- `gpu_state_upload_stt_target_mask` odpowiada za alokację, upload,
+  zwolnienie, księgowanie bajtów i transfer audit; bootstrap wywołuje go po
+  uploadzie współczynników materiałowych;
+- `engine.rs` i testy wyboru silnika nie oznaczają już v2 jako CPU-only;
+  Zhang–Li v1 pozostaje zablokowany na FEM GPU;
+- dodano `fem_cuda_slonczewski_contract`, a receptury managed STT i
+  time-domain budują oraz uruchamiają ten target.
+
+### 32.41.3. Dowód RED → GREEN
+
+Najpierw uruchomiono istniejącą recepturę po dodaniu testu kompletności
+deskryptora. Otrzymano oczekiwany RED:
+
+```text
+FAIL: FEM GPU Slonczewski descriptor must carry formula version, vector current, stack normal, and target mask
+```
+
+Po implementacji wykonano w kontenerze zarządzanym:
+
+```text
+just verify-fem-stt-native-contract
+```
+
+Wynik GREEN:
+
+```text
+FEM CUDA Slonczewski v2 numeric contract PASS
+fullmag-fem-sys: 1 passed; 0 failed
+```
+
+Test numeryczny sprawdza niezależnie: `J=(3e12,-4e12,0) A/m^2`,
+`n_stack=(0,1,0)`, `t_F=1e-9 m`, `P=0.5`, `Lambda=1`, `epsilon_prime=0.35`,
+`alpha=0.2`, `M_s=800 kA/m`, maskę `{1,0}`, zgodność z CPU oraz zmianę znaku
+po odwróceniu prądu. Węzeł poza celem pozostaje dokładnie zerowy.
+
+Następnie wykonano pełną recepturę:
+
+```text
+just verify-fem-time-domain-native-contract
+```
+
+Wynik: dokumentacja czasu LLG, managed CUDA/MFEM/SLEPc build, wszystkie
+kontrakty natywne, nowy `fem_cuda_slonczewski_contract`, kontrolowany pageable
+demag readback oraz `fullmag-fem-sys` (`35 passed; 0 failed`) przeszły.
+
+Source map `docs/physics/0960-spin-torque-sign-units-and-prescribed-sot.source-map.json`
+przechodzi walidator `validate_scientific_docs.py`; nota fizyczna opisuje teraz
+descriptor GPU, zakres dowodu i granice kwalifikacji.
+
+### 32.41.4. Granica kwalifikacji i ocena
+
+Macierz capability zmieniono wyłącznie dla krotki
+`FEM/GPU/double/strict/slonczewski.fullmag.v2/thin_layer`: z `unsupported` na
+`reference_executable`. Nie jest to `production_executable` ani `validated`.
+Dowód obejmuje jeden krok FP64 i operatorową inwolucję znaku, ale nie obejmuje
+pełnej trajektorii RK, trzech siatek, zbieżności przestrzennej, długiego
+przebiegu demaga, cross-backend parity z FDM/MuMax3, FP32 ani pełnego
+Python/UI round-trip. Interfejsowy `slonczewski_interface_flux.v1` nadal
+pozostaje fail-closed/semantic-only.
+
+Otwarte P0 pozostają: pełna trajektoria i cross-backend parity STT, SHE/SOT
+z BORIS i wzajemnością, RT0/KKT Oersteda, fizyczny adapter DOS→`C_s`, SML v2,
+skin/MQS, pełny Python/OpenAPI/UI round-trip oraz produkcyjna kwalifikacja
+FEM GPU. Szeroka ocena celu pozostaje konserwatywnie **86% implementacji /
+60% gotowości produkcyjnej**; zmiana podnosi jedynie wykonawczą granicę FEM
+GPU z fail-closed do ograniczonego `reference_executable`.
+
+## 32.42. Stałokrokowa trajektoria Slonczewskiego v2 FDM CUDA (2026-08-04)
+
+### 32.42.1. Zakres bramy
+
+Po synchronizacji z `origin/master` wybrano następną małą bramę P0 dla już
+istniejącego, wykonywalnego deskryptora FDM CUDA. Nie zmieniano równania
+Slonczewskiego, demaga, schematu Heun ani ABI. Test wykonuje ten sam plan
+`slonczewski.fullmag.v2` w `double`, ze stałym `dt=2.5e-13 s`, z wektorem
+prądu `J_c=(1.4e11,0,0) A/m^2`, normalną `n_stack=(2,0,0)` oraz rozdzielną
+maską celu. Po każdym z ośmiu zaakceptowanych kroków pobiera pełną
+magnetyzację CUDA i porównuje ją z niezależnym CPU-reference uruchomionym do
+tego samego prefiksu czasowego. Dzięki temu test nie ogranicza się do
+zgodności pojedynczego RHS-a ani końcowego stanu.
+
+### 32.42.2. RED → GREEN
+
+Dodano test:
+
+```text
+native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available
+```
+
+oraz rozszerzono recepturę `just verify-fdm-slonczewski-native-contract`, aby
+uruchamiała zarówno istniejący test one-step, jak i nowy test trajectory.
+Pierwsze uruchomienie po zmianie receptury zbudowało pełny `fullmag_fdm` w
+zarządzanym kontenerze CUDA; wynik końcowy:
+
+```text
+just verify-fdm-slonczewski-native-contract
+running 2 tests
+...with_target_mask_when_cuda_is_available ... ok
+...for_fixed_trajectory_when_cuda_is_available ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 781 filtered out
+```
+
+Brama obejmuje osiem prefiksów czasowych, nie osiem niezależnych przebiegów z
+ponownie ustawionym stanem CUDA. Porównanie zachowuje tolerancję
+`rtol=1e-6`, `atol=1e-10` dla każdej składowej `m` i każdego kroku.
+
+### 32.42.3. Granica kwalifikacji
+
+To jest bounded FP64 FDM CPU↔CUDA temporal-parity evidence dla jednego
+małego, stałokrokowego workloadu. Nie zamyka obecnie: sweepu skali prądu,
+zbieżności `dt` i siatki, FP32, adaptacyjnego RK, FEM/GPU, zgodności z
+MuMax3/BORIS ani fizycznego workloadu skyrmionu/racetrack/Hall angle.
+Capability matrix zachowuje `production_executable` dla FDM GPU oraz
+`reference_executable` dla FEM GPU; zmieniono wyłącznie opis dowodu FDM.
+Szeroka ocena celu pozostaje konserwatywnie **86% implementacji / 60%
+gotowości produkcyjnej**. Następne P0 pozostają: SHE/BORIS i wzajemność,
+pełna trajektoria FEM/GPU, current-scaling i cross-backend, skin/MQS,
+fizyczny adapter DOS→`C_s`, SML v2 oraz pełny Python/OpenAPI/UI round-trip.
+
+## 32.43. Izolowana brama skalowania prądu Slonczewskiego v2 FDM CUDA (2026-08-04)
+
+### 32.43.1. Zakres fizyczny
+
+Po ośmiokrokowej bramie temporalnej dodano osobny test, który nie używa
+CPU-reference jako jedynego kryterium. Plan FDM CUDA jest kanonicznym
+`slonczewski.fullmag.v2` z tym samym wektorem `J_c=(1.4e11,0,0) A/m^2`,
+`n_stack=(2,0,0)`, `P=0.62`, `Lambda=1.8`, `epsilon_prime=0.03` i maską celu.
+Wyłączono wymianę, demag i pole zewnętrzne, aby izolować źródło STT. Dla
+`dt=1e-15 s` wykonuje się po jednym kroku przy `0.5x`, `1x` i `2x` prądu,
+a norma przyrostu magnetyzacji względem stanu bazowego musi skalować się
+odpowiednio `1:2:4` w aktywnych komórkach. Tak mały krok utrzymuje pomiar w
+liniowym envelope Heuna; nie jest to twierdzenie o liniowości dużego prądu,
+długiej trajektorii ani o stabilności po zmianie siatki.
+
+### 32.43.2. Implementacja i dowód RED → GREEN
+
+Dodano test wykonywalny:
+
+```text
+native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available
+```
+
+Receptura `just verify-fdm-slonczewski-native-contract` została rozszerzona,
+aby uruchamiać trzy kanoniczne testy FDM CUDA. Managed build i runtime dały:
+
+```text
+just verify-fdm-slonczewski-native-contract
+running 3 tests
+...matches_cpu_reference_with_target_mask_when_cuda_is_available ... ok
+...has_bounded_current_scaling_when_cuda_is_available ... ok
+...matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 781 filtered out
+```
+
+Zmiana nie dotyka równania, prefaktora `hbar/e`, maski ani deskryptora ABI;
+sprawdza wyłącznie obserwowalną odpowiedź istniejącego kernela na skalowanie
+podpisanego `J_c dot n_stack`.
+
+### 32.43.3. Granica kwalifikacji
+
+Zamknięto tylko bounded isolated FP64 FDM CUDA current-increment scaling.
+Nie zamyka to nonlinearnego sweepu prądu, zbieżności `dt`/siatki, FP32,
+pełnej trajektorii FEM/GPU, cross-backend parity, MuMax3/BORIS ani workloadu
+skyrmionu/racetrack/Hall angle. Capability pozostaje
+`production_executable` dla FDM GPU i `reference_executable` dla FEM GPU;
+`validated_workloads` pozostaje puste. Szeroka ocena celu nie zmienia się:
+**86% implementacji / 60% gotowości produkcyjnej**. Następne P0 to pełna
+trajektoria FEM/GPU i cross-backend/current sweep, SHE/BORIS z wzajemnością,
+skin/MQS, DOS→`C_s`, SML v2 oraz pełny Python/OpenAPI/UI round-trip.
+
+## 32.44. Stałokrokowa trajektoria Slonczewskiego v2 FEM CPU↔GPU (2026-08-04)
+
+### 32.44.1. Zakres bramy
+
+Podłączono bramę temporalnej parytetu do rzeczywistego modułu testowego
+`native_fem::tests` (wcześniejszy filtr wskazywał pomocniczy, nieużywany plik i
+raportował zero dopasowanych testów). Workload jest kanonicznym
+`slonczewski.fullmag.v2` / `slonczewski_thin_layer_homogenized.v1` w FP64, z
+`J_c=(1.4e11,0,0) A/m^2`, `n_stack=(2,0,0)`, `P=0.62`, `Lambda=1.8`,
+`epsilon_prime=0.03`, `t_F=1e-9 m` i maską węzłów
+`[true,true,false,true,true]`. Wymiana pozostaje włączona, ponieważ jest
+warunkiem device-resident GPU RK; demag i pole zewnętrzne są wyłączone.
+CPU i GPU wykonują osiem kolejnych kroków Heuna przy `dt=1e-15 s`, a pełna
+magnetyzacja po każdym kroku jest porównywana z tolerancją `rtol=5e-7`,
+`atol=1e-10`. Maska jest sprawdzana przez parytet całego wektora; nie narzuca
+się bitowej niezmienności węzła nieaktywnego, bo wymiana może zmienić go
+pośrednio.
+
+### 32.44.2. Dowód RED → GREEN
+
+Dodano test:
+
+```text
+native_fem::tests::native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available
+```
+
+Receptura `just verify-fem-stt-native-contract` uruchamia teraz właściwy
+inline test `native_fem::tests`, a pierwsze dwa testy planera korzystają z
+`FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem`, dzięki czemu nie
+odtwarzają niepotrzebnie całego natywnego MFEM/CUDA artefaktu w Cargo.
+Managed wynik końcowy:
+
+```text
+FEM CUDA Slonczewski v2 numeric contract PASS
+versioned_stt_extension_is_append_only_after_legacy_plan_prefix ... ok
+auto_fem_canonical_slonczewski_v2_remains_gpu_eligible ... ok
+strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation ... ok
+native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available ... ok
+test result: ok; 1 passed for each filtered Rust contract
+```
+
+### 32.44.3. Granica kwalifikacji
+
+Zamknięto bounded FP64 CPU↔GPU temporal parity dla jednej ośmiokrokowej
+trajektorii Heuna i jednego małego mesh/parameter envelope, wraz z
+przekazaniem kanonicznego `J dot n_stack`, wersji formuły, grubości i maski.
+Nie zamyka to pełnej rodziny integratorów, adaptacji kroku, zbieżności
+`h`/`p`/multi-grid, długiego przebiegu demaga, FP32, cross-backend parity z
+FDM/MuMax3/BORIS, nonlinearnego sweepu prądu ani produkcyjnej kwalifikacji
+FEM GPU. Capability pozostaje `reference_executable`, a
+`validated_workloads` pozostaje puste. Szeroka ocena celu pozostaje
+**86% implementacji / 60% gotowości produkcyjnej**.

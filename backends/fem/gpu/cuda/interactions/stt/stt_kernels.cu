@@ -86,11 +86,14 @@ __global__ void slonczewski_stt_rhs_kernel(
     const double *__restrict__ ms,
     const double *__restrict__ alpha,
     const uint8_t *__restrict__ magnetic_node_mask,
+    const uint8_t *__restrict__ active_node_mask,
     double *__restrict__ dmx,
     double *__restrict__ dmy,
     double *__restrict__ dmz,
     double *__restrict__ block_max_rhs,
-    double current_density_mag,
+    double current_density_x,
+    double current_density_y,
+    double current_density_z,
     double current_sign,
     double gamma_mu0,
     double uniform_alpha,
@@ -101,32 +104,53 @@ __global__ void slonczewski_stt_rhs_kernel(
     double px,
     double py,
     double pz,
+    double stack_normal_x,
+    double stack_normal_y,
+    double stack_normal_z,
+    uint32_t formula_version,
     int N)
 {
     constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
     constexpr double kHbar = 1.054571817e-34;
-    constexpr double kElectronCharge = 1.60217662e-19;
+    constexpr double kLegacyElectronCharge = 1.60217662e-19;
+    constexpr double kExactElectronCharge = 1.602176634e-19;
 
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     double rhs_norm = 0.0;
-    if (i < N && (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
+    if (i < N &&
+        (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u) &&
+        (active_node_mask == nullptr || active_node_mask[i] != 0u)) {
         const double ms_i = ms[i];
-        if (current_density_mag > 0.0 && free_layer_thickness > 0.0 && ms_i > 0.0) {
+        const double current_density_mag = sqrt(
+            current_density_x * current_density_x +
+            current_density_y * current_density_y +
+            current_density_z * current_density_z);
+        const bool canonical_v2 =
+            formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
+        const double signed_current = canonical_v2
+            ? current_density_x * stack_normal_x +
+                current_density_y * stack_normal_y +
+                current_density_z * stack_normal_z
+            : current_sign * current_density_mag;
+        if (signed_current != 0.0 && free_layer_thickness > 0.0 && ms_i > 0.0) {
             const double alpha_i = alpha != nullptr ? alpha[i] : uniform_alpha;
             const double lmx = mx[i], lmy = my[i], lmz = mz[i];
             const double lambda_sq = lambda * lambda;
             const double m_dot_p = lmx * px + lmy * py + lmz * pz;
             const double denominator = (lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p;
             const double g = denominator != 0.0 ? (degree * lambda_sq) / denominator : 0.0;
-            const double beta_stt =
-                ((current_sign * current_density_mag * kHbar * gamma_mu0) /
-                 (2.0 * kElectronCharge * kMu0 * ms_i * free_layer_thickness)) *
-                g;
+            const double prefactor =
+                (signed_current * kHbar * gamma_mu0) /
+                ((canonical_v2 ? 1.0 : 2.0) *
+                 (canonical_v2 ? kExactElectronCharge : kLegacyElectronCharge) *
+                 kMu0 * ms_i * free_layer_thickness);
             const double inv_gilbert = 1.0 / (1.0 + alpha_i * alpha_i);
-            const double damping_like =
-                beta_stt * (1.0 + alpha_i * epsilon_prime) * inv_gilbert;
-            const double field_like =
-                beta_stt * (epsilon_prime - alpha_i) * inv_gilbert;
+            const double damping_like = canonical_v2
+                ? prefactor * (g + alpha_i * epsilon_prime) * inv_gilbert
+                : prefactor * g * (1.0 + alpha_i * epsilon_prime) * inv_gilbert;
+            const double field_like = canonical_v2
+                ? prefactor * (epsilon_prime - alpha_i * g) * inv_gilbert
+                : prefactor * g * (epsilon_prime - alpha_i) * inv_gilbert;
 
             const double mxp_x = lmy * pz - lmz * py;
             const double mxp_y = lmz * px - lmx * pz;
@@ -303,11 +327,14 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
     const double *ms,
     const double *alpha,
     const uint8_t *magnetic_node_mask,
+    const uint8_t *active_node_mask,
     double *dmx,
     double *dmy,
     double *dmz,
     double *block_max_rhs,
-    double current_density_mag,
+    double current_density_x,
+    double current_density_y,
+    double current_density_z,
     double current_sign,
     double gamma_mu0,
     double uniform_alpha,
@@ -318,6 +345,10 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
     double px,
     double py,
     double pz,
+    double stack_normal_x,
+    double stack_normal_y,
+    double stack_normal_z,
+    uint32_t formula_version,
     int N,
     cudaStream_t stream)
 {
@@ -329,11 +360,14 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
         ms,
         alpha,
         magnetic_node_mask,
+        active_node_mask,
         dmx,
         dmy,
         dmz,
         block_max_rhs,
-        current_density_mag,
+        current_density_x,
+        current_density_y,
+        current_density_z,
         current_sign,
         gamma_mu0,
         uniform_alpha,
@@ -344,6 +378,10 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
         px,
         py,
         pz,
+        stack_normal_x,
+        stack_normal_y,
+        stack_normal_z,
+        formula_version,
         N);
 }
 

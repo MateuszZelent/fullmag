@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-07-15
+- Last updated: 2026-08-04
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v2`,
@@ -12,6 +12,7 @@ Formula, operator, realization, and engine identifiers are classified by the
 normative registry in section 8.1 of the runtime contract; this note never uses
 an engine identifier as a formula or operator version.
 
+(problem-statement)=
 ## 1. Problem statement
 
 Fullmag needs one backend-independent convention for current-induced torque.
@@ -28,6 +29,7 @@ a local source model, not a Spin Hall drift-diffusion solver.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations and immutable conventions
 
 The elementary charge symbol is the positive magnitude `e>0`. `J_c` is
@@ -209,6 +211,7 @@ proves `q_SML=0` and `q_other=0`. SML/lattice flux never contributes to the
 magnetization torque. FEM may retain the `q_mag` surface functional instead of
 inventing a thickness.
 
+(symbols-and-si-units)=
 ### 2.6 Symbols and SI units
 
 | Symbol | Meaning | SI unit / constraint |
@@ -244,6 +247,7 @@ inventing a thickness.
 | `R_J`, `R_phi`, `r_m^Q` | charge-equivalent volumetric absorption | A/m^3 |
 | `mathcal R_m` | angular-momentum transfer density | J/m^3 |
 
+(assumptions-and-validity)=
 ### 2.7 Assumptions, validity, and prohibited interpretations
 
 The model assumes continuum micromagnetics, a resolved or explicitly
@@ -295,17 +299,46 @@ cell from signed stage current, then passed through the common Gilbert
 transform. Interface-flux torque uses the same single face flux with opposite
 signs in adjacent balances; it is not inserted twice as two cell sources.
 
-CPU double is the algebraic oracle. CUDA uses the same immutable descriptor,
-mask, signed current, formula version, and stage time with persistent device
-buffers. FP64 parity precedes a separately bounded FP32 qualification.
+CPU double is the algebraic oracle. CUDA now consumes the same immutable
+descriptor fields—vector current, oriented stack normal, formula version,
+explicit thickness, polarization, Gilbert coefficients, and optional target
+mask—through persistent device buffers. The target mask is owned by the GPU
+state mesh-region module; an absent mask means all magnetic nodes. FP64 parity
+precedes a separately bounded FP32 qualification.
 
-Until a CUDA descriptor carries that complete canonical data, a requested
-`slonczewski.fullmag.v2` CUDA execution fails before native construction. It
-must not reuse the legacy current norm, fixed-layer sign, or global-only mask.
+The managed FEM-GPU realization is intentionally bounded: the CUDA kernel and
+wrapper are executable and pass a one-step FP64 CPU↔GPU oracle, target-mask,
+and current-reversal contract. This does not yet prove a full RK trajectory,
+multi-grid convergence, cross-backend physical agreement, or production
+qualification. Before this descriptor was present, a requested
+`slonczewski.fullmag.v2` CUDA execution failed before native construction; it
+must never reuse the legacy current norm, fixed-layer sign, or global-only
+mask.
+The managed FEM-GPU lane now also passes a bounded eight-step fixed-step Heun
+trajectory against the FEM CPU reference for the same canonical descriptor and
+target mask. The workload keeps exchange enabled because that is a prerequisite
+of the device-resident GPU RK lane, while demag and external field are disabled;
+the result is temporal CPU↔GPU parity for this FP64 workload, not qualification
+of the full integrator family, multi-grid convergence, long-time stability,
+cross-backend continuum agreement, or production status.
+The managed FDM-CUDA lane additionally has a bounded eight-step fixed-step
+trajectory contract: after every accepted Heun step, the complete magnetization
+is compared with an independently executed CPU reference prefix using the same
+canonical descriptor and target mask. This is a temporal parity gate for one
+small double-precision workload, not a current-scaling, grid-convergence,
+FP32, FEM, or cross-backend qualification.
+It also has a bounded one-step current-scaling contract in the isolated
+zero-field response: with the same canonical descriptor and target mask, the
+norm of the magnetization increment is checked at `0.5`, `1`, and `2` times
+the signed stack-normal current. The test uses `dt=1e-15 s` so the Heun
+increment is in the linear-response envelope; it is evidence for the CUDA
+descriptor's `J_c\cdot n_stack` scaling, not a nonlinear large-current or
+long-time qualification.
 Likewise, an FDM request for `slonczewski_interface_flux.v1` fails in planning;
 FDM may not replace the oriented interface functional with the homogenized
 bulk `1/t_F` source.
 
+(discrete-realization)=
 ### 3.2 FEM
 
 For P1 `m`, Zhang–Li starts with an explicitly selected advective weak form,
@@ -317,7 +350,11 @@ Local prescribed SOT and homogenized Slonczewski are assembled as `L2`
 projections to nodal Gilbert-source RHS with local `M_s`, `alpha`, mask, and
 thickness. Interface flux is a surface functional on the oriented trace.
 Production CPU ownership is under `backends/fem/cpu/mfem/interactions/*`;
-GPU ownership is separate hypre/libCEED-capable code. `mfem_bridge.cpp` passes
+GPU ownership is separate hypre/libCEED-capable code. The FEM-GPU
+Slonczewski descriptor is uploaded by
+`gpu_state_upload_stt_target_mask` and consumed by the device kernel; the RK
+wrapper forwards `J_c`, `n_stack`, `formula_version`, and the target mask
+without rebuilding them from a current norm. `mfem_bridge.cpp` passes
 descriptors only. Strict GPU may not invoke a CPU torque path or claim GPU
 provenance after a fallback.
 
@@ -333,6 +370,7 @@ that state.
 
 ## 4. API, IR, planner, runtime, and workspace impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 The canonical classes are `PrescribedSpinOrbitTorque` and
@@ -343,6 +381,54 @@ Zhang–Li/Slonczewski inputs gain explicit formula and realization versions.
 Canonical Python export never drops signs, orientations, `t_F`, formula
 versions, or source bindings.
 
+```python
+# %%
+from fullmag.model.spin_torque import (
+    PrescribedSpinOrbitTorque,
+    RegionRef,
+    SignedScalarDrive,
+    SlonczewskiSTT,
+)
+
+torque = SlonczewskiSTT(
+    current_density=(0.0, 0.0, 1.0e12),
+    spin_polarization=(0.0, 0.0, 1.0),
+    degree=0.4,
+    lambda_asymmetry=1.0,
+    epsilon_prime=0.0,
+    free_layer_thickness_m=1.0e-9,
+    id="mtj_stt",
+    target=RegionRef("free_layer"),
+    stack_normal=(0.0, 0.0, 1.0),
+)
+
+sot = PrescribedSpinOrbitTorque(
+    name="hm_sot",
+    target=RegionRef("free_layer"),
+    drive=SignedScalarDrive(
+        current_density_Apm2=-4.0e11,
+        sigma=(0.0, 1.0, 0.0),
+    ),
+    xi_dl=0.12,
+    xi_fl=-0.03,
+    free_layer_thickness_m=1.5e-9,
+)
+```
+
+The canonical parameter-to-ProblemIR contract is:
+
+| Python | type | default | SI unit | validation | meaning | backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `SlonczewskiSTT.current_density` | `tuple[float, float, float]` | required unless `current_source` is used | `\\mathrm{A\\,m^{-2}}` | finite signed vector; `J dot n_stack` is retained | conventional charge-current density | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].current_density` |
+| `SlonczewskiSTT.free_layer_thickness_m` | `float` | required for canonical thin layer | `\\mathrm m` | finite and positive; no hidden geometry fallback in v2 | homogenized free-layer thickness | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].free_layer_thickness` |
+| `SlonczewskiSTT.stack_normal` | `vec3` | required for canonical v2 | `1` | finite non-zero vector normalized once at plan import | fixed-to-free stack orientation | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].stack_normal` |
+| `PrescribedSpinOrbitTorque.target` | `RegionRef` | required for canonical v1 | `1` | non-empty object/region reference; must resolve to an active magnetic target | prescribed SOT target region | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].target` |
+| `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive \| VectorCurrentDrive` | required; mutually exclusive drive forms | `A/m^2` or source binding | signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal | SOT current/polarization source and orientation | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].drive` |
+| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | `1` | finite signed damping-like efficiency | damping-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].xi_dl` |
+| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | `1` | finite signed field-like efficiency | field-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].xi_fl` |
+| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | `m` | finite and positive; no hidden cell-thickness fallback in v1 | ferromagnetic target thickness in the SOT prefactor | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].free_layer_thickness_m` |
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 IR uses typed `PrescribedSotIR`, a vector of resolved torque plans, explicit
@@ -376,6 +462,29 @@ prescribed versus solved, signed source, axes, normal, units, formula version,
 freshness, and capability scope. Apply uses the same validation as IR; export
 produces canonical Python. Heavy vector fields remain data-plane resources.
 
+(round-trip-and-failure-semantics)=
+### 4.5 Round-trip and failure semantics
+
+Python and UI authoring preserve the requested intent (formula, realization,
+current vector, target, normal, thickness, device, precision, and execution
+mode) in `ProblemIR`. The planner publishes resolved execution separately.
+Missing thickness, zero normal, mismatched target-mask length, unsupported
+interface flux, and unavailable device residency are validation errors; they
+must not be hidden by a CPU fallback in strict GPU mode. Extended mode may
+report an explicit fallback reason, but the artifact retains both requested and
+resolved lanes. The same validation rejects unsupported combinations before a
+native call, rather than silently changing the formula or realization.
+
+(implementation-mapping)=
+### 4.6 Implementation mapping
+
+The CPU implementation is the independent algebraic reference. The GPU path
+uses the same v2 expression in a device kernel and uploads only the optional
+target mask as mutable runtime state. No new physical state is added to
+`Context`; runtime ownership remains split between the STT descriptor and
+`FemGpuMeshRegionDeviceState`.
+
+(validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical and dimensional checks
@@ -409,6 +518,24 @@ rejection, stage times for every supported RK integrator, rejected-step
 rollback, quantity/RHS equality, strict-GPU no-fallback provenance, and
 Python–SceneDocument–UI–canonical-Python normalized round-trip.
 
+### 5.4 Bounded managed prescribed-SOT evidence (2026-08-04)
+
+The FDM CUDA lane now has a bounded, executable FP64 check of the canonical
+`prescribed_sot.fullmag.v1` source. The managed recipe
+`just verify-fdm-prescribed-sot-native-contract` builds the native algebra and
+CUDA runtime contracts, then runs
+`native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available`
+and
+`native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available`.
+Both tests pass for an eight-step fixed-step CPU-reference trajectory and an
+isolated `0.5x/1x/2x` signed-current increment envelope with an explicit target
+mask. This proves the current Rust-to-native descriptor, one Gilbert
+conversion, mask intersection, and FP64 trajectory parity for that small
+workload only. It does not prove FEM SOT execution, FP32, nonlinear current
+sweeps, stage-time envelopes, direct/inverse SHE, or production qualification;
+the canonical SOT capability therefore remains `semantic_only` in the
+capability matrix.
+
 ## 6. Completeness checklist
 
 - [ ] Python API and canonical alias migration
@@ -424,6 +551,7 @@ Python–SceneDocument–UI–canonical-Python normalized round-trip.
 
 Unchecked items are implementation work; this note alone does not satisfy them.
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 Ballistic transport, first-principles MTJ tunnelling, Rashba–Edelstein torque,
@@ -431,6 +559,7 @@ spin pumping, higher-order FEM, stabilized Zhang–Li forms, and hybrid executio
 need separate publications and capability gates. Spin pumping must never be a
 hidden change to `alpha`.
 
+(scientific-bibliography)=
 ## 8. References
 
 1. J. C. Slonczewski, JMMM 159, L1–L7 (1996), DOI: 10.1016/0304-8853(96)00062-5.
@@ -440,3 +569,58 @@ hidden change to `alpha`.
 5. A. Manchon et al., Rev. Mod. Phys. 91, 035004 (2019), DOI: 10.1103/RevModPhys.91.035004.
 6. T. Schrefl, `docs/papers/mic_intro.pdf` (local copy, 2016).
 7. MuMax3/amumax executable references under `external_solvers/3` and `external_solvers/amumax`; used only with an explicit conversion table.
+
+(source-code-index)=
+## Source code index
+
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU canonical v2 algebraic oracle |
+| `backends/fem/cpu/mfem/interactions/stt.cpp` | `initialize_stt_plan_fields` | FEM STT descriptor validation and normalization |
+| `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `slonczewski_stt_rhs_kernel` | FEM GPU v2 device torque kernel |
+| `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `fullmag_cuda_add_slonczewski_stt_rhs` | FEM GPU kernel launch wrapper |
+| `backends/fem/gpu/cuda/integrators/rk/rk_slonczewski_torque.cu` | `gpu_rk_add_slonczewski_torque` | Device-RK descriptor forwarding |
+| `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` | `gpu_rk_plan_device_resident` | Strict GPU readiness and target-mask gate |
+| `backends/fem/gpu/cuda/state/gpu_state.cpp` | `gpu_state_upload_stt_target_mask` | Optional target-mask device ownership and transfer audit |
+| `backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp` | `initialize_context_gpu_state` | Bootstrap upload ordering |
+| `backends/fdm/include/spin_torque.hpp` | `prescribed_sot_explicit_rhs` | Canonical prescribed-SOT Gilbert source and single explicit Gilbert conversion shared by CUDA precision lanes |
+| `backends/fdm/include/context.hpp` | `sot_params_from_ctx` | Native FDM SOT descriptor normalization and signed SI prefactor |
+| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
+| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
+| `backends/fdm/tests/prescribed_sot_contract.cpp` | `main` | Native algebraic canonical-SOT contract and sign/Gilbert checks |
+| `backends/fdm/tests/prescribed_sot_cuda_runtime.cu` | `main` | Managed FP64/FP32 native CUDA SOT runtime contract |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA canonical-SOT trajectory parity against CPU reference prefixes |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated FP64 `0.5x/1x/2x` signed-current and target-mask response contract |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class PrescribedSpinOrbitTorque` | Canonical Python SOT class preserving target, tagged drive, efficiencies, and ferromagnetic thickness |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SignedScalarDrive` | Signed scalar current, polarization axis, and optional envelope authoring |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class VectorCurrentDrive` | Vector current-source binding with explicit drive and interface axes |
+| `packages/fullmag-py/src/fullmag/runtime/scene_document.py` | `_decode_prescribed_sot` | SceneDocument/ProblemIR decode with fail-closed canonical SOT drive validation |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_prescribed_sot_entry` | Canonical Python export of all tagged-drive SOT fields |
+| `backends/fem/tests/cuda_slonczewski_contract.cpp` | `main` | Managed one-step CPU↔GPU numeric contract |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA trajectory parity against CPU reference prefixes |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated 0.5×/1×/2× signed-current increment-scaling contract |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available` | Managed eight-step FP64 FEM CPU↔GPU Heun trajectory parity with canonical descriptor and target mask |
+| `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
+
+```{math}
+:label: slonczewski-canonical-gilbert
+\\mathbf T_{\\mathrm{SL},G}=\\Omega_J\\left[\\epsilon(c)\\,\\mathbf m\\times(\\mathbf m\\times\\mathbf p)+\\epsilon'\\,\\mathbf m\\times\\mathbf p\\right].
+```
+
+```{math}
+:label: slonczewski-explicit-v2
+\\mathbf T_{\\mathrm{SL},\\mathrm{explicit}}=\\frac{\\Omega_J}{1+\\alpha^2}\\left[(\\epsilon+\\alpha\\epsilon')\\mathbf D+(\\epsilon'-\\alpha\\epsilon)\\mathbf C\\right].
+```
+
+```{math}
+:label: slonczewski-signed-current
+J_n=\\mathbf J_c\\cdot\\mathbf n_{\\mathrm{stack}},\\qquad \\Omega_J=\\frac{\\gamma_e\\hbar J_n}{eM_st_F}.
+```
+
+```{math}
+:label: prescribed-sot-gilbert
+\\Omega_{\\mathrm{DL}}=\\frac{\\gamma_e\\hbar\\xi_{\\mathrm{DL}}J_{\\mathrm{signed}}}{2eM_st_F},\\qquad
+\\Omega_{\\mathrm{FL}}=\\frac{\\gamma_e\\hbar\\xi_{\\mathrm{FL}}J_{\\mathrm{signed}}}{2eM_st_F},\\qquad
+\\mathbf T_{\\mathrm{SOT},G}=\\Omega_{\\mathrm{DL}}\\,\\mathbf m\\times(\\hat{\\boldsymbol\\sigma}\\times\\mathbf m)+\\Omega_{\\mathrm{FL}}\\,\\mathbf m\\times\\hat{\\boldsymbol\\sigma}.
+```

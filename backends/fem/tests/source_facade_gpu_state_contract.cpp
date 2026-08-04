@@ -728,6 +728,8 @@ void gpu_scalar_reduction_workspace_is_owned_by_cuda_reductions_module() {
                 std::string::npos &&
             reduction_workspace_memory_source.find("cudaHostAlloc") !=
                 std::string::npos &&
+            reduction_workspace_memory_source.find(
+                "FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK") != std::string::npos &&
             reduction_workspace_memory_source.find("cudaFreeHost") !=
                 std::string::npos &&
             reduction_workspace_memory_source.find("reductions.temp_storage") !=

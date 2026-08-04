@@ -78,11 +78,6 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
-    if (ctx.stt.slonczewski_enabled &&
-        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2) {
-        reason = "canonical Slonczewski v2 is not qualified on FEM GPU; strict GPU execution is fail-closed before provenance";
-        return plan;
-    }
     if (ctx.stt.zhang_li_enabled &&
         ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1) {
         reason = "canonical Zhang-Li v1 is not qualified on FEM GPU; strict GPU execution is fail-closed before provenance";
@@ -96,6 +91,12 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     if (ctx.gpu_state.device.lifecycle.node_count != ctx.mesh.n_nodes ||
         ctx.gpu_state.device.lifecycle.dof_len != static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull) {
         reason = "GPU RK device-resident path requires FemGpuState dimensions to match Context";
+        return plan;
+    }
+    if (ctx.stt.slonczewski_enabled && !ctx.stt.active_node_mask.empty() &&
+        (ctx.gpu_state.device.mesh_regions.stt_active_node_mask == nullptr ||
+         ctx.gpu_state.device.mesh_regions.stt_active_node_count != ctx.mesh.n_nodes)) {
+        reason = "GPU RK Slonczewski STT requires the canonical target-node mask on device";
         return plan;
     }
     if (!ctx.exchange.enabled) {

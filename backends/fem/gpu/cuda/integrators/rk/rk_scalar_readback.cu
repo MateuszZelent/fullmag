@@ -33,7 +33,7 @@ bool read_scalar_result_impl(
 {
     auto &gpu = ctx.gpu_state.device;
     if (gpu.reductions.host_scalar_result == nullptr) {
-        reason = "GPU RK scalar readback requires pinned scalar host staging";
+        reason = "GPU RK scalar readback requires scalar host staging";
         return false;
     }
     if (!cuda_ok(
@@ -73,11 +73,11 @@ bool read_scalar_results_impl(
     }
     auto &gpu = ctx.gpu_state.device;
     if (count > FEM_GPU_SCALAR_RESULT_SLOTS) {
-        reason = "GPU RK scalar readback count exceeds pinned scalar staging capacity";
+        reason = "GPU RK scalar readback count exceeds scalar staging capacity";
         return false;
     }
     if (gpu.reductions.host_scalar_result == nullptr) {
-        reason = "GPU RK scalar readback requires pinned scalar host staging";
+        reason = "GPU RK scalar readback requires scalar host staging";
         return false;
     }
     if (!cuda_ok(
