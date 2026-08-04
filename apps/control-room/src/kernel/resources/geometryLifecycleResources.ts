@@ -46,6 +46,7 @@ import {
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type {
+  DomainMetaResource,
   GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryValidationResource,
@@ -354,6 +355,35 @@ export function resolveFdmRegionMembershipRevision(
     resource.grid_fingerprint,
     resource.region_legend_fingerprint ?? "unknown",
   ].join(":");
+}
+
+/**
+ * Stable identity for the domain presentation adapter. The generation id
+ * anchors the structured grid while the optional realized-resource suffix
+ * identifies the current FDM mask or FEM shared-domain manifest.
+ */
+export function resolveDomainPresentationRevision(
+  domain: DomainMetaResource | null | undefined,
+  options: {
+    fdmMembership?: FdmRegionMembershipResource | null;
+    femManifest?: MeshSharedDomainManifestResource | null;
+  } = {},
+): ResourceRevision | null {
+  if (!domain) return null;
+  if (domain.discretization.toLowerCase() === "fdm") {
+    const membershipRevision = resolveFdmRegionMembershipRevision(
+      options.fdmMembership,
+    );
+    return membershipRevision == null
+      ? domain.generation_id
+      : `${domain.generation_id}:${membershipRevision}`;
+  }
+  const manifestRevision = resolveMeshSharedDomainManifestRevision(
+    options.femManifest,
+  );
+  return manifestRevision == null
+    ? domain.generation_id
+    : `${domain.generation_id}:${manifestRevision}`;
 }
 
 export function resolveMeshRegionMembershipRevision(

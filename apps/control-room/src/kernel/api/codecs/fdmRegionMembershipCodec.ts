@@ -7,12 +7,22 @@ const KIND_U32 = 2;
 export const FMRM_INACTIVE_REGION_ID = 0xffff_ffff;
 export const FMRM_HEADER_LEN = 64;
 
+/**
+ * v1 encoded only numeric region IDs and had no active mask. A zero therefore
+ * cannot be classified as active-unassigned versus inactive, so v1 is kept
+ * for diagnostics but must not be used as a realized render mask.
+ */
+export type FdmRegionMembershipSemanticStatus =
+  | "canonical"
+  | "legacy-ambiguous";
+
 export interface DecodedFdmRegionMembership {
   counts: [number, number, number];
   cellCount: number;
   legendCount: number;
   gridFingerprint: string;
   formatVersion: number;
+  semanticStatus: FdmRegionMembershipSemanticStatus;
   payloadKind: number;
   regionIds: Uint32Array;
 }
@@ -72,10 +82,10 @@ export function decodeFdmRegionMembership(
       FMRM_HEADER_LEN + index * Uint32Array.BYTES_PER_ELEMENT,
       true,
     );
-    // v1 used zero for an unoccupied cell. Normalize that legacy sentinel to
-    // the v2 value so render-model consumers have one inactive-cell contract.
-    regionIds[index] =
-      isLegacy && regionId === 0 ? FMRM_INACTIVE_REGION_ID : regionId;
+    // Preserve v1 values verbatim. Without an active mask, zero is ambiguous
+    // (inactive versus active-unassigned), so the caller can retain this
+    // payload for diagnostics without treating it as a realized render mask.
+    regionIds[index] = regionId;
   }
   return {
     counts,
@@ -85,5 +95,6 @@ export function decodeFdmRegionMembership(
     legendCount,
     payloadKind,
     regionIds,
+    semanticStatus: isCanonical ? "canonical" : "legacy-ambiguous",
   };
 }

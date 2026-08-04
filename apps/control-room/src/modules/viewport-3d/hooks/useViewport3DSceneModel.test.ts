@@ -215,6 +215,14 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("buildDiagnosticsSnapshotVersion");
   });
 
+  it("fails closed for ambiguous legacy FMRM membership", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      'if (binary.semanticStatus !== "canonical") return null;',
+    );
+  });
+
   it("filters live authored region overlays once matching mesh-backed regions exist", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const regionOverlayBlock = source.slice(
@@ -247,7 +255,15 @@ describe("useViewport3DSceneModel", () => {
     );
     expect(source).toContain("topology: fieldCompatibleTopologyRenderModel");
     expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
-    expect(source).toContain("Boolean(fieldCompatibleTopologyRenderModel) &&");
+    expect(source).toContain(
+      "Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&",
+    );
+    expect(source).toContain(
+      "magneticParts: fieldCompatibleTopologyRenderModel?.magneticParts ?? [],",
+    );
+    expect(source).toContain(
+      "fdmSettings: fdmDomain ? fdmSettings : null,",
+    );
     expect(source).toContain(
       "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
     );

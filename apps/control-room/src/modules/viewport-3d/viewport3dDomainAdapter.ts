@@ -1,7 +1,9 @@
 import type {
   DomainMetaResource,
+  FdmRegionMembershipResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
+import type { DecodedTopology } from "@/kernel/api/codecs";
 import {
   normalizeManifestRenderableCarriers,
   type ManifestCarrierSourceKind,
@@ -19,6 +21,45 @@ import {
   resolveDomainBounds,
   type Viewport3DBounds,
 } from "./viewport3dRenderModel";
+import {
+  buildDomainPresentation,
+  type DomainPresentation,
+  type DomainResourceState,
+  type FdmUniverseOutsideMagneticSupport,
+} from "@/shared/domain/mesh/domainPresentation";
+
+export {
+  buildDomainPresentation,
+  domainPresentationKey,
+  isFdmDomain,
+  isFemDomain,
+  resolveFdmCellState,
+} from "@/shared/domain/mesh/domainPresentation";
+export type {
+  DomainPresentation,
+  FdmDomainPresentation,
+  FemDomainPresentation,
+} from "@/shared/domain/mesh/domainPresentation";
+
+export interface Viewport3DDomainPresentationInput {
+  domainMeta: DomainMetaResource | null | undefined;
+  expectedFdmGridFingerprint?: string | null;
+  fdmMembership?: FdmRegionMembershipResource | null;
+  fdmMembershipStatus?: DomainResourceState;
+  femManifest?: MeshSharedDomainManifestResource | null;
+  femTopology?: DecodedTopology | null;
+  femTopologyStatus?: DomainResourceState;
+  universeOutsideMagneticSupport?: Omit<
+    FdmUniverseOutsideMagneticSupport,
+    "kind"
+  > | null;
+}
+
+export function adaptDomainPresentation(
+  input: Viewport3DDomainPresentationInput,
+): DomainPresentation {
+  return buildDomainPresentation(input);
+}
 
 type MeshPart = NonNullable<
   MeshSharedDomainManifestResource["mesh_parts"]

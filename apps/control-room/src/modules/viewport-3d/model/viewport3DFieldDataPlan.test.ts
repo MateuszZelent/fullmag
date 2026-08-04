@@ -608,6 +608,42 @@ describe("viewport3DFieldDataPlan", () => {
       quantityId: "H_eff",
     });
 
+    const fdmTargetQuantity = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings: {
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        surfaceColorSource: "component_y",
+        vectorsVisible: false,
+        visible: true,
+      },
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "m",
+      }),
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(fdmTargetQuantity.demands).toEqual([
+      expect.objectContaining({
+        passId: "fdm-domain:surface",
+        passKind: "surface",
+        quantityId: "H_eff",
+        scopeId: null,
+        scopeKind: "full",
+        targetId: "fdm-domain",
+      }),
+    ]);
+    expect([...fdmTargetQuantity.requests.values()][0]).toMatchObject({
+      query: {
+        component: "y",
+        scope_kind: "full",
+      },
+      quantityId: "H_eff",
+    });
+
     const airbox = resolveViewport3DAirboxFieldVectorDemandPlan({
       airboxParts: [{ id: "airbox-a", label: "Airbox A" }],
       quantityId: "H_demag",

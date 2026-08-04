@@ -2387,6 +2387,9 @@ export function useViewport3DSceneModel({
     }
     const binary = fdmRegionMembershipBinary.data;
     if (!binary) return null;
+    // Legacy v1 has no active mask, so zero is semantically ambiguous. Keep
+    // it available to diagnostics, but fail closed for realized rendering.
+    if (binary.semanticStatus !== "canonical") return null;
     const shapeMatches = binary.counts.every(
       (count, axis) => count === fdmDomain.shape[axis],
     );
@@ -3076,24 +3079,19 @@ export function useViewport3DSceneModel({
     [magneticPartFieldQueries],
   );
   const targetQuantityFieldDemandPlan = useMemo(() => {
-    if (!fieldCompatibleTopologyRenderModel) {
-      return {
-        demands: [],
-        requests: new Map<string, Viewport3DFieldResourceRequest>(),
-      };
-    }
     return resolveViewport3DTargetQuantityFieldDemandPlan({
-      fdmSettings,
+      fdmSettings: fdmDomain ? fdmSettings : null,
       getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
       magneticPartScopedFieldIds,
-      magneticParts: fieldCompatibleTopologyRenderModel.magneticParts,
+      magneticParts: fieldCompatibleTopologyRenderModel?.magneticParts ?? [],
       maxVectorGlyphs: maxInteractiveVectorGlyphs,
       primaryFieldQuantityId,
       selectedSnapshotQuery,
     });
   }, [
-    fieldCompatibleTopologyRenderModel,
+    fdmDomain,
     fdmSettings,
+    fieldCompatibleTopologyRenderModel?.magneticParts,
     getPartSettings,
     magneticPartScopedFieldIds,
     maxInteractiveVectorGlyphs,
@@ -3331,7 +3329,7 @@ export function useViewport3DSceneModel({
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
   const primaryFieldVectorEnabled =
-    Boolean(fieldCompatibleTopologyRenderModel) &&
+    Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&
     (Boolean(analysisOverlay) ||
       resolveViewport3DPrimaryFieldVectorEnabled({
         fdmInstanceModelNeedsFieldVector,

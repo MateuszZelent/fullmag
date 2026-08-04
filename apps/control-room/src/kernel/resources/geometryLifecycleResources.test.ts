@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import type { DomainMetaResource } from "../api/apiTypes";
 import {
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
@@ -49,6 +50,7 @@ import {
   resolveRegionRealizationRevision,
   resolveFdmRegionMembershipBinaryResourceKey,
   resolveFdmRegionMembershipRevision,
+  resolveDomainPresentationRevision,
   resolveMeshHistogramBinElementsResourceKey,
   resolveMeshRegionMembershipsRevision,
   resolveMeshRegionMembershipsResourceKey,
@@ -222,6 +224,51 @@ describe("geometry lifecycle resources", () => {
         schema_version: "fdm_region_membership.v1",
       }),
     ).toBe("fdm_region_membership.v1:7:9:grid-1:legend-1");
+  });
+
+  it("anchors domain presentation revisions to the realized FDM resource", () => {
+    const domain: DomainMetaResource = {
+      bounds: { min: [0, 0, 0], max: [2, 2, 1] },
+      coordinate_system: "cartesian",
+      counts: { cells: 4 },
+      dimension: 3,
+      discretization: "fdm",
+      domain_id: "domain:fdm",
+      generation_id: "generation-4",
+      grid: { origin: [0, 0, 0], shape: [2, 2, 1], spacing: [1, 1, 1] },
+      units: { length: "m" },
+    };
+    const membership = {
+      binary_path: "mesh/fdm.v2.bin",
+      cell_count: 4,
+      cell_m: [1, 1, 1],
+      counts: [2, 2, 1],
+      encoding: "u32le",
+      freshness: "current",
+      grid_fingerprint: "grid-4",
+      mesh_revision: 7,
+      origin_m: [0, 0, 0],
+      region_legend: [],
+      region_membership_revision: 9,
+      schema_version: "fdm_region_membership.v2",
+    } as never;
+
+    expect(resolveDomainPresentationRevision(domain)).toBe("generation-4");
+    expect(resolveDomainPresentationRevision(domain, { fdmMembership: membership })).toBe(
+      "generation-4:fdm_region_membership.v2:7:9:grid-4:unknown",
+    );
+    expect(
+      resolveDomainPresentationRevision(
+        { ...domain, discretization: "fem", generation_id: "generation-5" },
+        {
+          femManifest: {
+            revision: 4,
+            source_scene_revision: 12,
+            geometry_realization_revision: 11,
+          } as never,
+        },
+      ),
+    ).toBe("generation-5:4:12:11");
   });
 
   it("uses a deterministic batch resource key and revision for mesh region memberships", () => {

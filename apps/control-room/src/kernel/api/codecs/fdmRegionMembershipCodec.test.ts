@@ -35,7 +35,8 @@ describe("FMRM codec", () => {
     expect(decoded.counts).toEqual([2, 2, 1]);
     expect(decoded.cellCount).toBe(4);
     expect(decoded.legendCount).toBe(2);
-    expect([...decoded.regionIds]).toEqual([1, 1, 2, FMRM_INACTIVE_REGION_ID]);
+    expect(decoded.semanticStatus).toBe("legacy-ambiguous");
+    expect([...decoded.regionIds]).toEqual([1, 1, 2, 0]);
     expect(decoded.gridFingerprint).toBe("0".repeat(64));
   });
 
@@ -46,6 +47,7 @@ describe("FMRM codec", () => {
 
     expect(decoded.formatVersion).toBe(2);
     expect(decoded.payloadKind).toBe(2);
+    expect(decoded.semanticStatus).toBe("canonical");
     expect([...decoded.regionIds]).toEqual([
       FMRM_INACTIVE_REGION_ID,
       0,

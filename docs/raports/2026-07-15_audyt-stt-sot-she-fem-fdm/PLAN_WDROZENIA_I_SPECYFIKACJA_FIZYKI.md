@@ -6857,3 +6857,50 @@ refinementem, inicjalizacji vortex, relaksacji z demagiem FEM, Zhang--Li przez
 zbieżności `h`/`dt`. Dopiero taki przebieg może być porównaniem FEM do
 wcześniejszego FDM SP5; obecny status pozostaje **FDM SP5: diagnostyczny,
 FEM SP5: nieuruchomiony**.
+
+## 32.64. DomainPresentation i odcięcie FDM field-demand od FEM topology (2026-08-04)
+
+### 32.64.1. Granica domeny UI
+
+Dodano revision-aware adapter
+`apps/control-room/src/shared/domain/mesh/domainPresentation.ts` oraz jego
+reeksport w `viewport3dDomainAdapter.ts`. Jest to dyskryminowana granica
+`fdm | fem`, a nie drugi workspace. Dla FDM adapter niesie `shape`, `origin`,
+`spacing`, `cell_count`, fingerprint, rewizje maski, jawny stan
+`authoring-grid/realized/loading/stale/incompatible/error` oraz rozróżnienie
+`active-unassigned`, regionu i sentinela `u32::MAX`. FDM „airbox” pozostaje
+rolą `universe-outside-magnetic-support`, nie FEM-ową topologią elementową.
+Dla FEM adapter zachowuje shared-domain manifest, topology fingerprint i
+airbox parts. Rewizje są zakotwiczone w generacji domeny oraz w aktualnym
+FDM membership/FEM manifest resource.
+
+### 32.64.2. FDM membership i field path
+
+Legacy FMRM v1 pozostaje dekodowalny wyłącznie diagnostycznie jako
+`legacy-ambiguous`; ponieważ v1 nie przenosi active mask, nie może zasilać
+realized render mask. Tylko canonical v2 (`version=2`, `kind=2`) przechodzi do
+renderingu. To zamyka możliwość cichego pomylenia inactive `0` z active
+unassigned `0`.
+
+Usunięto też gate, który wymagał `fieldCompatibleTopologyRenderModel` dla
+każdego FDM pola. FDM ma teraz własną ścieżkę żądania primary field oraz
+target-quantity request `fdm-domain`, nawet gdy FEM manifest/topology nie
+istnieje. FEM stale-topology safety pozostaje bez zmian; dla domeny FEM
+`fdmSettings` nie jest wysyłany do planera żądań.
+
+### 32.64.3. Dowód i granica kwalifikacji
+
+Focused verification:
+
+```text
+7 test files passed; 173 tests passed
+pnpm --dir apps/control-room typecheck: exit 0
+targeted ESLint: exit 0
+```
+
+Testy obejmują adapter FDM/FEM, rewizje resource, v1/v2 codec, sentinele,
+fail-closed model, target-quantity FDM bez FEM topology, field-demand hook i
+FDM layer. Nie wykonano jeszcze browser/WebGL smoke na rzeczywistym payloadzie,
+pełnego Explorer/Inspector round-trip, aktualizacji capability matrix ani
+kwalifikacji `validated_workloads`. Ocena pozostaje **86% implementacji /
+60% gotowości produkcyjnej**.

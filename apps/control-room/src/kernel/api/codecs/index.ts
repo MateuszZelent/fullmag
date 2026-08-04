@@ -17,6 +17,7 @@ export {
   FMRM_INACTIVE_REGION_ID,
   FMRM_HEADER_LEN,
   type DecodedFdmRegionMembership,
+  type FdmRegionMembershipSemanticStatus,
 } from "./fdmRegionMembershipCodec";
 export { decodeTableRows } from "./tableRowsCodec";
 export {
