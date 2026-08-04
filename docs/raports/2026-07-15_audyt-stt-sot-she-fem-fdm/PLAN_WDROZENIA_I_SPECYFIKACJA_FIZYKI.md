@@ -7264,3 +7264,65 @@ Funkcja jest celowo offline (SP5 przebieg na bieżącym mesh trwa około minuty)
 i nie jest częścią hot pathu solvera. Capability matrix oraz
 `validated_workloads` pozostają bez zmian; ocena celu pozostaje **86%
 implementacji / 60% gotowości produkcyjnej**.
+
+## 32.70. Naprawa kompilacji FEM CPU dla walidacji OE-F1/OE-F2 (2026-08-04)
+
+### 32.70.1. Reprodukcja i przyczyna źródłowa
+
+Świeży managed gate `just verify-fem-oersted-oef1-cpu-contract` zatrzymał się
+przed uruchomieniem kontraktu, podczas budowy `fullmag_fem` z
+`FULLMAG_ENABLE_CUDA=OFF`, `FULLMAG_USE_MFEM_STACK=ON` i MPI. Błąd był
+deterministyczny:
+
+```text
+hypre_device_solver.cpp:360: error: GpuDemagPoissonWorkspace has no member stream_interop
+hypre_device_solver.cpp:359: error: mfem_default_stream_wait_for_hypre_validation was not declared
+```
+
+`HypreStreamInterop`, pole `GpuDemagPoissonWorkspace::stream_interop` oraz
+`mfem_default_stream_wait_for_hypre_validation` są deklarowane wyłącznie pod
+`FULLMAG_HAS_CUDA_RUNTIME`. Ciało
+`validate_demag_poisson_hypre_device_solve` miało jednak blok `#if
+FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)` bez dodatkowej osłony CUDA.
+W efekcie ścieżka CPU kompilowała referencję do GPU-only stanu, mimo że sama
+operacja `A_par->Mult` i norma residualu są poprawne również w CPU Hypre/MFEM.
+
+### 32.70.2. Test-first i korekta
+
+Dodano regresję źródłową
+`gpu_demag_hypre_validation_is_cuda_guarded_for_cpu_builds` w
+`backends/fem/tests/source_facade_gpu_rk_contract.cpp`. Test RED potwierdził
+brak oczekiwanej osłony. Minimalna korekta ogranicza wyłącznie wywołanie
+`mfem_default_stream_wait_for_hypre_validation(...)` do
+`#if FULLMAG_HAS_CUDA_RUNTIME`; CPU nadal liczy i certyfikuje residual przez
+MFEM/Hypre, a GPU zachowuje synchronizację strumienia przed odczytem residualu.
+Nie zmieniono równań, znaków, operatora Oersteda ani kryteriów zbieżności.
+
+### 32.70.3. Managed GREEN
+
+Po korekcie oba niezależne zarządzane przebiegi CPU zakończyły się `exit 0`:
+
+```text
+just verify-fem-oersted-oef1-cpu-contract
+just verify-fem-oersted-oef2-cpu-contract
+```
+
+W obu przypadkach obraz `fullmag/fem-cpu:local` zbudował `fullmag_fem` w
+trybie CUDA-off, a testy current-view MPI (`n1`, `n2`, byte identity) przeszły.
+OE-F1 uruchomił `fem_oersted_direct_tetra_contract: PASS`, a OE-F2 dodatkowo
+`fem_oersted_vector_potential_contract: PASS`. To jest dowód kompilacji i
+kontraktu CPU, nie dowód skalowalnego operatora GPU ani zbieżności fizycznej
+pełnego airboxu.
+
+### 32.70.4. Granica kwalifikacji FEM
+
+Naprawa usuwa blocker kompilacyjny dla OE-F1/OE-F2 i wzmacnia twierdzenie, że
+FEM CPU ma wykonywalne kontrakty bez ukrytej zależności od CUDA. Nie promuje
+żadnej capability do `validated`: OE-T0 nadal wymaga pełnej kwalifikacji
+RT0/KKT, OE-F1/OE-F2 wymagają zbieżności mesh/airbox i testów runtime, a FEM
+GPU wymaga osobnej bramy device-resident. Porównanie SP5 pozostaje wykonane
+dla obu backendów (FEM CPU i FDM), lecz ma status diagnostyczny, nie
+`equivalence_established`.
+
+Szeroka ocena celu pozostaje bez zmian: **86% implementacji / 60% gotowości
+produkcyjnej**.
