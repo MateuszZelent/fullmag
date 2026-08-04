@@ -160,6 +160,9 @@ def test_fdm_projected_gradient_bb_counterpart_exports_cpu_double_relaxation() -
         "flat_save_state",
     ]
     relax_stage, save_state_stage = payload["stages"]
+    sampling = relax_stage["ir"]["study"]["sampling"]
+    assert "table_autosave" not in sampling
+    assert sampling["stage_autosave"]["table"]["every_steps"] == 10
     runtime = relax_stage["ir"]["problem_meta"]["runtime_metadata"][
         "runtime_selection"
     ]

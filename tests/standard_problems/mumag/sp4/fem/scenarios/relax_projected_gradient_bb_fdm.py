@@ -37,22 +37,6 @@ film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
 
 study.demag()
-study.tableautosave(
-    10e-12,
-    quantities=[
-        "step",
-        "t",
-        "dt",
-        "mx",
-        "my",
-        "mz",
-        "e_ex",
-        "e_demag",
-        "e_ext",
-        "e_total",
-        "max_torque_T",
-    ],
-)
 study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
