@@ -6025,8 +6025,8 @@ pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
 
 Po wcześniejszym pullu oraz lokalnych, już zapisanych poprawkach sprawdzono
 stan repozytorium i wykonano bramę jeszcze raz z obowiązującej receptury
-kontenerowej. `master` jest lokalnie siedem commitów przed
-`origin/master` (`HEAD=20d7b4e3ef73c2ba48b77b57cb2e294f50cad2b2`,
+kontenerowej. `master` jest lokalnie jedenaście commitów przed
+`origin/master` (`HEAD=0560bd6de2fcc83fec967463be415a1d98509bbf`,
 `origin/master=b3c839b9c0d6a7cab99b8ad5c7b88007f7456a01`); nie wykonywano push.
 Niepowiązane usunięcia debugów w `apps/legacy_web` oraz modyfikacja
 `external_solvers/3` pozostały nietknięte.
@@ -6048,7 +6048,7 @@ sprawdzający odrzucenie niezbiegniętego kandydata; nie oznacza nieudanego cał
 testu ani dowodu zbieżności produkcyjnego przebiegu.
 
 Wniosek jest ograniczony do aktualnego kontraktu wykonawczego: po synchronizacji
-z masterem nie ma regresji w ścieżce Poisson/FEM-BEM, delta-potential,
+z masterem i ponownej budowie po zmianach reference STT nie ma regresji w ścieżce Poisson/FEM-BEM, delta-potential,
 timingu CUDA ani okresowym demagu/wymianie, a fail-closed dla nieudanego PCG
 działa. Nie awansuje to jeszcze demaga do pełnej kwalifikacji fizycznej.
 Nadal wymagają osobnych dowodów: medium/fine mesh convergence, airbox i RT0/KKT,
