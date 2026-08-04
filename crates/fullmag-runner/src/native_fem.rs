@@ -6804,6 +6804,107 @@ mod tests {
         )
     }
 
+    fn canonical_slonczewski_rhs_reference(plan: &FemPlanIR, m: [f64; 3]) -> [f64; 3] {
+        let contract = plan
+            .spin_torque_contract
+            .as_ref()
+            .expect("canonical Slonczewski contract");
+        assert_eq!(
+            contract.formula_version, "slonczewski.fullmag.v2",
+            "SI oracle requires the canonical Slonczewski v2 formula"
+        );
+        let normal = contract.stack_normal.expect("canonical stack normal");
+        let normal_norm =
+            (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        let current = plan.current_density.expect("current density");
+        let signed_current =
+            (current[0] * normal[0] + current[1] * normal[1] + current[2] * normal[2])
+                / normal_norm;
+        let p = plan.stt_spin_polarization.expect("spin polarization");
+        let p_norm = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+        let p = [p[0] / p_norm, p[1] / p_norm, p[2] / p_norm];
+        let alpha = plan.material.damping;
+        let lambda = plan.stt_lambda.expect("Slonczewski lambda");
+        let lambda_sq = lambda * lambda;
+        let degree = plan.stt_degree.expect("Slonczewski degree");
+        let epsilon_prime = plan.stt_epsilon_prime.unwrap_or(0.0);
+        let thickness = plan.stt_thickness.expect("free-layer thickness");
+        let prefactor = signed_current * 1.054571817e-34 * plan.gyromagnetic_ratio
+            / (1.602176634e-19
+                * 1.2566370614359173e-6
+                * plan.material.saturation_magnetisation
+                * thickness);
+        let dot_mp = m[0] * p[0] + m[1] * p[1] + m[2] * p[2];
+        let g = (degree * lambda_sq) / ((lambda_sq + 1.0) + (lambda_sq - 1.0) * dot_mp);
+        let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        let damping_like = prefactor * (g + alpha * epsilon_prime) * inv_gilbert;
+        let field_like = prefactor * (epsilon_prime - alpha * g) * inv_gilbert;
+        let m_cross_p = [
+            m[1] * p[2] - m[2] * p[1],
+            m[2] * p[0] - m[0] * p[2],
+            m[0] * p[1] - m[1] * p[0],
+        ];
+        let m_cross_m_cross_p = [
+            m[1] * m_cross_p[2] - m[2] * m_cross_p[1],
+            m[2] * m_cross_p[0] - m[0] * m_cross_p[2],
+            m[0] * m_cross_p[1] - m[1] * m_cross_p[0],
+        ];
+        [
+            damping_like * m_cross_m_cross_p[0] + field_like * m_cross_p[0],
+            damping_like * m_cross_m_cross_p[1] + field_like * m_cross_p[1],
+            damping_like * m_cross_m_cross_p[2] + field_like * m_cross_p[2],
+        ]
+    }
+
+    fn normalize_reference_m(v: [f64; 3]) -> [f64; 3] {
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        [v[0] / length, v[1] / length, v[2] / length]
+    }
+
+    fn canonical_slonczewski_heun_reference(plan: &FemPlanIR) -> (Vec<[f64; 3]>, f64) {
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let k1: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .copied()
+            .map(|m| canonical_slonczewski_rhs_reference(plan, m))
+            .collect();
+        let stage: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .zip(k1.iter())
+            .map(|(m, k)| {
+                normalize_reference_m([m[0] + dt * k[0], m[1] + dt * k[1], m[2] + dt * k[2]])
+            })
+            .collect();
+        let k2: Vec<[f64; 3]> = stage
+            .iter()
+            .copied()
+            .map(|m| canonical_slonczewski_rhs_reference(plan, m))
+            .collect();
+        let final_m: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .zip(k1.iter().zip(k2.iter()))
+            .map(|(m, (k1, k2))| {
+                normalize_reference_m([
+                    m[0] + 0.5 * dt * (k1[0] + k2[0]),
+                    m[1] + 0.5 * dt * (k1[1] + k2[1]),
+                    m[2] + 0.5 * dt * (k1[2] + k2[2]),
+                ])
+            })
+            .collect();
+        let max_rhs = final_m
+            .iter()
+            .copied()
+            .map(|m| {
+                let rhs = canonical_slonczewski_rhs_reference(plan, m);
+                (rhs[0] * rhs[0] + rhs[1] * rhs[1] + rhs[2] * rhs[2]).sqrt()
+            })
+            .fold(0.0, f64::max);
+        (final_m, max_rhs)
+    }
+
     fn effective_magnetic_thickness(mesh: &MeshIR) -> f64 {
         let (min_z, max_z) = mesh.nodes.iter().fold(
             (f64::INFINITY, f64::NEG_INFINITY),
@@ -8477,20 +8578,42 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_slonczewski_step_matches_cpu_reference_when_mfem_stack_is_available() {
+    fn native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available() {
         if !is_gpu_available() {
             eprintln!("skipping native FEM Slonczewski parity test: MFEM stack unavailable");
             return;
         }
 
         let mut plan = make_exchange_only_plan();
+        plan.enable_exchange = true;
+        plan.external_field = None;
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.stt_thickness = Some(1.0e-9);
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "slonczewski.fullmag.v2".to_string(),
+            operator_version: None,
+            realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: None,
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+        });
+        assert_eq!(
+            plan.spin_torque_contract
+                .as_ref()
+                .map(|contract| contract.formula_version.as_str()),
+            Some("slonczewski.fullmag.v2"),
+            "this parity fixture must exercise the canonical Slonczewski v2 contract"
+        );
         plan.current_density = Some([0.0, 0.0, 1.4e11]);
         plan.stt_degree = Some(0.62);
         plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
         plan.stt_lambda = Some(1.8);
         plan.stt_epsilon_prime = Some(0.03);
 
-        let (expected_m, _, expected_h_eff, expected_report) = cpu_reference_single_step(&plan);
+        let (expected_m, expected_max_rhs) = canonical_slonczewski_heun_reference(&plan);
+        let expected_h_eff = vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()];
         let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
         let stats = backend
             .step(plan.fixed_timestep.expect("fixed dt"))
@@ -8505,7 +8628,7 @@ mod tests {
         assert_scalar_close(
             "max_rhs_amplitude",
             stats.max_dm_dt,
-            expected_report.max_rhs_amplitude,
+            expected_max_rhs,
             5e-8,
             1e-9,
         );

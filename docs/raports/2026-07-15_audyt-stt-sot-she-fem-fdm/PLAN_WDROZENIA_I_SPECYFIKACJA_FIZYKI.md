@@ -6055,3 +6055,73 @@ Nadal wymagają osobnych dowodów: medium/fine mesh convergence, airbox i RT0/KK
 MPI scaling, długi runtime, mapy przestrzenne oraz cross-backend parity z FDM,
 MuMax3 i zewnętrznymi solverami. Szeroka ocena celu pozostaje konserwatywnie
 **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.50. Niezależny SI oracle dla jednego kroku Slonczewskiego v2 FEM (2026-08-04)
+
+### 32.50.1. Wykryta luka w fixture i granica reference lane
+
+Dotychczasowy test
+`native_fem_slonczewski_step_matches_cpu_reference_when_mfem_stack_is_available`
+nie był objęty recepturą `just verify-fem-stt-native-contract`. Po włączeniu
+go do bramy test RED ujawnił, że fixture nie ustawiał
+`spin_torque_contract`, mimo że nazwa sugerowała kanoniczny Slonczewski v2.
+Po dodaniu kontraktu v2 i ponownym uruchomieniu test nadal był RED: helper
+`cpu_reference_single_step` korzysta z `FemLlgProblem`, którego obecny FEM
+reference lane nie dodaje bezpośredniego Slonczewski STT do RHS. Nie zmieniono
+tego przez rozluźnienie tolerancji ani przez ukryty fallback.
+
+Fixture został zatem przepisany na jawny, niezależny oracle SI/Heun w teście.
+Oracle implementuje bezpośrednio:
+
+```text
+Omega_J = (J_c dot n_stack) hbar gamma0 /
+          (e mu0 M_s t_F)
+g(m)    = P Lambda^2 /
+          (Lambda^2 + 1 + (Lambda^2 - 1)(m dot p))
+tau     = [Omega_J (g + alpha epsilon')/(1+alpha^2)] m x (m x p)
+        + [Omega_J (epsilon' - alpha g)/(1+alpha^2)] m x p
+```
+
+Dla pola efektywnego `H_eff=0` wykonuje dokładnie dwa etapy Heuna z
+normalizacją kandydatów i porównuje magnetyzację po kroku oraz końcowe
+`max_dm_dt`. To jest common-limit: `m` jest jednorodne, demag i pole
+zewnętrzne są wyłączone, a włączona wymiana daje analitycznie zerowy wkład.
+
+### 32.50.2. Zakres i parametry dowodu
+
+Test nosi teraz nazwę
+`native_fem::tests::native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available`.
+Używa FP64, Heuna, `dt=2.5e-13 s`, `J_c=(0,0,1.4e11) A/m^2`,
+`n_stack=(0,0,1)`, `P=0.62`, `Lambda=1.8`, `epsilon_prime=0.03`,
+`t_F=1e-9 m`, `M_s=8e5 A/m`, `alpha=0.1`, `gamma0=2.211e5 m/(A s)` oraz
+jednorodnego `m=(1,0,0)` na małym mesh two-tets. Kontrakt zawiera
+`slonczewski.fullmag.v2` i
+`slonczewski_thin_layer_homogenized.v1`; wszystkie węzły są aktywne.
+Pole zewnętrzne i demag są wyłączone, a `enable_exchange=true` pozostaje
+wyłącznie wymaganiem device-resident GPU RK.
+
+### 32.50.3. Managed GREEN i granica kwalifikacji
+
+Po poprawce uruchomiono ponownie zaktualizowaną recepturę:
+
+```text
+just verify-fem-stt-native-contract
+```
+
+Wynik zarządzanego kontenera CUDA/MFEM/Hypre: C++
+`FEM CUDA Slonczewski v2 numeric contract PASS`, test ABI, oba testy planera,
+niezależny SI one-step, ośmiokrokowa trajektoria CPU↔GPU oraz current-scaling
+przeszły (`1 passed; 0 failed` dla każdego filtrowanego kontraktu). Ostrzeżenia
+Rust o nieużywanych symbolach są istniejące wcześniej i nie zmieniają wyniku.
+Zmieniono także komendy w `justfile`, przewodniku host parity i skrypcie
+sprawdzającym środowisko, aby wskazywały nową nazwę testu.
+
+Dowód zamyka bounded FP64 one-step FEM native v2 względem niezależnego oracle
+SI oraz nie zmienia capability: FEM GPU pozostaje
+`reference_executable`, `validated_workloads` pozostaje puste. Nie jest to
+jeszcze implementacja STT w `FemLlgProblem` reference lane ani cross-backend
+FDM↔FEM equivalence. Nadal otwarte są nonlinear current sweep, `dt`/mesh
+convergence, pełna rodzina integratorów, długie trajektorie, demag, FP32,
+MuMax3/BORIS, SHE/BORIS reciprocal, SML, skin/MQS i Python/OpenAPI/UI
+round-trip. Szeroka ocena celu pozostaje **86% implementacji / 60% gotowości
+produkcyjnej**.
