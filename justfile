@@ -294,7 +294,7 @@ verify-boris-fullmag-she-nf:
       test -x "$fullmag_bin"; \
       if [ -e "$report_root/matrix.json" ]; then echo "matrix report already exists: $report_root/matrix.json" >&2; exit 3; fi; \
       mkdir -p "$report_root"; \
-      PYTHONPATH=scripts python3 scripts/run_boris_fullmag_she_nf_matrix.py --boris-build-root "$boris_root" --fullmag "$fullmag_bin" --report-root "$report_root"'
+      PYTHONPATH="packages/fullmag-py/src:scripts${PYTHONPATH:+:$PYTHONPATH}" python3 scripts/run_boris_fullmag_she_nf_matrix.py --boris-build-root "$boris_root" --fullmag "$fullmag_bin" --report-root "$report_root" --device "${FULLMAG_BORIS_DEVICE:-cuda}"'
 
 verify-fdm-zhang-li-native-contract:
     docker compose --profile fem-gpu run --rm \

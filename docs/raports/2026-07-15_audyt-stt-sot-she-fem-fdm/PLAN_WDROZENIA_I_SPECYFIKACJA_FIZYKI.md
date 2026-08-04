@@ -6025,8 +6025,8 @@ pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
 
 Po wcześniejszym pullu oraz lokalnych, już zapisanych poprawkach sprawdzono
 stan repozytorium i wykonano bramę jeszcze raz z obowiązującej receptury
-kontenerowej. `master` jest lokalnie siedem commitów przed
-`origin/master` (`HEAD=20d7b4e3ef73c2ba48b77b57cb2e294f50cad2b2`,
+kontenerowej. `master` jest lokalnie jedenaście commitów przed
+`origin/master` (`HEAD=0560bd6de2fcc83fec967463be415a1d98509bbf`,
 `origin/master=b3c839b9c0d6a7cab99b8ad5c7b88007f7456a01`); nie wykonywano push.
 Niepowiązane usunięcia debugów w `apps/legacy_web` oraz modyfikacja
 `external_solvers/3` pozostały nietknięte.
@@ -6048,7 +6048,7 @@ sprawdzający odrzucenie niezbiegniętego kandydata; nie oznacza nieudanego cał
 testu ani dowodu zbieżności produkcyjnego przebiegu.
 
 Wniosek jest ograniczony do aktualnego kontraktu wykonawczego: po synchronizacji
-z masterem nie ma regresji w ścieżce Poisson/FEM-BEM, delta-potential,
+z masterem i ponownej budowie po zmianach reference STT nie ma regresji w ścieżce Poisson/FEM-BEM, delta-potential,
 timingu CUDA ani okresowym demagu/wymianie, a fail-closed dla nieudanego PCG
 działa. Nie awansuje to jeszcze demaga do pełnej kwalifikacji fizycznej.
 Nadal wymagają osobnych dowodów: medium/fine mesh convergence, airbox i RT0/KKT,
@@ -6229,3 +6229,62 @@ Nie zmienia capability: native FEM GPU pozostaje
 są `J`/`dt`/mesh convergence, długie przebiegi, FP32, maski na niejednorodnych
 obszarach oraz wspólna kwalifikacja z FDM CUDA, MuMax3 i BORIS. Szeroka ocena
 celu pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.53. Receptura macierzy BORIS–Fullmag: jawny Python i urządzenie (2026-08-04)
+
+### 32.53.1. RED z rzeczywistej receptury
+
+Pierwsze uruchomienie:
+
+```text
+FULLMAG_BORIS_FULLMAG_SHE_REPORT_ROOT=/zfn2/mateuszz/git/fullmag/boris-build/reports/fullmag-boris-she-nf-v1-rerun-20260804 \
+FULLMAG_BORIS_BUILD_ROOT=/zfn2/mateuszz/git/fullmag/boris-build/source \
+FULLMAG_FULLMAG_BINARY=/home/kkingstoun/git/fullmag/fullmag/.fullmag/local/bin/fullmag \
+just verify-boris-fullmag-she-nf
+```
+
+zatrzymało się przed wygenerowaniem artefaktu Fullmag, ponieważ receptura
+nadpisywała `PYTHONPATH` wartością `scripts`. `run_boris_fullmag_she_nf_matrix.py`
+importuje publiczny pakiet `fullmag`, więc otrzymano:
+
+```text
+ModuleNotFoundError: No module named 'fullmag'
+```
+
+Po poprawce receptura zachowuje `packages/fullmag-py/src` oraz `scripts` w
+`PYTHONPATH`; nie zmienia to modelu fizycznego ani wyników solvera.
+
+### 32.53.2. Jawna ścieżka CUDA BORIS
+
+Drugi RED ujawnił, że macierz hardcodowała `device="cpu"`, podczas gdy
+przypięty `BorisLin` jest binarium CUDA wymagającym `libnvidia-ml.so.1`.
+Zamiast ukrywać fallback, dodano parametr `--device {cpu,cuda}` oraz pole
+`device` w każdym wpisie i raporcie macierzy. Receptura przekazuje
+`FULLMAG_BORIS_DEVICE`, domyślnie `cuda`; ścieżka CPU nadal pozostaje dostępna
+wyłącznie dla binarium, które rzeczywiście ma CPU-owe zależności.
+
+Testy parsera, walidatora i porównania po zmianie:
+
+```text
+17 passed
+```
+
+Jawne uruchomienie CUDA wygenerowało pierwszy pełny artefakt BORIS N/F oraz
+artefakt Fullmag dla `10x4x2+2`, ale porównanie zakończyło się statusem
+`incomparable`: pola transportowe i interfejsowe różnią się, a `Tsi` BORIS ma
+jednostkę `A/(m s)`, natomiast Fullmag publikuje Gilbert source `1/s`.
+Przykładowe metryki z tego przypadku to `mu_s` max-relative
+`1.987e+0`, `spin_current_qia` `1.999998e+0` i charge-current `1.331e+0`.
+To jest dowód diagnostyczny i wskazuje na dalszą pracę nad wspólnym
+workloadem/konwencją, nie na zgodność solverów. `SHE-BORIS-001` pozostaje
+otwarta; nie zmieniono capability ani `validated_workloads`.
+
+### 32.53.3. Granica i następny krok
+
+Naprawa zamyka tylko dwa błędy integracyjne: import publicznego DSL oraz
+niejawny wybór urządzenia. Nie zamyka reciprocal `iSHA=SHA`, mapowania
+`S→V_s→mu_s`, zgodności interfejsu N/F/T, torque-unit mapping, trzech
+rozdzielczości ani produkcyjnej kwalifikacji SHE. Następny krok P0 to
+wydzielenie wspólnego, jednoznacznego M1 direct-SHE common-limit z identycznym
+`E`, `lambda_sf`, normalną i znakiem, a dopiero potem rozszerzenie go na
+reciprocal M2/BORIS.
