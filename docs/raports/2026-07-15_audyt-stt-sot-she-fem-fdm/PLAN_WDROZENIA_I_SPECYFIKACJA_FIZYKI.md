@@ -7128,3 +7128,71 @@ równowagowy lub niezależna kontrola tego wpływu, (c) co najmniej trzy poziomy
 `h` i kontrola `dt`, (d) audyt znaku i skali operatora oraz (e) rerun z
 release-clean managed runtime. Samo pole FEM nie może awansować
 `validated_workloads`.
+
+## 32.68. Aktualny rerun FEM STT po synchronizacji `master` (2026-08-04)
+
+### 32.68.1. Wykonana brama FEM
+
+Powyższe porównanie SP5 nie było jedynym testem FEM. Po synchronizacji
+`master` wykonano ponownie zarządzaną receptę:
+
+```text
+just verify-fem-stt-native-contract
+```
+
+Przebieg został wykonany w obrazie `fem-gpu`, z MFEM/CUDA/SLEPc i z trwałym
+targetem Cargo pod `/zfn2/mateuszz/git/fullmag`. Źródło w chwili wykonania:
+
+```text
+HEAD=950855de075e469fd1e57f1a10451c9d1ad082c1
+worktree_state=dirty
+```
+
+Brama zakończyła się `exit 0`. Zbudowany natywny FEM potwierdził:
+
+```text
+FEM CUDA Slonczewski v2 numeric contract PASS
+versioned_stt_extension_is_append_only_after_legacy_plan_prefix ... ok
+auto_fem_canonical_slonczewski_v2_remains_gpu_eligible ... ok
+strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation ... ok
+native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available ... ok
+native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available ... ok
+native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available ... ok
+native_fem_slonczewski_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available ... ok
+```
+
+Wynik obejmuje osobny SI oracle jednego kroku, wielokrokową parytetową
+trajektorię CPU--CUDA w FP64, ograniczenie skali prądu, kwalifikację wyboru
+urządzenia oraz wspólny limit z FDM. Ostatni test działał na minimalnej,
+jednorodnej siatce i bez demagnetyzacji/wymiany; nie jest to test vortexu,
+airboxu ani pełnego Standard Problem 5.
+
+### 32.68.2. Co zostało porównane między FEM i FDM
+
+Zakres FEM jest więc szerszy niż sam FDM:
+
+| poziom | FEM | FDM | status |
+|---|---|---|---|
+| operator STT | natywny FEM CPU/CUDA, Slonczewski v2 | natywny FDM CPU/CUDA, Slonczewski v2 | wspólny limit i testy bounded PASS |
+| transport SHE/iSHE | FEM M1 oraz bounded M2 CPU, testy ABI, zbieżności i wspólnego limitu | FDM M1/M2, testy wspólnego limitu | kontrakt/reference evidence; bez awansu `validated_workloads` |
+| dynamika SP5 | pełny FEM CPU do `1 ns`, demag Poisson--Robin, P1/tet4 | FDM CPU do `1 ns`, operator kartezjański | pole porównane diagnostycznie; equivalence `false` |
+| FEM GPU SP5 | brak pełnego przebiegu z kwalifikowanym artefaktem | FDM GPU ma wewnętrzne testy kontraktowe | otwarte |
+
+W szczególności nie twierdzimy już, że analiza była „tylko FDM”: FEM ma
+wykonane bramy operatora, transportu i pełny diagnostyczny SP5. Twierdzenie,
+którego nadal nie wolno używać, brzmi natomiast „FEM i FDM są równoważne dla
+SP5”. Aktualne pole FEM--FDM ma RMS `0.49796257925222454`, cosine
+`0.8741985937637287` i `valid_fraction=1.0`; rozbieżność jest przestrzenna,
+a nie wyłącznie skutkiem redukcji `avg(m)`.
+
+### 32.68.3. Granica produkcyjna FEM
+
+FEM osiągnął poziom **reference-executable / bounded diagnostic** dla STT i
+transportu, ale nie poziom produkcyjnej kwalifikacji. Do zamknięcia celu
+pozostają wspólne: objętościowo zachowawcze ograniczenie tet4/prism6,
+identyczny stan po relaksacji, ten sam operator Zhang--Li lub udowodniony
+adapter, co najmniej trzy poziomy `h`, kontrola `dt`, trzy rodziny Oersteda
+FEM (OE-T0/OE-F1/OE-F2), kwalifikacja FEM GPU, pełna ścieżka
+Python--ProblemIR--planner--UI oraz release-clean rerun. Do tego czasu
+macierz capability i `validated_workloads` pozostają bez awansu, a ocena celu
+pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
