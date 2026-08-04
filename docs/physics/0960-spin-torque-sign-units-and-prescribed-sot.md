@@ -383,7 +383,12 @@ versions, or source bindings.
 
 ```python
 # %%
-from fullmag.model.spin_torque import RegionRef, SlonczewskiSTT
+from fullmag.model.spin_torque import (
+    PrescribedSpinOrbitTorque,
+    RegionRef,
+    SignedScalarDrive,
+    SlonczewskiSTT,
+)
 
 torque = SlonczewskiSTT(
     current_density=(0.0, 0.0, 1.0e12),
@@ -396,6 +401,18 @@ torque = SlonczewskiSTT(
     target=RegionRef("free_layer"),
     stack_normal=(0.0, 0.0, 1.0),
 )
+
+sot = PrescribedSpinOrbitTorque(
+    name="hm_sot",
+    target=RegionRef("free_layer"),
+    drive=SignedScalarDrive(
+        current_density_Apm2=-4.0e11,
+        sigma=(0.0, 1.0, 0.0),
+    ),
+    xi_dl=0.12,
+    xi_fl=-0.03,
+    free_layer_thickness_m=1.5e-9,
+)
 ```
 
 The canonical parameter-to-ProblemIR contract is:
@@ -405,6 +422,11 @@ The canonical parameter-to-ProblemIR contract is:
 | `SlonczewskiSTT.current_density` | `tuple[float, float, float]` | required unless `current_source` is used | `\\mathrm{A\\,m^{-2}}` | finite signed vector; `J dot n_stack` is retained | conventional charge-current density | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].current_density` |
 | `SlonczewskiSTT.free_layer_thickness_m` | `float` | required for canonical thin layer | `\\mathrm m` | finite and positive; no hidden geometry fallback in v2 | homogenized free-layer thickness | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].free_layer_thickness` |
 | `SlonczewskiSTT.stack_normal` | `vec3` | required for canonical v2 | `1` | finite non-zero vector normalized once at plan import | fixed-to-free stack orientation | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].stack_normal` |
+| `PrescribedSpinOrbitTorque.target` | `RegionRef` | required for canonical v1 | `1` | non-empty object/region reference; must resolve to an active magnetic target | prescribed SOT target region | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].target` |
+| `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive \| VectorCurrentDrive` | required; mutually exclusive drive forms | `A/m^2` or source binding | signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal | SOT current/polarization source and orientation | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].drive` |
+| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | `1` | finite signed damping-like efficiency | damping-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].xi_dl` |
+| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | `1` | finite signed field-like efficiency | field-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].xi_fl` |
+| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | `m` | finite and positive; no hidden cell-thickness fallback in v1 | ferromagnetic target thickness in the SOT prefactor | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].free_layer_thickness_m` |
 
 (problem-ir)=
 ### 4.2 ProblemIR representation
@@ -496,6 +518,24 @@ rejection, stage times for every supported RK integrator, rejected-step
 rollback, quantity/RHS equality, strict-GPU no-fallback provenance, and
 Python–SceneDocument–UI–canonical-Python normalized round-trip.
 
+### 5.4 Bounded managed prescribed-SOT evidence (2026-08-04)
+
+The FDM CUDA lane now has a bounded, executable FP64 check of the canonical
+`prescribed_sot.fullmag.v1` source. The managed recipe
+`just verify-fdm-prescribed-sot-native-contract` builds the native algebra and
+CUDA runtime contracts, then runs
+`native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available`
+and
+`native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available`.
+Both tests pass for an eight-step fixed-step CPU-reference trajectory and an
+isolated `0.5x/1x/2x` signed-current increment envelope with an explicit target
+mask. This proves the current Rust-to-native descriptor, one Gilbert
+conversion, mask intersection, and FP64 trajectory parity for that small
+workload only. It does not prove FEM SOT execution, FP32, nonlinear current
+sweeps, stage-time envelopes, direct/inverse SHE, or production qualification;
+the canonical SOT capability therefore remains `semantic_only` in the
+capability matrix.
+
 ## 6. Completeness checklist
 
 - [ ] Python API and canonical alias migration
@@ -543,7 +583,20 @@ hidden change to `alpha`.
 | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` | `gpu_rk_plan_device_resident` | Strict GPU readiness and target-mask gate |
 | `backends/fem/gpu/cuda/state/gpu_state.cpp` | `gpu_state_upload_stt_target_mask` | Optional target-mask device ownership and transfer audit |
 | `backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp` | `initialize_context_gpu_state` | Bootstrap upload ordering |
+| `backends/fdm/include/spin_torque.hpp` | `prescribed_sot_explicit_rhs` | Canonical prescribed-SOT Gilbert source and single explicit Gilbert conversion shared by CUDA precision lanes |
+| `backends/fdm/include/context.hpp` | `sot_params_from_ctx` | Native FDM SOT descriptor normalization and signed SI prefactor |
+| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
+| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
+| `backends/fdm/tests/prescribed_sot_contract.cpp` | `main` | Native algebraic canonical-SOT contract and sign/Gilbert checks |
+| `backends/fdm/tests/prescribed_sot_cuda_runtime.cu` | `main` | Managed FP64/FP32 native CUDA SOT runtime contract |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA canonical-SOT trajectory parity against CPU reference prefixes |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated FP64 `0.5x/1x/2x` signed-current and target-mask response contract |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class PrescribedSpinOrbitTorque` | Canonical Python SOT class preserving target, tagged drive, efficiencies, and ferromagnetic thickness |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SignedScalarDrive` | Signed scalar current, polarization axis, and optional envelope authoring |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class VectorCurrentDrive` | Vector current-source binding with explicit drive and interface axes |
+| `packages/fullmag-py/src/fullmag/runtime/scene_document.py` | `_decode_prescribed_sot` | SceneDocument/ProblemIR decode with fail-closed canonical SOT drive validation |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_prescribed_sot_entry` | Canonical Python export of all tagged-drive SOT fields |
 | `backends/fem/tests/cuda_slonczewski_contract.cpp` | `main` | Managed one-step CPU↔GPU numeric contract |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA trajectory parity against CPU reference prefixes |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated 0.5×/1×/2× signed-current increment-scaling contract |
@@ -563,4 +616,11 @@ hidden change to `alpha`.
 ```{math}
 :label: slonczewski-signed-current
 J_n=\\mathbf J_c\\cdot\\mathbf n_{\\mathrm{stack}},\\qquad \\Omega_J=\\frac{\\gamma_e\\hbar J_n}{eM_st_F}.
+```
+
+```{math}
+:label: prescribed-sot-gilbert
+\\Omega_{\\mathrm{DL}}=\\frac{\\gamma_e\\hbar\\xi_{\\mathrm{DL}}J_{\\mathrm{signed}}}{2eM_st_F},\\qquad
+\\Omega_{\\mathrm{FL}}=\\frac{\\gamma_e\\hbar\\xi_{\\mathrm{FL}}J_{\\mathrm{signed}}}{2eM_st_F},\\qquad
+\\mathbf T_{\\mathrm{SOT},G}=\\Omega_{\\mathrm{DL}}\\,\\mathbf m\\times(\\hat{\\boldsymbol\\sigma}\\times\\mathbf m)+\\Omega_{\\mathrm{FL}}\\,\\mathbf m\\times\\hat{\\boldsymbol\\sigma}.
 ```

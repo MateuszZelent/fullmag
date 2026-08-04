@@ -5258,6 +5258,112 @@ i pełny Python/UI round-trip pozostają otwarte. Zapisany zakres poprawia
 wiarygodność diagnostyki BORIS, ale nie zwiększa oceny produkcyjnej: nadal
 **86% implementacji / 60% gotowości produkcyjnej**.
 
+## 32.45. Stałokrokowa trajektoria i skalowanie kanonicznego SOT v1 FDM CUDA (2026-08-04)
+
+### 32.45.1. Zakres fizyczny i kontrakt wejściowy
+
+Po zamknięciu bram Slonczewskiego dodano analogiczną, ale odrębną bramę dla
+`prescribed_sot.fullmag.v1`. Test nie używa legacy `|J|`: przekazuje signed
+`J_signed=-4e11 A/m^2`, `xi_DL=0.12`, `xi_FL=-0.03`,
+`sigma_hat=(0,1,0)`, `t_F=1.5e-9 m`, jawny `sot_target`,
+`PrescribedSotV1DriveIR::SignedScalar` oraz maskę celu, która wybiera tylko
+aktywne komórki. Wymiana, demag i pole zewnętrzne są wyłączone, a `dt=1e-15 s`
+utrzymuje pomiar w małym, stabilnym envelope Heuna. CPU reference korzysta z
+niezależnego `prescribed_sot_scales` i tej samej jednej konwersji Gilberta co
+opis fizyczny:
+
+```text
+Omega = gamma_e hbar J_signed/(2 e M_s t_F)
+T_G = Omega [xi_DL m x (sigma x m) + xi_FL m x sigma]
+T_explicit = [T_G + alpha m x T_G]/(1+alpha^2)
+```
+
+### 32.45.2. Implementacja i dowód RED → GREEN
+
+Dodano testy w rzeczywistym module `fdm::gpu::cuda::native::tests`:
+
+```text
+native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available
+native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available
+```
+
+Pierwszy test wykonuje osiem kolejnych kroków CUDA FP64 i po każdym kroku
+porównuje pełny wektor `m` z CPU-reference uruchomionym do tego samego
+prefiksu czasu. Drugi uruchamia `0.5x`, `1x` i `2x` signed current względem
+tego samego stanu bazowego; aktywne i wskazane komórki muszą mieć odpowiedź
+`1:2:4`, a komórki nieaktywne lub niewskazane nie mogą reagować.
+
+Receptura `just verify-fdm-prescribed-sot-native-contract` została rozszerzona
+o pełny managed `fullmag_fdm`, kontrakt algebraiczny, runtime CUDA FP64/FP32 i
+oba testy Rust. Wynik:
+
+```text
+prescribed SOT algebra contract: PASS
+prescribed SOT CUDA fp64/fp32 runtime: PASS
+running 2 tests
+...native_fdm_prescribed_sot_has_bounded_current_scaling... ok
+...native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 784 filtered out
+```
+
+Sprawdzono również publiczny round-trip Python/SceneDocument/script export:
+`TMPDIR=/tmp/fullmag-zfn2-build/python-sot-tests PYTHONPATH=packages/fullmag-py/src
+python3 -m pytest -q packages/fullmag-py/tests/test_prescribed_sot.py
+packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` dał
+`44 passed, 2 warnings, 88 subtests passed`. Pierwsza próba bez ustawionego
+`TMPDIR` była wyłącznie błędem hostowego pytest capture (`FileNotFoundError`,
+zero testów); nie zmienia to dowodu po powtórzeniu w prawidłowym katalogu.
+
+Pierwsze czerwone uruchomienia zatrzymały się na brakującym `sot_target` /
+`sot_drive`, a następnie na masce wskazującej nieaktywną komórkę. Oba błędy
+pochodziły z zamierzonego fail-closed walidatora planu; fixture uzupełniono do
+pełnego kontraktu zamiast osłabiać walidację.
+
+### 32.45.3. Granica kwalifikacji
+
+Zamknięto wyłącznie bounded FP64 FDM CUDA descriptor/trajectory/mask/current
+scaling evidence dla małego fixed-step workloadu. Nie zamyka to FEM SOT,
+FP32 error envelope, nieliniowego sweepu prądu, stage-time envelope,
+zbieżności `dt`/siatki, cross-backend parity, bezpośredniego lub odwrotnego
+SHE, ani produkcyjnej kwalifikacji. Canonical SOT pozostaje
+`semantic_only` we wszystkich czterech publicznych lane'ach; capability matrix
+opisuje nowy dowód, ale `validated_workloads` pozostaje puste. Szeroka ocena
+celu pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.46. Pull `origin/master` i ponowna brama demaga (2026-08-04)
+
+Wykonano:
+
+```text
+git pull --ff-only origin master
+Already up to date.
+```
+
+Branch jest `master`, lokalny HEAD `427aa79fe`, a `origin/master` wskazuje
+`b3c839b9c`; lokalne cztery commity implementacyjne pozostają jeszcze
+niepushowane. W historii są wcześniejsze poprawki/proweniencja demaga:
+`34cf6a9da` (degradacja pageable scalar staging), `02f7bf813` i `b3c839b9c`
+(udokumentowana synchronizacja pull). Niezależne lokalne usunięcia debugów
+`apps/legacy_web` oraz modyfikacja `external_solvers/3` pozostały poza zmianą.
+
+Po pullu uruchomiono managed:
+
+```text
+just verify-fem-demag-poisson-contract-focused
+```
+
+Receptura skonfigurowała CUDA/MFEM/Hypre i zbudowała oraz uruchomiła wszystkie
+sześć kontraktów: `fem_demag_poisson_contract`,
+`fem_demag_delta_potential_contract`, `fem_demag_fem_bem_contract`,
+`fem_cuda_demag_timing_contract`, `fem_cuda_periodic_demag_contract` i
+`fem_cuda_periodic_exchange_contract`; zakończyła się kodem `0`. Komunikaty
+`PCG: Number of iterations: 1 / No convergence!` pochodzą z fixture testującej
+odrzucenie niezbiegniętego kandydata i nie są dowodem zbieżności produkcyjnego
+przebiegu. Brama potwierdza poprawność kontraktów i fail-closed demaga po
+pullu, ale nie zamyka jeszcze pełnej kwalifikacji fizycznej: pozostają
+medium/fine convergence, airbox/RT0/KKT, MPI scaling, długi runtime i
+cross-backend demag parity. Szeroka ocena celu pozostaje **86% / 60%**.
+
 ## 32.36. Ujednolicenie walidacji objętości OCC z kontraktem Rust (2026-08-03)
 
 ### 32.36.1. Synchronizacja z `master`

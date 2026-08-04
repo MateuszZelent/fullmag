@@ -3343,6 +3343,174 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM prescribed SOT trajectory parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.enable_exchange = false;
+        plan.external_field = None;
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        plan.sot_current_density = Some(-4.0e11);
+        plan.sot_xi_dl = Some(0.12);
+        plan.sot_xi_fl = Some(-0.03);
+        plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        plan.sot_thickness = Some(1.5e-9);
+        plan.sot_target = Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        });
+        plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+            current_density_apm2: -4.0e11,
+            sigma_hat: [0.0, 1.0, 0.0],
+            envelope: None,
+        });
+        plan.sot_active_mask = Some(vec![
+            true, false, true, false, false, false, true, false, false,
+        ]);
+
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        for step in 1..=8 {
+            backend
+                .step(dt)
+                .expect("native fdm prescribed SOT trajectory step");
+            let expected = crate::fdm::cpu::reference::execute_reference_fdm(
+                &plan,
+                dt * step as f64,
+                &[],
+                None,
+                None,
+            )
+            .expect("cpu reference prescribed SOT trajectory");
+            let actual_m = backend
+                .copy_m(plan.initial_magnetization.len())
+                .expect("copy prescribed SOT trajectory m");
+
+            assert_vector_field_close(
+                &format!("prescribed SOT trajectory step {step}"),
+                &actual_m,
+                &expected.result.final_magnetization,
+                1e-6,
+                1e-10,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM prescribed SOT current-scaling test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut base_plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        base_plan.enable_exchange = false;
+        base_plan.external_field = None;
+        base_plan.fixed_timestep = Some(1.0e-15);
+
+        let mut baseline_backend =
+            NativeFdmBackend::create(&base_plan).expect("native fdm SOT baseline create");
+        baseline_backend
+            .step(base_plan.fixed_timestep.expect("fixed timestep"))
+            .expect("native fdm SOT baseline step");
+        let baseline = baseline_backend
+            .copy_m(base_plan.initial_magnetization.len())
+            .expect("copy SOT baseline m");
+
+        let run_at_scale = |scale: f64| {
+            let mut plan = base_plan.clone();
+            plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+            plan.sot_current_density = Some(-4.0e11 * scale);
+            plan.sot_xi_dl = Some(0.12);
+            plan.sot_xi_fl = Some(-0.03);
+            plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+            plan.sot_thickness = Some(1.5e-9);
+            plan.sot_target = Some(fullmag_ir::RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            });
+            plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: -4.0e11 * scale,
+                sigma_hat: [0.0, 1.0, 0.0],
+                envelope: None,
+            });
+            plan.sot_active_mask = Some(vec![
+                true, false, true, false, false, false, true, false, false,
+            ]);
+
+            let mut backend =
+                NativeFdmBackend::create(&plan).expect("native fdm scaled SOT create");
+            backend
+                .step(plan.fixed_timestep.expect("fixed timestep"))
+                .expect("native fdm scaled SOT step");
+            backend
+                .copy_m(plan.initial_magnetization.len())
+                .expect("copy scaled SOT m")
+        };
+
+        let half = run_at_scale(0.5);
+        let unit = run_at_scale(1.0);
+        let double = run_at_scale(2.0);
+        let active_mask = base_plan.active_mask.as_ref().expect("active mask");
+        let target_mask = [true, false, true, false, false, false, true, false, false];
+
+        for index in 0..baseline.len() {
+            if !active_mask[index] || !target_mask[index] {
+                assert_eq!(
+                    half[index], baseline[index],
+                    "inactive/untargeted half-current SOT leak at {index}"
+                );
+                assert_eq!(
+                    unit[index], baseline[index],
+                    "inactive/untargeted unit-current SOT leak at {index}"
+                );
+                assert_eq!(
+                    double[index], baseline[index],
+                    "inactive/untargeted double-current SOT leak at {index}"
+                );
+                continue;
+            }
+
+            let increment_norm = |state: &[f64; 3]| {
+                state
+                    .iter()
+                    .zip(baseline[index].iter())
+                    .map(|(value, reference)| (value - reference).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+            };
+            let half_norm = increment_norm(&half[index]);
+            let unit_norm = increment_norm(&unit[index]);
+            let double_norm = increment_norm(&double[index]);
+            assert!(
+                unit_norm > 1.0e-10,
+                "SOT current-scaling response is numerically zero at active target cell {index}: {unit_norm:.6e}"
+            );
+
+            let half_error = (unit_norm - 2.0 * half_norm).abs();
+            let double_error = (double_norm - 4.0 * half_norm).abs();
+            let scale = unit_norm.max(double_norm).max(1.0e-30);
+            assert!(
+                half_error <= 2.0e-4 * scale,
+                "0.5x/1x SOT current scaling mismatch at cell {index}: half={half_norm:.9e} unit={unit_norm:.9e} error={half_error:.3e}"
+            );
+            assert!(
+                double_error <= 4.0e-4 * scale,
+                "1x/2x SOT current scaling mismatch at cell {index}: half={half_norm:.9e} double={double_norm:.9e} error={double_error:.3e}"
+            );
+        }
+    }
+
+    #[test]
     fn native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available()
     {
         if !is_cuda_available() {
