@@ -727,6 +727,10 @@ fn fem_gpu_rk_plan_ineligible_error(message: String) -> RunError {
     }
 }
 
+fn fem_plan_gpu_request_is_forced(requested_device: &str) -> bool {
+    matches!(requested_device, "gpu" | "all_in_gpu")
+}
+
 fn fem_gpu_min_nodes_threshold() -> Option<usize> {
     match std::env::var("FULLMAG_FEM_GPU_MIN_NODES") {
         Ok(raw) => match raw.trim().parse::<usize>() {
@@ -784,23 +788,25 @@ fn apply_fem_gpu_plan_constraints(
         }
     }
 
-    if let Some(message) = fem_gpu_rk_plan_ineligible_message(plan) {
-        if forced_gpu {
-            return Err(fem_gpu_rk_plan_ineligible_error(message));
+    if resolution.engine == FemEngine::NativeGpu {
+        if let Some(message) = fem_gpu_rk_plan_ineligible_message(plan) {
+            if forced_gpu {
+                return Err(fem_gpu_rk_plan_ineligible_error(message));
+            }
+            runtime_warn_once(&message);
+            resolution.engine = FemEngine::CpuNative;
+            resolution.fallback = Some(runtime_fallback(
+                fem_engine_id(FemEngine::NativeGpu),
+                fem_engine_id(FemEngine::CpuNative),
+                FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON,
+                message,
+            ));
+            return Ok(FemPlanEngineResolution {
+                engine: resolution.engine,
+                fallback: resolution.fallback,
+                fem_crossover_decision,
+            });
         }
-        runtime_warn_once(&message);
-        resolution.engine = FemEngine::CpuNative;
-        resolution.fallback = Some(runtime_fallback(
-            fem_engine_id(FemEngine::NativeGpu),
-            fem_engine_id(FemEngine::CpuNative),
-            FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON,
-            message,
-        ));
-        return Ok(FemPlanEngineResolution {
-            engine: resolution.engine,
-            fallback: resolution.fallback,
-            fem_crossover_decision,
-        });
     }
 
     if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
@@ -1397,7 +1403,7 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     apply_fem_gpu_plan_constraints(
         plan,
         resolve_fem_engine_with_effective_request(problem, &requested_device)?,
-        requested_device != "auto",
+        fem_plan_gpu_request_is_forced(&requested_device),
         fem_crossover_decision,
     )
 }
@@ -9990,6 +9996,31 @@ mod tests {
         assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
         assert!(fallback.message.contains("zhang_li.fullmag.v1"));
         assert!(fallback.message.contains("canonical FEM STT"));
+    }
+
+    #[test]
+    fn explicit_cpu_fem_plan_is_not_classified_as_forced_gpu() {
+        assert!(!fem_plan_gpu_request_is_forced("cpu"));
+        assert!(!fem_plan_gpu_request_is_forced("auto"));
+        assert!(fem_plan_gpu_request_is_forced("gpu"));
+        assert!(fem_plan_gpu_request_is_forced("all_in_gpu"));
+    }
+
+    #[test]
+    fn explicit_cpu_zhang_li_plan_reaches_cpu_preflight() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &canonical_stt_fem_plan("zhang_li.fullmag.v1"),
+            EngineResolution {
+                engine: FemEngine::CpuNative,
+                fallback: None,
+            },
+            fem_plan_gpu_request_is_forced("cpu"),
+            None,
+        )
+        .expect("CPU Zhang-Li plan must not enter the strict GPU preflight");
+
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        assert!(resolution.fallback.is_none());
     }
 
     #[test]
