@@ -567,6 +567,10 @@ verify-fem-steady-transport-m2-common-limit-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles -- --exact --nocapture'
 
+verify-fem-steady-transport-m2-3d-common-limit-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-m2-3d CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles -- --exact --nocapture'
+
 verify-fdm-m2-heterogeneous-interface-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
       fem-gpu bash -lc 'cd /workspace && CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-m2-interface CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance -- --nocapture && CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-m2-interface CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib m2_mixing_interface_closes_nonzero_absorption_and_sml_with_torque_target -- --nocapture'

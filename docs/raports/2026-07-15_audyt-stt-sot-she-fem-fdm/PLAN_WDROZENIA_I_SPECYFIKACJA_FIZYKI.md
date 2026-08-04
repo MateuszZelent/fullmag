@@ -6661,3 +6661,56 @@ FDM↔FEM interfejsu, niezerowego Hall w geometrii 3-D, GPU parity ani
 `validated_workloads`; bounded FEM M2 nadal fail-closed odrzuca interfejsy
 wewnętrzne. Szeroka ocena celu pozostaje **86% implementacji / 60% gotowości
 produkcyjnej**.
+
+## 32.60. Bounded 3-D reciprocal M2 SHE/iSHE/AHE FDM↔FEM (2026-08-04)
+
+### 32.60.1. Zakres i korekta metryki
+
+Dodano test runnera
+`reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles` oraz
+receptę `just verify-fem-steady-transport-m2-3d-common-limit-contract`. Fixture
+ma `m=(1,0,0)`, `theta_SH=0.1`, `sigma_AHE=0.2 S/m`,
+`sigma=4 S/m`, `sigma_s=5 S/m`, `sigma_parallel=6 S/m`,
+`sigma_perpendicular=3 S/m`, `P=0.25`, `lambda_sf=0.3 m`, elektrody ładunkowe
+i spinowe na `z_min/z_max` oraz izolację na wszystkich ścianach poprzecznych.
+W ten sposób w jednym problemie występują niezerowe direct SHE, reciprocal
+iSHE, AHE i poprzeczna zmiana `mu_s`.
+
+Początkowy test uśredniał dziewięć węzłów FEM równymi wagami. To nie jest
+całka powierzchniowa dla siatki P1 i powodowało niemonotoniczny błąd metryki,
+nie błąd solvera. Zastąpiono je złożonymi wagami trapezowymi `1-2-1` w obu
+kierunkach, a następnie rozszerzono sweep tak, aby zagęszczać jednocześnie
+przekrój i długość: `(n_x,n_y,n_z)=(2,2,4),(4,4,8),(8,8,16)`.
+
+### 32.60.2. Managed GREEN
+
+Uruchomienie w zarządzanym obrazie `fem-gpu` po przebudowie `fullmag_fem`
+zakończyło się `exit 0`; Cargo używał trwałego celu
+`/tmp/fullmag-zfn2-build/cargo-targets/fem-m2-3d` (backed by `/zfn2`):
+
+```text
+M2 reciprocal 3-D SHE/iSHE nxy=2, Nz=4: potential=1.1440446880428556e-4, spin=1.9328657009760858e-2
+M2 reciprocal 3-D SHE/iSHE nxy=4, Nz=8: potential=1.5938720605285228e-4, spin=6.517590917801991e-3
+M2 reciprocal 3-D SHE/iSHE nxy=8, Nz=16: potential=5.6548283983631764e-5, spin=1.884314775342455e-3
+test ...reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 958 filtered out
+```
+
+Gate wymaga niezależnych residual/balance FDM i FEM poniżej `1e-9`,
+niezerowego poprzecznego potencjału spinowego na każdej siatce, monotonicznego
+spadku błędu profilu spinowego oraz niższego błędu potencjału na siatce fine
+niż na obu wcześniejszych siatkach. Fine cross-backend envelope wynosi
+`5.65483e-5 V` dla potencjału i `1.88431e-3 V` dla maksymalnej składowej
+spinowej. Charge error nie jest wymagany jako monotoniczny na każdym
+pośrednim poziomie, ponieważ FVM cell-centre i P1 FEM mają różne masy
+poprzeczne; warunek końcowy wykrywa pogorszenie fine-grid.
+
+### 32.60.3. Granica dowodu
+
+Jest to pierwszy wykonywalny, niezerowy 3-D reciprocal SHE/iSHE/AHE
+common-limit dla CPU-double obu backendów. Nie dowodzi jeszcze wspólnego
+FDM↔FEM interfejsu N/F/T, broken-H1/mortar FEM, heterogenicznych materiałów,
+FDM/FEM GPU parity, BORIS parity, dynamicznego Oersteda/skin/MQS, pełnej
+ścieżki Python/UI ani `validated_workloads`. Capability matrix pozostaje bez
+awansu, a szeroka ocena celu pozostaje **86% implementacji / 60% gotowości
+produkcyjnej**.

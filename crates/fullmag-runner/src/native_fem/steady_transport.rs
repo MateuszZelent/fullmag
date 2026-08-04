@@ -1132,6 +1132,46 @@ mod tests {
         }
     }
 
+    fn common_reciprocal_m2_3d_fdm_plan(nxy: usize, nz: usize) -> FdmPlanIR {
+        let mut plan = common_reciprocal_m2_fdm_plan(nz);
+        let cells = nxy * nxy * nz;
+        plan.grid.cells = [nxy as u32, nxy as u32, nz as u32];
+        plan.cell_size = [1.0 / nxy as f64, 1.0 / nxy as f64, 1.0 / nz as f64];
+        plan.active_mask = Some(vec![true; cells]);
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; cells];
+
+        let descriptor = plan.spin_transport_plans[0]
+            .fdm_cpu_double_reciprocal
+            .as_mut()
+            .expect("reciprocal FDM descriptor");
+        descriptor.active_cells = vec![true; cells];
+        descriptor.reciprocal_materials = vec![ResolvedReciprocalMaterialIR {
+            sigma_spm: 4.0,
+            sigma_spin_spm: 5.0,
+            sigma_parallel_spm: 6.0,
+            sigma_perpendicular_spm: 3.0,
+            sigma_ahe_spm: 0.2,
+            polarization_p: 0.25,
+            theta_sh: 0.1,
+        }; cells];
+        descriptor.reactions = vec![
+            ResolvedSpinReactionLengthsIR {
+                spin_flip_m: Some(0.3),
+                exchange_m: None,
+                dephasing_m: None,
+            };
+            cells
+        ];
+        descriptor.region_ids = vec![0; cells];
+        descriptor.torque_target_cells = vec![false; cells];
+        descriptor.saturation_magnetization_apm = vec![8.0e5; cells];
+        descriptor.linear_solver.relative_tolerance = 1.0e-13;
+        descriptor.linear_solver.absolute_tolerance = 1.0e-12;
+        descriptor.nonlinear_solver.max_picard_iterations = 12;
+        descriptor.nonlinear_solver.relative_update_tolerance = 1.0e-8;
+        plan
+    }
+
     fn common_reciprocal_m2_fem_mesh(nz: usize) -> MeshIR {
         let node = |x: usize, y: usize, z: usize| -> u32 { (z * 4 + y * 2 + x) as u32 };
         let mut nodes = Vec::with_capacity((nz + 1) * 4);
@@ -1188,6 +1228,92 @@ mod tests {
         }
         MeshIR::from_legacy_tet4(
             "reciprocal-m2-common-limit".into(),
+            nodes,
+            elements,
+            element_markers,
+            boundary_faces,
+            boundary_markers,
+            vec![],
+            vec![],
+            HashMap::new(),
+        )
+    }
+
+    fn common_reciprocal_m2_3d_fem_mesh(nxy: usize, nz: usize) -> MeshIR {
+        let nodes_per_plane = (nxy + 1) * (nxy + 1);
+        let node = |x: usize, y: usize, z: usize| -> u32 {
+            (z * nodes_per_plane + y * (nxy + 1) + x) as u32
+        };
+        let mut nodes = Vec::with_capacity((nz + 1) * nodes_per_plane);
+        for z in 0..=nz {
+            for y in 0..=nxy {
+                for x in 0..=nxy {
+                    nodes.push([
+                        x as f64 / nxy as f64,
+                        y as f64 / nxy as f64,
+                        z as f64 / nz as f64,
+                    ]);
+                }
+            }
+        }
+        let mut elements = Vec::with_capacity(nz * nxy * nxy * 6);
+        let mut element_markers = Vec::with_capacity(nz * nxy * nxy * 6);
+        let mut boundary_faces = Vec::new();
+        let mut boundary_markers = Vec::new();
+        for z in 0..nz {
+            for y in 0..nxy {
+                for x in 0..nxy {
+                    let a = node(x, y, z);
+                    let b = node(x + 1, y, z);
+                    let c = node(x + 1, y + 1, z);
+                    let d = node(x, y + 1, z);
+                    let e = node(x, y, z + 1);
+                    let f = node(x + 1, y, z + 1);
+                    let g = node(x + 1, y + 1, z + 1);
+                    let h = node(x, y + 1, z + 1);
+                    elements.extend([
+                        [a, b, c, g],
+                        [a, c, d, g],
+                        [a, d, h, g],
+                        [a, h, e, g],
+                        [a, e, f, g],
+                        [a, f, b, g],
+                    ]);
+                    element_markers.extend((0..6).map(|_| 1));
+
+                    let mut add_face = |face: [u32; 3], marker: u32| {
+                        boundary_faces.push(face);
+                        boundary_markers.push(marker);
+                    };
+                    if z == 0 {
+                        add_face([a, b, c], 1);
+                        add_face([a, c, d], 1);
+                    }
+                    if z + 1 == nz {
+                        add_face([e, f, g], 2);
+                        add_face([e, g, h], 2);
+                    }
+                    if x == 0 {
+                        add_face([a, d, h], 3);
+                        add_face([a, h, e], 3);
+                    }
+                    if x + 1 == nxy {
+                        add_face([b, c, g], 3);
+                        add_face([b, g, f], 3);
+                    }
+                    if y == 0 {
+                        add_face([a, e, f], 3);
+                        add_face([a, f, b], 3);
+                    }
+                    if y + 1 == nxy {
+                        add_face([c, d, g], 3);
+                        add_face([d, h, g], 3);
+                    }
+                }
+            }
+        }
+        MeshIR::from_legacy_tet4(
+            "reciprocal-m2-3d-common-limit".into(),
             nodes,
             elements,
             element_markers,
@@ -1328,6 +1454,184 @@ mod tests {
                 && resolution_errors.last().unwrap().2 < 1.0e-2,
             "reciprocal M2 FDM↔FEM common-limit envelope is too large at fine Nz: {:?}",
             resolution_errors.last().unwrap()
+        );
+    }
+
+    #[test]
+    fn reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!(
+                "skipping reciprocal M2 3-D SHE/iSHE FDM↔FEM test: native FEM CPU unavailable"
+            );
+            return;
+        }
+
+        const SIGMA_SPM: f64 = 4.0;
+        const SIGMA_SPIN_SPM: f64 = 5.0;
+        const SIGMA_PARALLEL_SPM: f64 = 6.0;
+        const SIGMA_PERPENDICULAR_SPM: f64 = 3.0;
+        const SIGMA_AHE_SPM: f64 = 0.2;
+        const POLARIZATION: f64 = 0.25;
+        const THETA_SH: f64 = 0.1;
+        const LAMBDA_SF_M: f64 = 0.3;
+        let mut cross_errors = Vec::new();
+
+        for (nxy, nz) in [(2usize, 4usize), (4, 8), (8, 16)] {
+            let fdm_plan = common_reciprocal_m2_3d_fdm_plan(nxy, nz);
+            let mut fdm_workflow = crate::fdm::cpu::spin_transport::FdmSpinTransportWorkflow::from_plan(
+                &fdm_plan,
+            )
+            .expect("FDM reciprocal M2 3-D workflow construction")
+            .expect("FDM reciprocal M2 3-D workflow");
+            let fdm_evaluation = fdm_workflow
+                .evaluate_stage(&fdm_plan.initial_magnetization, 0.0)
+                .expect("FDM reciprocal M2 3-D solve");
+            let fdm_module = &fdm_evaluation.modules[0];
+
+            let fem_mesh = common_reciprocal_m2_3d_fem_mesh(nxy, nz);
+            let fem_request = NativeFemSteadyTransportRequest {
+                mesh: fem_mesh.clone(),
+                execution: NativeFemSteadyTransportExecution::CpuDouble,
+                interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
+                gauge: NativeFemSteadyTransportGauge::BoundaryReference,
+                constitutive_model: NativeFemSteadyTransportConstitutiveModel::ReciprocalM2,
+                constitutive_version: M2_CONSTITUTIVE_VERSION.into(),
+                operator_version: M2_OPERATOR_VERSION.into(),
+                physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+                charge_conductivity_spm_per_element: vec![SIGMA_SPM; fem_mesh.cell_count()],
+                magnetization: vec![[1.0, 0.0, 0.0]; fem_mesh.nodes.len()],
+                sigma_s_spm: SIGMA_SPIN_SPM,
+                sigma_parallel_spm: Some(SIGMA_PARALLEL_SPM),
+                sigma_perpendicular_spm: Some(SIGMA_PERPENDICULAR_SPM),
+                sigma_ahe_spm: Some(SIGMA_AHE_SPM),
+                polarization_p: POLARIZATION,
+                theta_sh: THETA_SH,
+                lambda_sf_m: LAMBDA_SF_M,
+                lambda_j_m: None,
+                lambda_phi_m: None,
+                gamma_e_per_ts: 1.760_859_630_23e11,
+                saturation_magnetization_apm: 8.0e5,
+                relative_tolerance: 1.0e-10,
+                absolute_tolerance: 0.0,
+                maximum_iterations: 2_000,
+                charge_dirichlet: vec![(1, 1.0), (2, 0.0)],
+                spin_dirichlet: vec![(1, [0.0, 0.0, 0.2]), (2, [0.0, 0.0, 0.0])],
+            };
+            let fem_result = solve_native_fem_steady_transport(&fem_request)
+                .expect("FEM reciprocal M2 3-D solve");
+
+            let cells_per_plane = nxy * nxy;
+            let nodes_per_plane = (nxy + 1) * (nxy + 1);
+            let fdm_plane_average = |values: &[f64], plane: usize| -> f64 {
+                let start = plane * cells_per_plane;
+                values[start..start + cells_per_plane].iter().sum::<f64>()
+                    / cells_per_plane as f64
+            };
+            let fdm_spin_plane_average = |plane: usize, component: usize| -> f64 {
+                let start = plane * cells_per_plane;
+                fdm_module.spin_potential_volts[start..start + cells_per_plane]
+                    .iter()
+                    .map(|value| value[component])
+                    .sum::<f64>()
+                    / cells_per_plane as f64
+            };
+            let fem_plane_average = |values: &[f64], plane: usize| -> f64 {
+                let start = plane * nodes_per_plane;
+                let weighted_sum = (0..=nxy)
+                    .flat_map(|y| (0..=nxy).map(move |x| (x, y)))
+                    .map(|(x, y)| {
+                        let weight_x = if x == 0 || x == nxy { 1.0 } else { 2.0 };
+                        let weight_y = if y == 0 || y == nxy { 1.0 } else { 2.0 };
+                        weight_x * weight_y * values[start + y * (nxy + 1) + x]
+                    })
+                    .sum::<f64>();
+                weighted_sum / (4.0 * nxy as f64 * nxy as f64)
+            };
+            let fem_spin_plane_average = |plane: usize, component: usize| -> f64 {
+                let start = plane * nodes_per_plane;
+                let weighted_sum = (0..=nxy)
+                    .flat_map(|y| (0..=nxy).map(move |x| (x, y)))
+                    .map(|(x, y)| {
+                        let weight_x = if x == 0 || x == nxy { 1.0 } else { 2.0 };
+                        let weight_y = if y == 0 || y == nxy { 1.0 } else { 2.0 };
+                        weight_x
+                            * weight_y
+                            * fem_result.spin_potential_xyz_v
+                                [start + y * (nxy + 1) + x][component]
+                    })
+                    .sum::<f64>();
+                weighted_sum / (4.0 * nxy as f64 * nxy as f64)
+            };
+
+            assert!(
+                fdm_module.telemetry.spin_scaled_residual < 1.0e-9,
+                "FDM reciprocal M2 3-D spin residual is too large at nxy={nxy}, Nz={nz}: {}",
+                fdm_module.telemetry.spin_scaled_residual
+            );
+            assert!(
+                fdm_module
+                    .telemetry
+                    .charge_balance_relative
+                    .unwrap_or(f64::INFINITY)
+                    < 1.0e-9,
+                "FDM reciprocal M2 3-D charge balance is too large at nxy={nxy}, Nz={nz}: {:?}",
+                fdm_module.telemetry.charge_balance_relative
+            );
+            assert!(
+                fem_result.charge_relative_residual < 1.0e-9
+                    && fem_result.spin_relative_residual < 1.0e-9,
+                "FEM reciprocal M2 3-D residual is too large at nxy={nxy}, Nz={nz}: charge={}, spin={}",
+                fem_result.charge_relative_residual,
+                fem_result.spin_relative_residual
+            );
+
+            let mut max_potential_difference: f64 = 0.0;
+            let mut max_spin_difference: f64 = 0.0;
+            for z in 0..nz {
+                let fem_potential = 0.5
+                    * (fem_plane_average(&fem_result.electric_potential_v, z)
+                        + fem_plane_average(&fem_result.electric_potential_v, z + 1));
+                max_potential_difference = max_potential_difference
+                    .max((fdm_plane_average(&fdm_module.potential_volts, z) - fem_potential).abs());
+                for component in 0..3 {
+                    let fem_spin = 0.5
+                        * (fem_spin_plane_average(z, component)
+                            + fem_spin_plane_average(z + 1, component));
+                    max_spin_difference = max_spin_difference.max(
+                        (fdm_spin_plane_average(z, component) - fem_spin).abs(),
+                    );
+                }
+            }
+            eprintln!(
+                "M2 reciprocal 3-D SHE/iSHE nxy={nxy}, Nz={nz}: potential={max_potential_difference:e}, spin={max_spin_difference:e}"
+            );
+            cross_errors.push((nxy, max_potential_difference, max_spin_difference));
+
+            let transverse_spin = fdm_module
+                .spin_potential_volts
+                .iter()
+                .map(|value| value[0].abs().max(value[1].abs()))
+                .fold(0.0, f64::max);
+            assert!(
+                transverse_spin > 1.0e-8,
+                "3-D reciprocal SHE/iSHE fixture did not produce a transverse spin response"
+            );
+        }
+
+        for pair in cross_errors.windows(2) {
+            assert!(
+                pair[1].2 < pair[0].2,
+                "3-D reciprocal M2 FDM↔FEM spin profiles must converge under h refinement: coarse={pair:?}"
+            );
+        }
+        let fine = cross_errors.last().expect("3-D cross-backend sweep result");
+        assert!(
+            fine.1 < cross_errors[0].1 && fine.1 < cross_errors[1].1,
+            "3-D reciprocal M2 charge profile did not reach a lower fine-grid cross-backend error: {cross_errors:?}"
+        );
+        assert!(
+            fine.1 < 1.0e-3 && fine.2 < 5.0e-2,
+            "3-D reciprocal M2 FDM↔FEM common-limit envelope is too large: {fine:?}"
         );
     }
 

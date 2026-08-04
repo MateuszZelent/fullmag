@@ -910,8 +910,8 @@ differences are `6.72230e-3`, `1.94772e-3`, and `5.23159e-4 V`. Both
 discretizations satisfy their independent residual/balance gates and the
 cross-backend error decreases under refinement. This closes only the uniform,
 finite-spin-flip, no-Hall reciprocal common-limit fixture; heterogeneous
-materials, interfaces, nonzero SHE/AHE, 3-D field variation, GPU parity, and
-production qualification remain open.
+materials, interfaces, GPU parity, and production qualification remain open.
+A separate bounded 3-D nonzero-SHE/iSHE/AHE gate is documented below.
 
 An executable managed BORIS N/F smoke now completes at `coarse`, `medium`, and
 `fine` resolutions in the pinned CUDA image
@@ -1083,6 +1083,25 @@ FDM reference can carry explicit region IDs and oriented interface laws; it is
 not FEM interface support or FDM↔FEM parity, and it does not qualify a
 production N/F/T workload.
 
+The reciprocal common-limit sweep now also has a genuinely three-dimensional
+SHE/iSHE/AHE fixture, executed by
+`just verify-fem-steady-transport-m2-3d-common-limit-contract`. It uses
+`m=(1,0,0)`, `theta_SH=0.1`, `sigma_AHE=0.2 S/m`, the same reciprocal
+conductivities and finite `lambda_sf=0.3 m` as the uniform fixture, and
+insulating transverse faces. FDM and conforming tetrahedral FEM are refined
+together at `(n_x,n_y,n_z)=(2,2,4),(4,4,8),(8,8,16)`. The managed run passed
+with independent charge/spin residual gates and produced maximum
+FDM↔FEM plane-profile differences of
+`(1.14404e-4,1.93287e-2)`, `(1.59387e-4,6.51759e-3)`, and
+`(5.65483e-5,1.88431e-3)` for `(V,mu_s)`; the transverse spin potential is
+nonzero in every resolution. The charge cross-error is not required to be
+monotone at every intermediate mixed refinement because the FVM and P1 mass
+weights are different; the gate requires a lower fine-grid charge error than
+both coarser runs, strictly decreasing spin error, and a fine envelope below
+`1e-3 V`/`5e-2 V`. This is bounded CPU-double 3-D common-limit evidence, not
+FEM interface support, GPU transport parity, BORIS parity, or a
+`validated_workloads` promotion.
+
 The native ABI contract additionally executes the affine cube oracle described
 in section 5.2. It is deliberately a separate `just` target so a zero-gradient
 ABI smoke cannot mask a constitutive sign or `G=-\nabla\mu_s/2` factor error.
@@ -1111,6 +1130,7 @@ a qualified workload without the validation gates above.
 | M2 mesh convergence oracle | backends/fem/tests/steady_transport_contract.cpp | reciprocal_m2_converges_on_three_mesh_resolutions | finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions | `just verify-fem-steady-transport-m2-convergence-contract` |
 | M2 FDM/FEM common-limit oracle | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles | compare matched reciprocal FDM cell centres with FEM plane averages over three z resolutions | `just verify-fem-steady-transport-m2-common-limit-contract` |
 | FDM M2 heterogeneous-interface gate | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance | exercise an anisotropic N/F region jump and a companion mixing/SML closure with explicit torque accounting | `just verify-fdm-m2-heterogeneous-interface-contract` |
+| M2 3-D SHE/iSHE/AHE common-limit gate | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles | compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE | `just verify-fem-steady-transport-m2-3d-common-limit-contract` |
 
 (scientific-bibliography)=
 ## 9. References
