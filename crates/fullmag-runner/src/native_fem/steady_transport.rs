@@ -459,9 +459,12 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         BackendTarget, ChargePotentialGaugeIR, ChargeSolverPolicyIR, ExecutionDevice,
-        ExecutionMode, ExecutionPrecision, LinearTransportSolverPolicyIR,
-        RequestedTransportExecutionIR, ResolvedFemSpinTransportIR, ResolvedSpinTransportPlanIR,
-        SpinSolverPolicyIR, TransportCouplingIR,
+        ExecutionMode, ExecutionPrecision, FdmPlanIR, GridDimensions,
+        LinearTransportSolverPolicyIR, RequestedTransportExecutionIR,
+        ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
+        ResolvedFdmSpinTransportIR, ResolvedFemSpinTransportIR, ResolvedSpinBoundaryConditionIR,
+        ResolvedSpinBoundaryFaceIR, ResolvedSpinReactionLengthsIR, ResolvedSpinTransportPlanIR,
+        SpinSolverPolicyIR, StructuredBoundaryFaceIR, TransportCouplingIR,
     };
     use std::collections::HashMap;
 
@@ -617,6 +620,355 @@ mod tests {
                 validation_state: "algebra_validated".into(),
                 validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
             }),
+        }
+    }
+
+    fn common_direct_she_fdm_plan(nz: usize) -> FdmPlanIR {
+        let cells = nz;
+        let descriptor = ResolvedFdmSpinTransportIR {
+            descriptor_schema: "fullmag.fdm.spin_transport_descriptor.v1".into(),
+            charge_active_cells: vec![true; cells],
+            charge_conductivity_spm: vec![3.0; cells],
+            charge_boundaries: vec![
+                ResolvedChargeBoundaryFaceIR {
+                    source_id: "x_min".into(),
+                    face: StructuredBoundaryFaceIR::XMin,
+                    condition: ResolvedChargeBoundaryConditionIR::Voltage { potential_v: 0.5 },
+                },
+                ResolvedChargeBoundaryFaceIR {
+                    source_id: "x_max".into(),
+                    face: StructuredBoundaryFaceIR::XMax,
+                    condition: ResolvedChargeBoundaryConditionIR::Voltage { potential_v: -0.5 },
+                },
+                ResolvedChargeBoundaryFaceIR {
+                    source_id: "y_min".into(),
+                    face: StructuredBoundaryFaceIR::YMin,
+                    condition: ResolvedChargeBoundaryConditionIR::Insulating,
+                },
+                ResolvedChargeBoundaryFaceIR {
+                    source_id: "y_max".into(),
+                    face: StructuredBoundaryFaceIR::YMax,
+                    condition: ResolvedChargeBoundaryConditionIR::Insulating,
+                },
+                ResolvedChargeBoundaryFaceIR {
+                    source_id: "z_min".into(),
+                    face: StructuredBoundaryFaceIR::ZMin,
+                    condition: ResolvedChargeBoundaryConditionIR::Insulating,
+                },
+                ResolvedChargeBoundaryFaceIR {
+                    source_id: "z_max".into(),
+                    face: StructuredBoundaryFaceIR::ZMax,
+                    condition: ResolvedChargeBoundaryConditionIR::Insulating,
+                },
+            ],
+            charge_gauge: ChargePotentialGaugeIR::DirichletReference,
+            charge_solver: ChargeSolverPolicyIR {
+                engine: "cg".into(),
+                linear: LinearTransportSolverPolicyIR {
+                    relative_tolerance: 1.0e-11,
+                    absolute_tolerance: 1.0e-14,
+                    max_iterations: 2000,
+                },
+                physical_residual_version: "charge_balance_integrated_l2.v1".into(),
+                operator_version: "fv_charge_harmonic_v1".into(),
+            },
+            spin_active_cells: vec![true; cells],
+            spin_conductivity_spm: vec![2.0; cells],
+            polarization_p: vec![0.0; cells],
+            theta_sh: vec![0.1; cells],
+            reactions: vec![
+                ResolvedSpinReactionLengthsIR {
+                    spin_flip_m: Some(0.2),
+                    exchange_m: None,
+                    dephasing_m: None,
+                };
+                cells
+            ],
+            region_ids: vec![0; cells],
+            spin_boundaries: vec![
+                ResolvedSpinBoundaryFaceIR {
+                    source_id: "spin_x_min".into(),
+                    face: StructuredBoundaryFaceIR::XMin,
+                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+                },
+                ResolvedSpinBoundaryFaceIR {
+                    source_id: "spin_x_max".into(),
+                    face: StructuredBoundaryFaceIR::XMax,
+                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+                },
+                ResolvedSpinBoundaryFaceIR {
+                    source_id: "spin_y_min".into(),
+                    face: StructuredBoundaryFaceIR::YMin,
+                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+                },
+                ResolvedSpinBoundaryFaceIR {
+                    source_id: "spin_y_max".into(),
+                    face: StructuredBoundaryFaceIR::YMax,
+                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+                },
+                ResolvedSpinBoundaryFaceIR {
+                    source_id: "spin_z_min".into(),
+                    face: StructuredBoundaryFaceIR::ZMin,
+                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+                },
+                ResolvedSpinBoundaryFaceIR {
+                    source_id: "spin_z_max".into(),
+                    face: StructuredBoundaryFaceIR::ZMax,
+                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+                },
+            ],
+            interfaces: vec![],
+            torque_target_cells: vec![false; cells],
+            saturation_magnetization_apm: vec![8.0e5; cells],
+            gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+            spin_solver: SpinSolverPolicyIR {
+                engine: "gmres".into(),
+                linear: LinearTransportSolverPolicyIR {
+                    relative_tolerance: 1.0e-11,
+                    absolute_tolerance: 1.0e-14,
+                    max_iterations: 2000,
+                },
+                physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+                operator_version: "fv_spin_upwind_v1".into(),
+                default_external_boundary: "spin_insulating".into(),
+                reciprocal_nonlinear: None,
+            },
+            torque_formula_version: None,
+            oersted_source_bound: false,
+        };
+        FdmPlanIR {
+            grid: GridDimensions {
+                cells: [1, 1, nz as u32],
+            },
+            cell_size: [1.0, 0.1, 1.0 / nz as f64],
+            active_mask: Some(vec![true; cells]),
+            initial_magnetization: vec![[0.0, 0.0, 1.0]; cells],
+            spin_transport_plans: vec![ResolvedSpinTransportPlanIR {
+                module_id: "spin".into(),
+                current_source_id: "charge".into(),
+                resolved_coupling: TransportCouplingIR::OneWay,
+                requested_execution: RequestedTransportExecutionIR {
+                    discretization: BackendTarget::Fdm,
+                    device: ExecutionDevice::Cpu,
+                    precision: ExecutionPrecision::Double,
+                    execution_mode: ExecutionMode::Strict,
+                },
+                resolved_discretization: BackendTarget::Fdm,
+                resolved_device: ExecutionDevice::Cpu,
+                resolved_precision: ExecutionPrecision::Double,
+                constitutive_version: "transport_constitutive.one_way.fullmag.v1".into(),
+                operator_version: "fv_spin_upwind_v1".into(),
+                physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+                capabilities: vec!["transport.spin.direct_she".into()],
+                inserted_default_boundaries: vec![],
+                fdm_cpu_double: Some(descriptor),
+                fdm_cpu_double_reciprocal: None,
+                fdm_cpu_double_transient: None,
+                fem_cpu_double: None,
+            }],
+            ..FdmPlanIR::default()
+        }
+    }
+
+    fn common_direct_she_fem_mesh(nz: usize) -> MeshIR {
+        let node = |x: usize, y: usize, z: usize| -> u32 { (z * 4 + y * 2 + x) as u32 };
+        let mut nodes = Vec::with_capacity((nz + 1) * 4);
+        for z in 0..=nz {
+            for y in 0..=1 {
+                for x in 0..=1 {
+                    nodes.push([x as f64, 0.1 * y as f64, z as f64 / nz as f64]);
+                }
+            }
+        }
+        let mut elements = Vec::with_capacity(nz * 6);
+        let mut element_markers = Vec::with_capacity(nz * 6);
+        let mut boundary_faces = Vec::with_capacity(nz * 8 + 4);
+        let mut boundary_markers = Vec::with_capacity(nz * 8 + 4);
+        for z in 0..nz {
+            let a = node(0, 0, z);
+            let b = node(1, 0, z);
+            let c = node(1, 1, z);
+            let d = node(0, 1, z);
+            let e = node(0, 0, z + 1);
+            let f = node(1, 0, z + 1);
+            let g = node(1, 1, z + 1);
+            let h = node(0, 1, z + 1);
+            elements.extend([
+                [a, b, c, g],
+                [a, c, d, g],
+                [a, d, h, g],
+                [a, h, e, g],
+                [a, e, f, g],
+                [a, f, b, g],
+            ]);
+            element_markers.extend((0..6).map(|_| 1));
+
+            let mut add_face = |face: [u32; 3], marker: u32| {
+                boundary_faces.push(face);
+                boundary_markers.push(marker);
+            };
+            if z == 0 {
+                add_face([a, b, c], 3);
+                add_face([a, c, d], 3);
+            }
+            if z + 1 == nz {
+                add_face([e, f, g], 3);
+                add_face([e, g, h], 3);
+            }
+            add_face([a, d, h], 1);
+            add_face([a, h, e], 1);
+            add_face([b, c, g], 2);
+            add_face([b, g, f], 2);
+            add_face([a, e, f], 3);
+            add_face([a, f, b], 3);
+            add_face([c, d, g], 3);
+            add_face([d, h, g], 3);
+        }
+        MeshIR::from_legacy_tet4(
+            "direct-she-common-limit".into(),
+            nodes,
+            elements,
+            element_markers,
+            boundary_faces,
+            boundary_markers,
+            vec![],
+            vec![],
+            HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!(
+                "skipping M1 direct-SHE FDM↔FEM common-limit test: native FEM CPU unavailable"
+            );
+            return;
+        }
+
+        const LENGTH_M: f64 = 1.0;
+        const SIGMA_SPM: f64 = 3.0;
+        const SIGMA_SPIN_SPM: f64 = 2.0;
+        const THETA_SH: f64 = 0.1;
+        const LAMBDA_SF_M: f64 = 0.2;
+        const ELECTRIC_FIELD_V_PER_M: f64 = 1.0;
+
+        let amplitude = 2.0 * THETA_SH * SIGMA_SPM * ELECTRIC_FIELD_V_PER_M * LAMBDA_SF_M
+            / (SIGMA_SPIN_SPM * (0.5 * LENGTH_M / LAMBDA_SF_M).cosh());
+        let mut resolution_errors = Vec::new();
+        for nz in [8usize, 16, 32] {
+            let fdm_plan = common_direct_she_fdm_plan(nz);
+            let mut fdm_workflow =
+                crate::fdm::cpu::spin_transport::FdmSpinTransportWorkflow::from_plan(&fdm_plan)
+                    .expect("FDM common-limit workflow construction")
+                    .expect("FDM common-limit workflow");
+            let fdm_evaluation = fdm_workflow
+                .evaluate_stage(&fdm_plan.initial_magnetization, 0.0)
+                .expect("FDM direct-SHE common-limit solve");
+            let fdm_module = &fdm_evaluation.modules[0];
+
+            let fem_mesh = common_direct_she_fem_mesh(nz);
+            let fem_request = NativeFemSteadyTransportRequest {
+                mesh: fem_mesh.clone(),
+                execution: NativeFemSteadyTransportExecution::CpuDouble,
+                interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
+                gauge: NativeFemSteadyTransportGauge::BoundaryReference,
+                constitutive_version: CONSTITUTIVE_VERSION.into(),
+                operator_version: OPERATOR_VERSION.into(),
+                physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+                charge_conductivity_spm_per_element: vec![SIGMA_SPM; fem_mesh.cell_count()],
+                magnetization: vec![[0.0, 0.0, 1.0]; fem_mesh.nodes.len()],
+                sigma_s_spm: SIGMA_SPIN_SPM,
+                polarization_p: 0.0,
+                theta_sh: THETA_SH,
+                lambda_sf_m: LAMBDA_SF_M,
+                lambda_j_m: None,
+                lambda_phi_m: None,
+                gamma_e_per_ts: 1.760_859_630_23e11,
+                saturation_magnetization_apm: 8.0e5,
+                relative_tolerance: 1.0e-11,
+                absolute_tolerance: 0.0,
+                maximum_iterations: 2000,
+                charge_dirichlet: vec![(1, 0.5), (2, -0.5)],
+                spin_dirichlet: vec![],
+            };
+            let fem_result = solve_native_fem_steady_transport(&fem_request)
+                .expect("FEM direct-SHE common-limit solve");
+
+            let plane_nodes = 4usize;
+            let fem_plane_average = |plane: usize| -> f64 {
+                let start = plane * plane_nodes;
+                fem_result.spin_potential_xyz_v[start..start + plane_nodes]
+                    .iter()
+                    .map(|value| value[1])
+                    .sum::<f64>()
+                    / plane_nodes as f64
+            };
+
+            assert!(
+                (fem_result.current_density_volume_average_apm2[0]
+                    - SIGMA_SPM * ELECTRIC_FIELD_V_PER_M)
+                    .abs()
+                    < 1.0e-9,
+                "FEM common-limit charge current has wrong SI value at Nz={nz}: {:?}",
+                fem_result.current_density_volume_average_apm2
+            );
+            assert!(
+                fdm_module.telemetry.spin_scaled_residual < 1.0e-10,
+                "FDM common-limit spin residual is too large at Nz={nz}: {}",
+                fdm_module.telemetry.spin_scaled_residual
+            );
+            assert!(
+                fem_result.spin_relative_residual < 1.0e-10,
+                "FEM common-limit spin residual is too large at Nz={nz}: {}",
+                fem_result.spin_relative_residual
+            );
+
+            let mut max_relative_profile_difference: f64 = 0.0;
+            let mut max_fdm_oracle_error: f64 = 0.0;
+            let mut max_fem_oracle_error: f64 = 0.0;
+            let dz = LENGTH_M / nz as f64;
+            for z in 0..nz {
+                let coordinate = (z as f64 + 0.5) * dz - 0.5 * LENGTH_M;
+                let expected = amplitude * (coordinate / LAMBDA_SF_M).sinh();
+                let fdm_value = fdm_module.spin_potential_volts[z][1];
+                let fem_value = 0.5 * (fem_plane_average(z) + fem_plane_average(z + 1));
+                max_fdm_oracle_error = max_fdm_oracle_error.max((fdm_value - expected).abs());
+                max_fem_oracle_error = max_fem_oracle_error.max((fem_value - expected).abs());
+                let scale = expected
+                    .abs()
+                    .max(fdm_value.abs())
+                    .max(fem_value.abs())
+                    .max(1.0e-12);
+                max_relative_profile_difference =
+                    max_relative_profile_difference.max((fdm_value - fem_value).abs() / scale);
+            }
+
+            assert!(
+                max_fdm_oracle_error < 2.0e-3 && max_fem_oracle_error < 2.0e-3,
+                "common direct-SHE profiles miss the shared sinh oracle at Nz={nz}: FDM={max_fdm_oracle_error:e}, FEM={max_fem_oracle_error:e}"
+            );
+            assert!(
+                max_relative_profile_difference < 5.0e-2,
+                "FDM and FEM direct-SHE profiles differ beyond the common-limit envelope at Nz={nz}: {max_relative_profile_difference:e}"
+            );
+            assert!(
+                fdm_module.spin_potential_volts[nz - 1][1] > 0.0 && fem_plane_average(nz) > 0.0,
+                "common direct-SHE sign convention is not positive at the upper z face for Nz={nz}"
+            );
+            eprintln!(
+                "M1 direct-SHE Nz={nz}: FDM oracle={max_fdm_oracle_error:e}, FEM oracle={max_fem_oracle_error:e}, cross={max_relative_profile_difference:e}"
+            );
+            resolution_errors.push((nz, max_fdm_oracle_error, max_fem_oracle_error));
+        }
+
+        for pair in resolution_errors.windows(2) {
+            assert!(
+                pair[1].1 < pair[0].1 && pair[1].2 < pair[0].2,
+                "M1 direct-SHE profiles must converge under Nz refinement: coarse={:?}, fine={:?}",
+                pair[0],
+                pair[1]
+            );
         }
     }
 
