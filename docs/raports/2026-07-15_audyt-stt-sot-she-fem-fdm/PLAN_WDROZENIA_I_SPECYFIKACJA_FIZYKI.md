@@ -7196,3 +7196,71 @@ FEM (OE-T0/OE-F1/OE-F2), kwalifikacja FEM GPU, pełna ścieżka
 Python--ProblemIR--planner--UI oraz release-clean rerun. Do tego czasu
 macierz capability i `validated_workloads` pozostają bez awansu, a ocena celu
 pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.69. Objętościowo zachowawcze ograniczenie tet4 w porównaniu FEM–FDM (2026-08-04)
+
+### 32.69.1. Korekta operatora porównania
+
+Dotychczasowy `scripts/compare_sp5_field_states.py` próbkował pole P1 w
+środkach komórek FDM. Był to poprawny operator diagnostyczny, ale nie
+zachowywał całki objętościowej. Zaimplementowano
+`build_tet4_cartesian_restriction` w
+`packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py`.
+Dla każdego przecięcia tet4 z prostopadłościanem FDM klipowanie wypukłego
+wielościanu wyznacza objętość i pierwszy moment, a następnie całkuje affine P1
+barycentric basis. `CartesianRestriction.apply` zwraca średnią po pokrytej
+objętości, natomiast `conservation()` porównuje całkę FEM z całką po siatce
+kartezjańskiej.
+
+Kontrakt odrzuca nieproste lub niewspierane przypadki: elementy inne niż
+straight-sided `tet4`, elementy zdegenerowane, nakładające się komórki oraz
+siatkę FDM, która nie pokrywa całego wybranego wolumenu magnetycznego. Metoda
+ma identyfikator `exact_tet4_p1_volume_restriction_v1`; jest postprocessingiem
+i nie zmienia żadnego operatora demaga, Zhang--Li ani stanu solvera.
+
+### 32.69.2. Test-first i wynik na SP5
+
+Najpierw dodano test, który kończył się błędem importu brakującego symbolu
+`build_tet4_cartesian_restriction`. Po implementacji:
+
+```text
+packages/fullmag-py/tests/test_magnetization_comparison.py
+11 passed in 2.91s
+```
+
+Powtórzono porównanie na tych samych artefaktach FEM/FDM i czasie `t=1 ns`:
+
+```text
+PYTHONPATH=packages/fullmag-py/src python3 scripts/compare_sp5_field_states.py \
+  --fdm-run /zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu \
+  --fem-run /zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-full-20260804-cpu-h12-bb-r12 \
+  --output /zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-volume-field-comparison-1ns-h12.json
+```
+
+Pokrycie wyniosło `4096/4096`, `valid_fraction=1.0`,
+`coverage_min=0.9999999999999808` i `coverage_max=1.0000000000000167`. Wynik
+volume-restricted to:
+
+| metryka | wynik |
+|---|---:|
+| vector RMS | `0.49731737652723923` |
+| p99 | `1.6738097210831444` |
+| maksimum | `1.8966968128889123` |
+| cosine similarity | `0.874437658356207` |
+| MAE komponentu `x/y/z` | `0.3004111604550328 / 0.15430837218750412 / 0.0516730453321669` |
+
+Średnia FEM po ograniczeniu jest zgodna z objętościowym artefaktem FEM do
+precyzji raportu. Rozbieżność FEM–FDM pozostaje więc rzeczywista i nadal ma
+status **diagnostic / equivalence_established=false**; poprawa operatora
+porównania nie może być interpretowana jako poprawa solvera.
+
+### 32.69.3. Granica i następny gate
+
+Zamknięto jeden z wymaganych warunków planu: mapowanie pola FEM tet4 na siatkę
+FDM jest teraz objętościowo zachowawcze dla kwalifikowanej geometrii. Nie
+zamknięto jeszcze wspólnego stanu równowagowego, trzech poziomów `h`, sweepu
+`dt`, zgodności operatora Zhang--Li, porównania demagnetyzacji ani FEM GPU.
+Funkcja jest celowo offline (SP5 przebieg na bieżącym mesh trwa około minuty)
+i nie jest częścią hot pathu solvera. Capability matrix oraz
+`validated_workloads` pozostają bez zmian; ocena celu pozostaje **86%
+implementacji / 60% gotowości produkcyjnej**.

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Compare final FEM tet4 and FDM SP5 fields on the FDM cell-center grid.
+"""Compare final FEM tet4 and FDM SP5 fields on the FDM Cartesian grid.
 
-The FEM field is sampled with the explicitly diagnostic affine-P1 tet4
-center operator.  This is not the exact prism6 volume restriction used by the
-SP4 qualification path and therefore never promotes a workload by itself.
+The FEM field is reduced with the affine-P1 tet4 volume restriction.  This
+preserves the FEM volume integral for straight-sided, non-overlapping magnetic
+tetrahedra, but it remains a diagnostic comparison until the two solvers also
+share equilibrium, time-step, operator, and demagnetization qualification.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ from typing import Any
 import numpy as np
 
 from fullmag.analysis.fem_cartesian_restriction import (
-    sample_fem_tet4_cartesian_centers,
+    build_tet4_cartesian_restriction,
+    restrict_fem_magnetization,
 )
 from fullmag.analysis.magnetization_comparison import (
     CartesianGrid,
@@ -96,15 +98,12 @@ def _load_fem(run_dir: Path, grid: CartesianGrid) -> StructuredMagnetization:
     values = np.asarray(artifact.get("values"), dtype=np.float64)
     if values.shape != (mesh.n_nodes, 3):
         raise ValueError("FEM final field shape does not match planner mesh node count")
-    sampled = sample_fem_tet4_cartesian_centers(
-        mesh,
-        values,
-        grid,
-        time_s=float(artifact.get("time", _fem_final_time(run_dir))),
-    )
+    restriction = build_tet4_cartesian_restriction(mesh, grid)
+    sampled = restrict_fem_magnetization(values, restriction)
+    sampled_time = float(artifact.get("time", _fem_final_time(run_dir)))
     return StructuredMagnetization(
         values=sampled.values,
-        times=sampled.times,
+        times=np.asarray([sampled_time], dtype=np.float64),
         grid=sampled.grid,
         source_path=str(run_dir / "m_final.json"),
         metadata={
@@ -122,7 +121,7 @@ def compare(fdm_run_dir: Path, fem_run_dir: Path, time_tolerance: float) -> dict
     same_final_time = abs(float(fdm.times[-1]) - float(fem.times[-1])) <= time_tolerance
     metrics = compare_magnetization_textures(fem, fdm, high_error_threshold=1.0e-3)
     return {
-        "schema_version": "sp5.fem_fdm_field_comparison.v1",
+        "schema_version": "sp5.fem_fdm_field_comparison.v2",
         "scope": "final_field_same_time",
         "fdm_run": str(fdm_run_dir),
         "fem_run": str(fem_run_dir),
@@ -136,8 +135,8 @@ def compare(fdm_run_dir: Path, fem_run_dir: Path, time_tolerance: float) -> dict
             "status": "diagnostic",
             "equivalence_established": False,
             "reason": (
-                "tet4 cell-center sampling and scalar endpoint metrics do not replace "
-                "volume-consistent field restriction, h/dt convergence, or operator parity"
+                "volume-consistent tet4 restriction and scalar endpoint metrics do not replace "
+                "h/dt convergence, common equilibrium, or operator parity"
             ),
         },
     }

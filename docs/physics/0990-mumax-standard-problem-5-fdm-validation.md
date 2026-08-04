@@ -109,6 +109,11 @@ bit-for-bit.
 | $N_y$ | grid counts | $1$ |
 | $N_z$ | grid counts | $1$ |
 | $\bar m_i$ | volume-weighted mean reduced-magnetization component | $1$ |
+| $R_{ci}^{(e)}$ | volume-integrated affine-P1 restriction weight from tet4 element $e$ and node $i$ to Cartesian voxel $c$ | $1$ |
+| $V_c$ | Cartesian voxel volume | $\mathrm{m^3}$ |
+| $\lambda_i^{(e)}$ | affine P1 barycentric basis function of tet4 element $e$ | $1$ |
+| $\vartheta_c$ | fraction of voxel $c$ covered by selected magnetic tetrahedra | $1$ |
+| $\widetilde{\mathbf m}_c$ | volume-averaged FEM reduced magnetization reconstructed in voxel $c$ | $1$ |
 
 The literal material and grid values are $M_s=8.0\times10^5\,\mathrm{A\,m^{-1}}$,
 $A_{\mathrm{ex}}=13\times10^{-12}\,\mathrm{J\,m^{-1}}$,
@@ -372,27 +377,61 @@ Until a stable three-level FEM `h` sweep, controlled `dt` sweep, matched field
 sampling, and independent operator/sign audit pass, FEM remains
 `reference-executable/bounded` and `validated_workloads` must not advance.
 
-The same final snapshots were then compared as fields on the FDM cell-center
+The same final snapshots were then compared as fields on the FDM Cartesian
 grid. `scripts/compare_sp5_field_states.py` reconstructs the FEM planner mesh
-from `metadata.json` and evaluates its affine P1 `tet4` field at each Cartesian
-cell center with the diagnostic operator
-`tet4_cartesian_center_barycentric_v1`. The sampling covers all `4096` FDM
-voxels (`valid_fraction=1.0`, one containing tetrahedron per center), and both
-snapshots are at `t=1 ns`. The resulting report is archived at
-`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-field-comparison-1ns-h12.json`.
+from `metadata.json` and applies the exact affine-P1 volume restriction
+`build_tet4_cartesian_restriction`. The clipped tet4/voxel intersections cover
+all `4096` FDM voxels (`valid_fraction=1.0`); the coverage extrema are
+`0.9999999999999808` and `1.0000000000000167`, so the restriction preserves the
+magnetic volume to floating-point round-off. Both snapshots are at `t=1 ns`.
+The new report is archived at
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-volume-field-comparison-1ns-h12.json`.
 
 The field metrics are substantially different: vector RMS error
 `0.49796257925222454`, maximum error `1.9122155987326996`, p99 error
 `1.679783779553503`, and cosine similarity `0.8741985937637287`. The sampled
-FEM mean is `(0.06568520395227473, -0.07064260442076248,
--0.0019159783748134006)`, which differs from the volume-weighted FEM artifact
-mean by less than `3e-5` per component; the FDM mean is
+FEM mean is `(0.06571195970862105, -0.07068185866088314,
+-0.001918570717269364)`, exactly the volume-weighted artifact mean to the
+reported precision; the FDM mean is
 `(-0.23465571179208225, -0.09450957174904828, 0.02294296086440476)`. This is
 evidence that the earlier scalar discrepancy is also visible in the full
 texture, not an artifact of reducing each field to one vector. It remains a
-diagnostic comparison: cell-center interpolation is not volume-consistent
-restriction, and no `h/dt` convergence, common equilibrium, or operator/sign
-parity gate has passed.
+diagnostic comparison: the volume-preserving field map removes restriction
+error as an uncontrolled explanation, but no `h/dt` convergence, common
+equilibrium, or operator/sign parity gate has passed. The volume-restricted
+metrics are vector RMS `0.49731737652723923`, p99 `1.6738097210831444`, maximum
+`1.8966968128889123`, and cosine similarity `0.874437658356207`.
+
+The next comparison operator is defined as a volume-preserving tet4
+restriction rather than another point-sampling heuristic. For each FDM voxel
+$C_c$ and magnetic FEM tetrahedron $T_e$, the affine P1 nodal basis weight is
+
+```{math}
+:label: sp5-tet4-volume-restriction
+R_{ci}^{(e)}=\frac{1}{V_c}\int_{C_c\cap T_e}\lambda_i^{(e)}(\mathbf r)\,dV,
+\qquad
+\vartheta_c=\frac{1}{V_c}\sum_e\lvert C_c\cap T_e\rvert,
+```
+
+where $V_c$ is the Cartesian voxel volume and $\lambda_i^{(e)}$ is the
+tetrahedral barycentric basis function. The reconstructed voxel field is
+
+```{math}
+:label: sp5-tet4-volume-field
+\widetilde{\mathbf m}_c
+=\frac{\sum_{e,i}R_{ci}^{(e)}\mathbf m_i}{\vartheta_c},
+\qquad 0<\vartheta_c\leq1,
+```
+
+and voxels with $\vartheta_c=0$ are masked. Because $\lambda_i^{(e)}$ is
+affine, integrating it over the clipped convex polyhedron is exact up to the
+floating-point geometry and clipping tolerance; it preserves the FEM volume
+integral when the Cartesian grid covers the magnetic domain. This operator is
+valid only for affine straight-sided tet4 cells and non-overlapping magnetic
+meshes. Curved/high-order cells, overlapping elements, and uncovered magnetic
+volume are rejected or remain outside the qualification scope. The operator is
+an analysis/restriction layer, not a replacement for either backend's native
+demagnetization or Zhang--Li solver.
 
 ### 6.4 Observables and artifact semantics
 
@@ -498,8 +537,9 @@ requirements.
    operator, demagnetization, and update-order controls before changing the
    published equation.
 5. Complete the FEM three-level mesh, demagnetization, timestep, and matched
-   field-sampling gates; the current hmax=6 nm minimizer budget is not yet
-   torque-qualified.
+   field-sampling gates. The volume-preserving tet4 restriction is now
+   implemented and tested, but the current hmax=6 nm minimizer budget is not
+   yet torque-qualified.
 6. Keep the one-step CPU↔CUDA gate green while extending it to an accepted-step
    trajectory and a device-resident parity matrix.
 
@@ -540,4 +580,5 @@ requirements.
 | `sp5-fem-demag-runtime` | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` | `context_compute_demag_poisson` | FEM Poisson--Robin demagnetization realization and volume-weighted observables |
 | `sp5-fem-zhangli-provenance` | `crates/fullmag-runner/src/artifacts.rs` | `fem_spin_torque_provenance` | resolved FEM CPU engine and versioned Zhang--Li provenance |
 | `sp5-comparison-script` | `scripts/compare_sp5_scalar_runs.py` | `compare` | matched-time FEM/FDM scalar endpoint comparison with diagnostic-only qualification |
-| `sp5-field-comparison-script` | `scripts/compare_sp5_field_states.py` | `compare` | diagnostic tet4 cell-center FEM-to-FDM field comparison on the FDM grid |
+| `sp5-field-comparison-script` | `scripts/compare_sp5_field_states.py` | `compare` | matched-time FEM/FDM field comparison on the FDM grid with explicit restriction method and diagnostic qualification |
+| `sp5-tet4-volume-restriction` | `packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py` | `build_tet4_cartesian_restriction` | exact affine-P1 volume-preserving tet4-to-Cartesian restriction used to separate field mapping error from solver physics |

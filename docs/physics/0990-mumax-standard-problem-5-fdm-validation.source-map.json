@@ -12,7 +12,9 @@
     {"id": "sp5-zhang-li-mumax3", "symbols": ["b", "muB", "P", "e", "Ms", "Jc", "beta", "m"], "sources": ["sp5-mumax3-zhangli", "sp5-cpu-mumax3", "sp5-cuda-mumax3"]},
     {"id": "sp5-zhang-li-mumax3-rhs", "symbols": ["alpha", "beta", "m", "u"], "sources": ["sp5-mumax3-zhangli", "sp5-cpu-mumax3", "sp5-cuda-mumax3"]},
     {"id": "sp5-effective-field", "symbols": ["Aex", "mu0", "Ms", "m", "Hdemag"], "sources": ["sp5-python-study", "sp5-source-file-cellsize"]},
-    {"id": "sp5-mean-observable", "symbols": ["mbar", "Nx", "Ny", "Nz", "m"], "sources": ["sp5-source-file-run", "sp5-python-loader"]}
+    {"id": "sp5-mean-observable", "symbols": ["mbar", "Nx", "Ny", "Nz", "m"], "sources": ["sp5-source-file-run", "sp5-python-loader"]},
+    {"id": "sp5-tet4-volume-restriction", "symbols": ["Rci", "Vc", "lambda", "vartheta"], "sources": ["sp5-tet4-volume-restriction"]},
+    {"id": "sp5-tet4-volume-field", "symbols": ["mtilde", "Rci", "vartheta"], "sources": ["sp5-tet4-volume-restriction"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
@@ -36,7 +38,12 @@
     {"id": "mbar", "latex": "\\bar m_i", "meaning": "mean reduced-magnetization component", "si_unit": "1"},
     {"id": "Nx", "latex": "N_x", "meaning": "grid counts", "si_unit": "1"},
     {"id": "Ny", "latex": "N_y", "meaning": "grid counts", "si_unit": "1"},
-    {"id": "Nz", "latex": "N_z", "meaning": "grid counts", "si_unit": "1"}
+    {"id": "Nz", "latex": "N_z", "meaning": "grid counts", "si_unit": "1"},
+    {"id": "Rci", "latex": "R_{ci}^{(e)}", "meaning": "volume-integrated affine-P1 restriction weight from tet4 element $e$ and node $i$ to Cartesian voxel $c$", "si_unit": "1"},
+    {"id": "Vc", "latex": "V_c", "meaning": "Cartesian voxel volume", "si_unit": "\\mathrm{m^3}"},
+    {"id": "lambda", "latex": "\\lambda_i^{(e)}", "meaning": "affine P1 barycentric basis function of tet4 element $e$", "si_unit": "1"},
+    {"id": "vartheta", "latex": "\\vartheta_c", "meaning": "fraction of voxel $c$ covered by selected magnetic tetrahedra", "si_unit": "1"},
+    {"id": "mtilde", "latex": "\\widetilde{\\mathbf m}_c", "meaning": "volume-averaged FEM reduced magnetization reconstructed in voxel $c$", "si_unit": "1"}
   ],
   "sources": [
     {"id": "sp5-source-file-gridsize", "path": "external_solvers/3/test/standardproblem5.mx3", "symbol": "setgridsize", "responsibility": "Define the external grid counts."},
@@ -58,7 +65,8 @@
     {"id": "sp5-fem-demag-runtime", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp", "symbol": "context_compute_demag_poisson", "responsibility": "Execute the FEM Poisson--Robin demagnetization realization and volume-weighted observables."},
     {"id": "sp5-fem-zhangli-provenance", "path": "crates/fullmag-runner/src/artifacts.rs", "symbol": "fem_spin_torque_provenance", "responsibility": "Record resolved FEM CPU engine and versioned Zhang--Li provenance."},
     {"id": "sp5-comparison-script", "path": "scripts/compare_sp5_scalar_runs.py", "symbol": "compare", "responsibility": "Compare matched-time FEM/FDM scalar endpoints while keeping the result diagnostic until field and convergence gates are supplied."},
-    {"id": "sp5-field-comparison-script", "path": "scripts/compare_sp5_field_states.py", "symbol": "compare", "responsibility": "Compare matched-time FEM and FDM magnetization fields using diagnostic tet4 cell-center sampling on the FDM grid."}
+    {"id": "sp5-field-comparison-script", "path": "scripts/compare_sp5_field_states.py", "symbol": "compare", "responsibility": "Compare matched-time FEM and FDM magnetization fields on the FDM grid with an explicit restriction method and diagnostic qualification."},
+    {"id": "sp5-tet4-volume-restriction", "path": "packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py", "symbol": "build_tet4_cartesian_restriction", "responsibility": "Integrate affine P1 tet4 basis functions over tetrahedron/Cartesian-voxel intersections and preserve the FEM volume integral."}
   ],
   "public_api": {"parameters": [
     {"python": "study.engine", "type": "str", "default": "required", "si_unit": "1", "validation": "`fdm` for this contract", "meaning": "requested solver family", "backend_support": "FDM CPU/GPU", "problem_ir": "runtime_selection.backend"},
