@@ -356,7 +356,8 @@ mod control_room_guard_tests {
 
     use super::{
         api_openapi_response_is_compatible, control_room_launch_signature, packaged_install_root,
-        wait_for_api_ready, BootstrapProcessGuard, ControlRoomGuard, GuardedProcess,
+        browser_open_args, wait_for_api_ready, BootstrapProcessGuard, ControlRoomGuard,
+        GuardedProcess,
     };
     use std::process::Command as TestCommand;
 
@@ -387,6 +388,22 @@ mod control_room_guard_tests {
         assert_ne!(
             control_room_launch_signature(true, "http://localhost:8081"),
             control_room_launch_signature(false, "http://localhost:8081"),
+        );
+    }
+
+    #[test]
+    fn wsl_windows_opener_uses_cmd_start_syntax() {
+        assert_eq!(
+            browser_open_args(
+                "/mnt/c/Windows/System32/cmd.exe",
+                "http://172.17.101.240:3100/",
+            ),
+            vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "".to_string(),
+                "http://172.17.101.240:3100/".to_string(),
+            ]
         );
     }
 
@@ -830,13 +847,34 @@ pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
         TerminalLogSource::Api,
         format!("openapi json: {}", openapi_json_url()),
     );
-    if let Ok(opener) = which_opener() {
-        let _ = ProcessCommand::new(opener)
-            .arg(&ready.web_url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+    match which_opener() {
+        Ok(opener) => {
+            let args = browser_open_args(&opener, &ready.web_url);
+            if let Err(error) = ProcessCommand::new(&opener)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                terminal_logger().emit(
+                    TerminalLogSource::Cli,
+                    format!(
+                        "browser auto-launch failed via {opener}: {error}; open {} manually",
+                        ready.web_url
+                    ),
+                );
+            }
+        }
+        Err(error) => {
+            terminal_logger().emit(
+                TerminalLogSource::Cli,
+                format!(
+                    "browser auto-launch unavailable: {error}; open {} manually",
+                    ready.web_url
+                ),
+            );
+        }
     }
 }
 
@@ -1793,19 +1831,51 @@ fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Durat
 }
 
 pub(crate) fn which_opener() -> Result<String> {
-    for cmd in ["xdg-open", "open", "wslview"] {
-        if ProcessCommand::new("which")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            return Ok(cmd.to_string());
+    let candidates: &[&str] = if is_wsl_environment() {
+        &[
+            "wslview",
+            "cmd.exe",
+            "/mnt/c/Windows/System32/cmd.exe",
+            "xdg-open",
+            "open",
+        ]
+    } else {
+        &["xdg-open", "open", "wslview"]
+    };
+    for candidate in candidates {
+        if command_available(candidate) {
+            return Ok((*candidate).to_string());
         }
     }
     bail!("no browser opener found")
+}
+
+fn is_wsl_environment() -> bool {
+    std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::env::var_os("WSL_INTEROP").is_some()
+}
+
+fn command_available(command: &str) -> bool {
+    if command.contains('/') {
+        return Path::new(command).is_file();
+    }
+    command_exists(command)
+}
+
+fn browser_open_args(opener: &str, url: &str) -> Vec<String> {
+    if opener
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("cmd.exe"))
+    {
+        return vec![
+            "/C".to_string(),
+            "start".to_string(),
+            String::new(),
+            url.to_string(),
+        ];
+    }
+    vec![url.to_string()]
 }
 
 pub(crate) fn command_exists(cmd: &str) -> bool {
