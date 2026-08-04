@@ -6580,5 +6580,50 @@ fem steady transport contract: PASS
 Oba obserwowane błędy midpoint maleją przy rafinacji. Jest to ograniczona
 brama przestrzennej zbieżności FEM CPU z profilem jednorodnym poprzecznie; nie
 zamyka pełnego 3-D `h`/`p` sweep, heterogenicznych materiałów, interfejsów,
-FDM↔FEM reciprocal common-limit, GPU, ani `validated_workloads`. Szeroka ocena
+generalnego FDM↔FEM reciprocal common-limit, GPU, ani `validated_workloads`;
+ograniczony uniform common-limit jest opisany w sekcji 32.58. Szeroka ocena
 pozostaje **86% implementacji / 60% gotowości produkcyjnej**.
+
+## 32.58. Wspólny limit reciprocal M2 FDM↔FEM (2026-08-04)
+
+### 32.58.1. Cel i fixture
+
+Dodano do runnera test
+`reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles` oraz
+osobną receptę `just verify-fem-steady-transport-m2-common-limit-contract`.
+Test uruchamia ten sam problem SI w FDM CPU i FEM CPU: jednorodny prostopadłościan
+o długości `1 m`, przekrój `1 m x 0.1 m`, `m=e_z`,
+`sigma=4 S/m`, `sigma_s=5 S/m`, `sigma_parallel=6 S/m`,
+`sigma_perpendicular=3 S/m`, `P=0.25`, `theta_SH=sigma_AHE=0`,
+`lambda_sf=0.3 m`, bez exchange/dephasing. Potencjał ładunkowy ma elektrody
+`V(z=0)=1 V`, `V(z=1)=0 V`; `mu_{s,z}` ma zgodne warunki
+`0.2 V` i `0 V`; pozostałe składowe są izolowane/zerowe. FDM używa komórek
+`[1,1,N_z]`, a FEM conforming tetrahedral mesh ma te same płaszczyzny `z`.
+Porównanie jest wykonywane między wartościami FDM w środku komórek i średnią
+FEM po czterech węzłach płaszczyzny, następnie między dwiema sąsiednimi
+płaszczyznami.
+
+### 32.58.2. Managed GREEN i pomiary
+
+W zarządzanym obrazie `fem-gpu` przeszła brama:
+
+```text
+just verify-fem-steady-transport-m2-common-limit-contract
+```
+
+Wynik:
+
+```text
+M2 reciprocal common SI Nz=8: potential=5.602702602479637e-4, spin=6.7222990578735264e-3
+M2 reciprocal common SI Nz=16: potential=1.6232446439556902e-4, spin=1.9477183162976974e-3
+M2 reciprocal common SI Nz=32: potential=4.359865754688386e-5, spin=5.231586951655598e-4
+test ...reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles ... ok
+```
+
+Oba backendy przechodzą niezależne residual/balance gates, a błąd cross-backend
+maleje przy `N_z=8 -> 16 -> 32`. Jest to pierwszy wykonywalny common-limit dla
+reciprocal M2, ale tylko dla jednorodnego CPU-double, bez Hall, bez interfejsów
+i bez zmiennej przestrzennie magnetyzacji. Nie zamyka heterogenicznego/3-D
+sweep, interfejsów N/F/T, niezerowego SHE/AHE, GPU parity, pełnej ścieżki
+Python/UI ani `validated_workloads`. Ocena szeroka pozostaje
+**86% implementacji / 60% gotowości produkcyjnej**.

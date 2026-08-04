@@ -1023,7 +1023,8 @@ native runtime, canonical quantities, artifacts, and v2 reads. It is not a full
 production transport capability. Total-current and periodic electrodes,
 specified spin flux, `H(curl)`/broken-H1 mortar mixing or SML,
 hypre/libCEED production preconditioners, GPU residency, stage coupling, and
-FDM/FEM common-limit convergence remain unchecked work in sections 5 and 6.
+general heterogeneous FDM/FEM common-limit convergence remain unchecked work;
+the bounded uniform M1/M2 fixtures are documented below.
 
 ### 7.2 FEM CPU M2 bounded reciprocal implementation evidence
 
