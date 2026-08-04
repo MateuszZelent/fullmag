@@ -137,21 +137,6 @@ else:
 study.save("m", every=1e-10)
 study.save("H_demag", every=1e-10)
 
-# FEM deliberately uses the canonical fullmag realization.  The FDM
-# MuMax3-compatibility realization has a different public lane and is rejected
-# by the planner on FEM rather than being silently reinterpreted.
-study.spin_torque(
-    fm.ZhangLiSTT(
-        current_density=CURRENT_DENSITY,
-        degree=POLARIZATION,
-        xi=XI,
-        id="sp5_zhang_li_fem",
-        target=fm.RegionRef("plate"),
-        lande_g=2.0,
-        operator_version="zl_central_reference_v1",
-    )
-)
-
 relax_stage = study.stages.add_relax(
     stage_id="relax",
     algorithm="llg_overdamped",
@@ -167,5 +152,21 @@ relax_stage = study.stages.add_relax(
 relax_stage.tableautosave(
     every_steps=1,
     quantities=["time", "step", "mx", "my", "mz", "E_total", "max_dm_dt"],
+)
+
+# MuMax3 assigns J/Pol/xi after relax(), so the equilibrium stage is
+# conservative.  FEM deliberately uses the canonical fullmag realization for
+# the following dynamic stage; the FDM MuMax3-compatibility realization has a
+# different public lane and is rejected by the planner on FEM.
+study.spin_torque(
+    fm.ZhangLiSTT(
+        current_density=CURRENT_DENSITY,
+        degree=POLARIZATION,
+        xi=XI,
+        id="sp5_zhang_li_fem",
+        target=fm.RegionRef("plate"),
+        lande_g=2.0,
+        operator_version="zl_central_reference_v1",
+    )
 )
 study.stages.add_run(RUN_UNTIL, stage_id="current_run")

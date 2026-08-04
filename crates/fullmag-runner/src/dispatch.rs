@@ -625,10 +625,17 @@ fn resolve_fem_engine_with_effective_request(
     policy: &str,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
     apply_runtime_gpu_index(problem, "fem");
-    let ir_policy = runtime_fem_policy(problem);
     let fe_order = runtime_fem_order(problem);
+    let (policy, env_override) = effective_fem_execution_policy(problem, policy);
+
+    let availability = native_fem::native_availability();
+    resolve_fem_engine_with_availability(problem, &policy, env_override, fe_order, &availability)
+}
+
+fn effective_fem_execution_policy(problem: &ProblemIR, requested_policy: &str) -> (String, bool) {
+    let ir_policy = runtime_fem_policy(problem);
     let strict_gpu = strict_fem_gpu_requested(problem);
-    let (policy, env_override) = match std::env::var("FULLMAG_FEM_EXECUTION") {
+    match std::env::var("FULLMAG_FEM_EXECUTION") {
         Ok(env_val) if strict_gpu && !fem_policy_requires_gpu(&env_val) => {
             runtime_warn_once(&format!(
                 "ignoring FULLMAG_FEM_EXECUTION={} because ProblemIR requests device=gpu in strict execution mode",
@@ -647,11 +654,13 @@ fn resolve_fem_engine_with_effective_request(
             (env_val, true)
         }
         Err(_) if all_in_gpu_fem_env_requested() => ("all_in_gpu".to_string(), true),
-        Err(_) => (ir_policy.to_string(), false),
-    };
-
-    let availability = native_fem::native_availability();
-    resolve_fem_engine_with_availability(problem, &policy, env_override, fe_order, &availability)
+        // `requested_policy` is already the canonical effective request. In
+        // the plan-aware path it includes a managed launcher override and,
+        // for a certified mixed-topology plan, the device bound to the plan.
+        // Falling back to the raw ProblemIR policy here silently discarded
+        // that request and could select the GPU lane for a CPU-bound stage.
+        Err(_) => (requested_policy.to_string(), false),
+    }
 }
 
 fn strict_fem_gpu_requested(problem: &ProblemIR) -> bool {
@@ -7877,6 +7886,31 @@ mod tests {
                 .engine,
             FemEngine::NativeGpu,
         );
+    }
+
+    #[test]
+    fn managed_cpu_request_is_not_replaced_by_script_auto_without_environment_override() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+
+        let requested = effective_fem_device_request(&problem);
+        let (policy, env_override) = effective_fem_execution_policy(&problem, &requested);
+
+        assert_eq!(requested, "cpu");
+        assert_eq!(policy, "cpu");
+        assert!(!env_override);
     }
 
     #[test]
