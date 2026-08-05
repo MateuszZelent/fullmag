@@ -24,6 +24,7 @@ bool gpu_rk_add_direct_torques(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     std::string &reason);
 
 } // namespace fullmag::fem

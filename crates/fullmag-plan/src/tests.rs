@@ -5875,7 +5875,7 @@ fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
 }
 
 #[test]
-fn fem_prescribed_sot_gpu_fails_closed_until_native_cuda_realization() {
+fn fem_prescribed_sot_gpu_plan_materializes_constant_envelope() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     attach_unit_fem_domain_mesh(&mut ir);
@@ -5902,13 +5902,68 @@ fn fem_prescribed_sot_gpu_fails_closed_until_native_cuda_realization() {
         },
     }];
 
-    let error = crate::fem::plan_fem(&ir, BackendTarget::Fem)
-        .expect_err("FEM GPU prescribed SOT must remain fail-closed");
+    let planned = crate::fem::plan_fem(&ir, BackendTarget::Fem)
+        .expect("FEM GPU prescribed SOT should use the qualified native reference slice");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let contract = fem
+        .spin_torque_contract
+        .expect("versioned FEM GPU SOT contract");
+    assert_eq!(contract.formula_version, "prescribed_sot.fullmag.v1");
+    assert_eq!(
+        contract.sot_envelope,
+        None,
+        "an omitted envelope is the canonical unit constant"
+    );
+}
+
+#[test]
+fn fem_stage_time_prescribed_sot_plans_and_fdm_rejects_it() {
+    let mut fem_ir = ProblemIR::bootstrap_example();
+    fem_ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut fem_ir);
+    fem_ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot_stage".to_string(),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: fullmag_ir::PrescribedSotFormulaIR::FullmagV1 {
+            drive: fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: 1.0e11,
+                sigma_hat: [0.0, 1.0, 0.0],
+                envelope: Some(fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+                    amplitude: 0.5,
+                    frequency_hz: 1.0e12,
+                    phase_rad: 0.0,
+                    offset: 1.0,
+                }),
+            },
+            xi_dl: 0.12,
+            xi_fl: -0.02,
+            free_layer_thickness_m: 1.5e-9,
+        },
+    }];
+
+    let planned = crate::fem::plan_fem(&fem_ir, BackendTarget::Fem)
+        .expect("FEM should admit the bounded stage-time SOT descriptor");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(matches!(
+        fem.spin_torque_contract.and_then(|contract| contract.sot_envelope),
+        Some(fullmag_ir::TimeEnvelopeIR::Sinusoidal { .. })
+    ));
+
+    let mut fdm_ir = fem_ir;
+    fdm_ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    let error = plan(&fdm_ir).expect_err("FDM must remain fail-closed for stage-time SOT");
     assert!(error.reasons.iter().any(|reason| {
-        reason.contains("prescribed_sot.fullmag.v1")
-            && reason.contains("FEM GPU")
-            && reason.contains("semantic_only")
-    }), "unexpected FEM GPU SOT reasons: {:?}", error.reasons);
+        reason.contains("non-constant TimeEnvelope")
+            && reason.contains("stage_time_execution")
+    }), "unexpected FDM stage-time SOT reasons: {:?}", error.reasons);
 }
 
 #[test]

@@ -18,6 +18,7 @@ pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_SOT_FORMULA_NONE: u32 = 0;
 pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
+pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +153,25 @@ pub struct fullmag_fem_time_dependence_desc {
     pub struct_size: u32,
     pub kind: u32,
     pub parameters: fullmag_fem_time_dependence_parameters,
+    pub points: *const fullmag_fem_time_point,
+    pub point_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_sot_envelope_desc {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub kind: u32,
+    pub time_origin: u32,
+    pub amplitude: f64,
+    pub frequency_hz: f64,
+    pub phase_rad: f64,
+    pub offset: f64,
+    pub t_on_s: f64,
+    pub t_off_s: f64,
+    pub center_s: f64,
+    pub bandwidth_hz: f64,
     pub points: *const fullmag_fem_time_point,
     pub point_count: u64,
 }
@@ -646,6 +666,7 @@ pub struct fullmag_fem_plan_desc {
     pub sot_sigma: [f64; 3],
     pub sot_active_node_mask: *const u8,
     pub sot_active_node_mask_len: u64,
+    pub sot_envelope: fullmag_fem_sot_envelope_desc,
 }
 
 #[repr(C)]
@@ -2160,6 +2181,18 @@ mod tests {
         assert!(
             std::mem::offset_of!(fullmag_fem_plan_desc, sot_active_node_mask_len)
                 > std::mem::offset_of!(fullmag_fem_plan_desc, has_prescribed_sot)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, sot_envelope)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, sot_active_node_mask_len)
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_sot_envelope_desc, abi_version),
+            0
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_sot_envelope_desc, struct_size)
+                > std::mem::offset_of!(fullmag_fem_sot_envelope_desc, abi_version)
         );
     }
 

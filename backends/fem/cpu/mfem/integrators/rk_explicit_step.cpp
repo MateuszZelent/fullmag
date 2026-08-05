@@ -436,7 +436,13 @@ bool context_step_explicit_rk_mfem(
                     ctx.base_plan.precession_enabled,
                     ws.k[0], max_rhs_final);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final, ws.stt);
-        add_sot_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final);
+        add_sot_rhs_aos(
+            ctx,
+            ctx.state.m_xyz,
+            ws.k[0],
+            max_rhs_final,
+            ctx.state.current_time,
+            ctx.zeeman.stage_start_time_s);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;

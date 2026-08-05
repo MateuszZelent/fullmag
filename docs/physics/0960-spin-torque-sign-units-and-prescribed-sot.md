@@ -1,6 +1,6 @@
 # Spin-torque signs, SI units, and prescribed SOT
 
-- Status: active normative physics note; bounded FEM CPU/GPU implementation evidence
+- Status: active normative physics note; bounded FEM CPU/GPU stage-time implementation evidence
 - Owners: Fullmag core
 - Last updated: 2026-08-05
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
@@ -178,24 +178,44 @@ uses `PrescribedSpinOrbitTorque`; neither name proves capability
 
 #### 2.4.1 Current FEM realization boundary (2026-08-05)
 
-The FEM CPU reference lane now evaluates `prescribed_sot.fullmag.v1` directly
-from the SI/Gilbert expression above. The plan carries the signed scalar
-current, `xi_DL`, `xi_FL`, `t_F`, constant time envelope, normalized
+The FEM CPU reference lane evaluates `prescribed_sot.fullmag.v1` directly from
+the SI/Gilbert expression above. The plan carries the signed scalar current,
+`xi_DL`, `xi_FL`, `t_F`, a dimensionless time envelope, normalized
 `sigma_hat`, and an optional magnetic target-node mask. The native MFEM CPU
 path and the Rust FEM reference use the same backend-neutral algebra; both
 apply one Gilbert transform and reject malformed descriptor data before the
-solve. The managed contract compares an independent SI one-step Heun oracle,
+solve. The managed contracts compare independent SI one-step Heun oracles,
 the Rust FEM reference, and the native MFEM CPU result, including `H_eff` and
 the maximum RHS amplitude.
 
-The FEM GPU lane now has a bounded device-resident constant-envelope
-realization. Planner and native-runner route the canonical descriptor to the
-CUDA RK direct-torque path without a CPU fallback. The managed contract checks
-the CUDA interaction kernel against an independent SI oracle and the native
-runner checks one fixed Heun step against the FEM CPU reference, including
-`m`, `H_eff`, maximum RHS, target masking, and signed-current reversal. This
-does not qualify stage-varying envelopes, FP32, long trajectories, FEM
+The FEM GPU lane has a bounded device-resident realization for constant,
+sinusoidal, pulse, piecewise-linear, and sinc envelopes. At each RK stage the
+native path evaluates the scalar envelope at `t_n+c_i dt` (or the explicit
+stage-local origin in the C ABI) and forwards that scalar into the persistent
+CUDA direct-torque kernel; magnetization, masks, material fields, and RHS stay
+device-resident. Planner and native-runner route the canonical descriptor to
+this path without a CPU fallback. Managed CPU and real CUDA tests compare a
+sinusoidal two-stage Heun step against an independent SI oracle. This bounded
+evidence does not yet qualify event-knot clipping, rejected-step event
+bookkeeping, tabulated-artifact materialization, FP32, long trajectories, FEM
 multi-grid/convergence, or FEM↔FDM continuum agreement.
+
+#### 2.4.2 Stage-time envelope contract
+
+For an explicit RK stage `i`, the source multiplier is evaluated at
+
+```text
+t_i = t_n + c_i dt,
+```
+
+with the same `t_i` used by the rest of the RHS. Constant, sinusoidal, pulse,
+piecewise-linear, and sinc envelopes are evaluated in FP64 using the canonical
+definitions in `TimeEnvelopeIR`; PWL endpoints are held and pulse support is
+`[t_on,t_off)`. The current FEM descriptor is append-only and versioned. A
+tabulated envelope remains fail-closed until its artifact is materialized into
+an owned native buffer. Stage evaluation is not event alignment: a future
+production integrator must clip a trial step at every pulse/PWL knot and keep
+the envelope cursor in the rejected-step rollback record.
 
 ### 2.5 Torque transferred from solved spin transport
 
@@ -458,11 +478,11 @@ The canonical parameter-to-ProblemIR contract is:
 | `SlonczewskiSTT.current_density` | `tuple[float, float, float]` | required unless `current_source` is used | `\\mathrm{A\\,m^{-2}}` | finite signed vector; `J dot n_stack` is retained | conventional charge-current density | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].current_density` |
 | `SlonczewskiSTT.free_layer_thickness_m` | `float` | required for canonical thin layer | `\\mathrm m` | finite and positive; no hidden geometry fallback in v2 | homogenized free-layer thickness | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].free_layer_thickness` |
 | `SlonczewskiSTT.stack_normal` | `vec3` | required for canonical v2 | `1` | finite non-zero vector normalized once at plan import | fixed-to-free stack orientation | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].stack_normal` |
-| `PrescribedSpinOrbitTorque.target` | `RegionRef` | required for canonical v1 | `1` | non-empty object/region reference; must resolve to an active magnetic target | prescribed SOT target region | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes | `spin_torque_modules[].target` |
-| `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive \| VectorCurrentDrive` | required; mutually exclusive drive forms | `A/m^2` or source binding | signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal | SOT current/polarization source and orientation | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes | `spin_torque_modules[].drive` |
-| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | `1` | finite signed damping-like efficiency | damping-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes | `spin_torque_modules[].xi_dl` |
-| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | `1` | finite signed field-like efficiency | field-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes | `spin_torque_modules[].xi_fl` |
-| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | `m` | finite and positive; no hidden cell-thickness fallback in v1 | ferromagnetic target thickness in the SOT prefactor | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes | `spin_torque_modules[].free_layer_thickness_m` |
+| `PrescribedSpinOrbitTorque.target` | `RegionRef` | required for canonical v1 | `1` | non-empty object/region reference; must resolve to an active magnetic target | prescribed SOT target region | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for non-tabulated stage-time envelopes | `spin_torque_modules[].target` |
+| `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive \| VectorCurrentDrive` | required; mutually exclusive drive forms | `A/m^2` or source binding | signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal | SOT current/polarization source and orientation | FDM CPU/GPU bounded reference slice for constant envelopes; FEM CPU/GPU bounded reference slice for non-tabulated stage-time envelopes | `spin_torque_modules[].drive` |
+| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | `1` | finite signed damping-like efficiency | damping-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for non-tabulated stage-time envelopes | `spin_torque_modules[].xi_dl` |
+| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | `1` | finite signed field-like efficiency | field-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for non-tabulated stage-time envelopes | `spin_torque_modules[].xi_fl` |
+| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | `m` | finite and positive; no hidden cell-thickness fallback in v1 | ferromagnetic target thickness in the SOT prefactor | FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for non-tabulated stage-time envelopes | `spin_torque_modules[].free_layer_thickness_m` |
 
 (problem-ir)=
 ### 4.2 ProblemIR representation
@@ -520,7 +540,9 @@ MFEM evaluator plus a Rust reference evaluator. The FDM GPU and FEM
 Slonczewski/prescribed-SOT GPU paths use separate device realizations with the
 same backend-neutral descriptor. No new physical state is added to `Context`;
 FEM SOT runtime ownership is split between the append-only plan descriptor,
-the CPU interaction state, and the GPU state's direct-torque target mask.
+the CPU interaction state, and the GPU state's direct-torque target mask plus
+one scalar stage-envelope value. The scalar is evaluated from canonical stage
+time; it is not a hidden CPU torque fallback.
 
 (validation)=
 ## 5. Validation strategy
@@ -592,7 +614,17 @@ CUDA interaction contract. It then executes
 on the resolved MFEM CUDA device. That one-step gate matches the independent
 SI Heun oracle and the CPU reference for `m`, `H_eff`, and `max_rhs`, and
 exercises target-mask and current-reversal semantics. This is bounded FEM GPU
-reference evidence, not stage-time envelope support, FP32 qualification,
+reference evidence for the constant-envelope lane.
+
+The same recipe also executes
+`native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_cpu`
+and
+`native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_gpu`.
+Both use the same two-stage sinusoidal envelope, evaluate it at `t_n+c_i dt`,
+and compare the complete `m`, `H_eff`, and `max_rhs_amplitude` with the
+independent SI Heun oracle. The native evaluator covers five non-tabulated
+forms; this managed CPU/GPU oracle directly exercises the sinusoidal form.
+It does not yet prove event clipping/rollback, tabulated artifacts, FP32,
 multi-grid convergence, long-time stability, FEM↔FDM continuum parity, or
 production qualification.
 
@@ -604,8 +636,9 @@ production qualification.
 - [ ] FDM CPU double oracle
 - [ ] FDM CUDA FP64 parity and FP32 qualification
 - [x] FEM CPU/MFEM independent oracle (bounded one-step managed reference)
-- [x] FEM GPU strict residency path (bounded constant-envelope one-step FP64 reference)
-- [ ] Stage-consistent runtime and rollback
+- [x] FEM GPU strict residency path (bounded non-tabulated stage-time one-step FP64 reference)
+- [x] FEM stage-time descriptor and CPU/GPU SI-oracle tests
+- [ ] Event-aligned stage runtime and rejected-step rollback
 - [ ] Quantities, provenance, API, UI, and export
 - [ ] Managed runtime and browser validation evidence
 
@@ -668,12 +701,19 @@ hidden change to `alpha`.
 | `crates/fullmag-engine/src/fem.rs` | `sot_rhs_at` | Rust FEM reference realization of the canonical SOT source and target mask |
 | `backends/fem/gpu/cuda/interactions/sot/sot_kernels.cu` | `prescribed_sot_rhs_kernel` | FEM GPU device-resident canonical prescribed-SOT SI/Gilbert kernel |
 | `backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu` | `gpu_rk_add_prescribed_sot_torque` | FEM GPU direct-torque descriptor forwarding and launch validation |
-| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | Resolve the FEM SOT contract and preserve the bounded constant-envelope GPU reference lane |
+| `backends/fem/cpu/mfem/interactions/sot.cpp` | `evaluate_sot_envelope` | Evaluate the canonical non-tabulated SOT envelope at an RK stage time |
+| `backends/fem/gpu/cuda/integrators/rk/rk_direct_torques.cu` | `gpu_rk_add_direct_torques` | Forward one stage-time envelope scalar into the device-resident direct-torque path |
+| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | Resolve the FEM SOT contract and admit the bounded non-tabulated stage-time reference lane |
+| `crates/fullmag-runner/src/native_fem.rs` | `pack_native_sot_envelope` | Pack the append-only SOT envelope descriptor and owned PWL points |
+| `native/include/fullmag_fem.h` | `fullmag_fem_sot_envelope_desc` | Append-only ABI descriptor for stage-time prescribed-SOT envelopes |
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available` | Managed FEM CPU native/reference/oracle one-step contract |
-| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available` | Managed FEM GPU native/reference/oracle one-step contract |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available` | Managed FEM GPU native/reference/oracle one-step contract for the constant-envelope lane |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_cpu` | Managed FEM CPU two-stage Heun stage-time envelope contract against an independent SI oracle |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_gpu` | Managed real-CUDA FEM GPU two-stage Heun stage-time envelope contract against the same SI oracle |
 | `backends/fem/tests/cuda_sot_contract.cpp` | `main` | Managed CUDA prescribed-SOT mask, sign, SI-oracle, and CPU/GPU algebra contract |
 | `native/include/fullmag_fem.h` | `fullmag_fem_backend_create` | FEM ABI entry point consuming the append-only prescribed-SOT plan descriptor |
 | `crates/fullmag-fem-sys/src/lib.rs` | `fullmag_fem_backend_create` | Rust FFI declaration consuming the append-only prescribed-SOT descriptor |
+| `crates/fullmag-fem-sys/src/lib.rs` | `versioned_stt_extension_is_append_only_after_legacy_plan_prefix` | ABI test proving the SOT envelope descriptor remains append-only and self-describing |
 | `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
 
 ```{math}

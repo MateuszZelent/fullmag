@@ -16,7 +16,8 @@ struct Context;
  * The state is intentionally separate from solved SHE/spin transport. It
  * stores the signed conventional current, damping-like/field-like
  * efficiencies, the normalized spin-polarization axis, the ferromagnet
- * thickness, the constant stage envelope, and the realized FEM node mask.
+ * thickness, the immutable stage-time envelope descriptor, and the realized
+ * FEM node mask.
  */
 struct SotRuntimeState {
     bool enabled = false;
@@ -26,6 +27,18 @@ struct SotRuntimeState {
     double xi_fl = 0.0;
     double thickness = 0.0;
     double envelope_value = 1.0;
+    uint32_t envelope_kind = FULLMAG_FEM_TIME_CONSTANT;
+    uint32_t envelope_time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    double envelope_amplitude = 1.0;
+    double envelope_frequency_hz = 0.0;
+    double envelope_phase_rad = 0.0;
+    double envelope_offset = 0.0;
+    double envelope_t_on_s = 0.0;
+    double envelope_t_off_s = 0.0;
+    double envelope_center_s = 0.0;
+    double envelope_bandwidth_hz = 0.0;
+    std::vector<double> envelope_point_times_s{};
+    std::vector<double> envelope_point_values{};
     std::array<double, 3> sigma{0.0, 0.0, 1.0};
     std::vector<uint8_t> active_node_mask{};
 };
@@ -41,6 +54,14 @@ void add_sot_rhs_aos(
     const Context &ctx,
     const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz,
-    double &max_rhs);
+    double &max_rhs,
+    double evaluation_time_s,
+    double stage_start_time_s);
+
+/* Evaluate the immutable dimensionless source multiplier at an RK stage. */
+double evaluate_sot_envelope(
+    const SotRuntimeState &sot,
+    double evaluation_time_s,
+    double stage_start_time_s);
 
 } // namespace fullmag::fem

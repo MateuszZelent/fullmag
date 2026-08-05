@@ -25,6 +25,7 @@ bool gpu_rk_add_direct_torques(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     std::string &reason)
 {
     if (!gpu_rk_add_slonczewski_torque(ctx, m, rhs, stream, n, reason)) {
@@ -33,7 +34,8 @@ bool gpu_rk_add_direct_torques(
     if (!gpu_rk_add_zhang_li_torque(ctx, m, rhs, stream, n, reason)) {
         return false;
     }
-    if (!gpu_rk_add_prescribed_sot_torque(ctx, m, rhs, stream, n, reason)) {
+    if (!gpu_rk_add_prescribed_sot_torque(
+            ctx, m, rhs, stream, n, evaluation_time_s, reason)) {
         return false;
     }
     return true;

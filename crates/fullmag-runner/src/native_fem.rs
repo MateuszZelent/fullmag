@@ -842,6 +842,103 @@ fn flatten_native_geometry_mask(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn pack_native_sot_envelope(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<
+    (
+        ffi::fullmag_fem_sot_envelope_desc,
+        Vec<ffi::fullmag_fem_time_point>,
+    ),
+    RunError,
+> {
+    let mut descriptor = ffi::fullmag_fem_sot_envelope_desc {
+        abi_version: ffi::FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_sot_envelope_desc>() as u32,
+        kind: ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_CONSTANT as u32,
+        time_origin: ffi::fullmag_fem_time_origin::FULLMAG_FEM_TIME_ABSOLUTE as u32,
+        amplitude: 1.0,
+        frequency_hz: 0.0,
+        phase_rad: 0.0,
+        offset: 0.0,
+        t_on_s: 0.0,
+        t_off_s: 0.0,
+        center_s: 0.0,
+        bandwidth_hz: 0.0,
+        points: std::ptr::null(),
+        point_count: 0,
+    };
+    let mut points = Vec::new();
+    let Some(envelope) = plan
+        .spin_torque_contract
+        .as_ref()
+        .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1")
+        .and_then(|contract| contract.sot_envelope.as_ref())
+    else {
+        return Ok((descriptor, points));
+    };
+    match envelope {
+        fullmag_ir::TimeEnvelopeIR::Constant { value } => {
+            descriptor.amplitude = *value;
+        }
+        fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+            amplitude,
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINUSOIDAL as u32;
+            descriptor.amplitude = *amplitude;
+            descriptor.frequency_hz = *frequency_hz;
+            descriptor.phase_rad = *phase_rad;
+            descriptor.offset = *offset;
+        }
+        fullmag_ir::TimeEnvelopeIR::Pulse {
+            amplitude,
+            t_on_s,
+            t_off_s,
+        } => {
+            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PULSE as u32;
+            descriptor.amplitude = *amplitude;
+            descriptor.t_on_s = *t_on_s;
+            descriptor.t_off_s = *t_off_s;
+        }
+        fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points: source } => {
+            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PIECEWISE_LINEAR as u32;
+            points = source
+                .iter()
+                .map(|point| ffi::fullmag_fem_time_point {
+                    time_s: point.time_s,
+                    value: point.value,
+                })
+                .collect();
+            descriptor.points = optional_slice_ptr(&points);
+            descriptor.point_count = points.len() as u64;
+        }
+        fullmag_ir::TimeEnvelopeIR::Sinc {
+            amplitude,
+            center_s,
+            bandwidth_hz,
+            offset,
+        } => {
+            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINC_PULSE as u32;
+            descriptor.amplitude = *amplitude;
+            descriptor.center_s = *center_s;
+            descriptor.bandwidth_hz = *bandwidth_hz;
+            descriptor.offset = *offset;
+        }
+        fullmag_ir::TimeEnvelopeIR::Tabulated { artifact_ref, .. } => {
+            return Err(RunError {
+                message: format!(
+                    "native FEM prescribed SOT tabulated envelope requires materialized artifact '{}'; planner keeps this lane fail-closed",
+                    artifact_ref
+                ),
+            });
+        }
+    }
+    Ok((descriptor, points))
+}
+
+#[cfg(feature = "fem-gpu")]
 fn pack_native_regional_field_drives(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<
@@ -1839,6 +1936,7 @@ impl NativeFemBackend {
             _regional_geometry_node_storage,
             _regional_geometry_desc_storage,
         ) = pack_native_regional_field_drives(plan)?;
+        let (sot_envelope, _sot_envelope_points) = pack_native_sot_envelope(plan)?;
 
         let mesh = packed_mesh.descriptor(&plan.mesh);
 
@@ -2315,6 +2413,7 @@ impl NativeFemBackend {
                 .unwrap_or([0.0, 0.0, 1.0]),
             sot_active_node_mask: optional_slice_ptr(&sot_active_node_mask),
             sot_active_node_mask_len: sot_active_node_mask.len() as u64,
+            sot_envelope,
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -6959,7 +7058,11 @@ mod tests {
         ]
     }
 
-    fn canonical_prescribed_sot_rhs_reference(plan: &FemPlanIR, m: [f64; 3]) -> [f64; 3] {
+    fn canonical_prescribed_sot_rhs_reference_at_time(
+        plan: &FemPlanIR,
+        m: [f64; 3],
+        time_s: f64,
+    ) -> [f64; 3] {
         let contract = plan
             .spin_torque_contract
             .as_ref()
@@ -6988,7 +7091,57 @@ mod tests {
             .as_ref()
             .map(|envelope| match envelope {
                 fullmag_ir::TimeEnvelopeIR::Constant { value } => *value,
-                other => panic!("non-constant prescribed SOT envelope in SI oracle: {other:?}"),
+                fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+                    amplitude,
+                    frequency_hz,
+                    phase_rad,
+                    offset,
+                } => {
+                    offset + amplitude *
+                        (2.0 * std::f64::consts::PI * frequency_hz * time_s + phase_rad).sin()
+                }
+                fullmag_ir::TimeEnvelopeIR::Pulse {
+                    amplitude,
+                    t_on_s,
+                    t_off_s,
+                } => {
+                    if time_s >= *t_on_s && time_s < *t_off_s { *amplitude } else { 0.0 }
+                }
+                fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points } => {
+                    if points.is_empty() {
+                        0.0
+                    } else if time_s <= points[0].time_s {
+                        points[0].value
+                    } else if time_s >= points[points.len() - 1].time_s {
+                        points[points.len() - 1].value
+                    } else {
+                        let upper = points
+                            .iter()
+                            .position(|point| point.time_s > time_s)
+                            .expect("piecewise envelope upper point");
+                        let lower = upper - 1;
+                        let u = (time_s - points[lower].time_s)
+                            / (points[upper].time_s - points[lower].time_s);
+                        points[lower].value + u * (points[upper].value - points[lower].value)
+                    }
+                }
+                fullmag_ir::TimeEnvelopeIR::Sinc {
+                    amplitude,
+                    center_s,
+                    bandwidth_hz,
+                    offset,
+                } => {
+                    let x = bandwidth_hz * (time_s - center_s);
+                    let sinc = if x.abs() <= 1.0e-12 {
+                        1.0
+                    } else {
+                        (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x)
+                    };
+                    offset + amplitude * sinc
+                }
+                fullmag_ir::TimeEnvelopeIR::Tabulated { .. } => {
+                    panic!("tabulated prescribed SOT envelope is outside the SI oracle")
+                }
             })
             .unwrap_or(1.0);
         let thickness = contract.sot_thickness.expect("prescribed SOT thickness");
@@ -7024,7 +7177,7 @@ mod tests {
             .initial_magnetization
             .iter()
             .copied()
-            .map(|m| canonical_prescribed_sot_rhs_reference(plan, m))
+            .map(|m| canonical_prescribed_sot_rhs_reference_at_time(plan, m, 0.0))
             .collect();
         let stage: Vec<[f64; 3]> = plan
             .initial_magnetization
@@ -7037,7 +7190,7 @@ mod tests {
         let k2: Vec<[f64; 3]> = stage
             .iter()
             .copied()
-            .map(|m| canonical_prescribed_sot_rhs_reference(plan, m))
+            .map(|m| canonical_prescribed_sot_rhs_reference_at_time(plan, m, dt))
             .collect();
         let final_m: Vec<[f64; 3]> = plan
             .initial_magnetization
@@ -7055,7 +7208,7 @@ mod tests {
             .iter()
             .copied()
             .map(|m| {
-                let rhs = canonical_prescribed_sot_rhs_reference(plan, m);
+                let rhs = canonical_prescribed_sot_rhs_reference_at_time(plan, m, dt);
                 (rhs[0] * rhs[0] + rhs[1] * rhs[1] + rhs[2] * rhs[2]).sqrt()
             })
             .fold(0.0, f64::max);
@@ -8876,6 +9029,92 @@ mod tests {
             5e-7,
             1e-9,
         );
+    }
+
+    fn make_stage_time_prescribed_sot_plan(device: &str) -> FemPlanIR {
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some(device.to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+                amplitude: 0.5,
+                frequency_hz: 1.0e12,
+                phase_rad: 0.0,
+                offset: 1.0,
+            }),
+            sot_drive: None,
+        });
+        plan
+    }
+
+    fn assert_native_stage_time_prescribed_sot_step(plan: &FemPlanIR, label: &str) {
+        let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(plan);
+        let expected_h_eff = vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        let mut backend = NativeFemBackend::create(plan)
+            .unwrap_or_else(|error| panic!("{label} native FEM stage-time SOT create: {error}"));
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .unwrap_or_else(|error| panic!("{label} native FEM stage-time SOT step: {error}"));
+        let actual_m = backend
+            .copy_m(plan.mesh.nodes.len())
+            .expect("copy stage-time SOT m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy stage-time SOT H_eff");
+        assert_vector_field_close(
+            &format!("{label} stage-time SOT m"),
+            &actual_m,
+            &expected_m,
+            5e-7,
+            1e-10,
+        );
+        assert_vector_field_close(
+            &format!("{label} stage-time SOT H_eff"),
+            &actual_h_eff,
+            &expected_h_eff,
+            5e-7,
+            1e-6,
+        );
+        assert_scalar_close(
+            &format!("{label} stage-time SOT max_rhs_amplitude"),
+            stats.max_dm_dt,
+            expected_max_rhs,
+            5e-7,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_cpu() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM stage-time SOT CPU test: MFEM stack unavailable");
+            return;
+        }
+        let plan = make_stage_time_prescribed_sot_plan("cpu");
+        assert_native_stage_time_prescribed_sot_step(&plan, "CPU");
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_gpu() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+        let plan = make_stage_time_prescribed_sot_plan("cuda");
+        assert_native_stage_time_prescribed_sot_step(&plan, "GPU");
     }
 
     #[test]

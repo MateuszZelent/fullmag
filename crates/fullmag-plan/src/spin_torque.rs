@@ -388,6 +388,7 @@ pub(crate) struct ResolvedSotFields {
 pub(crate) fn resolve_sot_fields(
     problem: &ProblemIR,
     current_transports: &[ResolvedCurrentTransport],
+    allow_stage_time_envelope: bool,
 ) -> Result<ResolvedSotFields, PlanError> {
     if problem.spin_torque_modules.is_empty() {
         return Ok(ResolvedSotFields::default());
@@ -412,6 +413,7 @@ pub(crate) fn resolve_sot_fields(
                 } => {
                     match envelope {
                         None | Some(TimeEnvelopeIR::Constant { .. }) => {}
+                        Some(_) if allow_stage_time_envelope => {}
                         Some(_) => {
                             return Err(PlanError {
                                 reasons: vec![
@@ -566,7 +568,7 @@ mod tests {
             },
         }];
 
-        let resolved = resolve_sot_fields(&problem, &[])
+        let resolved = resolve_sot_fields(&problem, &[], false)
             .expect("canonical prescribed SOT must lower for FDM execution");
         assert_eq!(resolved.current_density, Some(-1.0e10));
         assert_eq!(
@@ -635,6 +637,7 @@ mod tests {
                     current_density: [jx, 4.0e9, 0.0],
                     solve_region: None,
                 }],
+                false,
             )
             .unwrap()
         };
@@ -676,7 +679,7 @@ mod tests {
             target: None,
             formula,
         }];
-        let resolved = resolve_sot_fields(&problem, &[])
+        let resolved = resolve_sot_fields(&problem, &[], false)
             .expect("legacy prescribed SOT must remain executable without reinterpretation");
         assert_eq!(
             resolved.formula_version,
@@ -702,7 +705,7 @@ mod tests {
             "ferromagnet_thickness_m": 1.5e-9
         }]);
         let problem: ProblemIR = serde_json::from_value(value).expect("0.2 migration");
-        let resolved = resolve_sot_fields(&problem, &[]).expect("legacy lowering");
+        let resolved = resolve_sot_fields(&problem, &[], false).expect("legacy lowering");
 
         assert_eq!(
             resolved.formula_version,
@@ -734,7 +737,7 @@ mod tests {
             .iter()
             .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed")));
 
-        let sot_error = resolve_sot_fields(&problem, &[])
+        let sot_error = resolve_sot_fields(&problem, &[], false)
             .expect_err("deprecated wire variant must not enter SOT field resolution");
         assert!(sot_error
             .reasons

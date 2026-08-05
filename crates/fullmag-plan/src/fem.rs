@@ -2277,7 +2277,7 @@ pub(crate) fn plan_fem(
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fem)?;
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fem, &current_transports)?;
-    let sot = resolve_sot_fields(problem, &current_transports)?;
+    let sot = resolve_sot_fields(problem, &current_transports, true)?;
 
     let base_material =
         selected_material.expect("validation should have caught missing FEM material");

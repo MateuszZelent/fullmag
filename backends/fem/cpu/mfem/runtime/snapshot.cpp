@@ -206,7 +206,13 @@ bool context_snapshot_stats_mfem(
             rhs_current,
             max_rhs_current);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, rhs_current, max_rhs_current);
-        add_sot_rhs_aos(ctx, ctx.state.m_xyz, rhs_current, max_rhs_current);
+        add_sot_rhs_aos(
+            ctx,
+            ctx.state.m_xyz,
+            rhs_current,
+            max_rhs_current,
+            ctx.state.current_time,
+            ctx.zeeman.stage_start_time_s);
         zero_non_magnetic_nodes_aos(rhs_current, ctx.mesh.magnetic_node_mask);
         max_rhs_current = max_norm_aos(rhs_current);
     }

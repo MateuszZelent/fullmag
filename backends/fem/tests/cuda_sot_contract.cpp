@@ -189,7 +189,9 @@ void canonical_prescribed_sot_matches_cpu_and_independent_oracle()
         cpu_context,
         {1.0, 0.0, 0.0, 1.0, 0.0, 0.0},
         cpu_rhs,
-        cpu_max_rhs);
+        cpu_max_rhs,
+        0.0,
+        0.0);
     check_near(rhs_y[0], cpu_rhs[1], "CPU/GPU prescribed SOT damping-like parity");
     check_near(rhs_z[0], cpu_rhs[2], "CPU/GPU prescribed SOT field-like parity");
 

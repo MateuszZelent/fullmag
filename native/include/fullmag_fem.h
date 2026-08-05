@@ -181,6 +181,31 @@ typedef struct {
     uint64_t point_count;
 } fullmag_fem_time_dependence_desc;
 
+/*
+ * Append-only prescribed-SOT envelope descriptor.  Unlike the regional-field
+ * waveform, this descriptor carries the dimensionless amplitude explicitly so
+ * all canonical TimeEnvelopeIR variants retain their SI multiplier semantics.
+ * The envelope is evaluated at the RK stage time; time_origin is retained for
+ * the ABI so direct C callers can request stage-local evaluation explicitly.
+ */
+#define FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t kind;
+    uint32_t time_origin;
+    double amplitude;
+    double frequency_hz;
+    double phase_rad;
+    double offset;
+    double t_on_s;
+    double t_off_s;
+    double center_s;
+    double bandwidth_hz;
+    const fullmag_fem_time_point *points;
+    uint64_t point_count;
+} fullmag_fem_sot_envelope_desc;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -587,6 +612,8 @@ typedef struct {
     double                     sot_sigma[3];
     const uint8_t             *sot_active_node_mask;
     uint64_t                   sot_active_node_mask_len;
+    /* Append-only stage-time envelope extension. */
+    fullmag_fem_sot_envelope_desc sot_envelope;
 } fullmag_fem_plan_desc;
 
 /*

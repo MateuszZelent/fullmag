@@ -38,7 +38,86 @@ double norm3(const Vec3 &v)
     return vector_norm3(v[0], v[1], v[2]);
 }
 
+double stable_sinc_pi(double x)
+{
+    const double ax = std::abs(x);
+    if (ax <= 1.0e-4) {
+        const double pi2_x2 = (M_PI * x) * (M_PI * x);
+        return 1.0 - pi2_x2 / 6.0 + (pi2_x2 * pi2_x2) / 120.0;
+    }
+    return std::sin(M_PI * x) / (M_PI * x);
+}
+
+bool finite_time_points(const fullmag_fem_sot_envelope_desc &descriptor, std::string &error)
+{
+    if (descriptor.point_count == 0) {
+        error = "prescribed FEM SOT piecewise-linear envelope requires at least one point";
+        return false;
+    }
+    if (descriptor.points == nullptr) {
+        error = "prescribed FEM SOT envelope points are null";
+        return false;
+    }
+    for (uint64_t i = 0; i < descriptor.point_count; ++i) {
+        const auto &point = descriptor.points[i];
+        if (!std::isfinite(point.time_s) || !std::isfinite(point.value)) {
+            error = "prescribed FEM SOT envelope points must be finite";
+            return false;
+        }
+        if (i > 0 && !(point.time_s > descriptor.points[i - 1].time_s)) {
+            error = "prescribed FEM SOT envelope point times must be strictly increasing";
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+double evaluate_sot_envelope(
+    const SotRuntimeState &sot,
+    double evaluation_time_s,
+    double stage_start_time_s)
+{
+    const double time_s = sot.envelope_time_origin == FULLMAG_FEM_TIME_STAGE_LOCAL
+        ? evaluation_time_s - stage_start_time_s
+        : evaluation_time_s;
+    switch (sot.envelope_kind) {
+    case FULLMAG_FEM_TIME_CONSTANT:
+        return sot.envelope_value;
+    case FULLMAG_FEM_TIME_SINUSOIDAL:
+        return sot.envelope_offset + sot.envelope_amplitude * std::sin(
+            2.0 * M_PI * sot.envelope_frequency_hz * time_s + sot.envelope_phase_rad);
+    case FULLMAG_FEM_TIME_PULSE:
+        return time_s >= sot.envelope_t_on_s && time_s < sot.envelope_t_off_s
+            ? sot.envelope_amplitude
+            : 0.0;
+    case FULLMAG_FEM_TIME_PIECEWISE_LINEAR: {
+        if (sot.envelope_point_times_s.empty()) {
+            return 0.0;
+        }
+        if (time_s <= sot.envelope_point_times_s.front()) {
+            return sot.envelope_point_values.front();
+        }
+        if (time_s >= sot.envelope_point_times_s.back()) {
+            return sot.envelope_point_values.back();
+        }
+        const auto upper = std::upper_bound(
+            sot.envelope_point_times_s.begin(), sot.envelope_point_times_s.end(), time_s);
+        const size_t upper_index = static_cast<size_t>(upper - sot.envelope_point_times_s.begin());
+        const size_t lower_index = upper_index - 1u;
+        const double u = (time_s - sot.envelope_point_times_s[lower_index]) /
+            (sot.envelope_point_times_s[upper_index] - sot.envelope_point_times_s[lower_index]);
+        return sot.envelope_point_values[lower_index] + u *
+            (sot.envelope_point_values[upper_index] - sot.envelope_point_values[lower_index]);
+    }
+    case FULLMAG_FEM_TIME_SINC_PULSE:
+        return sot.envelope_offset + sot.envelope_amplitude * stable_sinc_pi(
+            sot.envelope_bandwidth_hz * (time_s - sot.envelope_center_s));
+    default:
+        return 0.0;
+    }
+}
 
 bool initialize_sot_plan_fields(
     Context &ctx,
@@ -67,6 +146,53 @@ bool initialize_sot_plan_fields(
         error = "prescribed FEM SOT envelope value must be finite";
         return false;
     }
+    const auto &envelope = plan.sot_envelope;
+    if (envelope.abi_version != 0 &&
+        envelope.abi_version != FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION) {
+        error = "prescribed FEM SOT envelope ABI version is unsupported";
+        return false;
+    }
+    if (envelope.abi_version != 0 &&
+        envelope.struct_size < sizeof(fullmag_fem_sot_envelope_desc)) {
+        error = "prescribed FEM SOT envelope descriptor is truncated";
+        return false;
+    }
+    const uint32_t envelope_kind = envelope.abi_version == 0
+        ? FULLMAG_FEM_TIME_CONSTANT
+        : envelope.kind;
+    if (envelope_kind > FULLMAG_FEM_TIME_SINC_PULSE) {
+        error = "prescribed FEM SOT envelope kind is unsupported";
+        return false;
+    }
+    if (envelope.time_origin != FULLMAG_FEM_TIME_STAGE_LOCAL &&
+        envelope.time_origin != FULLMAG_FEM_TIME_ABSOLUTE) {
+        error = "prescribed FEM SOT envelope time origin is unsupported";
+        return false;
+    }
+    if (envelope_kind == FULLMAG_FEM_TIME_SINUSOIDAL &&
+        (!std::isfinite(envelope.amplitude) || !std::isfinite(envelope.frequency_hz) ||
+         envelope.frequency_hz < 0.0 || !std::isfinite(envelope.phase_rad) ||
+         !std::isfinite(envelope.offset))) {
+        error = "prescribed FEM SOT sinusoidal envelope parameters are invalid";
+        return false;
+    }
+    if (envelope_kind == FULLMAG_FEM_TIME_PULSE &&
+        (!std::isfinite(envelope.amplitude) || !std::isfinite(envelope.t_on_s) ||
+         !std::isfinite(envelope.t_off_s) || envelope.t_off_s <= envelope.t_on_s)) {
+        error = "prescribed FEM SOT pulse envelope parameters are invalid";
+        return false;
+    }
+    if (envelope_kind == FULLMAG_FEM_TIME_PIECEWISE_LINEAR &&
+        !finite_time_points(envelope, error)) {
+        return false;
+    }
+    if (envelope_kind == FULLMAG_FEM_TIME_SINC_PULSE &&
+        (!std::isfinite(envelope.amplitude) || !std::isfinite(envelope.center_s) ||
+         !std::isfinite(envelope.bandwidth_hz) || envelope.bandwidth_hz <= 0.0 ||
+         !std::isfinite(envelope.offset))) {
+        error = "prescribed FEM SOT sinc envelope parameters are invalid";
+        return false;
+    }
 
     const Vec3 sigma = {plan.sot_sigma[0], plan.sot_sigma[1], plan.sot_sigma[2]};
     const double sigma_norm = norm3(sigma);
@@ -81,6 +207,28 @@ bool initialize_sot_plan_fields(
     ctx.sot.xi_fl = plan.sot_xi_fl;
     ctx.sot.thickness = plan.sot_thickness;
     ctx.sot.envelope_value = plan.sot_envelope_value;
+    ctx.sot.envelope_kind = envelope_kind;
+    ctx.sot.envelope_time_origin = envelope.abi_version == 0
+        ? FULLMAG_FEM_TIME_ABSOLUTE
+        : envelope.time_origin;
+    ctx.sot.envelope_amplitude = envelope.abi_version == 0
+        ? plan.sot_envelope_value
+        : envelope.amplitude;
+    ctx.sot.envelope_frequency_hz = envelope.frequency_hz;
+    ctx.sot.envelope_phase_rad = envelope.phase_rad;
+    ctx.sot.envelope_offset = envelope.offset;
+    ctx.sot.envelope_t_on_s = envelope.t_on_s;
+    ctx.sot.envelope_t_off_s = envelope.t_off_s;
+    ctx.sot.envelope_center_s = envelope.center_s;
+    ctx.sot.envelope_bandwidth_hz = envelope.bandwidth_hz;
+    if (envelope_kind == FULLMAG_FEM_TIME_PIECEWISE_LINEAR) {
+        ctx.sot.envelope_point_times_s.reserve(envelope.point_count);
+        ctx.sot.envelope_point_values.reserve(envelope.point_count);
+        for (uint64_t i = 0; i < envelope.point_count; ++i) {
+            ctx.sot.envelope_point_times_s.push_back(envelope.points[i].time_s);
+            ctx.sot.envelope_point_values.push_back(envelope.points[i].value);
+        }
+    }
     ctx.sot.sigma = {
         sigma[0] / sigma_norm,
         sigma[1] / sigma_norm,
@@ -109,13 +257,20 @@ void add_sot_rhs_aos(
     const Context &ctx,
     const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz,
-    double &max_rhs)
+    double &max_rhs,
+    double evaluation_time_s,
+    double stage_start_time_s)
 {
     if (!ctx.sot.enabled) {
         return;
     }
 
     const Vec3 sigma = ctx.sot.sigma;
+    const double envelope_value = evaluate_sot_envelope(
+        ctx.sot, evaluation_time_s, stage_start_time_s);
+    if (!std::isfinite(envelope_value)) {
+        return;
+    }
     const double gamma_e = ctx.material_fields.material.gyromagnetic_ratio / kSotMu0;
     const size_t n = m_xyz.size() / 3u;
     for (size_t i = 0; i < n; ++i) {
@@ -138,7 +293,7 @@ void add_sot_rhs_aos(
             i,
             ctx.material_fields.material.damping);
         const double omega_base = gamma_e * kHbar *
-            (ctx.sot.current_density_am2 * ctx.sot.envelope_value) /
+            (ctx.sot.current_density_am2 * envelope_value) /
             (2.0 * kExactElectronCharge * ms * ctx.sot.thickness);
         const double omega_dl = omega_base * ctx.sot.xi_dl;
         const double omega_fl = omega_base * ctx.sot.xi_fl;

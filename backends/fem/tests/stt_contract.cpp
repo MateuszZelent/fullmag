@@ -489,7 +489,7 @@ void prescribed_sot_rhs_matches_si_oracle_and_current_reversal() {
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
     double max_rhs = 0.0;
-    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs, 0.0, 0.0);
 
     const double gamma_e = kGammaMu0Test / kMu0Test;
     const double omega_base = gamma_e * kHbarTest * ctx.sot.current_density_am2 *
@@ -508,7 +508,7 @@ void prescribed_sot_rhs_matches_si_oracle_and_current_reversal() {
 
     ctx.sot.current_density_am2 = -ctx.sot.current_density_am2;
     std::vector<double> reversed(3u, 0.0);
-    fullmag::fem::add_sot_rhs_aos(ctx, m, reversed, max_rhs);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, reversed, max_rhs, 0.0, 0.0);
     check_near(reversed[1], -rhs[1], std::abs(rhs[1]) * 1e-12, "SOT signed current reversal y");
     check_near(reversed[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "SOT signed current reversal z");
 }
@@ -519,7 +519,7 @@ void prescribed_sot_rhs_respects_magnetic_and_target_masks() {
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
     double max_rhs = 0.0;
-    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs, 0.0, 0.0);
     check_near(rhs[0], 0.0, 0.0, "SOT target mask x");
     check_near(rhs[1], 0.0, 0.0, "SOT target mask y");
     check_near(rhs[2], 0.0, 0.0, "SOT target mask z");
@@ -527,7 +527,7 @@ void prescribed_sot_rhs_respects_magnetic_and_target_masks() {
     ctx.sot.active_node_mask.clear();
     ctx.mesh.magnetic_node_mask = {0u};
     rhs.assign(3u, 0.0);
-    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs, 0.0, 0.0);
     check_near(rhs[0], 0.0, 0.0, "SOT magnetic mask x");
     check_near(rhs[1], 0.0, 0.0, "SOT magnetic mask y");
     check_near(rhs[2], 0.0, 0.0, "SOT magnetic mask z");
@@ -561,6 +561,53 @@ void prescribed_sot_plan_import_validates_append_only_descriptor() {
         "FEM SOT descriptor with a short node mask must fail closed");
     check(error.find("sot_active_node_mask") != std::string::npos,
           "FEM SOT short-mask error must identify the field");
+}
+
+void prescribed_sot_envelope_is_evaluated_at_rk_stage_time() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    fullmag_fem_plan_desc plan{};
+    plan.has_prescribed_sot = 1;
+    plan.sot_formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    plan.sot_current_density_am2 = 1.0e11;
+    plan.sot_xi_dl = 0.1;
+    plan.sot_thickness = 1.0e-9;
+    plan.sot_sigma[1] = 1.0;
+    plan.sot_envelope.abi_version = FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION;
+    plan.sot_envelope.struct_size = sizeof(fullmag_fem_sot_envelope_desc);
+    plan.sot_envelope.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+    plan.sot_envelope.time_origin = FULLMAG_FEM_TIME_STAGE_LOCAL;
+    plan.sot_envelope.amplitude = 2.0;
+    plan.sot_envelope.frequency_hz = 1.0;
+    plan.sot_envelope.offset = 0.5;
+    std::string error;
+    check(
+        fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "stage-time SOT envelope descriptor must import");
+    check_near(
+        fullmag::fem::evaluate_sot_envelope(ctx.sot, 0.25, 0.0),
+        2.5,
+        1e-14,
+        "stage-time sinusoidal SOT envelope");
+    check_near(
+        fullmag::fem::evaluate_sot_envelope(ctx.sot, 0.35, 0.10),
+        2.5,
+        1e-14,
+        "stage-local sinusoidal SOT envelope");
+
+    const fullmag_fem_time_point points[2] = {{0.0, 0.0}, {1.0, 2.0}};
+    plan.sot_envelope.kind = FULLMAG_FEM_TIME_PIECEWISE_LINEAR;
+    plan.sot_envelope.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    plan.sot_envelope.points = points;
+    plan.sot_envelope.point_count = 2;
+    check(
+        fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "piecewise-linear SOT envelope descriptor must import");
+    check_near(
+        fullmag::fem::evaluate_sot_envelope(ctx.sot, 0.25, 0.0),
+        0.5,
+        1e-14,
+        "piecewise-linear SOT envelope");
 }
 
 fullmag::fem::Context make_slonczewski_context() {
@@ -1149,5 +1196,6 @@ int main() {
     prescribed_sot_rhs_matches_si_oracle_and_current_reversal();
     prescribed_sot_rhs_respects_magnetic_and_target_masks();
     prescribed_sot_plan_import_validates_append_only_descriptor();
+    prescribed_sot_envelope_is_evaluated_at_rk_stage_time();
     return 0;
 }

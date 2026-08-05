@@ -870,7 +870,7 @@ pub(crate) fn plan_fdm(
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fdm)?;
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fdm, &current_transports)?;
-    let sot = resolve_sot_fields(problem, &current_transports)?;
+    let sot = resolve_sot_fields(problem, &current_transports, false)?;
 
     let magnet = &problem.magnets[0];
     let material = problem

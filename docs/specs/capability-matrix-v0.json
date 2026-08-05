@@ -296,7 +296,7 @@
       "execution_mode_scope": ["strict", "extended"],
       "workload_scope": "Canonical signed-current macrospin with SI/Gilbert/mask/stage-time requirements.",
       "validated_workloads": [],
-      "notes": "Lane-specific evidence: FDM CPU has the independent reference algebra, FDM CUDA has bounded managed FP64 trajectory/scaling evidence, FEM CPU has a managed native MFEM one-step SI-oracle/Rust-reference parity contract, and FEM GPU has a managed CUDA interaction/native one-step SI-oracle parity contract with signed current, constant envelope, target mask, H_eff, max-RHS, and current-reversal checks. FP32, stage-time envelopes, nonlinear sweeps, FEM multi-grid/convergence, FEM↔FDM continuum parity, and direct or inverse SHE qualification remain open; legacy executors are not v1 evidence."
+      "notes": "Lane-specific evidence: FDM CPU has the independent reference algebra, FDM CUDA has bounded managed FP64 trajectory/scaling evidence, FEM CPU has a managed native MFEM one-step SI-oracle/Rust-reference parity contract, and FEM GPU has managed CUDA interaction/native one-step SI-oracle parity contracts with signed current, constant or sinusoidal stage-time envelope, target mask, H_eff, max-RHS, and current-reversal checks. FP32, event alignment/rollback, tabulated artifacts, nonlinear sweeps, FEM multi-grid/convergence, FEM↔FDM continuum parity, and direct or inverse SHE qualification remain open; legacy executors are not v1 evidence."
     },
     {
       "id": "spin_torque.zhang_li.fullmag.v1", "capability_id": "spin_torque.zhang_li", "formula_version": "zhang_li.fullmag.v1",

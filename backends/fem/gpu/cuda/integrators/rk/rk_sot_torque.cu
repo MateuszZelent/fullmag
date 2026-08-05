@@ -9,6 +9,7 @@
 
 #include "context.hpp"
 #include "gpu/cuda/interactions/sot/sot_kernels.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
 
 #include <cuda_runtime.h>
 
@@ -36,6 +37,7 @@ bool gpu_rk_add_prescribed_sot_torque(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     std::string &reason)
 {
     if (!ctx.sot.enabled) {
@@ -67,7 +69,7 @@ bool gpu_rk_add_prescribed_sot_torque(
         ctx.sot.current_density_am2,
         ctx.sot.xi_dl,
         ctx.sot.xi_fl,
-        ctx.sot.envelope_value,
+        evaluate_sot_envelope(ctx.sot, evaluation_time_s, ctx.zeeman.stage_start_time_s),
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.sot.thickness,
         ctx.sot.sigma[0],

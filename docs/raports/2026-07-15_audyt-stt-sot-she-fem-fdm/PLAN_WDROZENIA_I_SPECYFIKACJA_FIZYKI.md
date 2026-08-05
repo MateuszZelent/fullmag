@@ -7897,3 +7897,93 @@ zmiana podnosi tylko wykonywalną granicę FEM GPU SOT. Następny etap planu to
 propagacja czasu stage do deskryptora/kernela bez host synchronisation,
 następnie rollback i kontrolowana zbieżność na jednym serializowanym artefakcie
 siatki CPU/GPU.
+
+## 32.77. FEM prescribed SOT: stage-time envelope descriptor i porównanie CPU/GPU (2026-08-05)
+
+### 32.77.1. Zakres implementacji
+
+Zrealizowano następny, wąsko zdefiniowany etap FEM SOT: obwiednia źródła jest
+teraz częścią append-only deskryptora ABI i jest oceniana dla rzeczywistego
+czasu etapu jawnego RK,
+
+```text
+t_i = t_n + c_i dt.
+```
+
+Deskryptor `fullmag_fem_sot_envelope_desc` ma własną wersję ABI, rozmiar,
+pochodzenie czasu i jawne pola dla stałej, sinusoidalnej, impulsowej,
+piecewise-linear oraz sinc. Native FEM CPU waliduje descriptor i kopiuje PWL
+punkty do własności `Context`; ewaluator ma stałą `sinc(0)=1`, interpolację
+liniową wewnątrz przedziału, hold na końcach PWL oraz półotwarty przedział
+impulsu `[t_on,t_off)`. `Tabulated` pozostaje fail-closed, ponieważ obecny
+runner nie materializuje jeszcze artefaktu do bufora z właścicielem runtime.
+
+CPU i GPU korzystają z tego samego czasu etapu. GPU ocenia wyłącznie jeden
+skalarny mnożnik obwiedni na hoście i przekazuje go do istniejącej ścieżki
+device-resident direct torque; nie kopiuje `m`, maski, pól materiałowych ani
+RHS do hosta i nie wprowadza CPU fallbacku. Nie jest to jeszcze event alignment:
+integrator nadal może przekroczyć w jednym trial step węzeł impulsu/PWL, a
+cursor/stan zdarzenia nie jest częścią rekordu rollback.
+
+### 32.77.2. Planner, Python/IR i ABI
+
+- FEM planner dopuszcza nie-stałe obwiednie dla ograniczonego native lane;
+  FDM planner pozostaje fail-closed dla tych samych wariantów, dopóki jego
+  własny kontrakt stage-time nie zostanie zrealizowany.
+- Runner mapuje `TimeEnvelopeIR` na descriptor bez zmiany jednostek
+  (`amplitude`, `offset` są bezwymiarowe; częstotliwość w Hz; czasy w s),
+  utrzymuje żywotność wektora PWL do zakończenia konstrukcji native backendu
+  i jawnie odrzuca `Tabulated` bez materializacji artefaktu.
+- Nowe pola są dopisane za dotychczasowym ogonem STT planu. Test ABI sprawdza
+  kolejność, wersję i `struct_size`; nie zmienia się prefiks starszych
+  klientów.
+- Publiczny Python i `ProblemIR` już posiadają wszystkie warianty obwiedni;
+  ten etap propaguje je do wykonawczego FEM CPU/GPU tylko w opisanym zakresie.
+
+### 32.77.3. Wykonane testy i porównanie FEM
+
+Wykonano zarządzaną receptę container-backed na trwałym storage
+`/zfn2/mateuszz/git/fullmag`:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-native-contract
+```
+
+Przeszły wszystkie dotychczasowe kontrakty stałej obwiedni oraz dwa nowe testy
+na tym samym canonical descriptorze:
+
+```text
+native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_cpu ... ok
+native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_gpu ... ok
+```
+
+Workload ma wymianę jako jedyny niezerowy składnik pola, jednolite
+`m=(1,0,0)`, `J=1e11 A/m^2`, `xi_DL=0.12`, `xi_FL=-0.02`,
+`t_F=1.5e-9 m`, `sigma=(0,1,0)` oraz sinusoidę
+`1+0.5 sin(2 pi 10^12 t)`. Niezależny orakl SI liczy oba etapy Heuna:
+`k1` przy `t=0` i `k2` przy `t=dt=2.5e-13 s`; native FEM CPU oraz rzeczywisty
+FEM CUDA na urządzeniu NVIDIA przechodzą przy porównaniu pełnego `m`,
+`H_eff=0` dla tego workloadu i `max_rhs_amplitude`. To jest bezpośrednie
+porównanie FEM CPU/GPU z tą samą fizyką i tym samym czasem etapu, nie tylko
+test kodu FDM.
+
+Weryfikacja nie jest jeszcze dowodem ogólnej zgodności FEM CPU↔GPU ani
+FEM↔FDM. Nie zamyka: event-knot clipping, rollback po odrzuconym kroku,
+materializacji `Tabulated`, wszystkich integratorów RK, FP32, trajektorii
+wielokrokowej, wspólnego serializowanego artefaktu siatki, trzech poziomów `h`,
+sweepu `dt`, zgodności pełnego pola i wspólnego limitu kontinuum FEM↔FDM.
+
+### 32.77.4. Status i wpływ na ocenę celu
+
+| Zakres | Status po §32.77 | Granica dowodu |
+|---|---|---|
+| FEM CPU prescribed SOT | `reference_executable` | stała oraz nie-tablicowa obwiednia stage-time, jeden krok Heuna, orakl SI/Rust/native |
+| FEM GPU prescribed SOT | `reference_executable` | rzeczywiste CUDA, ta sama obwiednia stage-time, jeden krok Heuna, bez fallbacku |
+| FEM CPU↔GPU trajektoria | `not_qualified` | brak wspólnej siatki, długiej trajektorii i pełnego pola |
+| FEM↔FDM | `equivalence_established=false` | brak wspólnego artefaktu, h/dt convergence i continuum limit |
+| SHE/SOT capability | `prescribed_sot` only | prescribed SOT nie jest solverem direct/inverse SHE |
+
+Ocena pozostaje **88% implementacji / 62% gotowości produkcyjnej**. Stage-time
+descriptor i rzeczywiste testy FEM CPU/GPU zwiększają dowód wykonywalności, ale
+nie dają podstaw do promocji `validated_workloads` ani deklaracji produkcyjnej
+zgodności.
