@@ -469,6 +469,16 @@ scalar-to-field-mean differences are below `3e-17`. A scalar row is therefore
 usable for this run, while the CPU accepted-step publication still needs a full
 trajectory gate.
 
+The FEM/FDM field comparator treats the final physical time as a hard
+comparability precondition. It still emits the numerical metrics when the
+caller supplies mismatched snapshots, so that the discrepancy can be
+diagnosed, but it marks the report `qualification.status="rejected"` and
+`equivalence_established=false` when
+$\lvert t_{\mathrm{FEM}}-t_{\mathrm{FDM}}\rvert$ exceeds the declared tolerance.
+Such metrics must not be interpreted as a cross-backend error estimate. A
+matched-time report remains `diagnostic` until the common equilibrium, operator,
+mesh, and $h/\Delta t$ convergence gates are satisfied.
+
 (implementation-mapping)=
 ## 7. Implementation mapping
 

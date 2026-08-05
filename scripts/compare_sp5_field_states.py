@@ -120,6 +120,19 @@ def compare(fdm_run_dir: Path, fem_run_dir: Path, time_tolerance: float) -> dict
     fem = _load_fem(fem_run_dir, fdm.grid)
     same_final_time = abs(float(fdm.times[-1]) - float(fem.times[-1])) <= time_tolerance
     metrics = compare_magnetization_textures(fem, fdm, high_error_threshold=1.0e-3)
+    qualification = {
+        "status": "diagnostic" if same_final_time else "rejected",
+        "equivalence_established": False,
+        "reason": (
+            "volume-consistent tet4 restriction and scalar endpoint metrics do not replace "
+            "h/dt convergence, common equilibrium, or operator parity"
+            if same_final_time
+            else (
+                "final physical times differ beyond the declared tolerance; field metrics "
+                "are not comparable"
+            )
+        ),
+    }
     return {
         "schema_version": "sp5.fem_fdm_field_comparison.v2",
         "scope": "final_field_same_time",
@@ -131,14 +144,7 @@ def compare(fdm_run_dir: Path, fem_run_dir: Path, time_tolerance: float) -> dict
         "time_tolerance_s": time_tolerance,
         "fem_sampling": dict(fem.metadata),
         "metrics": metrics.to_dict(),
-        "qualification": {
-            "status": "diagnostic",
-            "equivalence_established": False,
-            "reason": (
-                "volume-consistent tet4 restriction and scalar endpoint metrics do not replace "
-                "h/dt convergence, common equilibrium, or operator parity"
-            ),
-        },
+        "qualification": qualification,
     }
 
 

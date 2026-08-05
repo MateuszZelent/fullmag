@@ -10,7 +10,7 @@
 **Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@b03639a96`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@8bd36b8cf`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
@@ -8406,3 +8406,38 @@ Oersteda: nadal brakuje produkcyjnego solved-current chain, skin/MQS,
 FEM↔FDM continuum, pełnej ścieżki Python/ProblemIR/UI oraz walidacji
 zewnętrznymi solverami. Ocena celu pozostaje konserwatywnie **88%
 implementacji / 62% gotowości produkcyjnej**.
+
+## 32.86. Fail-closed dla niedopasowanego czasu w porównaniu pola FEM↔FDM (2026-08-05)
+
+### 32.86.1. Zidentyfikowany błąd bramy
+
+`scripts/compare_sp5_field_states.py` obliczał metryki także dla snapshotów o
+różnym czasie końcowym. Raport zawierał `same_final_time=false`, ale pozostawał
+ze statusem `diagnostic`, przez co konsument mógł omyłkowo potraktować wynik
+jak błąd między solverami. Jest to błąd kwalifikacji obserwabli, nie zmiana
+równań FEM/FDM.
+
+### 32.86.2. Korekta i test regresyjny
+
+Comparator zachowuje metryki diagnostyczne, lecz wybiera teraz:
+
+- `qualification.status="rejected"`, gdy
+  `abs(t_FEM-t_FDM) > time_tolerance_s`,
+- `equivalence_established=false` w obu przypadkach,
+- jawny powód: `final physical times differ beyond the declared tolerance`.
+
+Dodano `scripts/test_compare_sp5_field_states.py`, który przez rzeczywisty
+tet4-to-Cartesian volume restriction sprawdza zarówno odrzucenie różnych
+czasów, jak i zachowanie statusu `diagnostic` dla czasu zgodnego. Test wykonano:
+
+```text
+PYTHONPATH=packages/fullmag-py/src:. python3 -m unittest scripts.test_compare_sp5_field_states -v
+Ran 2 tests
+OK
+```
+
+Zmiana nie awansuje SP5 ani FEM↔FDM equivalence. Usuwa natomiast możliwość
+publikacji fizycznie nieporównywalnego endpointu jako poprawnego artefaktu
+diagnostycznego. Nadal wymagane są wspólny stan równowagowy, zgodność operatora,
+trzy poziomy `h`, kontrola `dt`, FEM GPU oraz release-clean managed rerun.
+Globalna ocena pozostaje **88% implementacji / 62% gotowości produkcyjnej**.
