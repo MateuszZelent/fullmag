@@ -8671,7 +8671,10 @@ bounded ścieżki publikuje:
 
 Digest jest kanonicznie liczony z little-endian `f64` oraz jawnego payloadu
 siatki; test `solved_current_oersted_identity_digests_are_stable_and_source_bound`
-sprawdza stabilność i zależność od maski źródła. To poprawia reprodukowalność
+sprawdza stabilność i zależność od maski źródła. Ten test został dołączony do
+managed recepty `FULLMAG_RUNTIME_PRUNE=0 just
+verify-fem-solved-current-oersted-reference`, która po zmianie ponownie
+przeszła w obrazie MFEM/HYPRE. To poprawia reprodukowalność
 bounded slice, ale nie zmienia jego kwalifikacji: `source_kind` jest jawnie
 `solved_current_h1_nodal_midpoint_reference`, a nie `ConservativeCurrentView`
 RT0/H(div). Nie ma więc jeszcze certyfikatu closure, stage revision ani
