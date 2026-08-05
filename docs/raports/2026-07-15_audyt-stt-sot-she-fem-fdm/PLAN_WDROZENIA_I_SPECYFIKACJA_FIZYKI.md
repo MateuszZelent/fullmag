@@ -10,7 +10,7 @@
 **Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@1c91533cb`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@b03639a96`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
@@ -164,8 +164,8 @@ kontraktem fizycznym. Żaden z tych faktów nie oznacza ilościowej zgodności.
 | Python/IR/OpenAPI/UI execution request | usunięto nieobsługiwane `hybrid` z UI, modelu authoringu, Rust API i wygenerowanego OpenAPI; 25 testów Inspector oraz 68 testów `fullmag-authoring` przechodzi | drift `hybrid` zamknięty; pełny leaf-by-leaf parity nadal otwarty |
 | FDM prescribed SOT | `just verify-fdm-prescribed-sot-native-contract`: algebra, CUDA FP64/FP32 i `cargo +nightly check --features cuda` przechodzą | natywny contract gate `pass`; brak pełnej kwalifikacji produktu |
 | FDM dynamiczny Oersted | `just verify-fdm-oersted-native-contract`: stage-time, rollback, adaptive, FSAL, ABM3 i axis oracle przechodzą | natywny contract gate `pass`; nie jest to jeszcze ogólny current-solve/airbox gate |
-| FEM OE-T0/OE-F1/OE-F2 CPU | zarządzane `just verify-fem-oersted-oet0-cpu-contract`, `...oef1...`, `...oef2...` przechodzą; wszystkie zawierają current-view MPI n1/n2 i tetra/direct/vector-potential contracts | `reference_executable` dla operator-contract slice; airbox, RT0/KKT, MPI race/skalowanie i zbieżność nadal otwarte |
-| FEM OE TSan | instrumentation audit przechodzi, runtime kończy się `ThreadSanitizer: unexpected memory mapping` | blokada środowiskowa; **nie** dowód błędu fizyki |
+| FEM OE-T0/OE-F1/OE-F2 CPU | świeże zarządzane `just verify-fem-oersted-oet0-cpu-contract` przechodzi: serial, `mpiexec -n 1`, `-n 2` i byte-identity; OE-F1/OE-F2 operator contracts również pozostają zielone | `reference_executable` dla operator-contract slice; airbox, distributed scaling, target-space convergence i pełny solved-current runtime nadal otwarte |
+| FEM OE TSan | osobny managed `fem-cpu-tsan` z `seccomp:unconfined` tylko dla TSan, `setarch x86_64 -R`, `just verify-fem-oersted-oet0-tsan-cpu-contract`: 1/1 instrumented contract passed | bounded race-sanitizer evidence; nie jest to dowód distributed-MPI race coverage ani produkcyjnej skalowalności |
 | M3 FDM CPU/double/strict | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m3-reference CARGO_INCREMENTAL=0 just verify-fdm-transient-spin-m3-reference`: `RC:0`; public subprocess resume, 15 komend Rust (26 przypadków testowych) i `11 passed` Python | `reference_executable` gate zamknięty dla jawnego seed/noise workloadu |
 | FEM STT | Po przebudowie zarządzanego obrazu (`just build target=fem-gpu-runtime`) katalog PETSc/SLEPc jest obecny; świeże `just verify-fem-stt-native-contract` buduje `fem_stt_contract` i przechodzi test ABI `versioned_stt_extension_is_append_only_after_legacy_plan_prefix` | `reference_executable` dla natywnego kontraktu/ABI; brak awansu GPU trajectory, pełnej integracji runtime i `validated` |
 | FEM prescribed SOT | `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-native-contract`: native CPU reference, CUDA interaction oracle i rzeczywisty native FEM GPU one-step przechodzą na stałym envelope | `reference_executable` CPU/GPU tylko dla bounded FP64 one-step; stage-time envelope, multi-grid, long trajectory, FEM↔FDM i `validated` pozostają otwarte |
@@ -2809,7 +2809,9 @@ Nie wolno łączyć PR-00 z masową implementacją. Physics publication i ADR mu
 - [ ] Stage-consistent coupling.
 - [ ] Rejected-step rollback.
 - [ ] Independent Oersted oracle.
-- [ ] OE-T0 jest ważonym RT0/KKT z exact-rank/component i real-MPI certificate.
+- [x] OE-T0 jest ważonym RT0/KKT z exact-rank/component i real-MPI certificate
+      dla zarządzanego bounded CPU reference; produkcyjny distributed/GPU lane
+      pozostaje niezakwalifikowany.
 - [ ] OE-F1 ma zbieżną singular/near/far tetra quadrature bez self deletion.
 - [ ] OE-F2 ma właściwe `H_0(curl) x H1_0`, compatibility i harmonic constraints.
 - [ ] FDM/FEM convergence.
@@ -2943,10 +2945,12 @@ nowego capability, ale jedna zatwierdzona semantyka jest gotowa do implementacji
 2. **M1 steady reference:** replay Python/IR/reference FDM i ograniczony FEM
    conforming H1/P1. Nazwać zakres dokładnie; nie deklarować broken/mortar,
    native FDM production ani GPU bez osobnego dowodu.
-3. **OE-T0:** zastąpić końcowe `ProjectCoefficient` ważonym RT0/KKT, naprawić
-   rank semantics komponentów terminalowych, zrealizować rzeczywisty globalny
-   MPI path i niezależny certificate. Najpierw unit/exact-rank, następnie
-   managed OE-T0 i TSAN; brak zieleni blokuje OE-F1/OE-F2.
+3. **OE-T0 bounded reference (zamknięte 2026-08-05):** końcowe źródło jest
+   ważonym RT0/KKT z exact-rank/component semantics, globalnym MPI
+   gather/solve/broadcast i niezależnym certyfikatem. Zielone są unit/exact-rank,
+   managed CPU OE-T0 z `-n 1/-n 2` byte identity oraz izolowany TSan. Otwarte
+   pozostają distributed sparse KKT, skalowanie, trzy poziomy zbieżności i
+   integracja solved-current z pełnym Oerstedem.
 4. **OE-F1:** wdrożyć affine-RT0 tetra quadrature i consistent projection.
    Uruchomić singular/near/far convergence oraz managed OE-F1.
 5. **OE-F2:** wdrożyć relative-boundary exact sequence, topology/cohomology,
@@ -8344,3 +8348,61 @@ Gate zamyka brak dowodu, że SOT jest testowane wyłącznie przez Heuna. Nie
 awansuje jeszcze `validated_workloads`, FP32, transportu SHE, solved-current
 Oersteda ani continuum FEM↔FDM; globalna ocena pozostaje **88% implementacji /
 62% gotowości produkcyjnej**.
+
+## 32.85. FEM OE-T0: realny MPI certificate i uruchamialny TSan gate (2026-08-05)
+
+### 32.85.1. Zakres korekty
+
+Poprzedni snapshot planu był nieaktualny: kod OE-T0 miał już ważoną projekcję
+`RT0/H(div)`/KKT, ale tabela nadal wykazywała `oersted-oet0` i TSan jako
+nieudane. Ponownie uruchomiono pełny managed CPU lane w obrazie MFEM 4.7 +
+HYPRE 2.32 z MPI. CMake potwierdził `MFEM_USE_MPI`, a test wymusił globalny
+rank-0 gather/solve/broadcast; lokalne partition IDs nie są używane jako
+substytut globalnego certyfikatu.
+
+### 32.85.2. Wyniki managed
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oet0-cpu-contract
+exit=0
+
+fem_conservative_current_view_contract ............ Passed
+fem_conservative_current_view_mpi_n1 .............. Passed
+fem_conservative_current_view_mpi_n2 .............. Passed
+fem_conservative_current_view_mpi_byte_identity ... Passed
+100% tests passed, 0 tests failed out of 4
+```
+
+Pierwszy TSan start na zwykłym serwisie ujawnił ograniczenie środowiskowe
+`ThreadSanitizer: unexpected memory mapping` (proces kończył się przed `main`).
+Nie zmieniono z tego powodu fizyki ani testu. Dodano izolowany `fem-cpu-tsan`,
+który dziedziczy CPU-only image, ma `seccomp:unconfined` wyłącznie dla
+sanitizera, a runner uruchamia CTest przez `setarch x86_64 -R`; zwykły
+`fem-cpu` nadal używa domyślnego profilu bezpieczeństwa.
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oet0-tsan-cpu-contract
+exit=0
+
+fem_conservative_current_view_contract ... Passed
+100% tests passed, 0 tests failed out of 1
+```
+
+Audyt recept i konfiguracji ma `16/16` testów zielonych. TSan nie uruchamia
+MPI ani kodu GPU; obejmuje tylko instrumentowane źródła OE-T0 i raportuje błąd
+race jako twardą porażkę.
+
+### 32.85.3. Granica kwalifikacji
+
+| Zakres | Status | Pozostaje otwarte |
+|---|---|---|
+| OE-T0 CPU serial + real MPI `-n 1/-n 2`, byte-identical records/certificate | `reference_executable` | distributed sparse KKT, skalowanie i memory/iteration study |
+| OE-T0 CPU TSan, instrumentowane production TUs, brak raportu race | `reference_executable` | multi-rank race/interleaving, stress workload i platform portability |
+| OE-F1/F2 zależne od zaakceptowanego snapshotu OE-T0 | `reference_executable` operator-contract slice | singular/near/far convergence, airbox continuum and target-space study |
+| FEM GPU OE-T0 | `unsupported`/`semantic_only` | device-resident RT0/KKT, parity and managed GPU evidence |
+
+To koryguje status FEM w planie, ale nie awansuje ogólnej capability dynamicznego
+Oersteda: nadal brakuje produkcyjnego solved-current chain, skin/MQS,
+FEM↔FDM continuum, pełnej ścieżki Python/ProblemIR/UI oraz walidacji
+zewnętrznymi solverami. Ocena celu pozostaje konserwatywnie **88%
+implementacji / 62% gotowości produkcyjnej**.
