@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve; standalone OE-T0/OE-F1/OE-F2 CPU operator contracts pass, but their provenance-preserving end-to-end integration remains open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve and publishes field/source digests; standalone OE-T0/OE-F1/OE-F2 CPU operator contracts pass, but their provenance-preserving end-to-end integration remains open."
     },
     {
       "solver": "FEM",
@@ -126,6 +126,12 @@
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
       "symbol": "solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current",
       "responsibility": "Verify finite field values and exact linear sign reversal for the bounded tet4 reference."
+    },
+    {
+      "id": "fem-oersted-artifact-provenance",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "execute_native_fem_steady_transport_plans; sha256_f64_slice; sha256_vec3_slice; sha256_mesh_source",
+      "responsibility": "Publish the bounded solved-current Oersted field and stable field/source/mesh digests in the v2 transport artifact and transport provenance without implying RT0/H(div) qualification."
     },
     {
       "id": "managed-fem-transport-gate",

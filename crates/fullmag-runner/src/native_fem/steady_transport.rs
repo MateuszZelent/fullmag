@@ -2097,6 +2097,10 @@ mod tests {
         );
         assert!(provenance.fallback.is_none());
         assert!(provenance.degradation.is_none());
+        assert!(provenance.oersted_source_kind.is_none());
+        assert!(provenance.oersted_source_current_sha256.is_none());
+        assert!(provenance.oersted_mesh_source_sha256.is_none());
+        assert!(provenance.oersted_field_sha256.is_none());
         assert_eq!(provenance.stage_coupling, "none");
     }
 

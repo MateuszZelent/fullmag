@@ -1025,6 +1025,15 @@ or mismatched manifest fails closed. No generic dispatcher, `Context`, or
 `mfem_bridge.cpp` owns these algorithms: they belong to current-transport and
 Oersted subsystems under `backends/fem`.
 
+Until the public runner consumes the immutable RT0/H(div) view, its bounded
+steady FEM reference path is intentionally versioned separately as
+`fullmag.fem.steady_spin_transport.v2`. That artifact publishes the nodal
+midpoint `H_oe` plus SHA-256 identities for the nodal source current and the
+mesh/domain mask, and labels the realization
+`solved_current_h1_nodal_midpoint_reference`. These digests improve replay and
+do not satisfy the RT0 closure, stage-revision, or OE-F1/OE-F2 certificate
+requirements above.
+
 Provenance records authored source and closure, formula/operator versions,
 current convention, envelope/bandwidth, validity metrics/override, requested
 and resolved execution, energy semantics, revisions, and external-oracle version.

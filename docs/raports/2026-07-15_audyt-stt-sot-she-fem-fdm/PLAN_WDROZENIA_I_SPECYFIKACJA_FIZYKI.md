@@ -3,14 +3,14 @@
 **Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; implementacja częściowa i niegotowa do integracji  \
 **Wariant:** 3 — pełny model docelowy wdrażany przez niezależnie walidowane kamienie milowe M0–M3  \
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
-**Aktualny baseline audytu:** `master@ccd237e78` (`origin/master` wskazuje ten sam commit)  \
-**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, `master@ccd237e78`  \
+**Aktualny kodowy baseline audytu:** `master@70ee4cafc` (`origin/master` wskazuje ten sam commit)  \
+**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, kodowy baseline `master@70ee4cafc`; dokumentacja jest aktualizowana w tym replayu  \
 **Merge-base:** bieżący checkout jest już zintegrowany na `master`; wcześniejsze rozjazdy gałęzi pozostają historią audytu, nie aktualnym stanem integracji  \
 **Data pierwotna:** 2026-07-15  \
 **Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@ccd237e78`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** kodowy baseline `master@70ee4cafc`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
@@ -84,7 +84,7 @@ oznacza ani pełnego milestone, ani walidacji continuum.
 | M0 torque | FDM/FEM CPU i część GPU istnieją | co najwyżej `reference_executable` | korekta Slonczewskiego, niezależny SI oracle, cross-backend parity |
 | M1 FDM CPU steady | `f867cda3913509ebbc455296302e40b1500fc349` | `reference_executable` | pełne interfejsy, Oersted FFT, zbieżność, native production owner |
 | M1 FEM CPU steady | `b91df882c7fc049ce82f359a0fa4ab8dfa0b9595`; bounded managed `steady-transport: pass` | `reference_executable` dla conforming H1/P1 subset | broken/subdomain spaces, mortar/mixing/SML, contrast i h-convergence |
-| FEM solved-current Oersted | planner/runtime midpoint slice dodany 2026-08-05; managed transport prerequisite `pass` | `development_executable` tylko dla steady one-way Ohmic CPU | RT0/H(div), closure, OE-F1/F2, direct-oracle, source digest, GPU i M2 |
+| FEM solved-current Oersted | planner/runtime midpoint slice dodany 2026-08-05; managed transport prerequisite `pass`; artefakt v2 publikuje pole i bounded field/source/mesh digests | `development_executable` tylko dla steady one-way Ohmic CPU | RT0/H(div), closure, OE-F1/F2 runtime, direct-oracle, stage/current-view identity, GPU i M2 |
 | OE-T0 FEM | managed serial/MPI + byte-identical certificate `pass` (fresh 2026-08-05) | `reference_executable` dla bounded operator contract | distributed sparse KKT, skalowanie i integracja z publicznym solved-current chain |
 | OE-F1 FEM direct | managed direct tetra contract `pass` (fresh 2026-08-05) | `reference_executable` dla bounded CPU operator contract | singular/near quadrature sweep, projection into runtime and end-to-end provenance |
 | OE-F2 FEM mixed | managed mixed vector-potential contract `pass` (fresh 2026-08-05) | `reference_executable` dla bounded CPU operator contract | exact-sequence/airbox convergence, runtime integration and GPU |
@@ -8653,3 +8653,26 @@ scene document ↔ builderze oraz podstawowe zasoby UI. Nie dowodzi jeszcze
 wykonania FEM z publicznego kliknięcia, browser smoke z realnym managed
 runtime ani propagacji capability `reference_executable` do ogólnej capability
 matrix; te bramy pozostają otwarte zgodnie z §32.89.3.
+
+## 32.91. Artefakt FEM z tożsamością bounded Oersted (2026-08-05)
+
+W publicznym runnerze domknięto osobną lukę audytową: przed tą zmianą pole
+`H_oe` było po obliczeniu używane przez plan LLG, lecz artefakt
+`transport/fem_steady_spin_transport.json` i `TransportExecutionProvenance`
+nie wskazywały, które pole oraz który prąd/mesh je wygenerowały. Od
+`70ee4cafc` artefakt ma schemat `fullmag.fem.steady_spin_transport.v2` i dla
+bounded ścieżki publikuje:
+
+- pole `H_oe` w porządku `node/xyz` wraz z `realization=biot_savart_midpoint`,
+- SHA-256 pola wynikowego,
+- SHA-256 nodalnego `J_charge`,
+- SHA-256 geometrii/topologii siatki wraz z maską domeny źródłowej,
+- identyczne identyfikatory w `TransportExecutionProvenance`.
+
+Digest jest kanonicznie liczony z little-endian `f64` oraz jawnego payloadu
+siatki; test `solved_current_oersted_identity_digests_are_stable_and_source_bound`
+sprawdza stabilność i zależność od maski źródła. To poprawia reprodukowalność
+bounded slice, ale nie zmienia jego kwalifikacji: `source_kind` jest jawnie
+`solved_current_h1_nodal_midpoint_reference`, a nie `ConservativeCurrentView`
+RT0/H(div). Nie ma więc jeszcze certyfikatu closure, stage revision ani
+zgodności z OE-F1/OE-F2 w publicznym łańcuchu.
