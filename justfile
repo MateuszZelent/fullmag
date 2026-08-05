@@ -558,6 +558,13 @@ verify-fem-rk-sot-rollback-contract:
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_rk_explicit_contract'
 
+# Focused one-cell FDM versus exchange-free multi-node FEM prescribed-SOT
+# common-limit gate.  It shares the exact signed descriptor and SI units.
+verify-fem-prescribed-sot-common-limit-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-sot-common-limit CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available -- --exact --nocapture'
+
 # M1.3 transparent-interface conforming-H1 FEM charge/spin CPU oracle.
 verify-fem-steady-transport-native-contract:
     just verify-fem-steady-transport-critical-remediation

@@ -9451,6 +9451,141 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!("skipping FEM SOT↔FDM common-limit test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut fem_plan = make_exchange_only_plan();
+        fem_plan.enable_exchange = false;
+        fem_plan.external_field = None;
+        fem_plan.mfem_device_string = Some("cpu".to_string());
+        fem_plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem_plan.mesh.nodes.len()];
+        fem_plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(-4.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.03),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+            sot_drive: None,
+        });
+        let dt = fem_plan.fixed_timestep.expect("SOT common-limit fixed timestep");
+
+        let mut fdm_plan = fullmag_ir::FdmPlanIR::default();
+        fdm_plan.grid = fullmag_ir::GridDimensions { cells: [1, 1, 1] };
+        fdm_plan.cell_size = [1.0e-9, 1.0e-9, 1.0e-9];
+        fdm_plan.region_mask = vec![1];
+        fdm_plan.active_mask = Some(vec![true]);
+        fdm_plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                fdm_plan.origin_m,
+                fdm_plan.grid.cells,
+                fdm_plan.cell_size,
+                1,
+                fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                fdm_plan.active_mask.as_deref(),
+                &fdm_plan.region_mask,
+            )
+            .expect("FDM SOT common-limit grid certificate")
+            .with_region_legend(vec![fullmag_ir::FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "common-limit".to_string(),
+                region_id: "common-limit:core".to_string(),
+                priority: 0,
+            }]),
+        );
+        fdm_plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        fdm_plan.material = fullmag_ir::FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.1,
+            ..Default::default()
+        };
+        fdm_plan.enable_exchange = false;
+        fdm_plan.enable_demag = false;
+        fdm_plan.gyromagnetic_ratio = 2.211e5;
+        fdm_plan.precision = fullmag_ir::ExecutionPrecision::Double;
+        fdm_plan.exchange_bc = ExchangeBoundaryCondition::Neumann;
+        fdm_plan.integrator = Some(IntegratorChoice::Heun);
+        fdm_plan.fixed_timestep = Some(dt);
+        fdm_plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        fdm_plan.sot_current_density = Some(-4.0e11);
+        fdm_plan.sot_xi_dl = Some(0.12);
+        fdm_plan.sot_xi_fl = Some(-0.03);
+        fdm_plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        fdm_plan.sot_thickness = Some(1.5e-9);
+        fdm_plan.sot_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 });
+        fdm_plan.sot_target = Some(fullmag_ir::RegionRefIR {
+            object_id: "common-limit".to_string(),
+            region_id: None,
+        });
+        fdm_plan.sot_active_mask = Some(vec![true]);
+        fdm_plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+            current_density_apm2: -4.0e11,
+            sigma_hat: [0.0, 1.0, 0.0],
+            envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+        });
+
+        let fdm_run = crate::fdm::cpu::reference::execute_reference_fdm(
+            &fdm_plan,
+            dt,
+            &[],
+            None,
+            None,
+        )
+        .expect("FDM SOT common-limit reference run");
+        assert_eq!(
+            fdm_run.result.final_magnetization.len(),
+            1,
+            "one-cell FDM SOT common-limit reference must produce one magnetization"
+        );
+        let expected = fdm_run.result.final_magnetization[0];
+
+        let mut fem_backend =
+            NativeFemBackend::create(&fem_plan).expect("FEM SOT common-limit native create");
+        fem_backend
+            .step(dt)
+            .expect("FEM SOT common-limit native step");
+        let actual = fem_backend
+            .copy_m(fem_plan.mesh.nodes.len())
+            .expect("FEM SOT common-limit magnetization");
+        for (node, value) in actual.iter().enumerate() {
+            assert_scalar_close(
+                &format!("FEM SOT↔FDM common-limit m[{node}][0]"),
+                value[0],
+                expected[0],
+                5e-8,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("FEM SOT↔FDM common-limit m[{node}][1]"),
+                value[1],
+                expected[1],
+                5e-8,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("FEM SOT↔FDM common-limit m[{node}][2]"),
+                value[2],
+                expected[2],
+                5e-8,
+                1e-10,
+            );
+        }
+    }
+
+    #[test]
     fn native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available() {
         if !native_cpu_gpu_parity_available(false) {
             return;

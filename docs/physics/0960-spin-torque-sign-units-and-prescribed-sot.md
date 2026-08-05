@@ -204,6 +204,11 @@ pulse at the same event knot. This bounded result does not yet qualify GPU or
 all-integrator rejected-step event bookkeeping, tabulated-artifact materialization, FP32, long trajectories, FEM
 multi-grid/convergence, or FEM↔FDM continuum agreement.
 
+A managed one-cell FDM versus exchange-free multi-node FEM common-limit
+contract now compares the same signed descriptor, SI constants, Gilbert
+damping, and constant envelope. It is a magnetization-algebra check; it does
+not establish mesh or continuum equivalence.
+
 #### 2.4.2 Stage-time envelope contract
 
 For an explicit RK stage `i`, the source multiplier is evaluated at
@@ -636,9 +641,9 @@ Both use the same two-stage sinusoidal envelope, evaluate it at `t_n+c_i dt`,
 and compare the complete `m`, `H_eff`, and `max_rhs_amplitude` with the
 independent SI Heun oracle. The native evaluator covers five non-tabulated
 forms; this managed CPU/GPU oracle directly exercises the sinusoidal form.
-It does not yet prove event clipping/rollback, tabulated artifacts, FP32,
-multi-grid convergence, long-time stability, FEM↔FDM continuum parity, or
-production qualification.
+It does not yet prove event clipping/rollback across the full integrator family,
+tabulated artifacts, FP32, multi-grid convergence, long-time stability, or
+FEM↔FDM continuum parity and production qualification.
 
 ## 6. Completeness checklist
 
@@ -652,6 +657,7 @@ production qualification.
 - [x] FEM stage-time descriptor and CPU/GPU SI-oracle tests
 - [x] FEM event-knot clipping for pulse/PWL envelopes (bounded CPU/GPU runtime and native contract tests)
 - [x] Bounded FEM CPU Heun rejected-step rollback and pulse event bookkeeping
+- [x] Bounded FEM CPU↔FDM prescribed-SOT common-limit (one-cell/multi-node, constant envelope)
 - [ ] Rejected-step rollback and event bookkeeping across GPU and all FEM integrators
 - [ ] Quantities, provenance, API, UI, and export
 - [ ] Managed runtime and browser validation evidence

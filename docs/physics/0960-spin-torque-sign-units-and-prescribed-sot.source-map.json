@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and non-tabulated stage-time FEM GPU reference realizations, including a managed CPU Heun rollback retry at the same pulse knot. Full trajectory, GPU/all-integrator rollback, multi-grid, and continuum qualification remain open."
+      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and non-tabulated stage-time FEM GPU reference realizations, including a managed CPU Heun rollback retry at the same pulse knot and a one-cell FDM versus multi-node FEM constant-envelope common-limit. Full trajectory, GPU/all-integrator rollback, multi-grid, and continuum qualification remain open."
     },
     {
       "solver": "FEM",
@@ -19,7 +19,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "Canonical signed-current reference lane, independent eight-step fixed-step trajectory oracle, and bounded isolated 0.5x/1x/2x current-increment scaling contract exist; nonlinear current-sweep and cross-backend qualification remain open."
+      "reason": "Canonical signed-current reference lane, independent eight-step fixed-step trajectory oracle, bounded isolated 0.5x/1x/2x current-increment scaling contract, and a one-cell constant-envelope common-limit against FEM exist; nonlinear current-sweep and continuum cross-backend qualification remain open."
     },
     {
       "solver": "FDM",

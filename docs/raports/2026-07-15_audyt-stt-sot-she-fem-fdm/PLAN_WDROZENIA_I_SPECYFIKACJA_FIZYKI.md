@@ -8166,3 +8166,54 @@ przedziału pulse z polityką event clipping.
 Wynik podnosi wyłącznie bounded FEM CPU rollback evidence. Nie zmienia statusu
 FEM GPU transportu, solved-current Oersteda, pełnej FEM↔FDM trajektorii ani
 globalnej oceny **88% implementacji / 62% gotowości produkcyjnej**.
+
+## 32.81. FEM↔FDM common-limit dla prescribed SOT (2026-08-05)
+
+### 32.81.1. Workload i kontrakt
+
+Dodano `native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available`.
+FEM używa exchange-free tetrahedralnego workloadu z pięcioma węzłami, FDM
+jednej aktywnej komórki. Oba backendy mają identyczne:
+
+- `prescribed_sot.fullmag.v1`, `J=-4e11 A/m^2`, `xi_DL=0.12`, `xi_FL=-0.03`;
+- `sigma_hat=(0,1,0)`, `t_F=1.5 nm`, `M_s=800 kA/m`, `alpha=0.1`;
+- stałą obwiednię `a=0.25`, krok Heuna `dt=2.5e-13 s` i początkowe
+  `m=(1,0,0)`.
+
+W FDM descriptor `sot_envelope` jest ustawiony jawnie obok `sot_drive`.
+`sot_drive` jest provenance/źródłem autorskim, natomiast referencyjny builder
+FDM używa znormalizowanego pola `sot_envelope`; pominięcie tego pola oznacza
+obwiednię `1` i jest celowo traktowane jako błąd fixture, nie jako dopuszczalny
+fallback.
+
+### 32.81.2. Wynik managed
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-common-limit-contract
+exit=0
+```
+
+Wynik testu:
+
+```text
+native_fem::tests::native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available ... ok
+test result: ok. 1 passed; 0 failed; 970 filtered out
+```
+
+Każdy z pięciu węzłów FEM zgadza się z jedną komórką FDM dla wszystkich trzech
+składowych `m` w tolerancji `rel=5e-8`, `abs=1e-10`. To jest niezależny
+cross-backend check lokalnej algebry i normalizacji `m`, nie dowód zgodności
+siatki, exchange, demaga, trajektorii wielokrokowej ani continuum limit.
+
+### 32.81.3. Granica kwalifikacji
+
+| Zakres | Status | Pozostaje otwarte |
+|---|---|---|
+| FEM CPU↔FDM, prescribed SOT, stała obwiednia, jeden krok | `reference_executable` | dłuższa trajektoria i sweep `dt` |
+| FEM GPU↔FDM | `not_qualified` | rzeczywisty CUDA workload i parity artefaktu |
+| pulse/PWL/Sinc cross-backend | `not_qualified` | wspólne event-aware testy i tabulated materialization |
+| exchange/demag/mixed mesh cross-backend | `not_qualified` | wspólny fizyczny workload, a nie macrospin/common-limit |
+
+Wynik wzmacnia dowód FEM, że wcześniejsze porównanie nie było wyłącznie FDM,
+ale nie podnosi globalnej oceny **88% implementacji / 62% gotowości
+produkcyjnej**.
