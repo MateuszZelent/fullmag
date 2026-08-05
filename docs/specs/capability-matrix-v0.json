@@ -287,16 +287,16 @@
       "formula_version": "prescribed_sot.fullmag.v1",
       "label": "PrescribedSpinOrbitTorque canonical v1",
       "lanes": {
-        "fdm_cpu_reference": "semantic_only",
-        "fdm_gpu_production": "semantic_only",
-        "fem_cpu_public": "semantic_only",
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "reference_executable",
         "fem_gpu_public": "semantic_only"
       },
       "precision_scope": ["double", "single only after explicit qualification"],
       "execution_mode_scope": ["strict", "extended"],
       "workload_scope": "Canonical signed-current macrospin with SI/Gilbert/mask/stage-time requirements.",
       "validated_workloads": [],
-      "notes": "PR-00 contract plus bounded managed FDM CUDA FP64 evidence: native algebra/runtime contracts, an eight-step fixed-step CPU-reference trajectory, and isolated 0.5x/1x/2x signed-current target-mask scaling all pass. This remains a semantic-only capability because FEM SOT, FP32, nonlinear/stage-time sweeps, cross-backend parity, and direct or inverse SHE qualification are still open; legacy executors are not v1 evidence."
+      "notes": "Lane-specific evidence: FDM CPU has the independent reference algebra, FDM CUDA has bounded managed FP64 trajectory/scaling evidence, and FEM CPU has a managed native MFEM one-step SI-oracle/Rust-reference parity contract with signed current, constant envelope, target mask, H_eff, and max-RHS checks. FEM GPU fails closed because its CUDA SOT realization is semantic-only. FP32, stage-time envelopes, nonlinear sweeps, FEM multi-grid/convergence, FEM↔FDM continuum parity, and direct or inverse SHE qualification remain open; legacy executors are not v1 evidence."
     },
     {
       "id": "spin_torque.zhang_li.fullmag.v1", "capability_id": "spin_torque.zhang_li", "formula_version": "zhang_li.fullmag.v1",

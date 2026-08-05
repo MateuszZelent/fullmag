@@ -6629,6 +6629,13 @@ mod tests {
             lande_g: (formula_version == "zhang_li.fullmag.v1").then_some(2.0),
             active_node_mask: Some(vec![true; 4]),
             active_element_mask: Some(vec![true]),
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
         plan
     }

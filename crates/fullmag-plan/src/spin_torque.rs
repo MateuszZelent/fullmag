@@ -78,7 +78,7 @@ fn support_matrix_note(lane: SpinTorqueExecutableLane) -> &'static str {
         }
         SpinTorqueExecutableLane::Fem => {
             "support matrix: slonczewski=production_executable(cpu/gpu native), zhang_li=production_executable(cpu/gpu native), \
-             spin_orbit_torque=not_executable_yet, \
+             spin_orbit_torque=reference_executable(cpu native)/semantic_only(gpu), \
              interface_cpp=semantic_only, drift_diffusion=semantic_only"
         }
     }
@@ -336,16 +336,13 @@ pub(crate) fn resolve_legacy_spin_torque(
         }
         SpinTorqueModuleIR::DriftDiffusionSpinTorque { .. } => LegacySpinTorqueFields::default(),
         SpinTorqueModuleIR::PrescribedSot { formula, .. } => match (lane, formula) {
-            (SpinTorqueExecutableLane::Fdm, PrescribedSotFormulaIR::FullmagV1 { .. }) => {
+            (SpinTorqueExecutableLane::Fem, PrescribedSotFormulaIR::FullmagV1 { .. })
+            | (SpinTorqueExecutableLane::Fdm, PrescribedSotFormulaIR::FullmagV1 { .. }) => {
+                // Prescribed SOT is resolved separately below so the legacy STT
+                // compatibility fields remain empty.  FEM currently owns a
+                // native CPU reference realization; the GPU planner/runtime
+                // gate remains explicit and fail-closed.
                 LegacySpinTorqueFields::default()
-            }
-            (_, PrescribedSotFormulaIR::FullmagV1 { .. }) => {
-                return Err(PlanError {
-                    reasons: vec![format!(
-                        "spin_torque_modules[0]=prescribed_sot formula_version=prescribed_sot.fullmag.v1 is not executable on this lane; {}",
-                        support_matrix_note(lane)
-                    )],
-                });
             }
             (SpinTorqueExecutableLane::Fdm, PrescribedSotFormulaIR::LegacyFullmagV0 { .. }) => {
                 LegacySpinTorqueFields::default()
@@ -579,6 +576,34 @@ mod tests {
         assert_eq!(resolved.sigma, Some([0.0, 1.0, 0.0]));
         assert_eq!(resolved.xi_dl, Some(0.1));
         assert_eq!(resolved.thickness, Some(1.0e-9));
+    }
+
+    #[test]
+    fn canonical_prescribed_sot_is_eligible_for_fem_reference_lane() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+            schema_version: "prescribed_sot.v1".to_string(),
+            id: "sot".to_string(),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula: PrescribedSotFormulaIR::FullmagV1 {
+                drive: PrescribedSotV1DriveIR::SignedScalar {
+                    current_density_apm2: 1.0e11,
+                    sigma_hat: [0.0, 1.0, 0.0],
+                    envelope: None,
+                },
+                xi_dl: 0.12,
+                xi_fl: -0.02,
+                free_layer_thickness_m: 1.5e-9,
+            },
+        }];
+
+        let resolved = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fem, &[])
+            .expect("canonical prescribed SOT must be eligible for FEM reference lowering");
+        assert!(resolved.current_density.is_none());
+        assert!(resolved.stt_degree.is_none());
     }
 
     #[test]

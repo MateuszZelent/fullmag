@@ -5875,6 +5875,91 @@ fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
 }
 
 #[test]
+fn fem_prescribed_sot_gpu_fails_closed_until_native_cuda_realization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot_gpu".to_string(),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: fullmag_ir::PrescribedSotFormulaIR::FullmagV1 {
+            drive: fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: 1.0e11,
+                sigma_hat: [0.0, 1.0, 0.0],
+                envelope: None,
+            },
+            xi_dl: 0.12,
+            xi_fl: -0.02,
+            free_layer_thickness_m: 1.5e-9,
+        },
+    }];
+
+    let error = crate::fem::plan_fem(&ir, BackendTarget::Fem)
+        .expect_err("FEM GPU prescribed SOT must remain fail-closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("prescribed_sot.fullmag.v1")
+            && reason.contains("FEM GPU")
+            && reason.contains("semantic_only")
+    }), "unexpected FEM GPU SOT reasons: {:?}", error.reasons);
+}
+
+#[test]
+fn fem_prescribed_sot_cpu_plan_materializes_signed_fields_and_target_mask() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot_cpu".to_string(),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: fullmag_ir::PrescribedSotFormulaIR::FullmagV1 {
+            drive: fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: -1.0e11,
+                sigma_hat: [0.0, 2.0, 0.0],
+                envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+            },
+            xi_dl: 0.12,
+            xi_fl: -0.02,
+            free_layer_thickness_m: 1.5e-9,
+        },
+    }];
+
+    let planned = plan(&ir).expect("canonical FEM CPU SOT should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let contract = fem
+        .spin_torque_contract
+        .expect("versioned FEM SOT contract");
+    assert_eq!(contract.formula_version, "prescribed_sot.fullmag.v1");
+    assert_eq!(contract.sot_current_density, Some(-1.0e11));
+    assert_eq!(contract.sot_xi_dl, Some(0.12));
+    assert_eq!(contract.sot_xi_fl, Some(-0.02));
+    assert_eq!(contract.sot_thickness, Some(1.5e-9));
+    assert_eq!(contract.sot_sigma, Some([0.0, 1.0, 0.0]));
+    assert_eq!(
+        contract.sot_envelope,
+        Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 })
+    );
+    assert!(contract.sot_drive.is_some());
+    assert!(contract
+        .active_node_mask
+        .as_ref()
+        .is_some_and(|mask| !mask.is_empty() && mask.iter().any(|selected| *selected)));
+}
+
+#[test]
 fn fdm_mumax3_zhang_li_plan_preserves_identity_and_operator() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fdm;

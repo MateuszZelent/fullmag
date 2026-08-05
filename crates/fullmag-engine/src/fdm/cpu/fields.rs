@@ -205,6 +205,39 @@ fn prescribed_sot_scales(
     }
 }
 
+/// Evaluate the backend-neutral prescribed-SOT local torque for one
+/// magnetization vector. FEM and FDM reference paths call this helper so the
+/// SI constants, Gilbert conversion, and cross-product signs stay identical.
+pub(crate) fn prescribed_sot_torque_from_config(
+    magnetization: Vector3,
+    cfg: &SotConfig,
+    saturation_magnetisation: f64,
+    gamma0: f64,
+    alpha: f64,
+) -> Vector3 {
+    let ms = saturation_magnetisation.max(1e-30);
+    let (damping_like, field_like) = prescribed_sot_scales(cfg, ms, gamma0, alpha);
+    let [sx, sy, sz] = cfg.sigma;
+    let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
+    let sigma = [sx / snorm, sy / snorm, sz / snorm];
+    let [m0, m1, m2] = magnetization;
+    let mxs = [
+        m1 * sigma[2] - m2 * sigma[1],
+        m2 * sigma[0] - m0 * sigma[2],
+        m0 * sigma[1] - m1 * sigma[0],
+    ];
+    let mmxs = [
+        m1 * mxs[2] - m2 * mxs[1],
+        m2 * mxs[0] - m0 * mxs[2],
+        m0 * mxs[1] - m1 * mxs[0],
+    ];
+    [
+        -damping_like * mmxs[0] + field_like * mxs[0],
+        -damping_like * mmxs[1] + field_like * mxs[1],
+        -damping_like * mmxs[2] + field_like * mxs[2],
+    ]
+}
+
 impl ExchangeLlgProblem {
     // ===================================================================
     // Observables
@@ -2657,20 +2690,6 @@ impl ExchangeLlgProblem {
 
     #[allow(dead_code)]
     pub(crate) fn sot_torque(&self, magnetization: &[Vector3], cfg: &SotConfig) -> Vec<Vector3> {
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let (damping_like, field_like) = prescribed_sot_scales(
-            cfg,
-            ms,
-            self.dynamics.gyromagnetic_ratio,
-            self.material.damping,
-        );
-
-        let [sx, sy, sz] = cfg.sigma;
-        let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
-        let sx = sx / snorm;
-        let sy = sy / snorm;
-        let sz = sz / snorm;
-
         let n = self.grid.cell_count();
 
         (0..n)
@@ -2683,21 +2702,13 @@ impl ExchangeLlgProblem {
                 {
                     return [0.0, 0.0, 0.0];
                 }
-                let [m0, m1, m2] = magnetization[flat];
-
-                let mxs_x = m1 * sz - m2 * sy;
-                let mxs_y = m2 * sx - m0 * sz;
-                let mxs_z = m0 * sy - m1 * sx;
-
-                let mmxs_x = m1 * mxs_z - m2 * mxs_y;
-                let mmxs_y = m2 * mxs_x - m0 * mxs_z;
-                let mmxs_z = m0 * mxs_y - m1 * mxs_x;
-
-                [
-                    -damping_like * mmxs_x + field_like * mxs_x,
-                    -damping_like * mmxs_y + field_like * mxs_y,
-                    -damping_like * mmxs_z + field_like * mxs_z,
-                ]
+                prescribed_sot_torque_from_config(
+                    magnetization[flat],
+                    cfg,
+                    self.material.saturation_magnetisation,
+                    self.dynamics.gyromagnetic_ratio,
+                    self.material.damping,
+                )
             })
             .collect()
     }
@@ -3011,20 +3022,6 @@ impl ExchangeLlgProblem {
         cfg: &SotConfig,
         out: &mut [Vector3],
     ) {
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let (damping_like, field_like) = prescribed_sot_scales(
-            cfg,
-            ms,
-            self.dynamics.gyromagnetic_ratio,
-            self.material.damping,
-        );
-
-        let [sx, sy, sz] = cfg.sigma;
-        let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
-        let sx = sx / snorm;
-        let sy = sy / snorm;
-        let sz = sz / snorm;
-
         let n = self.grid.cell_count();
 
         let compute = |flat: usize, o: &mut Vector3| {
@@ -3036,19 +3033,16 @@ impl ExchangeLlgProblem {
             {
                 return;
             }
-            let [m0, m1, m2] = magnetization[flat];
-
-            let mxs_x = m1 * sz - m2 * sy;
-            let mxs_y = m2 * sx - m0 * sz;
-            let mxs_z = m0 * sy - m1 * sx;
-
-            let mmxs_x = m1 * mxs_z - m2 * mxs_y;
-            let mmxs_y = m2 * mxs_x - m0 * mxs_z;
-            let mmxs_z = m0 * mxs_y - m1 * mxs_x;
-
-            o[0] += -damping_like * mmxs_x + field_like * mxs_x;
-            o[1] += -damping_like * mmxs_y + field_like * mxs_y;
-            o[2] += -damping_like * mmxs_z + field_like * mxs_z;
+            let torque = prescribed_sot_torque_from_config(
+                magnetization[flat],
+                cfg,
+                self.material.saturation_magnetisation,
+                self.dynamics.gyromagnetic_ratio,
+                self.material.damping,
+            );
+            o[0] += torque[0];
+            o[1] += torque[1];
+            o[2] += torque[2];
         };
 
         #[cfg(feature = "parallel")]
@@ -3071,20 +3065,6 @@ impl ExchangeLlgProblem {
         cfg: &SotConfig,
         out: &mut VectorFieldSoA,
     ) {
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let (damping_like, field_like) = prescribed_sot_scales(
-            cfg,
-            ms,
-            self.dynamics.gyromagnetic_ratio,
-            self.material.damping,
-        );
-
-        let [sx, sy, sz] = cfg.sigma;
-        let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
-        let sx = sx / snorm;
-        let sy = sy / snorm;
-        let sz = sz / snorm;
-
         for flat in 0..self.grid.cell_count() {
             if !self.is_active(flat)
                 || cfg
@@ -3094,21 +3074,16 @@ impl ExchangeLlgProblem {
             {
                 continue;
             }
-            let m0 = magnetization.x[flat];
-            let m1 = magnetization.y[flat];
-            let m2 = magnetization.z[flat];
-
-            let mxs_x = m1 * sz - m2 * sy;
-            let mxs_y = m2 * sx - m0 * sz;
-            let mxs_z = m0 * sy - m1 * sx;
-
-            let mmxs_x = m1 * mxs_z - m2 * mxs_y;
-            let mmxs_y = m2 * mxs_x - m0 * mxs_z;
-            let mmxs_z = m0 * mxs_y - m1 * mxs_x;
-
-            out.x[flat] += -damping_like * mmxs_x + field_like * mxs_x;
-            out.y[flat] += -damping_like * mmxs_y + field_like * mxs_y;
-            out.z[flat] += -damping_like * mmxs_z + field_like * mxs_z;
+            let torque = prescribed_sot_torque_from_config(
+                [magnetization.x[flat], magnetization.y[flat], magnetization.z[flat]],
+                cfg,
+                self.material.saturation_magnetisation,
+                self.dynamics.gyromagnetic_ratio,
+                self.material.damping,
+            );
+            out.x[flat] += torque[0];
+            out.y[flat] += torque[1];
+            out.z[flat] += torque[2];
         }
     }
 

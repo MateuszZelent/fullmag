@@ -17,6 +17,7 @@
 #include "cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
@@ -78,6 +79,7 @@ struct Context {
     EffectiveFieldRuntimeState effective_field{};
 
     SttRuntimeState stt{};
+    SotRuntimeState sot{};
 
     // ── Oersted field (cylindrical conductor or explicit nodal H field) ──
     OerstedRuntimeState oersted{};

@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "tetra_geometry_oracle.hpp"
@@ -441,6 +442,125 @@ void check_near(double actual, double expected, double tol, const char *msg) {
             actual);
         std::exit(1);
     }
+}
+
+void prescribed_sot_module_owns_local_physics() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "sot.hpp");
+    const std::string source = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "sot.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+
+    check(
+        header.find("struct SotRuntimeState") != std::string::npos,
+        "FEM SOT module must own prescribed-SOT runtime state");
+    check(
+        source.find("FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1") != std::string::npos &&
+            source.find("kExactElectronCharge") != std::string::npos &&
+            source.find("damping_like") != std::string::npos &&
+            source.find("field_like") != std::string::npos,
+        "FEM SOT source must own the canonical SI/Gilbert algebra");
+    check(
+        context_header.find("SotRuntimeState sot") != std::string::npos,
+        "Context must store SOT state through the SOT owner");
+}
+
+fullmag::fem::Context make_sot_context() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.sot.enabled = true;
+    ctx.sot.formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    ctx.sot.current_density_am2 = 1.0e11;
+    ctx.sot.xi_dl = 0.12;
+    ctx.sot.xi_fl = -0.02;
+    ctx.sot.thickness = 1.5e-9;
+    ctx.sot.envelope_value = 0.25;
+    ctx.sot.sigma = {0.0, 1.0, 0.0};
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.material.damping = 0.1;
+    ctx.material_fields.material.gyromagnetic_ratio = kGammaMu0Test;
+    return ctx;
+}
+
+void prescribed_sot_rhs_matches_si_oracle_and_current_reversal() {
+    auto ctx = make_sot_context();
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    std::vector<double> rhs(3u, 0.0);
+    double max_rhs = 0.0;
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs);
+
+    const double gamma_e = kGammaMu0Test / kMu0Test;
+    const double omega_base = gamma_e * kHbarTest * ctx.sot.current_density_am2 *
+        ctx.sot.envelope_value /
+        (2.0 * kExactElectronChargeTest *
+         ctx.material_fields.material.saturation_magnetisation * ctx.sot.thickness);
+    const double omega_dl = omega_base * ctx.sot.xi_dl;
+    const double omega_fl = omega_base * ctx.sot.xi_fl;
+    const double inv_gilbert = 1.0 / (1.0 + ctx.material_fields.material.damping *
+                                      ctx.material_fields.material.damping);
+    const double damping_like = (omega_dl - ctx.material_fields.material.damping * omega_fl) * inv_gilbert;
+    const double field_like = (omega_fl + ctx.material_fields.material.damping * omega_dl) * inv_gilbert;
+    check_near(rhs[0], 0.0, 1e-30, "SOT macrospin rhs x");
+    check_near(rhs[1], damping_like, std::abs(damping_like) * 1e-12, "SOT damping-like basis");
+    check_near(rhs[2], field_like, std::abs(field_like) * 1e-12, "SOT field-like basis");
+
+    ctx.sot.current_density_am2 = -ctx.sot.current_density_am2;
+    std::vector<double> reversed(3u, 0.0);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, reversed, max_rhs);
+    check_near(reversed[1], -rhs[1], std::abs(rhs[1]) * 1e-12, "SOT signed current reversal y");
+    check_near(reversed[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "SOT signed current reversal z");
+}
+
+void prescribed_sot_rhs_respects_magnetic_and_target_masks() {
+    auto ctx = make_sot_context();
+    ctx.sot.active_node_mask = {0u};
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    std::vector<double> rhs(3u, 0.0);
+    double max_rhs = 0.0;
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs);
+    check_near(rhs[0], 0.0, 0.0, "SOT target mask x");
+    check_near(rhs[1], 0.0, 0.0, "SOT target mask y");
+    check_near(rhs[2], 0.0, 0.0, "SOT target mask z");
+
+    ctx.sot.active_node_mask.clear();
+    ctx.mesh.magnetic_node_mask = {0u};
+    rhs.assign(3u, 0.0);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs);
+    check_near(rhs[0], 0.0, 0.0, "SOT magnetic mask x");
+    check_near(rhs[1], 0.0, 0.0, "SOT magnetic mask y");
+    check_near(rhs[2], 0.0, 0.0, "SOT magnetic mask z");
+}
+
+void prescribed_sot_plan_import_validates_append_only_descriptor() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    fullmag_fem_plan_desc plan{};
+    plan.has_prescribed_sot = 1;
+    plan.sot_formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    plan.sot_current_density_am2 = 1.0e11;
+    plan.sot_xi_dl = 0.1;
+    plan.sot_xi_fl = 0.0;
+    plan.sot_thickness = 1.0e-9;
+    plan.sot_sigma[1] = 1.0;
+    const uint8_t mask[2] = {1u, 0u};
+    plan.sot_active_node_mask = mask;
+    plan.sot_active_node_mask_len = 2;
+    plan.sot_envelope_value = 1.0;
+    std::string error;
+    check(
+        fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "canonical FEM SOT descriptor must import");
+    check(ctx.sot.enabled && ctx.sot.active_node_mask.size() == 2u,
+          "FEM SOT import must retain enablement and node mask");
+
+    plan.sot_active_node_mask_len = 1;
+    check(
+        !fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "FEM SOT descriptor with a short node mask must fail closed");
+    check(error.find("sot_active_node_mask") != std::string::npos,
+          "FEM SOT short-mask error must identify the field");
 }
 
 fullmag::fem::Context make_slonczewski_context() {
@@ -1025,5 +1145,9 @@ int main() {
     canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_data();
     canonical_stt_plan_import_rejects_read_only_slonczewski_v1();
     canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualification();
+    prescribed_sot_module_owns_local_physics();
+    prescribed_sot_rhs_matches_si_oracle_and_current_reversal();
+    prescribed_sot_rhs_respects_magnetic_and_target_masks();
+    prescribed_sot_plan_import_validates_append_only_descriptor();
     return 0;
 }

@@ -1758,6 +1758,26 @@ impl FemLlgProblem {
         )
     }
 
+    fn sot_rhs_at(&self, node: usize, magnetization: Vector3) -> Vector3 {
+        let Some(config) = self.terms.sot.as_ref() else {
+            return [0.0, 0.0, 0.0];
+        };
+        if config
+            .active_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.get(node).copied().unwrap_or(false))
+        {
+            return [0.0, 0.0, 0.0];
+        }
+        crate::fdm::cpu::fields::prescribed_sot_torque_from_config(
+            magnetization,
+            config,
+            self.material.saturation_magnetisation,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        )
+    }
+
     /// In-place LLG RHS: writes result into `out`, uses `scratch` for fields.
     fn llg_rhs_into(
         &self,
@@ -1771,7 +1791,7 @@ impl FemLlgProblem {
             out[i] = if volumes[i] > 0.0 {
                 add(
                     self.llg_rhs_from_field(*m, scratch.h_eff[i]),
-                    self.slonczewski_rhs_at(i, *m),
+                    add(self.slonczewski_rhs_at(i, *m), self.sot_rhs_at(i, *m)),
                 )
             } else {
                 [0.0, 0.0, 0.0]
@@ -2350,7 +2370,7 @@ impl FemLlgProblem {
                 if magnetic_node_volumes[node] > 0.0 {
                     norm(add(
                         self.llg_rhs_from_field(*m, *h),
-                        self.slonczewski_rhs_at(node, *m),
+                        add(self.slonczewski_rhs_at(node, *m), self.sot_rhs_at(node, *m)),
                     ))
                 } else {
                     0.0
@@ -2365,7 +2385,7 @@ impl FemLlgProblem {
                 if magnetic_node_volumes[node] > 0.0 {
                     norm(add(
                         self.llg_rhs_from_field(*m, effective_field[node]),
-                        self.slonczewski_rhs_at(node, *m),
+                        add(self.slonczewski_rhs_at(node, *m), self.sot_rhs_at(node, *m)),
                     ))
                 } else {
                     0.0
@@ -2498,7 +2518,10 @@ impl FemLlgProblem {
             let rhs = if self.topology.magnetic_node_volumes[node] > 0.0 {
                 add(
                     self.llg_rhs_from_field(magnetization[node], effective),
-                    self.slonczewski_rhs_at(node, magnetization[node]),
+                    add(
+                        self.slonczewski_rhs_at(node, magnetization[node]),
+                        self.sot_rhs_at(node, magnetization[node]),
+                    ),
                 )
             } else {
                 [0.0, 0.0, 0.0]
@@ -3483,7 +3506,7 @@ impl FemLlgProblem {
                 if magnetic_node_volumes[node] > 0.0 {
                     add(
                         self.llg_rhs_from_field(*m, *h),
-                        self.slonczewski_rhs_at(node, *m),
+                        add(self.slonczewski_rhs_at(node, *m), self.sot_rhs_at(node, *m)),
                     )
                 } else {
                     [0.0, 0.0, 0.0]
@@ -3498,7 +3521,7 @@ impl FemLlgProblem {
                 if magnetic_node_volumes[node] > 0.0 {
                     add(
                         self.llg_rhs_from_field(*m, effective_field[node]),
-                        self.slonczewski_rhs_at(node, *m),
+                        add(self.slonczewski_rhs_at(node, *m), self.sot_rhs_at(node, *m)),
                     )
                 } else {
                     [0.0, 0.0, 0.0]

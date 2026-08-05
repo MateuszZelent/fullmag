@@ -12,6 +12,7 @@
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
@@ -435,6 +436,7 @@ bool context_step_explicit_rk_mfem(
                     ctx.base_plan.precession_enabled,
                     ws.k[0], max_rhs_final);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final, ws.stt);
+        add_sot_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;

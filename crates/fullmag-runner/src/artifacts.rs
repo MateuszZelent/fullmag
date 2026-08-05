@@ -3979,14 +3979,16 @@ mod tests {
         let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan else {
             panic!("expected FDM plan");
         };
-        fdm.region_mask = vec![1, 1, 2, 2, 0, 0, 1, 2];
-        fdm.active_mask = Some(vec![true, true, true, true, true, false, true, true]);
+        fdm.origin_m = [1.0e-9, -3.0e-9, 7.0e-9];
+        fdm.cell_size = [2.0e-9, 3.0e-9, 4.0e-9];
+        fdm.region_mask = vec![0, 1, 2, 0, 0, 0, 0, 0];
+        fdm.active_mask = Some(vec![false, true, true, false, false, true, false, false]);
         fdm.grid_certificate = Some(
             fullmag_ir::FdmGridCertificateIR::new_with_masks(
                 fdm.origin_m,
                 fdm.grid.cells,
                 fdm.cell_size,
-                7,
+                3,
                 1024,
                 fdm.active_mask.as_deref(),
                 &fdm.region_mask,
@@ -4025,13 +4027,45 @@ mod tests {
         assert_eq!(descriptor["schema_version"], "fdm_region_membership.v2");
         assert_eq!(descriptor["object_ids"], serde_json::json!(["body"]));
         assert_eq!(descriptor["cell_count"], 8);
+        assert_eq!(descriptor["magnetic_support"]["semantic_role"], "magnetic-support");
+        assert_eq!(
+            descriptor["magnetic_support"]["grid_fingerprint"],
+            descriptor["grid_fingerprint"]
+        );
+        assert_eq!(descriptor["magnetic_support"]["active_cell_count"], 3);
+        assert_eq!(descriptor["magnetic_support"]["inactive_cell_count"], 5);
+        assert_eq!(
+            descriptor["magnetic_support"]["active_unassigned_cell_count"],
+            1
+        );
+        for (actual, expected) in descriptor["magnetic_support"]["bounds_min_m"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip([3e-9, -3e-9, 7e-9])
+        {
+            assert!((actual.as_f64().unwrap() - expected).abs() < 1e-20);
+        }
+        for (actual, expected) in descriptor["magnetic_support"]["bounds_max_m"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip([7e-9, 3e-9, 11e-9])
+        {
+            assert!((actual.as_f64().unwrap() - expected).abs() < 1e-20);
+        }
         assert_eq!(descriptor["region_legend"].as_array().unwrap().len(), 2);
         assert_eq!(&artifacts[1].bytes[..4], b"FMRM");
         assert_eq!(artifacts[1].bytes[4], 2);
         assert_eq!(
-            u32::from_le_bytes(artifacts[1].bytes[84..88].try_into().unwrap()),
+            u32::from_le_bytes(artifacts[1].bytes[64..68].try_into().unwrap()),
             u32::MAX,
             "inactive cells must remain distinguishable from active cells without an authored region"
+        );
+        assert_eq!(
+            u32::from_le_bytes(artifacts[1].bytes[84..88].try_into().unwrap()),
+            0,
+            "active cells without an authored region must remain active-unassigned"
         );
         assert_eq!(
             artifacts[1].bytes.len(),
@@ -4809,6 +4843,13 @@ mod tests {
             lande_g: None,
             active_node_mask: Some(vec![true, true, false, false]),
             active_element_mask: Some(vec![true]),
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
 
         let output_dir = std::env::temp_dir().join(format!(

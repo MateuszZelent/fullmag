@@ -26,6 +26,7 @@
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
 #include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
@@ -76,6 +77,9 @@ bool build_context_from_plan(
     initialize_dmi_plan_fields(ctx, plan);
     initialize_material_plan_fields(ctx, plan);
     if (!initialize_stt_plan_fields(ctx, plan, error)) {
+        return false;
+    }
+    if (!initialize_sot_plan_fields(ctx, plan, error)) {
         return false;
     }
 

@@ -114,6 +114,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/stt.cpp
     cpu/mfem/interactions/stt_slonczewski.cpp
     cpu/mfem/interactions/stt_zhang_li.cpp
+    cpu/mfem/interactions/sot.cpp
     cpu/mfem/interactions/thermal_brown.cpp
     cpu/mfem/interactions/thermal_brown_field.cpp
     cpu/mfem/interactions/thermal_brown_sampler.cpp

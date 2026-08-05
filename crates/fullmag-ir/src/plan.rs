@@ -10,7 +10,8 @@ use crate::{
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RegionalFieldDriveIR, RelaxStopIR,
     RelaxationAlgorithmIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
+    PrescribedSotV1DriveIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -812,6 +813,23 @@ pub struct FemSpinTorquePlanIR {
     pub active_node_mask: Option<Vec<bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_element_mask: Option<Vec<bool>>,
+    /// Prescribed-SOT signed source current density [A/m²]. These fields are
+    /// populated when `formula_version` is `prescribed_sot.fullmag.v1`; STT
+    /// contracts leave them empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_current_density: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_xi_dl: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_xi_fl: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_sigma: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_thickness: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_envelope: Option<TimeEnvelopeIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_drive: Option<PrescribedSotV1DriveIR>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

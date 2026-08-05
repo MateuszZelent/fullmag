@@ -1879,7 +1879,19 @@ impl NativeFemBackend {
                 ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE
             }
         };
-        let stt_contract = plan.spin_torque_contract.as_ref();
+        let stt_contract = plan.spin_torque_contract.as_ref().filter(|contract| {
+            contract.formula_version.starts_with("slonczewski.")
+                || contract.formula_version.starts_with("zhang_li.")
+        });
+        let sot_contract = plan
+            .spin_torque_contract
+            .as_ref()
+            .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1");
+        if sot_contract.is_some() && native_fem_plan_requests_gpu_mfem_device(plan) {
+            return Err(RunError {
+                message: "native FEM GPU prescribed_sot.fullmag.v1 is semantic_only; the native CUDA realization is not implemented and execution must fail closed without fallback".to_string(),
+            });
+        }
         let stt_active_node_mask = stt_contract
             .and_then(|contract| contract.active_node_mask.as_ref())
             .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
@@ -1909,6 +1921,17 @@ impl NativeFemBackend {
             Some("zl_central_reference_v1") => 1,
             Some(_) => u32::MAX,
         };
+        let sot_active_node_mask = sot_contract
+            .and_then(|contract| contract.active_node_mask.as_ref())
+            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let sot_envelope_value = sot_contract
+            .and_then(|contract| contract.sot_envelope.as_ref())
+            .and_then(|envelope| match envelope {
+                fullmag_ir::TimeEnvelopeIR::Constant { value } => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(1.0);
 
         let mut plan_desc = ffi::fullmag_fem_plan_desc {
             mesh,
@@ -2273,6 +2296,30 @@ impl NativeFemBackend {
             stt_active_node_mask_len: stt_active_node_mask.len() as u64,
             stt_active_element_mask: optional_slice_ptr(&stt_active_element_mask),
             stt_active_element_mask_len: stt_active_element_mask.len() as u64,
+            has_prescribed_sot: i32::from(sot_contract.is_some()),
+            sot_formula_version: if sot_contract.is_some() {
+                ffi::FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1
+            } else {
+                ffi::FULLMAG_FEM_SOT_FORMULA_NONE
+            },
+            sot_current_density_am2: sot_contract
+                .and_then(|contract| contract.sot_current_density)
+                .unwrap_or(0.0),
+            sot_xi_dl: sot_contract
+                .and_then(|contract| contract.sot_xi_dl)
+                .unwrap_or(0.0),
+            sot_xi_fl: sot_contract
+                .and_then(|contract| contract.sot_xi_fl)
+                .unwrap_or(0.0),
+            sot_thickness: sot_contract
+                .and_then(|contract| contract.sot_thickness)
+                .unwrap_or(0.0),
+            sot_envelope_value,
+            sot_sigma: sot_contract
+                .and_then(|contract| contract.sot_sigma)
+                .unwrap_or([0.0, 0.0, 1.0]),
+            sot_active_node_mask: optional_slice_ptr(&sot_active_node_mask),
+            sot_active_node_mask_len: sot_active_node_mask.len() as u64,
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -6832,7 +6879,22 @@ mod tests {
                 } else {
                     None
                 },
-                sot: None,
+                sot: plan
+                    .spin_torque_contract
+                    .as_ref()
+                    .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1")
+                    .map(|contract| fullmag_engine::SotConfig {
+                        formula: fullmag_engine::SotFormula::FullmagV1,
+                        current_density: contract
+                            .sot_current_density
+                            .expect("prescribed SOT current density"),
+                        xi_dl: contract.sot_xi_dl.expect("prescribed SOT xi_dl"),
+                        xi_fl: contract.sot_xi_fl.expect("prescribed SOT xi_fl"),
+                        sigma: contract.sot_sigma.expect("prescribed SOT sigma"),
+                        thickness: contract.sot_thickness.expect("prescribed SOT thickness"),
+                        active_mask: contract.active_node_mask.clone(),
+                        envelope: contract.sot_envelope.clone(),
+                    }),
                 oersted_cylinder: None,
             },
         );
@@ -6900,6 +6962,109 @@ mod tests {
             damping_like * m_cross_m_cross_p[1] + field_like * m_cross_p[1],
             damping_like * m_cross_m_cross_p[2] + field_like * m_cross_p[2],
         ]
+    }
+
+    fn canonical_prescribed_sot_rhs_reference(plan: &FemPlanIR, m: [f64; 3]) -> [f64; 3] {
+        let contract = plan
+            .spin_torque_contract
+            .as_ref()
+            .expect("prescribed SOT contract");
+        assert_eq!(
+            contract.formula_version, "prescribed_sot.fullmag.v1",
+            "SI oracle requires prescribed_sot.fullmag.v1"
+        );
+        let current_density = contract
+            .sot_current_density
+            .expect("prescribed SOT current density");
+        let xi_dl = contract.sot_xi_dl.expect("prescribed SOT xi_dl");
+        let xi_fl = contract.sot_xi_fl.expect("prescribed SOT xi_fl");
+        let sigma_raw = contract.sot_sigma.expect("prescribed SOT sigma");
+        let sigma_norm = (sigma_raw[0] * sigma_raw[0]
+            + sigma_raw[1] * sigma_raw[1]
+            + sigma_raw[2] * sigma_raw[2])
+            .sqrt();
+        let sigma = [
+            sigma_raw[0] / sigma_norm,
+            sigma_raw[1] / sigma_norm,
+            sigma_raw[2] / sigma_norm,
+        ];
+        let envelope = contract
+            .sot_envelope
+            .as_ref()
+            .map(|envelope| match envelope {
+                fullmag_ir::TimeEnvelopeIR::Constant { value } => *value,
+                other => panic!("non-constant prescribed SOT envelope in SI oracle: {other:?}"),
+            })
+            .unwrap_or(1.0);
+        let thickness = contract.sot_thickness.expect("prescribed SOT thickness");
+        let gamma_e = plan.gyromagnetic_ratio / 1.2566370614359173e-6;
+        let omega_base = gamma_e * 1.054571817e-34 * current_density * envelope
+            / (2.0 * 1.602176634e-19 * plan.material.saturation_magnetisation * thickness);
+        let omega_dl = omega_base * xi_dl;
+        let omega_fl = omega_base * xi_fl;
+        let alpha = plan.material.damping;
+        let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        let damping_like = (omega_dl - alpha * omega_fl) * inv_gilbert;
+        let field_like = (omega_fl + alpha * omega_dl) * inv_gilbert;
+        let m_cross_sigma = [
+            m[1] * sigma[2] - m[2] * sigma[1],
+            m[2] * sigma[0] - m[0] * sigma[2],
+            m[0] * sigma[1] - m[1] * sigma[0],
+        ];
+        let m_cross_m_cross_sigma = [
+            m[1] * m_cross_sigma[2] - m[2] * m_cross_sigma[1],
+            m[2] * m_cross_sigma[0] - m[0] * m_cross_sigma[2],
+            m[0] * m_cross_sigma[1] - m[1] * m_cross_sigma[0],
+        ];
+        [
+            -damping_like * m_cross_m_cross_sigma[0] + field_like * m_cross_sigma[0],
+            -damping_like * m_cross_m_cross_sigma[1] + field_like * m_cross_sigma[1],
+            -damping_like * m_cross_m_cross_sigma[2] + field_like * m_cross_sigma[2],
+        ]
+    }
+
+    fn canonical_prescribed_sot_heun_reference(plan: &FemPlanIR) -> (Vec<[f64; 3]>, f64) {
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let k1: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .copied()
+            .map(|m| canonical_prescribed_sot_rhs_reference(plan, m))
+            .collect();
+        let stage: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .zip(k1.iter())
+            .map(|(m, k)| {
+                normalize_reference_m([m[0] + dt * k[0], m[1] + dt * k[1], m[2] + dt * k[2]])
+            })
+            .collect();
+        let k2: Vec<[f64; 3]> = stage
+            .iter()
+            .copied()
+            .map(|m| canonical_prescribed_sot_rhs_reference(plan, m))
+            .collect();
+        let final_m: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .zip(k1.iter().zip(k2.iter()))
+            .map(|(m, (k1, k2))| {
+                normalize_reference_m([
+                    m[0] + 0.5 * dt * (k1[0] + k2[0]),
+                    m[1] + 0.5 * dt * (k1[1] + k2[1]),
+                    m[2] + 0.5 * dt * (k1[2] + k2[2]),
+                ])
+            })
+            .collect();
+        let max_rhs = final_m
+            .iter()
+            .copied()
+            .map(|m| {
+                let rhs = canonical_prescribed_sot_rhs_reference(plan, m);
+                (rhs[0] * rhs[0] + rhs[1] * rhs[1] + rhs[2] * rhs[2]).sqrt()
+            })
+            .fold(0.0, f64::max);
+        (final_m, max_rhs)
     }
 
     fn normalize_reference_m(v: [f64; 3]) -> [f64; 3] {
@@ -8595,6 +8760,102 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM prescribed-SOT parity test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+            sot_drive: None,
+        });
+
+        let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(&plan);
+        let (reference_m, _, reference_h_eff, reference_report) = cpu_reference_single_step(&plan);
+        assert_vector_field_close(
+            "independent oracle versus FEM Rust reference m",
+            &reference_m,
+            &expected_m,
+            1e-12,
+            1e-14,
+        );
+        assert_scalar_close(
+            "independent oracle versus FEM Rust reference max_rhs",
+            reference_report.max_rhs_amplitude,
+            expected_max_rhs,
+            1e-12,
+            1e-9,
+        );
+
+        let mut backend = NativeFemBackend::create(&plan).expect("native FEM prescribed-SOT create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native prescribed-SOT FEM step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy SOT m");
+        let actual_h_eff = backend.copy_h_eff(plan.mesh.nodes.len()).expect("copy SOT H_eff");
+
+        assert_vector_field_close("prescribed SOT m", &actual_m, &expected_m, 5e-8, 1e-10);
+        assert_vector_field_close("prescribed SOT H_eff", &actual_h_eff, &reference_h_eff, 5e-8, 1e-6);
+        assert_scalar_close(
+            "prescribed SOT max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_max_rhs,
+            5e-8,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_rejects_prescribed_sot_on_gpu_before_native_call() {
+        let mut plan = make_exchange_only_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+            sot_drive: None,
+        });
+
+        let error = match NativeFemBackend::create(&plan) {
+            Ok(_) => panic!("native FEM GPU SOT must fail closed before native execution"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("prescribed_sot.fullmag.v1"));
+        assert!(error.message.contains("FEM GPU"));
+        assert!(error.message.contains("semantic_only"));
+        assert!(error.message.contains("fail closed"));
+    }
+
+    #[test]
     fn managed_openmpi_defaults_use_isolated_single_rank_launch() {
         let source = include_str!("native_fem.rs");
 
@@ -8644,6 +8905,13 @@ mod tests {
             lande_g: None,
             active_node_mask: None,
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
         assert_eq!(
             plan.spin_torque_contract
@@ -8715,6 +8983,13 @@ mod tests {
             lande_g: None,
             active_node_mask: None,
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
         fem_plan.current_density = Some([0.0, 0.0, 1.4e11]);
         fem_plan.stt_degree = Some(0.62);
@@ -8844,6 +9119,13 @@ mod tests {
             lande_g: None,
             active_node_mask: Some(vec![true, true, false, true, true]),
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
 
         let cpu_plan = native_plan_for_device(&plan, "cpu");
@@ -8899,6 +9181,13 @@ mod tests {
             lande_g: None,
             active_node_mask: Some(vec![true, true, false, true, true]),
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
 
         let dt = plan.fixed_timestep.expect("fixed timestep");

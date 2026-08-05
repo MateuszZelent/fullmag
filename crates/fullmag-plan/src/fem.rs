@@ -21,7 +21,9 @@ use crate::mesh::{
     study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
-use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
+use crate::spin_torque::{
+    resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
+};
 use crate::util::{
     mesh_workflow_metadata, problem_domain_frame, runtime_requests_cuda,
     shared_domain_mesh_requested, MU0,
@@ -2275,6 +2277,14 @@ pub(crate) fn plan_fem(
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fem)?;
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fem, &current_transports)?;
+    let sot = resolve_sot_fields(problem, &current_transports)?;
+    if sot.formula_version == Some("prescribed_sot.fullmag.v1") && runtime_requests_cuda(problem) {
+        return Err(PlanError {
+            reasons: vec![
+                "prescribed_sot.fullmag.v1 is reference-executable on FEM CPU only; FEM GPU remains semantic_only until a native CUDA SOT realization is implemented (fail-closed, no fallback)".to_string(),
+            ],
+        });
+    }
 
     let base_material =
         selected_material.expect("validation should have caught missing FEM material");
@@ -2660,7 +2670,7 @@ pub(crate) fn plan_fem(
         }
         None => (None, None),
     };
-    let spin_torque_contract = spin_torque
+    let stt_contract = spin_torque
         .slonczewski_formula_version
         .as_ref()
         .or(spin_torque.zhang_li_formula_version.as_ref())
@@ -2673,7 +2683,47 @@ pub(crate) fn plan_fem(
             lande_g: spin_torque.zhang_li_lande_g,
             active_node_mask: stt_active_node_mask,
             active_element_mask: stt_active_element_mask,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
+    let sot_active_node_mask = sot
+        .target
+        .as_ref()
+        .map(|target| {
+            materialize_fem_spin_torque_target_masks(
+                target,
+                mesh.nodes.len(),
+                mesh.cell_count(),
+                &object_segments,
+                &resolved_mesh_parts,
+            )
+            .map(|(nodes, _elements)| nodes)
+        })
+        .transpose()?;
+    let spin_torque_contract = stt_contract.or_else(|| {
+        sot.formula_version.map(|formula_version| fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: formula_version.to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: sot.target.clone(),
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: sot_active_node_mask.clone(),
+            active_element_mask: None,
+            sot_current_density: sot.current_density,
+            sot_xi_dl: sot.xi_dl,
+            sot_xi_fl: sot.xi_fl,
+            sot_sigma: sot.sigma,
+            sot_thickness: sot.thickness,
+            sot_envelope: sot.envelope.clone(),
+            sot_drive: sot.drive.clone(),
+        })
+    });
 
     if !problem.spin_transport_modules.is_empty() && ms_element_field.is_some() {
         return Err(PlanError {

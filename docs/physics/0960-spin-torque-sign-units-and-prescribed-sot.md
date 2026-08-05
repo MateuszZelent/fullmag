@@ -1,8 +1,8 @@
 # Spin-torque signs, SI units, and prescribed SOT
 
-- Status: draft — implementation-blocking normative physics
+- Status: active normative physics note; bounded FEM CPU implementation evidence
 - Owners: Fullmag core
-- Last updated: 2026-08-04
+- Last updated: 2026-08-05
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v2`,
@@ -23,9 +23,11 @@ direction while preserving a plausible magnitude.
 
 This note freezes the signs, dimensions, orientations, and realizations of
 Zhang–Li STT, Slonczewski STT, prescribed SOT, and torque obtained from a solved
-spin-current balance. It does not claim that any lane already implements or
-validates this complete contract. In particular, `PrescribedSpinOrbitTorque` is
-a local source model, not a Spin Hall drift-diffusion solver.
+spin-current balance. The current evidence is lane-specific: canonical
+prescribed SOT has bounded executable FDM CPU/GPU evidence and a bounded FEM
+CPU reference realization; FEM GPU remains semantic-only. In particular,
+`PrescribedSpinOrbitTorque` is a local source model, not a Spin Hall
+drift-diffusion solver.
 
 ## 2. Physical model
 
@@ -174,6 +176,24 @@ not prescribed SOT and lowers to `DriftDiffusionSpinTorque`.
 uses `PrescribedSpinOrbitTorque`; neither name proves capability
 `transport.spin.direct_she`.
 
+#### 2.4.1 Current FEM realization boundary (2026-08-05)
+
+The FEM CPU reference lane now evaluates `prescribed_sot.fullmag.v1` directly
+from the SI/Gilbert expression above. The plan carries the signed scalar
+current, `xi_DL`, `xi_FL`, `t_F`, constant time envelope, normalized
+`sigma_hat`, and an optional magnetic target-node mask. The native MFEM CPU
+path and the Rust FEM reference use the same backend-neutral algebra; both
+apply one Gilbert transform and reject malformed descriptor data before the
+solve. The managed contract compares an independent SI one-step Heun oracle,
+the Rust FEM reference, and the native MFEM CPU result, including `H_eff` and
+the maximum RHS amplitude.
+
+The FEM GPU lane is deliberately fail-closed. Planner and native-runner
+preflight reject `prescribed_sot.fullmag.v1` when the resolved MFEM device is
+CUDA, with no CPU fallback and no claim of GPU provenance. Stage-varying
+envelopes, GPU CUDA kernels, FEM multi-grid/convergence, long trajectories,
+and FEM↔FDM continuum agreement remain open qualification work.
+
 ### 2.5 Torque transferred from solved spin transport
 
 The charge-equivalent spin-current tensor is `Q_ia`, where the first index is
@@ -306,11 +326,11 @@ mask—through persistent device buffers. The target mask is owned by the GPU
 state mesh-region module; an absent mask means all magnetic nodes. FP64 parity
 precedes a separately bounded FP32 qualification.
 
-The managed FEM-GPU realization is intentionally bounded: the CUDA kernel and
-wrapper are executable and pass a one-step FP64 CPU↔GPU oracle, target-mask,
-and current-reversal contract. This does not yet prove a full RK trajectory,
-multi-grid convergence, cross-backend physical agreement, or production
-qualification. Before this descriptor was present, a requested
+The managed FEM-GPU Slonczewski realization is intentionally bounded: the CUDA
+kernel and wrapper are executable and pass a one-step FP64 CPU↔GPU oracle,
+target-mask, and current-reversal contract. This does not yet prove a full RK
+trajectory, multi-grid convergence, cross-backend physical agreement, or
+production qualification. Before this descriptor was present, a requested
 `slonczewski.fullmag.v2` CUDA execution failed before native construction; it
 must never reuse the legacy current norm, fixed-layer sign, or global-only
 mask.
@@ -435,11 +455,11 @@ The canonical parameter-to-ProblemIR contract is:
 | `SlonczewskiSTT.current_density` | `tuple[float, float, float]` | required unless `current_source` is used | `\\mathrm{A\\,m^{-2}}` | finite signed vector; `J dot n_stack` is retained | conventional charge-current density | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].current_density` |
 | `SlonczewskiSTT.free_layer_thickness_m` | `float` | required for canonical thin layer | `\\mathrm m` | finite and positive; no hidden geometry fallback in v2 | homogenized free-layer thickness | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].free_layer_thickness` |
 | `SlonczewskiSTT.stack_normal` | `vec3` | required for canonical v2 | `1` | finite non-zero vector normalized once at plan import | fixed-to-free stack orientation | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].stack_normal` |
-| `PrescribedSpinOrbitTorque.target` | `RegionRef` | required for canonical v1 | `1` | non-empty object/region reference; must resolve to an active magnetic target | prescribed SOT target region | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].target` |
-| `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive \| VectorCurrentDrive` | required; mutually exclusive drive forms | `A/m^2` or source binding | signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal | SOT current/polarization source and orientation | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].drive` |
-| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | `1` | finite signed damping-like efficiency | damping-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].xi_dl` |
-| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | `1` | finite signed field-like efficiency | field-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].xi_fl` |
-| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | `m` | finite and positive; no hidden cell-thickness fallback in v1 | ferromagnetic target thickness in the SOT prefactor | FDM CPU/GPU bounded reference slice; FEM semantic-only | `spin_torque_modules[].free_layer_thickness_m` |
+| `PrescribedSpinOrbitTorque.target` | `RegionRef` | required for canonical v1 | `1` | non-empty object/region reference; must resolve to an active magnetic target | prescribed SOT target region | FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only | `spin_torque_modules[].target` |
+| `PrescribedSpinOrbitTorque.drive` | `SignedScalarDrive \| VectorCurrentDrive` | required; mutually exclusive drive forms | `A/m^2` or source binding | signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal | SOT current/polarization source and orientation | FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only | `spin_torque_modules[].drive` |
+| `PrescribedSpinOrbitTorque.xi_dl` | `float` | required | `1` | finite signed damping-like efficiency | damping-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only | `spin_torque_modules[].xi_dl` |
+| `PrescribedSpinOrbitTorque.xi_fl` | `float` | `0.0` | `1` | finite signed field-like efficiency | field-like SOT efficiency | FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only | `spin_torque_modules[].xi_fl` |
+| `PrescribedSpinOrbitTorque.free_layer_thickness_m` | `float` | required | `m` | finite and positive; no hidden cell-thickness fallback in v1 | ferromagnetic target thickness in the SOT prefactor | FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only | `spin_torque_modules[].free_layer_thickness_m` |
 
 (problem-ir)=
 ### 4.2 ProblemIR representation
@@ -491,11 +511,13 @@ native call, rather than silently changing the formula or realization.
 (implementation-mapping)=
 ### 4.6 Implementation mapping
 
-The CPU implementation is the independent algebraic reference. The GPU path
-uses the same v2 expression in a device kernel and uploads only the optional
-target mask as mutable runtime state. No new physical state is added to
-`Context`; runtime ownership remains split between the STT descriptor and
-`FemGpuMeshRegionDeviceState`.
+The FDM CPU implementation is the independent algebraic reference for its
+canonical lane, while the FEM CPU implementation has an independent native
+MFEM evaluator plus a Rust reference evaluator. The FDM GPU and FEM
+Slonczewski GPU paths use their respective qualified device realizations; FEM
+GPU prescribed SOT is not implemented and is rejected before FFI. No new
+physical state is added to `Context`; FEM SOT runtime ownership is split
+between the append-only plan descriptor and the CPU interaction state.
 
 (validation)=
 ## 5. Validation strategy
@@ -544,10 +566,28 @@ Both tests pass for an eight-step fixed-step CPU-reference trajectory and an
 isolated `0.5x/1x/2x` signed-current increment envelope with an explicit target
 mask. This proves the current Rust-to-native descriptor, one Gilbert
 conversion, mask intersection, and FP64 trajectory parity for that small
-workload only. It does not prove FEM SOT execution, FP32, nonlinear current
-sweeps, stage-time envelopes, direct/inverse SHE, or production qualification;
-the canonical SOT capability therefore remains `semantic_only` in the
+workload only. It does not prove FEM GPU execution, FP32, nonlinear current
+sweeps, stage-time envelopes, direct/inverse SHE, or production qualification.
+The FDM lane status is recorded independently from the FEM lane in the
 capability matrix.
+
+### 5.5 Bounded managed FEM CPU prescribed-SOT evidence (2026-08-05)
+
+The managed recipe `just verify-fem-prescribed-sot-native-contract` builds the
+MFEM/CUDA container runtime, runs the native FEM source/descriptor contract,
+and executes
+`native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available`.
+The test forces the FEM CPU device and compares, at one fixed Heun step, an
+independent SI oracle against the Rust FEM reference and native MFEM CPU for
+the complete magnetization, `H_eff`, and maximum RHS amplitude. The workload
+also exercises a constant envelope with value `0.25`, a nontrivial field-like
+coefficient, signed current in `A/m^2`, and the complete node mask path.
+
+The same runner rejects a CUDA-resolved canonical SOT plan before the FFI call;
+the planner has an equivalent GPU gate. This is executable FEM CPU reference
+evidence, not FEM GPU support, stage-time envelope support, multi-grid
+convergence, long-time stability, FEM↔FDM continuum parity, or production
+qualification.
 
 ## 6. Completeness checklist
 
@@ -556,7 +596,7 @@ capability matrix.
 - [ ] Planner and scoped capability matrix
 - [ ] FDM CPU double oracle
 - [ ] FDM CUDA FP64 parity and FP32 qualification
-- [ ] FEM CPU/MFEM independent oracle
+- [x] FEM CPU/MFEM independent oracle (bounded one-step managed reference)
 - [ ] FEM GPU strict residency path
 - [ ] Stage-consistent runtime and rollback
 - [ ] Quantities, provenance, API, UI, and export
@@ -600,6 +640,7 @@ hidden change to `alpha`.
 | `backends/fdm/include/context.hpp` | `sot_params_from_ctx` | Native FDM SOT descriptor normalization and signed SI prefactor |
 | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
 | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
+| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_torque_from_config` | Backend-neutral canonical SOT SI/Gilbert algebra shared by FDM and the Rust FEM reference |
 | `backends/fdm/tests/prescribed_sot_contract.cpp` | `main` | Native algebraic canonical-SOT contract and sign/Gilbert checks |
 | `backends/fdm/tests/prescribed_sot_cuda_runtime.cu` | `main` | Managed FP64/FP32 native CUDA SOT runtime contract |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA canonical-SOT trajectory parity against CPU reference prefixes |
@@ -615,6 +656,14 @@ hidden change to `alpha`.
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_canonical_slonczewski_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated 0.5×/1×/2× signed-current increment-scaling contract |
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available` | Managed eight-step FP64 FEM CPU↔GPU Heun trajectory parity with canonical descriptor and target mask |
 | `crates/fullmag-runner/src/native_fem.rs` | `native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available` | Managed isolated FP64 0.5×/1×/2× signed-current scaling after tangential projection for FEM CPU and GPU |
+| `backends/fem/cpu/mfem/interactions/sot.cpp` | `add_sot_rhs_aos` | Native FEM CPU prescribed-SOT SI/Gilbert RHS evaluator |
+| `backends/fem/cpu/mfem/interactions/sot.hpp` | `initialize_sot_plan_fields` | Validate the append-only SOT descriptor, normalize the spin axis, and materialize the target mask |
+| `crates/fullmag-engine/src/fem.rs` | `sot_rhs_at` | Rust FEM reference realization of the canonical SOT source and target mask |
+| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | Resolve the FEM SOT contract and fail closed for the semantic-only GPU lane |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available` | Managed FEM CPU native/reference/oracle one-step contract |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_rejects_prescribed_sot_on_gpu_before_native_call` | Native-runner fail-closed gate for unresolved FEM GPU SOT |
+| `native/include/fullmag_fem.h` | `fullmag_fem_backend_create` | FEM ABI entry point consuming the append-only prescribed-SOT plan descriptor |
+| `crates/fullmag-fem-sys/src/lib.rs` | `fullmag_fem_backend_create` | Rust FFI declaration consuming the append-only prescribed-SOT descriptor |
 | `backends/fem/tests/stt_contract.cpp` | `main` | Module/source ownership contract |
 
 ```{math}

@@ -43,6 +43,7 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
         || ctx.magnetoelastic.enabled
         || ctx.stt.zhang_li_enabled
         || ctx.stt.slonczewski_enabled
+        || ctx.sot.enabled
         || (ctx.thermal_brown.temperature > 0.0);
 }
 

@@ -16,6 +16,8 @@ pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
 pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_SOT_FORMULA_NONE: u32 = 0;
+pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -634,6 +636,16 @@ pub struct fullmag_fem_plan_desc {
     pub stt_active_node_mask_len: u64,
     pub stt_active_element_mask: *const u8,
     pub stt_active_element_mask_len: u64,
+    pub has_prescribed_sot: i32,
+    pub sot_formula_version: u32,
+    pub sot_current_density_am2: f64,
+    pub sot_xi_dl: f64,
+    pub sot_xi_fl: f64,
+    pub sot_thickness: f64,
+    pub sot_envelope_value: f64,
+    pub sot_sigma: [f64; 3],
+    pub sot_active_node_mask: *const u8,
+    pub sot_active_node_mask_len: u64,
 }
 
 #[repr(C)]
@@ -2140,6 +2152,14 @@ mod tests {
         assert!(
             std::mem::offset_of!(fullmag_fem_plan_desc, stt_active_element_mask_len)
                 > std::mem::offset_of!(fullmag_fem_plan_desc, stt_formula_version)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, has_prescribed_sot)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, stt_active_element_mask_len)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, sot_active_node_mask_len)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, has_prescribed_sot)
         );
     }
 

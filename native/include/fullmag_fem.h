@@ -57,6 +57,11 @@ typedef enum {
     FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1 = 1,
 } fullmag_fem_stt_operator_version;
 
+typedef enum {
+    FULLMAG_FEM_SOT_FORMULA_NONE = 0,
+    FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1 = 1,
+} fullmag_fem_sot_formula_version;
+
 typedef struct {
     double atol;
     double rtol;
@@ -570,6 +575,18 @@ typedef struct {
     uint64_t                   stt_active_node_mask_len;
     const uint8_t             *stt_active_element_mask;
     uint64_t                   stt_active_element_mask_len;
+
+    /* Append-only prescribed spin-orbit torque extension. */
+    int                        has_prescribed_sot;
+    uint32_t                   sot_formula_version;
+    double                     sot_current_density_am2;
+    double                     sot_xi_dl;
+    double                     sot_xi_fl;
+    double                     sot_thickness;
+    double                     sot_envelope_value;
+    double                     sot_sigma[3];
+    const uint8_t             *sot_active_node_mask;
+    uint64_t                   sot_active_node_mask_len;
 } fullmag_fem_plan_desc;
 
 /*
