@@ -7,10 +7,10 @@
 **Dedykowany worktree:** `/tmp/fullmag-spin-transport`, `codex/spin-transport-m0-m3@ab2f686afe0aaa60d269966bd87388c0e59e14c6`  \
 **Merge-base:** `0612941f3b99137cbb171c183452368cc0f71029`; gałąź ma `109` własnych commitów i jest `271` commitów za aktualnym `master`  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-08-04  \
+**Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@835e7500a`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@1623979461`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
@@ -8060,3 +8060,58 @@ produkcyjnej**. Następne wymagane bramy to: jawny rejected-step rollback test,
 materializacja `Tabulated`, event-aware wszystkie integratory, FP32, długa
 trajektoria, jeden serializowany artefakt siatki FEM CPU/GPU, trzy poziomy `h`,
 kontrolowany sweep `dt`, pełne pole oraz ilościowa FEM↔FDM common-limit.
+
+## 32.79. Świeża brama FEM↔FDM dla M1/M2 SHE (2026-08-05)
+
+### 32.79.1. Zakres i pytanie audytowe
+
+Na pytanie, czy wcześniejsze porównanie obejmowało tylko FDM, wykonano pełny
+managed rerun ścieżki FEM steady transportu. Zakres obejmuje trzy odrębne
+poziomy dowodu: (1) native FEM CPU/MFEM kontrakty ABI i solvera, (2) liniowy
+M1 direct-SHE common-limit z profilem analitycznym oraz FDM, (3) reciprocal M2
+FDM↔FEM w 1D-invariant i 3D z niezerowym SHE/iSHE/AHE. Wszystkie workloady są
+CPU-double; obecność obrazu CUDA służy wyłącznie powtarzalnemu managed buildowi
+i nie oznacza kwalifikacji FEM GPU transportu.
+
+### 32.79.2. Wykonane recepty i wyniki
+
+Wykonano przez repozytoryjny `just` i kontener MFEM:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-stt-native-contract
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-m2-common-limit-contract
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-m2-3d-common-limit-contract
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-native-contract
+```
+
+Wszystkie cztery recepty zakończyły się `exit=0`. Istotne wyniki ilościowe:
+
+| Workload | FEM evidence | FEM↔FDM evidence | Wynik |
+|---|---|---|---|
+| Slonczewski v2 common-limit | native MFEM step, independent SI oracle | jeden krok Heuna, zgodne `m` na węzłach FEM z jednokomórkowym FDM reference | `pass`, bounded |
+| M1 direct SHE | conforming H1/P1 CPU, residual < `1e-10` | profile error względem analitycznego/FDM: `3.10e-2 → 8.64e-3 → 2.26e-3` dla `Nz=8,16,32` | `pass`, zbieżność |
+| M2 reciprocal 1D | monolityczny H1/P1, charge/spin residual < `1e-10` | max `|V_FDM−V_FEM|`: `5.60e-4 → 1.62e-4 → 4.36e-5 V`; max `|mu_s,FDM−mu_s,FEM|`: `6.72e-3 → 1.95e-3 → 5.23e-4 V` | `pass`, zbieżność |
+| M2 reciprocal 3D SHE/iSHE/AHE | conforming tetrahedral FEM CPU, residual/balance gate | `(V,mu_s)` profile error: `(1.14e-4,1.93e-2)`, `(1.59e-4,6.52e-3)`, `(5.65e-5,1.88e-3)` dla `(2,2,4)→(4,4,8)→(8,8,16)` | `pass`, bounded 3D |
+| API/artifacts/provenance | FEM transport fields and revisions read through v2 | no hidden FDM fallback in tested route | `pass`, contract |
+
+Wspólne porównania używają tego samego SI descriptora, orientacji osi, BC,
+parametrów przewodności i `lambda_sf`; wartości FEM są porównywane jako
+plane-averages/volume-consistent functionals z FDM cell-centred values. Każdy
+backend ma osobny residual/balance check przed obliczeniem błędu cross-backend.
+
+### 32.79.3. Granica kwalifikacji po rerun
+
+| Zakres | Status | Dlaczego nie `validated` |
+|---|---|---|
+| FEM CPU M1 conforming H1/P1 | `reference_executable` | brak broken/subdomain/mortar/mixing/SML i pełnego sweepu materiałów |
+| FEM CPU M2 bounded | `reference_executable` | brak interfejsów N/F/T, GPU, transient i pełnej macierzy parametrów |
+| FEM↔FDM M1/M2 common-limit | `reference_executable` | kontrolowane profile CPU-double, bez wspólnego workloadu magnetycznego/transient |
+| FEM GPU transport | `semantic_only` | brak wykonawczego GPU transport lane i CPU↔GPU parity |
+| FEM dynamiczny Oersted z solved current | `not_qualified` | obecne bramy obejmują prescribed/cylinder oraz OE-T0/F1/F2 kontrakty, nie pełny produkcyjny łańcuch |
+| FEM↔FDM równoważność produktu | `equivalence_established=false` | brak wspólnego artefaktu siatki, trajektorii LLG, sweepu `h/dt` i continuum limit |
+
+Wniosek audytowy: wcześniejsze testy FDM nie były jedynym dowodem. FEM ma
+wykonywalne CPU/MFEM common-limit dla STT oraz M1/M2 SHE, w tym 3D profile z
+monotoniczną zbieżnością spinu. Jest to jednak wąski, uczciwie opisany zakres
+referencyjny; nie zamyka produkcyjnego FEM STT/SOT/SHE ani pełnej parity FEM↔FDM.
+Ocena celu pozostaje **88% implementacji / 62% gotowości produkcyjnej**.
