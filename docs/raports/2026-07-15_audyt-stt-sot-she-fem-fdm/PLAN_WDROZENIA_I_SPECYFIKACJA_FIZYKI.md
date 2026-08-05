@@ -8217,3 +8217,47 @@ siatki, exchange, demaga, trajektorii wielokrokowej ani continuum limit.
 Wynik wzmacnia dowód FEM, że wcześniejsze porównanie nie było wyłącznie FDM,
 ale nie podnosi globalnej oceny **88% implementacji / 62% gotowości
 produkcyjnej**.
+
+## 32.82. FEM CPU↔CUDA prescribed SOT: ośmiokrokowa trajektoria na wspólnej siatce (2026-08-05)
+
+### 32.82.1. Zakres testu
+
+Dodano test `native_fem_prescribed_sot_fixed_trajectory_cpu_gpu_parity_when_mfem_stack_is_available`.
+CPU i CUDA dostają ten sam serializowany w pamięci mesh `two_tets`, te same
+pięć węzłów, descriptor `prescribed_sot.fullmag.v1`, aktywną maskę
+`[true,true,false,true,true]`, `J=1e11 A/m^2`, `xi_DL=0.12`, `xi_FL=-0.02`,
+`sigma_hat=(0,1,0)`, `t_F=1.5 nm`, stałą obwiednię `1` i `dt=1e-15 s`.
+Exchange pozostaje włączony, demag i pole zewnętrzne są wyłączone, a oba
+backendy wykonują osiem kolejnych kroków Heuna bez CPU fallbacku.
+
+### 32.82.2. Wynik managed
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-trajectory-parity-contract
+exit=0
+```
+
+Test zakończył się:
+
+```text
+test result: ok. 1 passed; 0 failed; 971 filtered out
+```
+
+Na każdym z ośmiu zaakceptowanych kroków zgadzały się pełne wektory
+magnetyzacji CPU/CUDA oraz `max_rhs`. Najgorszy zaobserwowany błąd pola wyniósł
+`L2=4.440892e-16`, `Linf=2.220446e-16`; nie wystąpił transfer całego pola jako
+fallback ani rozjazd czasu akceptacji.
+
+### 32.82.3. Granica kwalifikacji
+
+| Zakres | Status | Pozostaje otwarte |
+|---|---|---|
+| FEM CPU↔CUDA prescribed SOT, 8 kroków Heun, FP64, wspólny mesh | `reference_executable` | długie trajektorie, sweep `dt`, FP32 |
+| FEM GPU rollback przy odrzuconym kroku/event knot | `not_qualified` | urządzeniowy snapshot/restore i retry |
+| RK4/RK23/RK45 oraz FSAL | `not_qualified` | osobne temporal-parity i rollback gates |
+| FEM CPU↔CUDA z exchange+demag oraz FEM↔FDM continuum | `not_qualified` | wspólny airbox/pole, trzy poziomy `h`, kontrola `dt` |
+
+To zamyka wyłącznie bounded temporal parity dla prescribed SOT na FEM. Nie
+awansuje transportu FEM, solved-current Oersteda, efektu naskórkowego,
+interfejsów SML ani pełnej zgodności produktu; globalna ocena pozostaje
+**88% implementacji / 62% gotowości produkcyjnej**.

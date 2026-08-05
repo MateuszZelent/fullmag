@@ -7,13 +7,13 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and non-tabulated stage-time FEM GPU reference realizations, including a managed CPU Heun rollback retry at the same pulse knot and a one-cell FDM versus multi-node FEM constant-envelope common-limit. Full trajectory, GPU/all-integrator rollback, multi-grid, and continuum qualification remain open."
+      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and non-tabulated stage-time FEM GPU reference realizations, including a managed CPU Heun rollback retry at the same pulse knot, a one-cell FDM versus multi-node FEM constant-envelope common-limit, and an eight-step CPU/CUDA fixed-step trajectory on one mesh. GPU/all-integrator rollback, multi-grid, and continuum qualification remain open."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "reference_executable",
-      "reason": "Managed CUDA Slonczewski one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, isolated 0.5x/1x/2x tangential current-scaling, constant-envelope prescribed-SOT one-step, and sinusoidal stage-time prescribed-SOT Heun SI-oracle contracts pass. GPU event-aware rollback, full integrator-family, tabulated artifacts, multi-grid, and cross-backend qualification remain open; rollback is bounded only on the FEM CPU Heun lane."
+      "reason": "Managed CUDA Slonczewski one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, isolated 0.5x/1x/2x tangential current-scaling, constant-envelope prescribed-SOT one-step, sinusoidal stage-time prescribed-SOT Heun SI-oracle, and an eight-step prescribed-SOT CPU/CUDA trajectory on one mesh pass. GPU event-aware rollback, full integrator-family, tabulated artifacts, multi-grid, and cross-backend qualification remain open; rollback is bounded only on the FEM CPU Heun lane."
     },
     {
       "solver": "FDM",

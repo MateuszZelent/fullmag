@@ -209,6 +209,13 @@ contract now compares the same signed descriptor, SI constants, Gilbert
 damping, and constant envelope. It is a magnetization-algebra check; it does
 not establish mesh or continuum equivalence.
 
+The managed FEM lane also runs an eight-step fixed-step Heun trajectory on the
+same two-tetra mesh with CPU and CUDA consuming the identical prescribed-SOT
+descriptor, active-node mask, and `dt=1e-15 s`. The complete magnetization and
+scalar RHS metrics agree at every accepted step. This is a bounded FEM
+CPU/GPU temporal-parity result; it does not qualify FP32, adaptive rejection,
+other RK tableaus, or continuum FEM↔FDM equivalence.
+
 #### 2.4.2 Stage-time envelope contract
 
 For an explicit RK stage `i`, the source multiplier is evaluated at
@@ -641,9 +648,11 @@ Both use the same two-stage sinusoidal envelope, evaluate it at `t_n+c_i dt`,
 and compare the complete `m`, `H_eff`, and `max_rhs_amplitude` with the
 independent SI Heun oracle. The native evaluator covers five non-tabulated
 forms; this managed CPU/GPU oracle directly exercises the sinusoidal form.
-It does not yet prove event clipping/rollback across the full integrator family,
-tabulated artifacts, FP32, multi-grid convergence, long-time stability, or
-FEM↔FDM continuum parity and production qualification.
+The same managed lane now also compares an eight-step fixed-step CPU/CUDA
+trajectory on one shared mesh and descriptor. It does not yet prove event
+clipping/rollback across the full integrator family, tabulated artifacts,
+FP32, multi-grid convergence, long-time stability, or FEM↔FDM continuum parity
+and production qualification.
 
 ## 6. Completeness checklist
 
@@ -658,6 +667,7 @@ FEM↔FDM continuum parity and production qualification.
 - [x] FEM event-knot clipping for pulse/PWL envelopes (bounded CPU/GPU runtime and native contract tests)
 - [x] Bounded FEM CPU Heun rejected-step rollback and pulse event bookkeeping
 - [x] Bounded FEM CPU↔FDM prescribed-SOT common-limit (one-cell/multi-node, constant envelope)
+- [x] Bounded FEM CPU↔CUDA prescribed-SOT eight-step fixed-step trajectory parity
 - [ ] Rejected-step rollback and event bookkeeping across GPU and all FEM integrators
 - [ ] Quantities, provenance, API, UI, and export
 - [ ] Managed runtime and browser validation evidence

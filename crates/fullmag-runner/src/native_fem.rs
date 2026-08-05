@@ -9586,6 +9586,78 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_prescribed_sot_fixed_trajectory_cpu_gpu_parity_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: Some(vec![true, true, false, true, true]),
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+            sot_drive: None,
+        });
+
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+        let dt = plan.fixed_timestep.expect("fixed SOT trajectory timestep");
+        let mut cpu = NativeFemBackend::create(&cpu_plan).expect("native FEM SOT CPU create");
+        let mut gpu = NativeFemBackend::create(&gpu_plan).expect("native FEM SOT GPU create");
+
+        for step in 1..=8 {
+            let cpu_stats = cpu
+                .step(dt)
+                .expect("native FEM SOT CPU trajectory step");
+            let gpu_stats = gpu
+                .step(dt)
+                .expect("native FEM SOT GPU trajectory step");
+            let cpu_m = cpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT CPU trajectory m");
+            let gpu_m = gpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT GPU trajectory m");
+            assert_vector_field_parity(
+                &format!("prescribed SOT FEM CPU/GPU trajectory step {step}"),
+                &cpu_m,
+                &gpu_m,
+                5e-7,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("prescribed SOT CPU/GPU time step {step}"),
+                cpu_stats.time,
+                gpu_stats.time,
+                5e-7,
+                1e-24,
+            );
+            assert_scalar_close(
+                &format!("prescribed SOT CPU/GPU max_rhs step {step}"),
+                cpu_stats.max_dm_dt,
+                gpu_stats.max_dm_dt,
+                5e-7,
+                1e-9,
+            );
+        }
+    }
+
+    #[test]
     fn native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available() {
         if !native_cpu_gpu_parity_available(false) {
             return;
