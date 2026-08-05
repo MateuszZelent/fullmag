@@ -275,6 +275,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_rk4_accept_kernel.cu
             gpu/cuda/integrators/rk/rk_snapshot.cu
             gpu/cuda/integrators/rk/rk_slonczewski_torque.cu
+            gpu/cuda/integrators/rk/rk_sot_torque.cu
             gpu/cuda/integrators/rk/rk_scalar_readback.cu
             gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_schedule.cu
@@ -289,6 +290,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
             gpu/cuda/interactions/oersted/oersted_kernels.cu
             gpu/cuda/interactions/stt/stt_kernels.cu
+            gpu/cuda/interactions/sot/sot_kernels.cu
             gpu/cuda/interactions/thermal/thermal_kernels.cu
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
@@ -622,6 +624,18 @@ target_include_directories(fem_cuda_slonczewski_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
+
+add_executable(fem_cuda_sot_contract tests/cuda_sot_contract.cpp)
+target_link_libraries(fem_cuda_sot_contract PRIVATE fullmag_fem)
+if(FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_cuda_sot_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_cuda_sot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_sot_contract COMMAND fem_cuda_sot_contract)
 
 add_executable(fem_cuda_rk_guard_contract tests/cuda_rk_guard_contract.cpp)
 target_link_libraries(fem_cuda_rk_guard_contract PRIVATE fullmag_fem)

@@ -7,13 +7,13 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "reference_executable",
-    "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT now has a bounded FEM CPU reference realization. Full trajectory, multi-grid, and continuum qualification remain open."
+      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and constant-envelope FEM GPU reference realizations. Full trajectory, multi-grid, and continuum qualification remain open."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "reference_executable",
-    "reason": "Managed CUDA Slonczewski one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, and isolated 0.5x/1x/2x tangential current-scaling contracts pass; prescribed SOT is semantic-only and fails closed on FEM GPU. Full integrator-family, multi-grid, and cross-backend qualification remain open."
+      "reason": "Managed CUDA Slonczewski one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, isolated 0.5x/1x/2x tangential current-scaling, and constant-envelope prescribed-SOT one-step SI-oracle contracts pass. Full integrator-family, stage-time envelope, multi-grid, and cross-backend qualification remain open."
     },
     {
       "solver": "FDM",
@@ -25,7 +25,7 @@
       "solver": "FDM",
       "device": "GPU",
       "status": "production_executable",
-    "reason": "Managed CUDA FP64 parity passes for the Slonczewski one-step/eight-step trajectories plus bounded isolated 0.5x/1x/2x current scaling, and canonical prescribed-SOT has a separate bounded eight-step/scaling contract; FEM GPU prescribed SOT remains semantic-only. FP32 envelope, nonlinear current sweeps, cross-backend parity, and full qualification remain open."
+      "reason": "Managed CUDA FP64 parity passes for the Slonczewski one-step/eight-step trajectories plus bounded isolated 0.5x/1x/2x current scaling, and canonical prescribed-SOT has a separate bounded eight-step/scaling contract; FEM GPU adds a constant-envelope one-step SI-oracle contract. FP32 envelope, nonlinear current sweeps, cross-backend parity, and full qualification remain open."
     }
   ],
   "equations": [
@@ -47,7 +47,7 @@
     {
       "id": "prescribed-sot-gilbert",
       "symbols": ["gamma_e", "hbar", "e", "Ms", "tF", "J_signed", "xi_DL", "xi_FL", "m_p_sigma", "Omega_DL", "Omega_FL"],
-      "sources": ["fdm-sot-cpu-scales", "fdm-sot-cpu-torque", "fdm-sot-gpu-helper", "fdm-sot-gpu-context", "fem-sot-cpu", "fem-sot-cpu-context", "fem-sot-rust-reference"]
+      "sources": ["fdm-sot-cpu-scales", "fdm-sot-cpu-torque", "fdm-sot-gpu-helper", "fdm-sot-gpu-context", "fem-sot-cpu", "fem-sot-cpu-context", "fem-sot-rust-reference", "fem-sot-gpu-kernel"]
     }
   ],
   "symbols": [
@@ -102,9 +102,12 @@
     {"id": "fem-sot-cpu", "path": "backends/fem/cpu/mfem/interactions/sot.cpp", "symbol": "add_sot_rhs_aos", "responsibility": "Native FEM CPU prescribed-SOT SI/Gilbert RHS evaluator."},
     {"id": "fem-sot-cpu-context", "path": "backends/fem/cpu/mfem/interactions/sot.hpp", "symbol": "initialize_sot_plan_fields", "responsibility": "Validate the append-only SOT descriptor, normalize the spin axis, and materialize the target mask."},
     {"id": "fem-sot-rust-reference", "path": "crates/fullmag-engine/src/fem.rs", "symbol": "sot_rhs_at", "responsibility": "Rust FEM reference realization of the canonical SOT source and target mask."},
-    {"id": "fem-sot-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "Resolve the FEM SOT contract and fail closed for the semantic-only GPU lane."},
+    {"id": "fem-sot-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/sot/sot_kernels.cu", "symbol": "prescribed_sot_rhs_kernel", "responsibility": "Evaluate the device-resident canonical prescribed-SOT SI/Gilbert source with magnetic and target masks."},
+    {"id": "fem-sot-gpu-wrapper", "path": "backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu", "symbol": "gpu_rk_add_prescribed_sot_torque", "responsibility": "Forward the immutable FEM SOT descriptor into the device-resident RK direct-torque lane."},
+    {"id": "fem-sot-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "Resolve the FEM SOT contract and preserve the bounded constant-envelope GPU reference lane."},
     {"id": "fem-sot-runner-oracle", "path": "crates/fullmag-runner/src/native_fem.rs", "symbol": "native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available", "responsibility": "Managed FEM CPU native/reference/oracle one-step contract."},
-    {"id": "fem-sot-runner-gpu-gate", "path": "crates/fullmag-runner/src/native_fem.rs", "symbol": "native_fem_rejects_prescribed_sot_on_gpu_before_native_call", "responsibility": "Native-runner fail-closed gate for unresolved FEM GPU SOT."},
+    {"id": "fem-sot-runner-gpu-oracle", "path": "crates/fullmag-runner/src/native_fem.rs", "symbol": "native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available", "responsibility": "Managed FEM GPU one-step CPU/reference/oracle contract for the constant-envelope SOT lane."},
+    {"id": "fem-sot-cuda-contract", "path": "backends/fem/tests/cuda_sot_contract.cpp", "symbol": "main", "responsibility": "Managed CUDA prescribed-SOT mask, sign, SI-oracle, and CPU/GPU algebra contract."},
     {"id": "fem-sot-abi-header", "path": "native/include/fullmag_fem.h", "symbol": "fullmag_fem_backend_create", "responsibility": "FEM ABI entry point consuming the append-only prescribed-SOT plan descriptor."},
     {"id": "fem-sot-abi-rust", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "fullmag_fem_backend_create", "responsibility": "Rust FFI declaration consuming the append-only prescribed-SOT descriptor."},
     {"id": "stt-source-contract", "path": "backends/fem/tests/stt_contract.cpp", "symbol": "main", "responsibility": "Source ownership and descriptor-completeness contract."}
@@ -114,11 +117,11 @@
       {"python": "SlonczewskiSTT.current_density", "type": "tuple[float, float, float]", "default": "required unless `current_source` is used", "si_unit": "\\\\mathrm{A\\\\,m^{-2}}", "validation": "finite signed vector; `J dot n_stack` is retained", "meaning": "conventional charge-current density", "backend_support": "FDM CPU/GPU and FEM CPU/GPU reference lanes", "problem_ir": "spin_torque_modules[].current_density"},
       {"python": "SlonczewskiSTT.free_layer_thickness_m", "type": "float", "default": "required for canonical thin layer", "si_unit": "\\\\mathrm m", "validation": "finite and positive; no hidden geometry fallback in v2", "meaning": "homogenized free-layer thickness", "backend_support": "FDM CPU/GPU and FEM CPU/GPU reference lanes", "problem_ir": "spin_torque_modules[].free_layer_thickness"},
       {"python": "SlonczewskiSTT.stack_normal", "type": "vec3", "default": "required for canonical v2", "si_unit": "1", "validation": "finite non-zero vector normalized once at plan import", "meaning": "fixed-to-free stack orientation", "backend_support": "FDM CPU/GPU and FEM CPU/GPU reference lanes", "problem_ir": "spin_torque_modules[].stack_normal"},
-      {"python": "PrescribedSpinOrbitTorque.target", "type": "RegionRef", "default": "required for canonical v1", "si_unit": "1", "validation": "non-empty object/region reference; must resolve to an active magnetic target", "meaning": "prescribed SOT target region", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only", "problem_ir": "spin_torque_modules[].target"},
-      {"python": "PrescribedSpinOrbitTorque.drive", "type": "SignedScalarDrive | VectorCurrentDrive", "default": "required; mutually exclusive drive forms", "si_unit": "`A/m^2` or source binding", "validation": "signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal", "meaning": "SOT current/polarization source and orientation", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only", "problem_ir": "spin_torque_modules[].drive"},
-      {"python": "PrescribedSpinOrbitTorque.xi_dl", "type": "float", "default": "required", "si_unit": "1", "validation": "finite signed damping-like efficiency", "meaning": "damping-like SOT efficiency", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only", "problem_ir": "spin_torque_modules[].xi_dl"},
-      {"python": "PrescribedSpinOrbitTorque.xi_fl", "type": "float", "default": "0.0", "si_unit": "1", "validation": "finite signed field-like efficiency", "meaning": "field-like SOT efficiency", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only", "problem_ir": "spin_torque_modules[].xi_fl"},
-      {"python": "PrescribedSpinOrbitTorque.free_layer_thickness_m", "type": "float", "default": "required", "si_unit": "m", "validation": "finite and positive; no hidden cell-thickness fallback in v1", "meaning": "ferromagnetic target thickness in the SOT prefactor", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU reference-executable; FEM GPU semantic-only", "problem_ir": "spin_torque_modules[].free_layer_thickness_m"}
+      {"python": "PrescribedSpinOrbitTorque.target", "type": "RegionRef", "default": "required for canonical v1", "si_unit": "1", "validation": "non-empty object/region reference; must resolve to an active magnetic target", "meaning": "prescribed SOT target region", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes", "problem_ir": "spin_torque_modules[].target"},
+      {"python": "PrescribedSpinOrbitTorque.drive", "type": "SignedScalarDrive | VectorCurrentDrive", "default": "required; mutually exclusive drive forms", "si_unit": "`A/m^2` or source binding", "validation": "signed scalar requires finite `current_density_Apm2` and nonzero `sigma`; vector source requires nonparallel finite drive direction and interface normal", "meaning": "SOT current/polarization source and orientation", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes", "problem_ir": "spin_torque_modules[].drive"},
+      {"python": "PrescribedSpinOrbitTorque.xi_dl", "type": "float", "default": "required", "si_unit": "1", "validation": "finite signed damping-like efficiency", "meaning": "damping-like SOT efficiency", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes", "problem_ir": "spin_torque_modules[].xi_dl"},
+      {"python": "PrescribedSpinOrbitTorque.xi_fl", "type": "float", "default": "0.0", "si_unit": "1", "validation": "finite signed field-like efficiency", "meaning": "field-like SOT efficiency", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes", "problem_ir": "spin_torque_modules[].xi_fl"},
+      {"python": "PrescribedSpinOrbitTorque.free_layer_thickness_m", "type": "float", "default": "required", "si_unit": "m", "validation": "finite and positive; no hidden cell-thickness fallback in v1", "meaning": "ferromagnetic target thickness in the SOT prefactor", "backend_support": "FDM CPU/GPU bounded reference slice; FEM CPU/GPU bounded reference slice for constant envelopes", "problem_ir": "spin_torque_modules[].free_layer_thickness_m"}
     ]
   }
 }

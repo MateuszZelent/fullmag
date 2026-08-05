@@ -168,6 +168,7 @@ kontraktem fizycznym. Żaden z tych faktów nie oznacza ilościowej zgodności.
 | FEM OE TSan | instrumentation audit przechodzi, runtime kończy się `ThreadSanitizer: unexpected memory mapping` | blokada środowiskowa; **nie** dowód błędu fizyki |
 | M3 FDM CPU/double/strict | `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/m3-reference CARGO_INCREMENTAL=0 just verify-fdm-transient-spin-m3-reference`: `RC:0`; public subprocess resume, 15 komend Rust (26 przypadków testowych) i `11 passed` Python | `reference_executable` gate zamknięty dla jawnego seed/noise workloadu |
 | FEM STT | Po przebudowie zarządzanego obrazu (`just build target=fem-gpu-runtime`) katalog PETSc/SLEPc jest obecny; świeże `just verify-fem-stt-native-contract` buduje `fem_stt_contract` i przechodzi test ABI `versioned_stt_extension_is_append_only_after_legacy_plan_prefix` | `reference_executable` dla natywnego kontraktu/ABI; brak awansu GPU trajectory, pełnej integracji runtime i `validated` |
+| FEM prescribed SOT | `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-native-contract`: native CPU reference, CUDA interaction oracle i rzeczywisty native FEM GPU one-step przechodzą na stałym envelope | `reference_executable` CPU/GPU tylko dla bounded FP64 one-step; stage-time envelope, multi-grid, long trajectory, FEM↔FDM i `validated` pozostają otwarte |
 | Cały pakiet Python | bieżący rerun: `1407 passed, 46 failed, 2 skipped, 69 warnings, 550 subtests`; porażki dotyczą istniejących benchmark/mesh/SP4 fixtures, nie nowego `hybrid` slice | repozytorium nie ma zielonego full-suite; nie wolno twierdzić o pełnej integracji |
 
 Naprawiono również receptę M3, która ignorowała `CARGO_TARGET_DIR` i szukała
@@ -185,10 +186,10 @@ BORIS–Fullmag nie zbiega się na drobnych siatkach, a `mu_s`, `Q_ia`, flux i
 torque nie są jeszcze porównywalne ilościowo. Bounded reciprocal M2 FEM CPU ma
 `reference_executable` wyłącznie w zakresie opisanym w sekcji 32.55; nie
 otrzymuje `validated_workloads`.
-Ocena celu pozostaje konserwatywnie **86% implementacji / 60% gotowości
-produkcyjnej**: bounded M2 zamyka wykonywalny wycinek, ale nie kompensuje
-otwartych bram reciprocal parity, FEM STT, GPU/FEM cross-backend, pełnej
-macierzy i zielonego full-suite.
+Ocena celu pozostaje konserwatywnie **88% implementacji / 62% gotowości
+produkcyjnej**: bounded M2 i kolejne wykonywalne wycinki FEM zamykają część
+toru referencyjnego, ale nie kompensują otwartych bram reciprocal parity, FEM
+STT, GPU/FEM cross-backend, pełnej macierzy i zielonego full-suite.
 
 ---
 
@@ -7762,7 +7763,8 @@ Implementacja obejmuje pełną ścieżkę dla ograniczonego kontraktu:
 
 - `ProblemIR/FemPlanIR`: append-only pola planu SOT (`J`, `xi_DL`, `xi_FL`,
   `t_F`, `sigma`, stały envelope, node mask);
-- planner: materializacja kontraktu i jawny gate `FEM GPU = semantic_only`;
+- planner: w stanie historycznym tego wpisu materializacja kontraktu i jawny
+  gate `FEM GPU = semantic_only` (usunięty przez §32.76 dla stałego envelope);
 - C ABI + `fullmag-fem-sys`: nowe pola są dopisane za istniejącym rozszerzeniem
   STT, bez zmiany prefiksu ABI;
 - native FEM CPU: walidacja deskryptora w `sot.cpp`, lokalny RHS w każdej
@@ -7801,11 +7803,13 @@ przyjmował konfigurację `sot`, ale nie dodawał jej do RHS. Wspólny helper
 `prescribed_sot_torque_from_config` i `sot_rhs_at` zostały włączone do każdej
 kompozycji RHS FEM; test referencyjny przeszedł dopiero po tej korekcie.
 
-### 32.75.4. Granica FEM GPU i pozostałe bramy
+### 32.75.4. Granica FEM GPU i pozostałe bramy (stan sprzed §32.76)
 
-FEM GPU nie jest jeszcze wykonawczym SOT. Planner oraz native runner odrzucają
-plan z `prescribed_sot.fullmag.v1` i urządzeniem CUDA przed wywołaniem FFI;
-nie ma ukrytego CPU fallbacku ani fałszywej proweniencji GPU. Brakujące prace:
+W momencie zamknięcia tego wpisu FEM GPU nie był jeszcze wykonawczym SOT.
+Planner oraz native runner odrzucały plan z `prescribed_sot.fullmag.v1` i
+urządzeniem CUDA przed wywołaniem FFI; nie było ukrytego CPU fallbacku ani
+fałszywej proweniencji GPU. Ten historyczny blocker został usunięty w §32.76.
+Pozostające prace:
 
 1. device-resident CUDA SOT z identycznym deskryptorem i maską;
 2. envelope zależny od czasu/stage i rollback odrzuconych etapów;
@@ -7815,8 +7819,81 @@ nie ma ukrytego CPU fallbacku ani fałszywej proweniencji GPU. Brakujące prace:
 5. walidacja wielomateriałowa, interfejsowa i cross-backend oraz dopiero potem
    ewentualna promocja `validated_workloads`.
 
-Po tej zmianie status SOT jest lane-specific: FDM pozostaje zgodny z własnym
-bounded evidence, FEM CPU jest `reference_executable` dla stałego envelope i
-jednego kroku, a FEM GPU pozostaje `semantic_only`. Nie zmienia to oceny
-zgodności SP5 ani globalnej oceny **88% implementacji / 62% gotowości
-produkcyjnej**; zwiększa natomiast rzeczywisty, sprawdzony zakres FEM.
+Po tej zmianie historyczny status SOT pozostaje lane-specific dla §32.75:
+FDM zachowuje własne bounded evidence, FEM CPU jest `reference_executable`, a
+FEM GPU było jeszcze `semantic_only`. Aktualny status FEM GPU opisuje §32.76;
+nie zmienia to oceny zgodności SP5 ani globalnej oceny **88% implementacji /
+62% gotowości produkcyjnej**.
+
+## 32.76. Canonical prescribed SOT: FEM GPU device-resident reference slice (2026-08-05)
+
+### 32.76.1. Implementacja CUDA i wspólny kontrakt
+
+Domknięto pierwszy wykonywalny tor CUDA dla `prescribed_sot.fullmag.v1` na
+FEM. Jest to lokalny, stały-envelope source w device-resident RK direct-torque
+path, a nie solver SHE. Kernel
+`backends/fem/gpu/cuda/interactions/sot/sot_kernels.cu` używa tej samej
+formuły SI/Gilberta co FEM CPU:
+
+```text
+gamma_e = gamma0 / mu0
+Omega_base = gamma_e*hbar*(J_signed*envelope)/(2*e*M_s*t_F)
+D = (Omega_DL - alpha*Omega_FL)/(1+alpha^2)
+F = (Omega_FL + alpha*Omega_DL)/(1+alpha^2)
+dm/dt += -D m x (m x sigma_hat) + F m x sigma_hat
+```
+
+`M_s` i `alpha` są pobierane z buforów urządzenia, `sigma` jest normalizowane
+w kernelu, a maska celu korzysta z tego samego slotu GPU mesh-region co STT;
+planner nadal dopuszcza tylko jeden moduł direct spin torque naraz. Kernel
+zachowuje również redukcję normy całego złożonego RHS dla węzłów poza maską,
+żeby nie zaniżać `max_rhs` przy częściowym celu. C++ wrapper nie wykonuje
+żadnych odczytów urządzenia w pętli RK i odrzuca brakujące bufory/maskę.
+
+### 32.76.2. RED→GREEN i managed evidence
+
+Najpierw wykonano celowo czerwony przebieg:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-native-contract
+```
+
+Konfiguracja CMake zatrzymała się na brakujących źródłach CUDA SOT, co
+potwierdziło, że recepta rzeczywiście obejmuje nowy target, a nie tylko test
+CPU. Po implementacji ten sam container-backed przebieg zakończył się
+`exit=0` i dostarczył:
+
+- `fullmag_fem`, `fem_stt_contract` oraz `fem_cuda_sot_contract` zbudowane w
+  obrazie MFEM/CUDA;
+- `FEM CUDA prescribed-SOT numeric contract PASS`: niezależny SI oracle,
+  zgodność z `add_sot_rhs_aos`, maska magnetyczna/target oraz dokładna zmiana
+  znaku po `J -> -J`;
+- `native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available` —
+  FEM CPU, jeden krok Heun, `m`, `H_eff` i `max_rhs`;
+- `native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available` —
+  FEM GPU na rzeczywistym urządzeniu CUDA, ten sam descriptor i stały envelope,
+  bez CPU fallbacku, z tą samą tolerancją FP64 względem oracle i CPU reference.
+
+To jest dowód `reference_executable` dla jawnie ograniczonego workloadu
+`double/strict/constant-envelope/one-step`. Nie jest to dowód produkcyjnego
+GPU SOT: nadal brakuje FP32, wszystkich integratorów, trajektorii wieloetapowej,
+envelope zależnego od czasu, rollbacku odrzuconego etapu, wielomateriałowego
+testu interfejsowego, trzech poziomów `h`, sweepu `dt` i FEM↔FDM common-limit.
+
+### 32.76.3. Aktualizacja statusu i następna brama
+
+Capability `spin_torque.prescribed_sot` ma teraz:
+
+| Lane | Status | Zakres dowodu |
+|---|---|---|
+| FDM CPU | `reference_executable` | niezależna algebra SI/Gilberta |
+| FDM GPU | `production_executable` | bounded FP64 trajectory/scaling slice |
+| FEM CPU | `reference_executable` | managed one-step native MFEM/Rust/oracle |
+| FEM GPU | `reference_executable` | managed one-step native CUDA/CPU/oracle, stały envelope |
+
+`validated_workloads` pozostaje puste, a statusy nie promują direct/inverse SHE.
+Globalna ocena pozostaje **88% implementacji / 62% gotowości produkcyjnej**;
+zmiana podnosi tylko wykonywalną granicę FEM GPU SOT. Następny etap planu to
+propagacja czasu stage do deskryptora/kernela bez host synchronisation,
+następnie rollback i kontrolowana zbieżność na jednym serializowanym artefakcie
+siatki CPU/GPU.

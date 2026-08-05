@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-02",
+  "updated_at": "2026-08-05",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -290,13 +290,13 @@
         "fdm_cpu_reference": "reference_executable",
         "fdm_gpu_production": "production_executable",
         "fem_cpu_public": "reference_executable",
-        "fem_gpu_public": "semantic_only"
+        "fem_gpu_public": "reference_executable"
       },
       "precision_scope": ["double", "single only after explicit qualification"],
       "execution_mode_scope": ["strict", "extended"],
       "workload_scope": "Canonical signed-current macrospin with SI/Gilbert/mask/stage-time requirements.",
       "validated_workloads": [],
-      "notes": "Lane-specific evidence: FDM CPU has the independent reference algebra, FDM CUDA has bounded managed FP64 trajectory/scaling evidence, and FEM CPU has a managed native MFEM one-step SI-oracle/Rust-reference parity contract with signed current, constant envelope, target mask, H_eff, and max-RHS checks. FEM GPU fails closed because its CUDA SOT realization is semantic-only. FP32, stage-time envelopes, nonlinear sweeps, FEM multi-grid/convergence, FEM↔FDM continuum parity, and direct or inverse SHE qualification remain open; legacy executors are not v1 evidence."
+      "notes": "Lane-specific evidence: FDM CPU has the independent reference algebra, FDM CUDA has bounded managed FP64 trajectory/scaling evidence, FEM CPU has a managed native MFEM one-step SI-oracle/Rust-reference parity contract, and FEM GPU has a managed CUDA interaction/native one-step SI-oracle parity contract with signed current, constant envelope, target mask, H_eff, max-RHS, and current-reversal checks. FP32, stage-time envelopes, nonlinear sweeps, FEM multi-grid/convergence, FEM↔FDM continuum parity, and direct or inverse SHE qualification remain open; legacy executors are not v1 evidence."
     },
     {
       "id": "spin_torque.zhang_li.fullmag.v1", "capability_id": "spin_torque.zhang_li", "formula_version": "zhang_li.fullmag.v1",

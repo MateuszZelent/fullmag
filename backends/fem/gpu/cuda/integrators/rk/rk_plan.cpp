@@ -145,6 +145,20 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         reason = "GPU RK device-resident path requires explicit or geometry-derived Slonczewski free-layer thickness";
         return plan;
     }
+    if (ctx.sot.enabled) {
+        if (ctx.gpu_state.device.materials.ms == nullptr ||
+            ctx.gpu_state.device.materials.alpha == nullptr) {
+            reason = "GPU RK prescribed SOT requires device-resident Ms and alpha";
+            return plan;
+        }
+        if (!ctx.sot.active_node_mask.empty() &&
+            (ctx.gpu_state.device.mesh_regions.stt_active_node_mask == nullptr ||
+                ctx.gpu_state.device.mesh_regions.stt_active_node_count !=
+                    static_cast<uint64_t>(ctx.mesh.n_nodes))) {
+            reason = "GPU RK prescribed SOT requires the canonical target-node mask on device";
+            return plan;
+        }
+    }
     const bool integrator_supported =
         ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_HEUN ||
         ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK4 ||

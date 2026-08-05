@@ -2278,13 +2278,6 @@ pub(crate) fn plan_fem(
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fem, &current_transports)?;
     let sot = resolve_sot_fields(problem, &current_transports)?;
-    if sot.formula_version == Some("prescribed_sot.fullmag.v1") && runtime_requests_cuda(problem) {
-        return Err(PlanError {
-            reasons: vec![
-                "prescribed_sot.fullmag.v1 is reference-executable on FEM CPU only; FEM GPU remains semantic_only until a native CUDA SOT realization is implemented (fail-closed, no fallback)".to_string(),
-            ],
-        });
-    }
 
     let base_material =
         selected_material.expect("validation should have caught missing FEM material");

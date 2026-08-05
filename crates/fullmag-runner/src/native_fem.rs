@@ -1887,11 +1887,6 @@ impl NativeFemBackend {
             .spin_torque_contract
             .as_ref()
             .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1");
-        if sot_contract.is_some() && native_fem_plan_requests_gpu_mfem_device(plan) {
-            return Err(RunError {
-                message: "native FEM GPU prescribed_sot.fullmag.v1 is semantic_only; the native CUDA realization is not implemented and execution must fail closed without fallback".to_string(),
-            });
-        }
         let stt_active_node_mask = stt_contract
             .and_then(|contract| contract.active_node_mask.as_ref())
             .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
@@ -8824,9 +8819,15 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_rejects_prescribed_sot_on_gpu_before_native_call() {
+    fn native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
         let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
         plan.mfem_device_string = Some("cuda".to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
         plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
             formula_version: "prescribed_sot.fullmag.v1".to_string(),
             operator_version: None,
@@ -8845,14 +8846,36 @@ mod tests {
             sot_drive: None,
         });
 
-        let error = match NativeFemBackend::create(&plan) {
-            Ok(_) => panic!("native FEM GPU SOT must fail closed before native execution"),
-            Err(error) => error,
-        };
-        assert!(error.message.contains("prescribed_sot.fullmag.v1"));
-        assert!(error.message.contains("FEM GPU"));
-        assert!(error.message.contains("semantic_only"));
-        assert!(error.message.contains("fail closed"));
+        let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(&plan);
+        let (_, _, reference_h_eff, _) = cpu_reference_single_step(&plan);
+        let mut backend = NativeFemBackend::create(&plan).expect("native FEM GPU prescribed-SOT create");
+        let device_name = backend.device_info().expect("GPU SOT device info").name;
+        assert!(
+            device_name.contains("cuda") || device_name.contains("NVIDIA") ||
+                device_name.contains("GeForce") || device_name.contains("RTX"),
+            "prescribed-SOT GPU test resolved unexpected device: {device_name}"
+        );
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native prescribed-SOT GPU step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy GPU SOT m");
+        let actual_h_eff = backend.copy_h_eff(plan.mesh.nodes.len()).expect("copy GPU SOT H_eff");
+
+        assert_vector_field_close("prescribed SOT GPU m", &actual_m, &expected_m, 5e-7, 1e-10);
+        assert_vector_field_close(
+            "prescribed SOT GPU H_eff",
+            &actual_h_eff,
+            &reference_h_eff,
+            5e-7,
+            1e-6,
+        );
+        assert_scalar_close(
+            "prescribed SOT GPU max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_max_rhs,
+            5e-7,
+            1e-9,
+        );
     }
 
     #[test]
