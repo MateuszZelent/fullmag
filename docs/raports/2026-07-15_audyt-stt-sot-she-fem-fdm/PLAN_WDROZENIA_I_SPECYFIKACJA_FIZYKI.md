@@ -3,14 +3,14 @@
 **Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; implementacja częściowa i niegotowa do integracji  \
 **Wariant:** 3 — pełny model docelowy wdrażany przez niezależnie walidowane kamienie milowe M0–M3  \
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
-**Aktualny baseline audytu:** `master@d1b851633eebf7becdd8adf25abca0fd47b15da1`  \
-**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, `master@d1b851633eebf7becdd8adf25abca0fd47b15da1`  \
-**Merge-base:** `0612941f3b99137cbb171c183452368cc0f71029`; gałąź ma `109` własnych commitów i jest `271` commitów za aktualnym `master`  \
+**Aktualny baseline audytu:** `master@ccd237e78` (`origin/master` wskazuje ten sam commit)  \
+**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, `master@ccd237e78`  \
+**Merge-base:** bieżący checkout jest już zintegrowany na `master`; wcześniejsze rozjazdy gałęzi pozostają historią audytu, nie aktualnym stanem integracji  \
 **Data pierwotna:** 2026-07-15  \
 **Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@e3bc225d999c557adf4add4e1044fccf62e87cbc`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@ccd237e78`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
@@ -85,9 +85,9 @@ oznacza ani pełnego milestone, ani walidacji continuum.
 | M1 FDM CPU steady | `f867cda3913509ebbc455296302e40b1500fc349` | `reference_executable` | pełne interfejsy, Oersted FFT, zbieżność, native production owner |
 | M1 FEM CPU steady | `b91df882c7fc049ce82f359a0fa4ab8dfa0b9595`; bounded managed `steady-transport: pass` | `reference_executable` dla conforming H1/P1 subset | broken/subdomain spaces, mortar/mixing/SML, contrast i h-convergence |
 | FEM solved-current Oersted | planner/runtime midpoint slice dodany 2026-08-05; managed transport prerequisite `pass` | `development_executable` tylko dla steady one-way Ohmic CPU | RT0/H(div), closure, OE-F1/F2, direct-oracle, source digest, GPU i M2 |
-| OE-T0 FEM | `ab2f686afe0aaa60d269966bd87388c0e59e14c6`; managed serial/MPI + TSan `pass` | `reference_executable` dla bounded certificate slice | distributed sparse KKT, skalowanie i pełna zależna OE-F1/F2 kwalifikacja |
-| OE-F1 FEM direct | kontrakt/receptura; managed result `fail` | `semantic_only` | singular/near quadrature, projection, convergence |
-| OE-F2 FEM mixed | kontrakt/receptura; managed result `fail` | `semantic_only` | exact-sequence solve, topology, AMS, airbox convergence |
+| OE-T0 FEM | managed serial/MPI + byte-identical certificate `pass` (fresh 2026-08-05) | `reference_executable` dla bounded operator contract | distributed sparse KKT, skalowanie i integracja z publicznym solved-current chain |
+| OE-F1 FEM direct | managed direct tetra contract `pass` (fresh 2026-08-05) | `reference_executable` dla bounded CPU operator contract | singular/near quadrature sweep, projection into runtime and end-to-end provenance |
+| OE-F2 FEM mixed | managed mixed vector-potential contract `pass` (fresh 2026-08-05) | `reference_executable` dla bounded CPU operator contract | exact-sequence/airbox convergence, runtime integration and GPU |
 | FDM FFT Oersted | wpis capability bez produkcyjnego wykonania | `semantic_only` | zamknięty obwód, kernel/direct oracle, native CPU/CUDA |
 | M2 FDM CPU reciprocal | `bc512ae113c9a016a22e3c1f39125171e2b559bc`–`3e93d77694a7a032602a0e08387d797dfb3ff139` | `reference_executable` | pełna macierz Onsagera, FEM/GPU, SML, zbieżność i product gate |
 | M3 FDM CPU | `031a6fdfaacb7a115f0822fdc0bc0bf8e151d0dc` | `reference_executable` dla one-way single-grid CPU/double | fizyczny `C_s`, event alignment, FEM/GPU, stiff-limit i pełny restart gate |
@@ -95,9 +95,11 @@ oznacza ani pełnego milestone, ani walidacji continuum.
 | external solvers | ręcznie odczytane wzory/kod | `source_visible` | wersjonowane adaptery i automatyczne workload comparisons |
 
 Pliki `.fullmag/reports/fem-cpu-only/{steady-transport,time-domain}/result.json`
-mają `status=pass`, lecz ich `scope=managed_cpu_lane_prerequisite`. Wyniki
-`oersted-oet0`, `oersted-oet0-tsan`, `oersted-oef1` i `oersted-oef2` mają
-`status=fail`. Żaden z tych plików sam nie uprawnia do `validated`.
+mają `status=pass`, lecz ich `scope=managed_cpu_lane_prerequisite`. Wcześniejsze
+artefakty `oersted-oet0`, `oersted-oet0-tsan`, `oersted-oef1` i `oersted-oef2`
+zapisane przed świeżym rerunem mają `status=fail` i są historycznym snapshotem;
+autorytatywne bieżące wyniki operatorów są zapisane w §32.89. Żaden z tych
+operatorowych kontraktów sam nie uprawnia do `validated` end-to-end.
 
 Snapshot artefaktów odczytany 2026-07-28, bez ponownego uruchamiania gates w
 ramach tego audytu dokumentacji:
