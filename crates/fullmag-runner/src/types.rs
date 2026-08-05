@@ -2920,6 +2920,18 @@ pub struct TransportExecutionProvenance {
     pub fallback: Option<TransportFallbackProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degradation: Option<TransportDegradationProvenance>,
+    /// Identity of a solved-current source consumed by a bounded Oersted
+    /// realization.  The optional fields are absent for transport-only runs
+    /// and remain explicitly descriptive of the current implementation slice;
+    /// they do not claim a conservative RT0/H(div) current view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_source_current_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_mesh_source_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_field_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

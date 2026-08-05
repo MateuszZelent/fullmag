@@ -47,5 +47,9 @@ pub(super) fn transport_provenance(
         torque_target: descriptor.torque_target.clone(),
         fallback: None,
         degradation: None,
+        oersted_source_kind: None,
+        oersted_source_current_sha256: None,
+        oersted_mesh_source_sha256: None,
+        oersted_field_sha256: None,
     })
 }

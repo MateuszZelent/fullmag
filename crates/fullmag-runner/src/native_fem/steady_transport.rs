@@ -2,6 +2,7 @@ use crate::types::{AuxiliaryArtifact, FieldSnapshot, RunError, TransportExecutio
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{FemCellTypeIR, FemPlanIR, MeshIR};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::ffi::{CStr, CString};
 use std::f64::consts::PI;
 use std::ptr;
@@ -127,6 +128,8 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
     for prepared in prepared {
         let resolved = prepared.resolved;
         let result = solve_native_fem_steady_transport(&prepared.request)?;
+        let mut transport_provenance = prepared.provenance;
+        let mut module_oersted_field_xyz = None;
         if let Some(descriptor) = resolved.fem_cpu_double.as_ref() {
             if descriptor.oersted_source_bound {
                 let field = solved_current_midpoint_biot_savart_field(
@@ -134,6 +137,18 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                     &descriptor.charge_domain.element_mask,
                     &result.charge_current_density_xyz_apm2,
                 )?;
+                let field_sha256 = sha256_f64_slice(&field);
+                let current_sha256 = sha256_vec3_slice(&result.charge_current_density_xyz_apm2);
+                let mesh_source_sha256 = sha256_mesh_source(
+                    &plan.mesh,
+                    &descriptor.charge_domain.element_mask,
+                )?;
+                transport_provenance.oersted_source_kind =
+                    Some("solved_current_h1_nodal_midpoint_reference".into());
+                transport_provenance.oersted_source_current_sha256 = Some(current_sha256);
+                transport_provenance.oersted_mesh_source_sha256 = Some(mesh_source_sha256);
+                transport_provenance.oersted_field_sha256 = Some(field_sha256);
+                module_oersted_field_xyz = Some(field.clone());
                 add_flat_field(
                     oersted_field_xyz.get_or_insert_with(|| vec![0.0; field.len()]),
                     &field,
@@ -157,6 +172,18 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             "capabilities": resolved.capabilities,
             "inserted_default_boundaries": resolved.inserted_default_boundaries,
             "descriptor": resolved.fem_cpu_double,
+            "oersted": module_oersted_field_xyz.as_ref().map(|field| {
+                serde_json::json!({
+                    "source_kind": "solved_current_h1_nodal_midpoint_reference",
+                    "realization": "biot_savart_midpoint",
+                    "location": "node",
+                    "component_order": "xyz",
+                    "field_xyz": field,
+                    "field_sha256": sha256_f64_slice(field),
+                    "source_current_sha256": transport_provenance.oersted_source_current_sha256.clone(),
+                    "mesh_source_sha256": transport_provenance.oersted_mesh_source_sha256.clone(),
+                })
+            }),
             "result": {
                 "electric_potential_v": result.electric_potential_v,
                 "charge_current_density_xyz_apm2": result.charge_current_density_xyz_apm2,
@@ -182,15 +209,26 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                 "resolved_interface": result.resolved_interface,
             }
         }));
-        provenance.push(prepared.provenance);
+        provenance.push(transport_provenance);
     }
+    let aggregate_oersted = oersted_field_xyz.as_ref().map(|field| {
+        serde_json::json!({
+            "source_kind": "solved_current_h1_nodal_midpoint_reference",
+            "realization": "biot_savart_midpoint",
+            "location": "node",
+            "component_order": "xyz",
+            "field_xyz": field,
+            "field_sha256": sha256_f64_slice(field),
+        })
+    });
     let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-        "schema": "fullmag.fem.steady_spin_transport.v1",
+        "schema": "fullmag.fem.steady_spin_transport.v2",
         "component_order": "row_major_Q_ia",
         "flow_axes": ["x", "y", "z"],
         "spin_axes": ["x", "y", "z"],
         "location": "node",
         "modules": records,
+        "oersted": aggregate_oersted,
     }))
     .map_err(|error| RunError {
         message: format!("serialize FEM steady transport artifact: {error}"),
@@ -205,6 +243,40 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
         provenance,
         oersted_field_xyz,
     }))
+}
+
+fn sha256_f64_slice(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn sha256_vec3_slice(values: &[[f64; 3]]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        for component in value {
+            hasher.update(component.to_le_bytes());
+        }
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn sha256_mesh_source(mesh: &MeshIR, source_element_mask: &[bool]) -> Result<String, RunError> {
+    let payload = serde_json::to_vec(&(
+        &mesh.mesh_name,
+        &mesh.nodes,
+        &mesh.cells,
+        &mesh.element_markers,
+        &mesh.facets,
+        &mesh.boundary_markers,
+        source_element_mask,
+    ))
+    .map_err(|error| RunError {
+        message: format!("serialize FEM Oersted mesh source identity: {error}"),
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(payload)))
 }
 
 fn add_flat_field(target: &mut [f64], source: &[f64]) -> Result<(), RunError> {
@@ -2328,6 +2400,23 @@ mod tests {
         for (left, right) in field.iter().zip(reversed) {
             assert!((left + right).abs() < 1.0e-14);
         }
+    }
+
+    #[test]
+    fn solved_current_oersted_identity_digests_are_stable_and_source_bound() {
+        let mesh = request().mesh;
+        let current = vec![[1.0, -2.0, 3.0]; 4];
+        let field = vec![0.25, -0.5, 0.75, 1.0, 2.0, 3.0];
+        let current_digest = sha256_vec3_slice(&current);
+        let field_digest = sha256_f64_slice(&field);
+        assert_eq!(current_digest, sha256_vec3_slice(&current));
+        assert_eq!(field_digest, sha256_f64_slice(&field));
+        assert!(current_digest.starts_with("sha256:"));
+        assert!(field_digest.starts_with("sha256:"));
+
+        let active_digest = sha256_mesh_source(&mesh, &[true]).expect("active mesh digest");
+        let inactive_digest = sha256_mesh_source(&mesh, &[false]).expect("inactive mesh digest");
+        assert_ne!(active_digest, inactive_digest);
     }
 }
 
