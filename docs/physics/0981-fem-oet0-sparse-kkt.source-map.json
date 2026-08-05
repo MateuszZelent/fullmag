@@ -40,7 +40,11 @@
     {"id": "dense-reference", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "class ConservativeCurrentView", "responsibility": "Own the bounded deterministic small-mesh Gaussian-elimination reference used by the view."},
     {"id": "sparse-runtime-test", "path": "backends/fem/tests/conservative_current_view_contract.cpp", "symbol": "main", "responsibility": "Dispatch the optional sparse runtime fixture beyond 4096 RT0 DOFs."},
     {"id": "source-regression", "path": "backends/fem/tests/source_facade_gpu_rk_contract.cpp", "symbol": "main", "responsibility": "Run the source ownership regression that guards sparse MFEM/MINRES selection."},
-    {"id": "view-boundary", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp", "symbol": "class ConservativeCurrentView", "responsibility": "Expose the immutable accepted FEM current-view boundary."}
+    {"id": "view-boundary", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp", "symbol": "class ConservativeCurrentView", "responsibility": "Expose the immutable accepted FEM current-view boundary."},
+    {"id": "managed-oet0-gate", "path": "justfile", "symbol": "verify-fem-oersted-oet0-cpu-contract", "responsibility": "Build and run the managed CPU OE-T0 serial and real MPI n1/n2 byte-identity qualification."},
+    {"id": "managed-oet0-tsan-gate", "path": "justfile", "symbol": "verify-fem-oersted-oet0-tsan-cpu-contract", "responsibility": "Run the isolated sanitizer contract through the seccomp-relaxed TSan service and ASLR-disabled launcher."},
+    {"id": "tsan-service", "path": "compose.yaml", "symbol": "fem-cpu-tsan", "responsibility": "Isolate the sanitizer-only seccomp relaxation from the ordinary FEM CPU service."},
+    {"id": "tsan-runner", "path": "scripts/run_fem_cpu_only_contract.sh", "symbol": "oersted-oet0-tsan", "responsibility": "Disable ASLR before loading the instrumented OE-T0 executable and fail closed on sanitizer reports."}
   ],
   "public_api": {"parameters": [
     {"python": "CurrentTransport.name", "type": "str", "default": "required", "si_unit": "1", "validation": "non-empty", "meaning": "named current source", "backend_support": "FEM/FDM authoring", "problem_ir": "current_transport[].name"},

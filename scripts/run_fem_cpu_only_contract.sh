@@ -143,9 +143,13 @@ CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-1}" \
   2>&1 | tee "$report_dir/build.log"
 
 if [[ "$scenario" == "oersted-oet0-tsan" ]]; then
+  command -v setarch >/dev/null 2>&1 || {
+    echo 'TSan requires setarch to disable ASLR before the instrumented process starts' >&2
+    exit 1
+  }
   TSAN_OPTIONS="halt_on_error=1:exitcode=66" \
   LD_LIBRARY_PATH="$build_dir/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}" \
-    ctest --test-dir "$build_dir/backends/fem" --output-on-failure \
+    setarch x86_64 -R ctest --test-dir "$build_dir/backends/fem" --output-on-failure \
       --tests-regex '^fem_conservative_current_view_contract$' \
       2>&1 | tee -a "$report_dir/test.log"
 elif [[ "$scenario" == oersted-oe* ]]; then

@@ -2,7 +2,7 @@
 
 - Status: executable reference realization; production qualification is bounded
 - Owners: Fullmag FEM current-transport
-- Last updated: 2026-08-04
+- Last updated: 2026-08-05
 - Related physics owner: `docs/physics/0980-dynamic-current-and-oersted-coupling.md`
 - Related specification: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Operator: `fem_conservative_current_rt0_view.v1`
@@ -236,6 +236,17 @@ conservative view contract passing. This proves executable CPU sparse behavior,
 not production-scale distributed qualification. Required next gates are three
 mesh refinements, a condition-number/iteration report, memory scaling, and an
 independent direct Biot--Savart comparison for the resulting Oersted field.
+
+The independent TSan gate is executed by the managed `fem-cpu-tsan` service.
+This service inherits the CPU-only image but uses `seccomp:unconfined` solely
+for the sanitizer process, because the WSL2 kernel's `vm.mmap_rnd_bits=32`
+otherwise prevents GCC TSan from reserving its shadow range. The runner then
+starts CTest through `setarch x86_64 -R`, so ASLR is disabled before the
+instrumented executable is loaded. The ordinary `fem-cpu` service and all
+non-TSan gates retain the default seccomp profile. The managed command
+`just verify-fem-oersted-oet0-tsan-cpu-contract` completed with one instrumented
+contract passing and no race report on 2026-08-05. This is runtime-sanitizer
+evidence, not a distributed-MPI or production-scale claim.
 
 (limitations)=
 ## 8. Limitations and deferred work

@@ -104,14 +104,19 @@ class RepositoryContractTests(unittest.TestCase):
             "  fem-cpu:\n"
             "    image: fullmag/fem-cpu:local\n"
             "    environment:\n"
-            "      FULLMAG_MANAGED_FEM_DEVICE: cpu\n",
+            "      FULLMAG_MANAGED_FEM_DEVICE: cpu\n"
+            "  fem-cpu-tsan:\n"
+            "    extends:\n"
+            "      service: fem-cpu\n"
+            "    security_opt:\n"
+            "      - seccomp:unconfined\n",
             encoding="utf-8",
         )
         (root / "justfile").write_text(
             "\n".join(
                 f"{name}:\n"
-                "    docker compose build fem-cpu\n"
-                "    docker compose run --rm --no-deps fem-cpu "
+                f"    docker compose build {'fem-cpu-tsan' if name == 'verify-fem-oersted-oet0-tsan-cpu-contract' else 'fem-cpu'}\n"
+                f"    docker compose run --rm --no-deps {'fem-cpu-tsan' if name == 'verify-fem-oersted-oet0-tsan-cpu-contract' else 'fem-cpu'} "
                 "./scripts/run_fem_cpu_only_contract.sh"
                 f"{' oersted-oet0-tsan' if name == 'verify-fem-oersted-oet0-tsan-cpu-contract' else ''}\n"
                 for name in GOOD_RECIPE_NAMES
@@ -128,6 +133,7 @@ class RepositoryContractTests(unittest.TestCase):
             "conservative_constraint_rank.cpp\n"
             "periodic_charge_potential.cpp\n"
             "conservative_current_view.cpp\n"
+            "setarch x86_64 -R ctest\n"
             "OE-T0 TSan generated instrumentation rules audit: PASS\n",
             encoding="utf-8",
         )
@@ -256,6 +262,7 @@ class RepositoryContractTests(unittest.TestCase):
 
         self.assertIn("-DFULLMAG_OET0_TSAN=ON", runner)
         self.assertIn("TSAN_OPTIONS=\"halt_on_error=1:exitcode=66\"", runner)
+        self.assertIn("setarch x86_64 -R ctest", runner)
         self.assertIn(
             "OE-T0 TSan generated instrumentation rules audit: PASS", runner
         )

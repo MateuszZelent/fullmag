@@ -166,14 +166,24 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
             and "--features cuda" not in normalized,
             f"GPU-backed recipe is forbidden: {name}",
         )
-        _require(
-            "docker compose build fem-cpu" in normalized,
-            f"{name} does not build the repository-owned fem-cpu image",
-        )
-        _require(
-            "docker compose run --rm --no-deps fem-cpu" in normalized,
-            f"{name} does not select the isolated fem-cpu service",
-        )
+        if name == "verify-fem-oersted-oet0-tsan-cpu-contract":
+            _require(
+                "docker compose build fem-cpu-tsan" in normalized,
+                f"{name} does not build the isolated TSan service",
+            )
+            _require(
+                "docker compose run --rm --no-deps fem-cpu-tsan" in normalized,
+                f"{name} does not select the isolated TSan service",
+            )
+        else:
+            _require(
+                "docker compose build fem-cpu" in normalized,
+                f"{name} does not build the repository-owned fem-cpu image",
+            )
+            _require(
+                "docker compose run --rm --no-deps fem-cpu" in normalized,
+                f"{name} does not select the isolated fem-cpu service",
+            )
         _require(
             "scripts/run_fem_cpu_only_contract.sh" in normalized,
             f"{name} bypasses the pre-build CPU configuration audit",
@@ -197,6 +207,14 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
     _require(
         "fullmag_managed_fem_device: cpu" in lower_service,
         "fem-cpu compose service must attest device=cpu",
+    )
+    tsan_service = _compose_service_body(compose, "fem-cpu-tsan")
+    lower_tsan_service = tsan_service.lower()
+    _require(
+        "service: fem-cpu" in lower_tsan_service
+        and "security_opt:" in lower_tsan_service
+        and "seccomp:unconfined" in lower_tsan_service,
+        "fem-cpu-tsan must inherit fem-cpu and explicitly relax seccomp only for TSan",
     )
 
     lower_dockerfile = dockerfile.lower()
@@ -242,6 +260,7 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
         "periodic_charge_potential.cpp",
         "conservative_current_view.cpp",
         "OE-T0 TSan generated instrumentation rules audit: PASS",
+        "setarch x86_64 -R ctest",
     ):
         _require(token in runner, f"OE-T0 TSan runner contract missing: {token}")
     for token in (
