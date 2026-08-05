@@ -3,8 +3,8 @@
 **Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; implementacja częściowa i niegotowa do integracji  \
 **Wariant:** 3 — pełny model docelowy wdrażany przez niezależnie walidowane kamienie milowe M0–M3  \
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
-**Aktualny kodowy baseline audytu:** `master@70ee4cafc` (`origin/master` wskazuje ten sam commit)  \
-**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, kodowy baseline `master@70ee4cafc`; dokumentacja jest aktualizowana w tym replayu  \
+**Aktualny kodowy baseline audytu:** `master@70ee4cafc`; dokumentacyjne i gate'owe follow-upy `88e0fcdc4` oraz `0fcff20d1` są już na `origin/master`  \
+**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, ostatni zapisany stan `master@0fcff20d1`; niniejsza korekta planu jest kolejnym zapisem dokumentacji  \
 **Merge-base:** bieżący checkout jest już zintegrowany na `master`; wcześniejsze rozjazdy gałęzi pozostają historią audytu, nie aktualnym stanem integracji  \
 **Data pierwotna:** 2026-07-15  \
 **Ostatnia aktualizacja:** 2026-08-05  \
