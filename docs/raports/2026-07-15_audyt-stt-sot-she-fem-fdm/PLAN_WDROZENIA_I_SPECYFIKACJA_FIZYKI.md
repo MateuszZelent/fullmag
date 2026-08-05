@@ -10,7 +10,7 @@
 **Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@8bd36b8cf`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@e3bc225d999c557adf4add4e1044fccf62e87cbc`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
@@ -8441,3 +8441,57 @@ publikacji fizycznie nieporównywalnego endpointu jako poprawnego artefaktu
 diagnostycznego. Nadal wymagane są wspólny stan równowagowy, zgodność operatora,
 trzy poziomy `h`, kontrola `dt`, FEM GPU oraz release-clean managed rerun.
 Globalna ocena pozostaje **88% implementacji / 62% gotowości produkcyjnej**.
+
+## 32.87. Świeży managed FEM CPU steady-transport rerun na aktualnym masterze (2026-08-05)
+
+### 32.87.1. Zakres i komenda
+
+Po korekcie bramy czasu z §32.86 ponowiono ograniczony kontrakt FEM, aby
+odseparować bieżący stan źródeł od wcześniejszych artefaktów runtime. Użyto
+wyłącznie repozytoryjnej recepty `just` i kontenera `fullmag/fem-cpu:local`:
+
+```text
+FULLMAG_FEM_CPU_REPORT_ROOT=/workspace/.fullmag/reports/fem-cpu-only \
+  just verify-fem-steady-transport-cpu-only-contract
+```
+
+Konfiguracja CMake była jawnie CPU-only:
+`FULLMAG_ENABLE_CUDA=OFF`, `FULLMAG_ENABLE_FEM_GPU=OFF` oraz
+`FULLMAG_USE_MFEM_STACK=ON`; linkowanie wykazało MFEM 4.7 i HYPRE 2.32.
+Nie uruchamiano hostowego CMake ani binariów jako dowodu FEM.
+
+### 32.87.2. Wynik
+
+Recepta zbudowała i wykonała oba natywne kontrakty:
+
+```text
+fem steady transport contract: PASS
+fem steady transport ABI contract: PASS
+```
+
+Kontrakt M2 ponownie pokazał zbieżność profilu midpoint przy `Nx=8,16,32`:
+`V=0.527052, 0.526914, 0.526879 V` oraz `mu_x=0.175368, 0.177036,
+0.177449 V`; błędy coarse/medium wyniosły odpowiednio
+`1.72849e-4 / 3.42662e-5 V` i `2.08109e-3 / 4.12567e-4 V`.
+
+Maszynowy wynik znajduje się w
+`.fullmag/reports/fem-cpu-only/steady-transport/result.json`, SHA-256:
+`4779ea71b968f21bc563070febf1aa7c8a9ac909a82ba71a1969cd827607eddf`.
+Zakres artefaktu pozostaje `managed_cpu_lane_prerequisite`, a więc jest to
+dowód regresji i wykonywalności ograniczonego FEM CPU, nie promocja
+`validated_workloads`.
+
+### 32.87.3. Wpływ na kwalifikację FEM
+
+Świeży rerun potwierdza, że porównanie FEM z FDM nie było wyłącznie analizą
+statycznego kodu ani FDM: FEM CPU rzeczywiście rozwiązuje bounded M1/M2 w
+kontenerze MFEM/HYPRE. Nie zamyka to jednak:
+
+- wykonawczego GPU steady transportu FEM (obecnie `semantic_only` i fail-closed),
+- pełnych interfejsów broken-H1/mixing/SML oraz transient `C_s`,
+- sprzężenia solved-current → dynamiczny Oersted,
+- wspólnego artefaktu siatki, stanu początkowego, sweepu `h/dt` i continuum
+  limitu dla FEM↔FDM SP5.
+
+Statusy z §32.79 i §32.86 pozostają bez zmian: FEM CPU M1/M2 jest
+`reference_executable`, a `FEM↔FDM equivalence_established=false`.
