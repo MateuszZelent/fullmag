@@ -10,7 +10,7 @@
 **Ostatnia aktualizacja:** 2026-08-05  \
 **Raport źródłowy:** [README.md](./README.md)
 
-**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@717eaf81e`. Brama
+**Bieżący stan wykonawczy (snapshot 2026-08-05):** `master@1c91533cb`. Brama
 parytetu authoringu pozostaje zielona, ale wynik fizyczny nadal ma status
 `not_qualified`. Managed FEM runtime został zbudowany przez repozytoryjną
 receptę `just` w czystym worktree z bazą `b596e96cd`; aktywny runtime ma
