@@ -204,6 +204,12 @@ pulse at the same event knot. This bounded result does not yet qualify GPU or
 all-integrator rejected-step event bookkeeping, tabulated-artifact materialization, FP32, long trajectories, FEM
 multi-grid/convergence, or FEM↔FDM continuum agreement.
 
+The managed FEM CPU contract also rejects a candidate on the relaxation-energy
+gate at the pulse `t_off` knot and verifies that the rejected attempt leaves
+magnetization, accepted time, step index, and plateau history unchanged. This
+is bounded CPU Heun evidence; GPU energy rejection and the remaining RK
+tableaus are still unqualified.
+
 A managed one-cell FDM versus exchange-free multi-node FEM common-limit
 contract now compares the same signed descriptor, SI constants, Gilbert
 damping, and constant envelope. It is a magnetization-algebra check; it does
@@ -237,9 +243,10 @@ event search is stateless (it uses the immutable descriptor and accepted
 native FEM CPU Heun contract covers the failure-after-candidate boundary: the
 magnetization, accepted time, and step index are restored, and a retry lands on
 the same pulse knot before the next knot. This is a bounded CPU proof, not a
-qualification of GPU, adaptive-energy rejection, or every RK integrator. The
+qualification of GPU adaptive-energy rejection or every RK integrator. The
 managed runtime evidence covers pulse knots on CPU and GPU; a native contract
-test covers PWL and stage-local knot conversion.
+test covers PWL and stage-local knot conversion. The CPU energy-rejection test
+does not qualify device rollback or adaptive-energy handling for every tableau.
 
 ### 2.5 Torque transferred from solved spin transport
 
@@ -665,7 +672,7 @@ and production qualification.
 - [x] FEM GPU strict residency path (bounded non-tabulated stage-time one-step FP64 reference)
 - [x] FEM stage-time descriptor and CPU/GPU SI-oracle tests
 - [x] FEM event-knot clipping for pulse/PWL envelopes (bounded CPU/GPU runtime and native contract tests)
-- [x] Bounded FEM CPU Heun rejected-step rollback and pulse event bookkeeping
+- [x] Bounded FEM CPU Heun rejected-step rollback, energy rejection, and pulse event bookkeeping
 - [x] Bounded FEM CPU↔FDM prescribed-SOT common-limit (one-cell/multi-node, constant envelope)
 - [x] Bounded FEM CPU↔CUDA prescribed-SOT eight-step fixed-step trajectory parity
 - [ ] Rejected-step rollback and event bookkeeping across GPU and all FEM integrators

@@ -8261,3 +8261,41 @@ To zamyka wyłącznie bounded temporal parity dla prescribed SOT na FEM. Nie
 awansuje transportu FEM, solved-current Oersteda, efektu naskórkowego,
 interfejsów SML ani pełnej zgodności produktu; globalna ocena pozostaje
 **88% implementacji / 62% gotowości produkcyjnej**.
+
+## 32.83. FEM CPU: energy-rejection rollback prescribed SOT na węźle `t_off` (2026-08-05)
+
+### 32.83.1. Deterministyczny workload
+
+Rozszerzono `fem_rk_explicit_contract` o
+`cpu_sot_pulse_energy_rejection_rolls_back_at_event_knot`. Workload używa
+Heuna, jednego węzła magnetycznego, pulse `[1 ns,2 ns)`, zaakceptowanego czasu
+startowego `t=1 ns` i żądanego `dt=1.5 ns`, więc polityka event clipping kieruje
+próbę dokładnie do `t_off=2 ns`. Ustawiony poprzedni stan energii wymusza
+odrzucenie kandydata przez relaxation-energy gate; `dt_min=1 ns` zatrzymuje
+kontroler na jego floor, bez sztucznego kolejnego kroku.
+
+### 32.83.2. Wynik managed
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-rk-sot-rollback-contract
+exit=0
+```
+
+Kontrakt potwierdza `status=FULLMAG_FEM_OK` z publikacją diagnostyki jednego
+odrzuconego podejścia, ale bez publikacji kandydata: `m`, `current_time=1 ns`,
+`step_count=0` i plateau-energy history pozostają niezmienione; licznik
+`relax_energy_rejected_attempts` i `stats.rejected_attempts` wynosi `1`, a
+stop reason jest jawnie `numerical_stagnation/gradient`.
+
+### 32.83.3. Granica kwalifikacji
+
+| Zakres | Status | Pozostaje otwarte |
+|---|---|---|
+| FEM CPU Heun, energy rejection, pulse `t_off`, rollback | `reference_executable` | pełna macierz energii i wielokrotne retry |
+| FEM GPU energy rejection/event rollback | `not_qualified` | urządzeniowy reject/restore i ponowienie |
+| RK4/RK23/RK45, FSAL, PWL/Tabulated | `not_qualified` | osobne event-aware energy/rollback gates |
+
+Wynik zamyka tylko brakujący bounded CPU-Heun przypadek odrzucenia
+energetycznego; nie zmienia globalnej oceny **88% implementacji / 62%
+gotowości produkcyjnej** ani statusu produkcyjnego transportu, Oersteda i
+continuum FEM↔FDM.

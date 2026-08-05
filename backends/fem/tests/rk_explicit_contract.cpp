@@ -1065,6 +1065,63 @@ void cpu_sot_pulse_failure_rollback_preserves_event_knot() {
         "post-pulse SOT step must publish the unclipped dt");
 }
 
+void cpu_sot_pulse_energy_rejection_rolls_back_at_event_knot() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    ctx.oersted = {};
+    ctx.state.current_time = 1.0e-9;
+    ctx.state.step_count = 0;
+    ctx.base_plan.dt_seconds = 1.5e-9;
+    ctx.adaptive_dt.current_dt = 1.5e-9;
+    ctx.adaptive_dt.dt_min = 1.0e-9;
+    ctx.adaptive_dt.max_reject = 2;
+    ctx.sot.enabled = true;
+    ctx.sot.formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    ctx.sot.current_density_am2 = 1.0e11;
+    ctx.sot.xi_dl = 0.12;
+    ctx.sot.xi_fl = -0.02;
+    ctx.sot.thickness = 1.5e-9;
+    ctx.sot.envelope_kind = FULLMAG_FEM_TIME_PULSE;
+    ctx.sot.envelope_time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    ctx.sot.envelope_amplitude = 1.0;
+    ctx.sot.envelope_t_on_s = 1.0e-9;
+    ctx.sot.envelope_t_off_s = 2.0e-9;
+    ctx.sot.sigma = {0.0, 1.0, 0.0};
+    ctx.material_fields.material.saturation_magnetisation = 800.0e3;
+    ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    ctx.stage_completion.relax_stop.torque_tolerance_apm = 1.0e-30;
+    ctx.stage_completion.relax_previous_total_energy_valid = true;
+    ctx.stage_completion.relax_previous_total_energy_j = -1.0e30;
+
+    const std::vector<double> initial_m = ctx.state.m_xyz;
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::run_backend_step(ctx, 1.5e-9, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check_vector_near(
+        ctx.state.m_xyz, initial_m, 0.0,
+        "energy-rejected SOT pulse must restore magnetization at event knot");
+    check_near(
+        ctx.state.current_time, 1.0e-9, 0.0,
+        "energy-rejected SOT pulse must restore time at event knot");
+    check(
+        ctx.state.step_count == 0u,
+        "energy-rejected SOT pulse must restore step index at event knot");
+    check(
+        ctx.stage_completion.relax_energy_window_count == 0u,
+        "energy-rejected SOT pulse must not publish a plateau sample");
+    check(
+        ctx.stage_completion.relax_energy_rejected_attempts == 1u,
+        "energy-rejected SOT pulse must count one rejected event-knot attempt");
+    check(
+        stats.rejected_attempts == 1u,
+        "public stats must expose the rejected SOT event-knot attempt");
+    check(
+        ctx.stage_completion.snapshot.has_reason == 1 &&
+            ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+        "energy-rejected SOT pulse must stop explicitly at controller floor");
+}
+
 void cpu_rk_success_commits_state_and_completion_once() {
     auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
     set_step_profile(ctx, true);
@@ -1267,6 +1324,7 @@ int main() {
     cpu_rk_guard_failures_preserve_committed_state();
     cpu_rk_failure_injection_rolls_back_complete_published_state();
     cpu_sot_pulse_failure_rollback_preserves_event_knot();
+    cpu_sot_pulse_energy_rejection_rolls_back_at_event_knot();
     cpu_rk_success_commits_state_and_completion_once();
     profiler_off_does_not_collect_rk_transaction_telemetry();
     cpu_relaxation_energy_rejection_rolls_back_until_stagnation();
