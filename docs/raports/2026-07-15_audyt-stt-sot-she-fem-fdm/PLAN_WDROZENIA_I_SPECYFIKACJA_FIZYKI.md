@@ -8622,3 +8622,34 @@ Następny krok implementacyjny jest jednoznaczny: zastąpić bounded nodal proje
 publikowanym `ConservativeCurrentView`, następnie wywołać OE-F1 lub OE-F2 z
 provenance źródła i dołączyć bezpośredni oracle oraz sweep `h`/`dt` do wspólnego
 benchmarku FEM↔FDM.
+
+## 32.90. Świeży authoring/IR/UI round-trip dla FEM Oersted (2026-08-05)
+
+Poza bramami C++ sprawdzono publiczne powierzchnie authoringu dla tego samego
+modelu źródła prądu. W środowisku z `PYTHONPATH=packages/fullmag-py/src`
+wykonano:
+
+```text
+python3 -m pytest -q -s \
+  packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py \
+  packages/fullmag-py/tests/test_stno_roundtrip.py
+30 passed, 45 subtests passed
+```
+
+W Control Room uruchomiono ukierunkowane testy modelu inspektorów, zasobów i
+selekcji:
+
+```text
+corepack pnpm exec vitest run \
+  src/modules/inspector/panels/SpinAuthoringInspectorModel.test.ts \
+  src/modules/inspector/panels/TransportAuthoringInspectorModel.test.ts \
+  src/modules/inspector/panels/PhysicsInteractionPanelModel.test.ts \
+  src/kernel/resources/spinAuthoringResources.test.ts
+Test Files 4 passed; Tests 32 passed
+```
+
+Dowód zamyka utratę parametrów `CurrentTransport`/`OerstedField` w Python ↔
+scene document ↔ builderze oraz podstawowe zasoby UI. Nie dowodzi jeszcze
+wykonania FEM z publicznego kliknięcia, browser smoke z realnym managed
+runtime ani propagacji capability `reference_executable` do ogólnej capability
+matrix; te bramy pozostają otwarte zgodnie z §32.89.3.
