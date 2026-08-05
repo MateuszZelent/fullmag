@@ -195,9 +195,12 @@ stage-local origin in the C ABI) and forwards that scalar into the persistent
 CUDA direct-torque kernel; magnetization, masks, material fields, and RHS stay
 device-resident. Planner and native-runner route the canonical descriptor to
 this path without a CPU fallback. Managed CPU and real CUDA tests compare a
-sinusoidal two-stage Heun step against an independent SI oracle. This bounded
-evidence does not yet qualify event-knot clipping, rejected-step event
-bookkeeping, tabulated-artifact materialization, FP32, long trajectories, FEM
+sinusoidal two-stage Heun step against an independent SI oracle; managed FEM
+CPU and real CUDA runtime tests also prove pulse-step clipping at `t_on` and
+`t_off`. The common native step policy handles pulse and PWL knots for both
+CPU and GPU, but
+this bounded evidence does not yet qualify rejected-step event bookkeeping,
+tabulated-artifact materialization, FP32, long trajectories, FEM
 multi-grid/convergence, or FEM↔FDM continuum agreement.
 
 #### 2.4.2 Stage-time envelope contract
@@ -213,9 +216,15 @@ piecewise-linear, and sinc envelopes are evaluated in FP64 using the canonical
 definitions in `TimeEnvelopeIR`; PWL endpoints are held and pulse support is
 `[t_on,t_off)`. The current FEM descriptor is append-only and versioned. A
 tabulated envelope remains fail-closed until its artifact is materialized into
-an owned native buffer. Stage evaluation is not event alignment: a future
-production integrator must clip a trial step at every pulse/PWL knot and keep
-the envelope cursor in the rejected-step rollback record.
+an owned native buffer. The native FEM step wrapper now clips a trial step at
+the first future pulse/PWL knot inside the requested interval, converting
+stage-local knots to absolute time before the RK transaction starts. The
+event search is stateless (it uses the immutable descriptor and accepted
+`current_time`), so there is no mutable envelope cursor to restore; the
+existing RK transaction still needs a dedicated rejected-step test before
+rollback semantics can be qualified. The managed runtime evidence covers pulse
+knots on CPU and GPU; a native contract test covers PWL and stage-local knot
+conversion.
 
 ### 2.5 Torque transferred from solved spin transport
 
@@ -638,7 +647,8 @@ production qualification.
 - [x] FEM CPU/MFEM independent oracle (bounded one-step managed reference)
 - [x] FEM GPU strict residency path (bounded non-tabulated stage-time one-step FP64 reference)
 - [x] FEM stage-time descriptor and CPU/GPU SI-oracle tests
-- [ ] Event-aligned stage runtime and rejected-step rollback
+- [x] FEM event-knot clipping for pulse/PWL envelopes (bounded CPU/GPU runtime and native contract tests)
+- [ ] Rejected-step rollback and event bookkeeping across all FEM integrators
 - [ ] Quantities, provenance, API, UI, and export
 - [ ] Managed runtime and browser validation evidence
 

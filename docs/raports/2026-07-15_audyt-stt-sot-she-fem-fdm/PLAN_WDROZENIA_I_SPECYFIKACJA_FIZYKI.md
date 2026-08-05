@@ -7987,3 +7987,76 @@ Ocena pozostaje **88% implementacji / 62% gotowości produkcyjnej**. Stage-time
 descriptor i rzeczywiste testy FEM CPU/GPU zwiększają dowód wykonywalności, ale
 nie dają podstaw do promocji `validated_workloads` ani deklaracji produkcyjnej
 zgodności.
+
+## 32.78. FEM prescribed SOT: event-knot clipping w runtime krokowym (2026-08-05)
+
+### 32.78.1. Problem numeryczny i zakres korekty
+
+Sama ewaluacja obwiedni w punktach RK nie wystarcza dla źródła z nieciągłością.
+Jeżeli pojedynczy trial step przechodzi przez `t_on`, `t_off` albo węzeł PWL,
+solver całkuje funkcję skokową jednym wieloetapowym przybliżeniem. Daje to
+wynik zależny od makrokroku i może ukryć błąd w porównaniu CPU/GPU. Dlatego
+common FEM runtime policy dzieli teraz żądany krok na pierwszym przyszłym węźle
+obwiedni, jeszcze przed utworzeniem `RkStepTransaction`.
+
+Implementacja jest ograniczona do deskryptora już istniejącego w FEM:
+
+- `next_sot_envelope_event_time(...)` w
+  `backends/fem/cpu/mfem/interactions/sot.hpp/.cpp` wyszukuje najbliższy
+  przyszły węzeł dla `Pulse` (`t_on`, `t_off`) i `PiecewiseLinear` (każdy punkt);
+- czasy `FULLMAG_FEM_TIME_STAGE_LOCAL` są przeliczane na czas absolutny przez
+  `stage_start_time_s`, a czasy absolutne pozostają bez przesunięcia;
+- `Constant`, `Sinusoidal` i `SincPulse` są gładkie i nie wymuszają event knot;
+- `run_backend_step(...)` w
+  `backends/fem/cpu/mfem/runtime/backend_step.cpp` stosuje `min(requested_dt,
+  event_time-current_time)` dla każdej próby, także po odrzuceniu energetycznym;
+- wyszukiwanie jest bezstanowe: nie ma kursora obwiedni do kopiowania ani
+  cofania, a istniejący rollback przywraca stan RK, magnetyzację i kontroler.
+
+To jest polityka wspólna dla FEM CPU i GPU, ponieważ GPU korzysta z tego samego
+sterownika kroku, a sama wartość skalarna obwiedni nadal trafia do
+device-resident torque path bez kopiowania `m`, RHS ani pól materiałowych.
+Nie jest to jeszcze dowód, że każdy integrator GPU ma pełne event-aware
+rollback; ten zakres pozostaje osobną bramą.
+
+### 32.78.2. Test-first i dowód managed
+
+Test runnera `native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots`
+został najpierw uruchomiony w RED po zaostrzeniu tolerancji czasowej: bez
+implementacji zwrócił `dt=2.5e-13 s` zamiast wymaganego `1.0e-13 s`. Po korekcie
+runtime ten sam test przeszedł w zarządzanym obrazie MFEM/CUDA.
+
+Wykonano:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-native-contract
+```
+
+Wynik końcowy `exit=0` obejmuje:
+
+- `FEM CUDA prescribed-SOT numeric contract PASS`;
+- `prescribed_sot_event_alignment_handles_pulse_pwl_and_stage_local_time` w
+  `fem_stt_contract` — pure contract dla impulsu, PWL i stage-local conversion;
+- `native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots` oraz
+  `..._on_gpu` — rzeczywisty FEM CPU i CUDA runtime: kroki `1e-13 s`,
+  `1e-13 s`, następnie `2.5e-13 s`, z czasami akceptacji `1e-13`, `2e-13`,
+  `4.5e-13 s`;
+- dotychczasowe FEM CPU/GPU one-step SI-oracle tests dla stałej i sinusoidalnej
+  obwiedni.
+
+### 32.78.3. Granica kwalifikacji po korekcie
+
+| Zakres | Status | Dowód |
+|---|---|---|
+| FEM CPU event clipping | `reference_executable` | managed pulse runtime + native PWL/stage-local contract |
+| FEM GPU event clipping | `reference_executable` | managed CUDA pulse runtime, wspólna orkiestracja, bez fallbacku |
+| Rejected-step rollback | `not_qualified` | brak testu wymuszonego odrzucenia z porównaniem stanu przed/po |
+| Wszystkie integratory RK | `not_qualified` | obecny runtime test używa Heuna |
+| FEM↔FDM | `equivalence_established=false` | brak wspólnej siatki, pola, trajektorii oraz h/dt convergence |
+
+Korekta usuwa konkretny błąd dyskretyzacji nieciągłej obwiedni w ścieżce FEM,
+ale nie zmienia globalnej oceny **88% implementacji / 62% gotowości
+produkcyjnej**. Następne wymagane bramy to: jawny rejected-step rollback test,
+materializacja `Tabulated`, event-aware wszystkie integratory, FP32, długa
+trajektoria, jeden serializowany artefakt siatki FEM CPU/GPU, trzy poziomy `h`,
+kontrolowany sweep `dt`, pełne pole oraz ilościowa FEM↔FDM common-limit.

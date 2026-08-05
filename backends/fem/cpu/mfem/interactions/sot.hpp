@@ -64,4 +64,17 @@ double evaluate_sot_envelope(
     double evaluation_time_s,
     double stage_start_time_s);
 
+/*
+ * Find the first discontinuity knot strictly after the accepted time and
+ * inside the requested trial interval. The returned time is absolute even
+ * when the envelope descriptor is stage-local. Smooth envelopes have no
+ * event knots and return false.
+ */
+bool next_sot_envelope_event_time(
+    const SotRuntimeState &sot,
+    double current_time_s,
+    double requested_dt_s,
+    double stage_start_time_s,
+    double &event_time_s);
+
 } // namespace fullmag::fem

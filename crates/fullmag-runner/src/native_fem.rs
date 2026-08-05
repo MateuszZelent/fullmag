@@ -9117,6 +9117,100 @@ mod tests {
         assert_native_stage_time_prescribed_sot_step(&plan, "GPU");
     }
 
+    fn make_pulse_prescribed_sot_plan(device: &str) -> FemPlanIR {
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some(device.to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Pulse {
+                amplitude: 1.0,
+                t_on_s: 1.0e-13,
+                t_off_s: 2.0e-13,
+            }),
+            sot_drive: None,
+        });
+        plan
+    }
+
+    fn assert_native_pulse_event_alignment(plan: &FemPlanIR, label: &str) {
+        let mut backend = NativeFemBackend::create(plan)
+            .unwrap_or_else(|error| panic!("{label} native FEM pulse SOT create: {error}"));
+        let first = backend
+            .step(2.5e-13)
+            .unwrap_or_else(|error| panic!("{label} first event-aligned FEM SOT step: {error}"));
+        assert!(
+            (first.dt - 1.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_on clipped dt: {}",
+            first.dt
+        );
+        assert!(
+            (first.time - 1.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_on clipped time: {}",
+            first.time
+        );
+
+        let second = backend
+            .step(2.5e-13)
+            .unwrap_or_else(|error| panic!("{label} second event-aligned FEM SOT step: {error}"));
+        assert!(
+            (second.dt - 1.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_off clipped dt: {}",
+            second.dt
+        );
+        assert!(
+            (second.time - 2.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_off clipped time: {}",
+            second.time
+        );
+
+        let third = backend
+            .step(2.5e-13)
+            .unwrap_or_else(|error| panic!("{label} post-pulse FEM SOT step: {error}"));
+        assert!(
+            (third.dt - 2.5e-13).abs() < 1.0e-25,
+            "{label} post-pulse dt remains requested: {}",
+            third.dt
+        );
+        assert!(
+            (third.time - 4.5e-13).abs() < 1.0e-25,
+            "{label} post-pulse time advances: {}",
+            third.time
+        );
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM SOT event-alignment test: MFEM stack unavailable");
+            return;
+        }
+        let plan = make_pulse_prescribed_sot_plan("cpu");
+        assert_native_pulse_event_alignment(&plan, "CPU");
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots_on_gpu() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+        let plan = make_pulse_prescribed_sot_plan("cuda");
+        assert_native_pulse_event_alignment(&plan, "GPU");
+    }
+
     #[test]
     fn managed_openmpi_defaults_use_isolated_single_rank_launch() {
         let source = include_str!("native_fem.rs");

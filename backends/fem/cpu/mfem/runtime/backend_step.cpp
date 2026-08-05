@@ -26,6 +26,7 @@
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <new>
@@ -228,10 +229,26 @@ int run_backend_step(
     // retry overhead remains visible in the final accepted-step diagnostics.
     ctx.stepper.transaction_telemetry = {};
     for (;;) {
+        double attempt_dt = active_dt;
+        double envelope_event_time_s = 0.0;
+        if (next_sot_envelope_event_time(
+                ctx.sot,
+                ctx.state.current_time,
+                active_dt,
+                ctx.zeeman.stage_start_time_s,
+                envelope_event_time_s)) {
+            attempt_dt = std::min(
+                active_dt,
+                envelope_event_time_s - ctx.state.current_time);
+            if (!std::isfinite(attempt_dt) || !(attempt_dt > 0.0)) {
+                error = "prescribed FEM SOT envelope event produced a non-positive trial step";
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+        }
         bool energy_rejected = false;
         const int status = run_backend_step_attempt(
             ctx,
-            active_dt,
+            attempt_dt,
             out_stats,
             error,
             energy_rejected);
@@ -265,7 +282,7 @@ int run_backend_step(
         energy_rejections += 1;
         ctx.adaptive_dt.rejected_steps += 1;
         ctx.stage_completion.relax_energy_rejected_attempts += 1;
-        if (!tighten_relaxation_controller(ctx, active_dt) ||
+        if (!tighten_relaxation_controller(ctx, attempt_dt) ||
             energy_rejections > ctx.adaptive_dt.max_reject) {
             set_stage_completion(
                 ctx,

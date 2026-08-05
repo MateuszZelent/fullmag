@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace fullmag::fem {
 namespace {
@@ -117,6 +118,100 @@ double evaluate_sot_envelope(
     default:
         return 0.0;
     }
+}
+
+bool next_sot_envelope_event_time(
+    const SotRuntimeState &sot,
+    double current_time_s,
+    double requested_dt_s,
+    double stage_start_time_s,
+    double &event_time_s)
+{
+    event_time_s = 0.0;
+    if (!std::isfinite(current_time_s) ||
+        !std::isfinite(requested_dt_s) || requested_dt_s <= 0.0) {
+        return false;
+    }
+    if (sot.envelope_kind != FULLMAG_FEM_TIME_PULSE &&
+        sot.envelope_kind != FULLMAG_FEM_TIME_PIECEWISE_LINEAR) {
+        return false;
+    }
+
+    const bool stage_local = sot.envelope_time_origin == FULLMAG_FEM_TIME_STAGE_LOCAL;
+    if (stage_local && !std::isfinite(stage_start_time_s)) {
+        return false;
+    }
+    const double horizon_time_s = current_time_s + requested_dt_s;
+    if (!std::isfinite(horizon_time_s)) {
+        return false;
+    }
+    double time_scale = std::max({
+        1.0,
+        std::abs(current_time_s),
+        std::abs(horizon_time_s),
+    });
+    if (stage_local) {
+        time_scale = std::max(time_scale, std::abs(stage_start_time_s));
+    }
+    const double tolerance_s = 32.0 * std::numeric_limits<double>::epsilon() * time_scale;
+    const double local_current_s = stage_local
+        ? current_time_s - stage_start_time_s
+        : current_time_s;
+    const double local_horizon_s = stage_local
+        ? horizon_time_s - stage_start_time_s
+        : horizon_time_s;
+    if (!std::isfinite(local_current_s) || !std::isfinite(local_horizon_s)) {
+        return false;
+    }
+    const double local_scale = std::max({
+        1.0,
+        std::abs(local_current_s),
+        std::abs(local_horizon_s),
+    });
+    const double local_tolerance_s =
+        32.0 * std::numeric_limits<double>::epsilon() * local_scale;
+
+    bool found = false;
+    double candidate_time_s = 0.0;
+    const auto consider_local_knot = [&](double local_knot_s) {
+        if (!std::isfinite(local_knot_s)) {
+            return;
+        }
+        const double absolute_knot_s = stage_local
+            ? stage_start_time_s + local_knot_s
+            : local_knot_s;
+        if (!std::isfinite(absolute_knot_s) ||
+            !(absolute_knot_s > current_time_s + tolerance_s) ||
+            absolute_knot_s > horizon_time_s + tolerance_s) {
+            return;
+        }
+        if (!found || absolute_knot_s < candidate_time_s) {
+            found = true;
+            candidate_time_s = absolute_knot_s;
+        }
+    };
+
+    if (sot.envelope_kind == FULLMAG_FEM_TIME_PULSE) {
+        consider_local_knot(sot.envelope_t_on_s);
+        consider_local_knot(sot.envelope_t_off_s);
+    } else if (!sot.envelope_point_times_s.empty()) {
+        const auto first_future = std::upper_bound(
+            sot.envelope_point_times_s.begin(),
+            sot.envelope_point_times_s.end(),
+            local_current_s + local_tolerance_s);
+        for (auto it = first_future; it != sot.envelope_point_times_s.end(); ++it) {
+            if (*it > local_horizon_s + local_tolerance_s) {
+                break;
+            }
+            consider_local_knot(*it);
+        }
+    }
+
+    if (!found) {
+        return false;
+    }
+    event_time_s = candidate_time_s;
+    return true;
 }
 
 bool initialize_sot_plan_fields(

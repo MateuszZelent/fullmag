@@ -610,6 +610,48 @@ void prescribed_sot_envelope_is_evaluated_at_rk_stage_time() {
         "piecewise-linear SOT envelope");
 }
 
+void prescribed_sot_event_alignment_handles_pulse_pwl_and_stage_local_time() {
+    fullmag::fem::SotRuntimeState sot;
+    sot.envelope_kind = FULLMAG_FEM_TIME_PULSE;
+    sot.envelope_time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    sot.envelope_t_on_s = 1.0e-13;
+    sot.envelope_t_off_s = 2.0e-13;
+    double event_time_s = 0.0;
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 0.0, 2.5e-13, 0.0, event_time_s),
+        "pulse must expose the first future event");
+    check_near(event_time_s, 1.0e-13, 1.0e-25, "pulse on event");
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 0.0, 2.5e-13, 1.0e12, event_time_s),
+        "absolute pulse timing must ignore the unused stage origin");
+    check_near(event_time_s, 1.0e-13, 1.0e-25, "absolute pulse event with unused stage origin");
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 1.0e-13, 2.5e-13, 0.0, event_time_s),
+        "pulse must expose the off event after the on knot");
+    check_near(event_time_s, 2.0e-13, 1.0e-25, "pulse off event");
+    check(
+        !fullmag::fem::next_sot_envelope_event_time(
+            sot, 2.0e-13, 2.5e-13, 0.0, event_time_s),
+        "pulse must not repeat an event at the accepted boundary");
+
+    sot.envelope_kind = FULLMAG_FEM_TIME_PIECEWISE_LINEAR;
+    sot.envelope_time_origin = FULLMAG_FEM_TIME_STAGE_LOCAL;
+    sot.envelope_point_times_s = {1.0e-13, 3.0e-13, 5.0e-13};
+    sot.envelope_point_values = {0.0, 1.0, 0.0};
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 1.0e-12, 3.0e-13, 1.0e-12, event_time_s),
+        "stage-local PWL must expose a future knot in absolute time");
+    check_near(event_time_s, 1.1e-12, 1.0e-24, "stage-local PWL event");
+    check(
+        !fullmag::fem::next_sot_envelope_event_time(
+            sot, 1.0e-12, 5.0e-14, 1.0e-12, event_time_s),
+        "PWL event outside the requested interval must not clip the step");
+}
+
 fullmag::fem::Context make_slonczewski_context() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 1;
@@ -1197,5 +1239,6 @@ int main() {
     prescribed_sot_rhs_respects_magnetic_and_target_masks();
     prescribed_sot_plan_import_validates_append_only_descriptor();
     prescribed_sot_envelope_is_evaluated_at_rk_stage_time();
+    prescribed_sot_event_alignment_handles_pulse_pwl_and_stage_local_time();
     return 0;
 }
