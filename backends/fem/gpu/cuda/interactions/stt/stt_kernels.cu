@@ -194,6 +194,7 @@ __global__ void zhang_li_element_rhs_kernel(
     const double *__restrict__ nodes_xyz,
     const uint32_t *__restrict__ elements,
     const uint8_t *__restrict__ magnetic_element_mask,
+    const uint8_t *__restrict__ active_element_mask,
     const double *__restrict__ mx,
     const double *__restrict__ my,
     const double *__restrict__ mz,
@@ -208,14 +209,19 @@ __global__ void zhang_li_element_rhs_kernel(
     double current_z,
     double degree,
     double beta,
+    double lande_g,
+    uint32_t formula_version,
     double uniform_alpha,
     int element_count)
 {
     constexpr double kMuB = 9.274009994e-24;
-    constexpr double kElectronCharge = 1.60217662e-19;
+    constexpr double kElectronChargeLegacy = 1.60217662e-19;
+    constexpr double kExactElectronCharge = 1.602176634e-19;
 
     const int e = blockIdx.x * blockDim.x + threadIdx.x;
-    if (e >= element_count || (magnetic_element_mask != nullptr && magnetic_element_mask[e] == 0u)) {
+    if (e >= element_count ||
+        (magnetic_element_mask != nullptr && magnetic_element_mask[e] == 0u) ||
+        (active_element_mask != nullptr && active_element_mask[e] == 0u)) {
         return;
     }
     const size_t base = static_cast<size_t>(e) * 4u;
@@ -238,8 +244,13 @@ __global__ void zhang_li_element_rhs_kernel(
     if (!(elem_ms > 0.0)) {
         return;
     }
-    const double drift_prefactor =
-        (degree * kMuB) / (kElectronCharge * elem_ms * (1.0 + beta * beta));
+    const bool canonical_v1 =
+        formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
+    const double drift_prefactor = canonical_v1
+        ? (lande_g * kMuB * degree) /
+            (2.0 * kExactElectronCharge * elem_ms)
+        : (degree * kMuB) /
+            (kElectronChargeLegacy * elem_ms * (1.0 + beta * beta));
     const double ux = current_x * drift_prefactor;
     const double uy = current_y * drift_prefactor;
     const double uz = current_z * drift_prefactor;
@@ -271,8 +282,11 @@ __global__ void zhang_li_element_rhs_kernel(
         const double dc_y = lmz * c_x - lmx * c_z;
         const double dc_z = lmx * c_y - lmy * c_x;
         const double inv_gilbert = 1.0 / (1.0 + alpha_i * alpha_i);
-        const double adiabatic_scale = (1.0 + alpha_i * beta) * inv_gilbert;
-        const double cross_scale = (alpha_i - beta) * inv_gilbert;
+        const double direction = canonical_v1 ? -1.0 : 1.0;
+        const double adiabatic_scale =
+            direction * (1.0 + alpha_i * beta) * inv_gilbert;
+        const double cross_scale =
+            direction * (alpha_i - beta) * inv_gilbert;
         stt_atomic_add_double(
             &work_x[node],
             nodal_weight * (adiabatic_scale * (-dc_x) + cross_scale * c_x));
@@ -389,6 +403,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
     const double *nodes_xyz,
     const uint32_t *elements,
     const uint8_t *magnetic_element_mask,
+    const uint8_t *active_element_mask,
     const double *mx,
     const double *my,
     const double *mz,
@@ -408,6 +423,8 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
     double current_z,
     double degree,
     double beta,
+    double lande_g,
+    uint32_t formula_version,
     double uniform_alpha,
     int element_count,
     int node_count,
@@ -425,6 +442,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
         nodes_xyz,
         elements,
         magnetic_element_mask,
+        active_element_mask,
         mx,
         my,
         mz,
@@ -439,6 +457,8 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
         current_z,
         degree,
         beta,
+        lande_g,
+        formula_version,
         uniform_alpha,
         element_count);
     zhang_li_normalize_add_rhs_kernel<<<node_blocks, kBlockSize, 0, stream>>>(

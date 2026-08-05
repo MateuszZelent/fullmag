@@ -131,6 +131,46 @@ void canonical_slonczewski_gpu_descriptor_contract_is_source_visible() {
         "FEM GPU bootstrap must upload the STT target mask through the state module");
 }
 
+void canonical_zhang_li_gpu_descriptor_matches_cpu_contract() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string kernels = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "stt" / "stt_kernels.cu");
+    const std::string header = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "stt" / "stt_kernels.hpp");
+    const std::string torque = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_zhang_li_torque.cu");
+    const std::string mesh_regions = read_text_file(
+        root / "gpu" / "cuda" / "mesh" / "mesh_regions_state.hpp");
+    const std::string runtime = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
+    const std::string state_header = read_text_file(
+        root / "gpu" / "cuda" / "state" / "gpu_state.hpp");
+
+    check(
+        header.find("active_element_mask") != std::string::npos &&
+            header.find("formula_version") != std::string::npos &&
+            header.find("lande_g") != std::string::npos,
+        "FEM GPU Zhang-Li descriptor must carry target-element mask, formula version, and Landé factor");
+    check(
+        kernels.find("FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1") != std::string::npos &&
+            kernels.find("kExactElectronCharge") != std::string::npos &&
+            kernels.find("active_element_mask") != std::string::npos &&
+            kernels.find("canonical_v1") != std::string::npos,
+        "FEM GPU Zhang-Li kernel must implement the canonical exact-constant branch and target-element mask");
+    check(
+        torque.find("ctx.stt.formula_version") != std::string::npos &&
+            torque.find("ctx.stt.lande_g") != std::string::npos &&
+            torque.find("active_element_mask") != std::string::npos,
+        "FEM GPU RK Zhang-Li wrapper must forward the canonical descriptor and target-element mask");
+    check(
+        mesh_regions.find("stt_active_element_mask") != std::string::npos,
+        "FEM GPU mesh-region state must own the optional Zhang-Li target-element mask");
+    check(
+        runtime.find("gpu_state_upload_stt_element_mask") != std::string::npos &&
+            state_header.find("gpu_state_upload_stt_element_mask") != std::string::npos,
+        "FEM GPU bootstrap must upload the Zhang-Li target-element mask through the state module");
+}
+
 void zhang_li_cip_is_owned_by_zhang_li_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string stt =
@@ -951,9 +991,9 @@ void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualificat
     const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_device_resident(zhang_li, reason);
     check(!zhang_li_plan.enabled, "canonical Zhang-Li GPU plan must be disabled");
     check(
-        reason.find("canonical Zhang-Li") != std::string::npos &&
-            reason.find("not qualified") != std::string::npos,
-        "canonical Zhang-Li GPU fail-closed reason must precede device prerequisites");
+        reason.find("FemGpuState") != std::string::npos &&
+            reason.find("device-resident") != std::string::npos,
+        "canonical Zhang-Li GPU plan must reach device prerequisites after formula qualification");
 }
 
 } // namespace
@@ -961,6 +1001,7 @@ void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualificat
 int main() {
     slonczewski_cpp_is_owned_by_slonczewski_module();
     canonical_slonczewski_gpu_descriptor_contract_is_source_visible();
+    canonical_zhang_li_gpu_descriptor_matches_cpu_contract();
     zhang_li_cip_is_owned_by_zhang_li_module();
     stt_plan_fields_are_owned_by_stt_module();
     stt_aggregate_header_documents_submodule_boundaries();

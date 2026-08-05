@@ -7615,3 +7615,117 @@ implementacji kwalifikowanej realizacji STT oraz dedykowana recepta/validator
 SP5. Ocena ogólna pozostaje **88% implementacji / 62% gotowości produkcyjnej**;
 nowe dane zwiększają zakres dowodu FEM, ale nie zwiększają kwalifikacji
 produkcyjnej.
+
+## 32.74. FEM SP5: canonical GPU RK45 po usunięciu błędu niezainicjalizowanych buforów (2026-08-05)
+
+### 32.74.1. Reprodukcja i przyczyna źródłowa
+
+Próba canonical FEM SP5 GPU z §32.73 weszła do `fem_native_gpu`, wykonała
+relaksację i kończyła się dopiero przy pierwszym etapie adaptacyjnego RK45:
+
+```text
+RunError: GPU RK stage contains zero, subnormal-norm, or nonfinite active magnetization
+```
+
+Nie był to problem fizyki Zhang--Li ani maski airboxu. `rk45_stage_sequence.cu`
+wywołuje pierwszy predictor ze współczynnikami `3/40, 9/40, 0, 0, 0, 0`, a
+`rk_attempt_setup.cu` wypełniał tylko `k[0]` i `k[1]`. Pozostałe bufory `k[2]`
+... `k[5]` pochodziły z `cudaMalloc` bez inicjalizacji. W IEEE CUDA wyrażenie
+`0.0 * NaN` nadal daje `NaN`, więc nieużywany współczynnik zatruwał
+magnetyzację przed normalizacją. Wyjaśnia to jednocześnie: przejście kanonicznego
+Heuna, przejście legacy Zhang--Li oraz awarię wyłącznie RK45.
+
+Korekta jest lokalna i bez zmiany równań: `gpu_device_zero_component(...)`
+zeruje każdą alokowaną składową, a `rk_workspace_memory.cpp` zeruje każdy bufor
+`rk.k[stage]` bezpośrednio po alokacji. Dodano kontrakt źródłowy wymagający tej
+własności. Nie dodano fallbacku GPU→CPU ani nie zmieniono znaku, jednostek,
+prefaktora `g/2`, maski target-element ani wersji `zhang_li.fullmag.v1`.
+
+### 32.74.2. Brama kompilacji i runtime
+
+Wykonano zarządzaną receptę:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-native-contract
+```
+
+Przeszły: dokumentacyjny gate LLG, wszystkie kontrakty C++ (w tym
+`FEM CUDA Zhang-Li skew-tetra numeric contract PASS`, `FEM CUDA Slonczewski v2
+numeric contract PASS` i `FEM CUDA RK guard contract PASS`), `fem_stt_contract`,
+`fem_source_facade_gpu_rk_contract`, oraz 36 testów `fullmag-fem-sys` ABI.
+Następnie przebudowano managed runtime przez container-backed
+`FULLMAG_RUNTIME_PRUNE=0 FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1
+FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime`. Bundel schema v3
+jest poprawny, zawiera HYPRE 1537 bindingów, `compute_capability=8.9`, a jego
+proweniencja to `git_commit=976d9f64c6ad7be917e257b47db9c81bb1d792a0`,
+`source_snapshot_sha256=4cdfef38333ac45fbca5f85e88a05c69bc4598f44ea975b5c762459481e54a1e`
+i `dirty_patch_sha256=128c442aefd3f68d96f13523b736d98d86773c5c305543d667229cd6103752f3`.
+
+### 32.74.3. Canonical FEM GPU SP5 — wynik wykonywalny
+
+Uruchomienie:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 \
+FULLMAG_SP5_FEM_MAX_ELEMENT_SIZE=12e-9 \
+FULLMAG_SP5_FEM_MIN_ELEMENT_SIZE=6e-9 \
+FULLMAG_SP5_FEM_UNIVERSE_MAX_ELEMENT_SIZE=40e-9 \
+FULLMAG_SP5_FEM_RELAX_ALGORITHM=projected_gradient_bb \
+FULLMAG_SP5_FEM_RELAX_MAX_STEPS=1 \
+FULLMAG_SP5_FEM_RUN_UNTIL=1e-12 \
+just fem-managed-headless gpu examples/mumax_standard_problem_5_fem.py \
+/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-canonical-rk45-fixed-20260805
+```
+
+Przebieg zakończył się `status=completed`, `resolved_engine_id=fem_native_gpu`,
+bez fallbacku, na NVIDIA GeForce RTX 4080 SUPER (`cc=8.9`, driver `13010`,
+CUDA runtime `12060`, MFEM CUDA, device HYPRE/CG+AMG). Siatka miała `1948`
+tet4 i `378` węzłów. Etap relaksacji wykonał jeden krok PGBB; etap dynamiczny
+zaakceptował `15` kroków adaptacyjnego RK45 (`rhs_evals=7`, `total_rhs_evals=108`)
+do `t=1e-12 s` (`1 ps`). Końcowe wartości:
+
+```text
+E_ex    = 2.5617206738781727e-18 J
+E_demag = 6.7522416631341160e-19 J
+E_total = 3.2369448401915845e-18 J
+max_torque = 3.614554848674329e-1 T
+```
+
+To jest pierwszy rzeczywisty canonical FEM GPU execution proof dla Zhang--Li
+v1. Nie jest jeszcze dowodem zgodności naukowej ani kwalifikacji `validated`.
+
+### 32.74.4. FEM CPU↔GPU — porównanie diagnostyczne
+
+Ten sam skrypt i parametry uruchomiono na CPU:
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-canonical-rk45-cpu-20260805`.
+CPU zakończył się jako `fem_cpu_native`, bez fallbacku, z `1929` tet4,
+`378` węzłami, jednym krokiem relaksacji i `13` zaakceptowanymi krokami
+dynamicznymi do `1 ps`; `E_total=3.304278269687727e-18 J`.
+Ostatnie skalary `avg(m)` wynoszą:
+
+```text
+GPU = ( 1.367294365756148e-2, -2.947574566757963e-3, 1.587525261999254e-3 )
+CPU = ( 1.104906208572696e-2, -1.092120400756062e-3, 1.412751546227598e-3 )
+||delta avg(m)||2 = 3.2183863218810814e-3
+delta E_total     = -6.733342949614231e-20 J
+```
+
+Wynik jest `diagnostic`, ponieważ Gmsh wygenerował niezależne topologie
+(`1948` kontra `1929` elementów), a liczba kroków adaptacyjnych również jest
+inna. Nie wolno na tej podstawie ogłaszać CPU/GPU parity. Do następnej bramy
+trzeba zamrozić jeden serializowany artefakt FEM i uruchomić CPU oraz GPU na
+identycznych węzłach/elementach, a następnie wykonać co najmniej trzy poziomy
+`h`, kontrolowany sweep `dt`, porównanie pełnego pola i test operatora
+Zhang--Li na wspólnym stanie początkowym.
+
+### 32.74.5. Korekta statusu i ocena celu
+
+Historyczny wpis §32.73 opisuje stan sprzed poprawki i pozostaje śladem
+reprodukcji blockera. Aktualny status FEM GPU zmienia się z
+`unsupported / semantic_only` na `reference-executable / bounded smoke` dla
+canonical `zhang_li.fullmag.v1`; `validated_workloads`, parity i
+`FEM↔FDM equivalence_established` pozostają bez zmian. FEM jest więc
+porównany na poziomie CPU, CUDA operatora, managed runtime i canonical SP5,
+nie tylko FDM. Ocena ogólna pozostaje **88% implementacji / 62% gotowości
+produkcyjnej**, ponieważ usunięcie błędu wykonawczego nie zamyka bram
+zbieżności, wspólnej siatki, pełnego pola ani niezależnego audytu fizyki.

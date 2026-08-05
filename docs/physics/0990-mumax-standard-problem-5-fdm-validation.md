@@ -1,8 +1,8 @@
 # MuMax3 Standard Problem 5 as a Fullmag FDM/FEM validation contract
 
-- Status: frozen source-to-IR reproduction with an executable FEM counterpart; isolated CPU↔CUDA MuMax3-operator step is qualified, but FDM/FEM full scientific qualification is not
+- Status: frozen source-to-IR reproduction with executable FEM CPU/CUDA counterparts; isolated CPU↔CUDA MuMax3-operator step is qualified, but FDM/FEM full scientific qualification is not
 - Owners: Fullmag FDM validation
-- Last updated: 2026-08-04
+- Last updated: 2026-08-05
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -370,6 +370,24 @@ uses `zhang_li.mumax3.v1`/`zl_mumax3_central_v1`, and the relaxed equilibria,
 finite-element mesh and Poisson--Robin demagnetization are not the same as the
 FDM tensor-FFT realization. The FEM run also comes from a managed runtime with
 `worktree_state=dirty`, so it is not a release qualification artifact.
+
+A canonical FEM GPU run now also completes a bounded `1 ps` two-stage smoke on
+the same public script after the CUDA RK45 workspace fix. The managed runtime
+resolved `fem_native_gpu` on an NVIDIA GeForce RTX 4080 SUPER (compute
+capability `8.9`, CUDA runtime `12060`, device HYPRE/CG+AMG), with no CPU
+fallback. The run used `1948` tet4 elements and `378` nodes, one PGBB
+relaxation step, then `15` accepted adaptive RK45 dynamic steps to
+`t=1e-12 s`; its final energies were
+`E_ex=2.5617206738781727e-18 J`,
+`E_demag=6.752241663134116e-19 J`, and
+`E_total=3.2369448401915845e-18 J`. The artifact is archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-canonical-rk45-fixed-20260805`.
+The matched CPU smoke is archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-canonical-rk45-cpu-20260805`;
+it used `1929` tet4 elements and `378` nodes, `13` accepted dynamic steps,
+and ended at `E_total=3.304278269687727e-18 J`. Because the independently
+generated meshes differ, this is an executable CPU/GPU diagnostic comparison,
+not a parity or equivalence result.
 
 The earlier one-step bounded probe remains archived at
 `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-probe-20260804-cpu-fixed-v2`.

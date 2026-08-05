@@ -129,6 +129,15 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
+    if (!gpu_state_upload_stt_element_mask(
+            ctx.gpu_state.device,
+            ctx.stt.active_element_mask.empty() ? nullptr : ctx.stt.active_element_mask.data(),
+            static_cast<uint64_t>(ctx.stt.active_element_mask.size()),
+            static_cast<uint64_t>(ctx.mesh.n_elements),
+            ctx.transfer_audit.audit,
+            error)) {
+        return gpu_bootstrap_failed(ctx, error);
+    }
     if (ctx.magnetoelastic.enabled && !ctx.magnetoelastic.uniform_strain) {
         if (!gpu_state_upload_magnetoelastic_strain(
                 ctx.gpu_state.device,

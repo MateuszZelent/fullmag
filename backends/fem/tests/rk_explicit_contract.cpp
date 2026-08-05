@@ -1075,6 +1075,9 @@ void cpu_relaxation_energy_rejection_rolls_back_until_stagnation() {
 
 void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
     const auto root = fem_source_root() / "gpu" / "cuda" / "integrators" / "rk";
+    const std::string gpu_rk_workspace = read_text_file(root / "rk_workspace_memory.cpp");
+    const std::string gpu_device_memory = read_text_file(
+        fem_source_root() / "gpu" / "cuda" / "state" / "device_memory.cpp");
     const std::string setup = read_text_file(root / "rk_attempt_setup.cu");
     const std::string rk4 = read_text_file(root / "rk4_stage_sequence.cu");
     const std::string rk23 = read_text_file(root / "rk23_stage_sequence.cu");
@@ -1086,6 +1089,13 @@ void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
     const std::string stage_schedule = read_text_file(root / "rk_stage_schedule.cu");
     const std::string backend_step = read_text_file(
         fem_source_root() / "cpu" / "mfem" / "runtime" / "backend_step.cpp");
+
+    check(
+        gpu_device_memory.find("bool gpu_device_zero_component(") != std::string::npos,
+        "GPU device-memory module must own the component zero-fill helper");
+    check(
+        gpu_rk_workspace.find("gpu_device_zero_component(rk.k[stage]") != std::string::npos,
+        "GPU RK workspace must initialize every stage buffer before weighted predictors");
 
     check(setup.find("ctx.state.current_time,") != std::string::npos,
           "GPU RK stage 0 must use t_n");

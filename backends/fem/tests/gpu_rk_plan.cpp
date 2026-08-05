@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -408,6 +409,29 @@ int main() {
         check(
             reason.find("Zhang-Li") == std::string::npos,
             "GPU RK device-resident path must not reject Zhang-Li STT after device geometry support");
+    }
+    {
+        auto blocked = ctx;
+        blocked.stt.zhang_li_enabled = true;
+        blocked.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
+        blocked.stt.active_element_mask = {1u};
+        blocked.gpu_state.device.mesh_geometry.uploaded = true;
+        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
+        require_blocked(
+            blocked,
+            "target-element mask",
+            "canonical GPU Zhang-Li must require an uploaded target-element mask");
+        blocked.gpu_state.device.mesh_regions.stt_active_element_mask =
+            reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1));
+        blocked.gpu_state.device.mesh_regions.stt_active_element_count = ctx.mesh.n_elements;
+        reason.clear();
+        const auto canonical_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
+        check(
+            reason.find("Zhang-Li") == std::string::npos,
+            "canonical GPU Zhang-Li must reach the remaining device-resident prerequisites after mask upload");
+        check(
+            canonical_plan.stage_count == 2,
+            "canonical GPU Zhang-Li must preserve the selected Heun stage count");
     }
     {
         auto blocked = ctx;

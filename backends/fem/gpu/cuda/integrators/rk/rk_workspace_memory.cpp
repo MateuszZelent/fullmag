@@ -30,7 +30,8 @@ bool gpu_rk_workspace_allocate(
         return false;
     }
     for (uint32_t stage = 0; stage < stage_count; ++stage) {
-        if (!gpu_device_allocate_component(rk.k[stage], node_count, device_bytes, error)) {
+        if (!gpu_device_allocate_component(rk.k[stage], node_count, device_bytes, error) ||
+            !gpu_device_zero_component(rk.k[stage], node_count, error)) {
             return false;
         }
     }

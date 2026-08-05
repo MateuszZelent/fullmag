@@ -1,10 +1,12 @@
 # FEM Spin-Transfer Torque
 
-- Status: versioned native FEM CPU contract; canonical v2 GPU fail-closed
-- Last updated: 2026-07-15
+- Status: versioned native FEM CPU/CUDA operator contract; canonical GPU smoke executable, scientific qualification pending
+- Last updated: 2026-08-05
 - Implementation: `backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
   `backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
-  `backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`
+  `backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`,
+  `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu`,
+  `backends/fem/gpu/cuda/integrators/rk/rk_zhang_li_torque.cu`
 - Test: `backends/fem/tests/stt_contract.cpp`
 - Shared sign reference: `docs/physics/stt_sign_conventions.md`
 
@@ -177,8 +179,13 @@ this same map, SI units, and torque equation.
   Slonczewski v2 RHS through the shared SI evaluator used by the FDM reference
   lane. Zhang-Li remains a separate native FEM implementation and is not
   implicitly enabled by this reference-lane change.
-- Canonical v2 FEM GPU plans fail closed before device execution and before GPU
-  provenance is created. Existing GPU kernels retain legacy semantics only.
+- Canonical Slonczewski v2 FEM GPU plans still fail closed before device
+  execution and before GPU provenance is created. Canonical Zhang--Li v1 now
+  has an executable CUDA realization with the same target-element mask, Landé
+  factor, signed-current prefactor, and Gilbert transform as the CPU contract;
+  its bounded managed SP5 smoke completes on the device, but it remains
+  `not_qualified` until matched CPU/GPU mesh, timestep, field, and convergence
+  gates pass. Legacy GPU routes retain their historical semantics.
 - `slonczewski_interface_flux.v1` is semantic-only until a distinct oriented
   surface functional is implemented; it is never bulk-lowered.
 - Multi-module spin-torque authoring remains semantic-only for FEM until the
@@ -199,7 +206,7 @@ Current gate:
   rejection of missing canonical thickness and interface-flux bulk lowering,
   an independent canonical Zhang-Li `g/2` oracle without a beta denominator,
   Zhang-Li current reversal and target-element masking, and canonical GPU
-  fail-closed behavior. It also retains the legacy Slonczewski and Zhang-Li
+  device-prerequisite behavior. It also retains the legacy Slonczewski and Zhang-Li
   regression cases, nonmagnetic-node masking, Slonczewski source-module
   ownership, Zhang-Li source-module ownership, Zhang-Li tetrahedral
   gradient/nodal projection, additive Zhang-Li behavior for an existing RHS,
@@ -225,6 +232,11 @@ Current gate:
   thresholds from the workload under test. See
   `docs/validation/fem-zhang-li-skew-tetra-convergence-study-v1.json` and
   `docs/validation/fem-zhang-li-skew-tetra-runtime-v1.json`.
+- `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-native-contract` now
+  also compiles and executes the CUDA canonical Zhang--Li branch after
+  zero-initializing every allocated RK stage buffer. This guards the RK45
+  predictor against IEEE `0 * NaN` propagation from uninitialized CUDA scratch;
+  it is a numerical-safety contract, not a scientific parity claim.
 - Provenance/migration: an artifact without `requested_execution` metadata is
   legacy and unverified for requested-versus-resolved execution intent; no
   backward migration is inferred, and it cannot satisfy the named

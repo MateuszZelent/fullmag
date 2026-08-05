@@ -78,12 +78,6 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
-    if (ctx.stt.zhang_li_enabled &&
-        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1) {
-        reason = "canonical Zhang-Li v1 is not qualified on FEM GPU; strict GPU execution is fail-closed before provenance";
-        return plan;
-    }
-
     if (!ctx.gpu_state.device.lifecycle.allocated) {
         reason = "GPU RK device-resident path requires allocated FemGpuState";
         return plan;
@@ -139,6 +133,12 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         (!ctx.gpu_state.device.mesh_geometry.uploaded ||
             ctx.gpu_state.device.mesh_geometry.element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK device-resident path requires device-resident mesh geometry for Zhang-Li STT";
+        return plan;
+    }
+    if (ctx.stt.zhang_li_enabled && !ctx.stt.active_element_mask.empty() &&
+        (ctx.gpu_state.device.mesh_regions.stt_active_element_mask == nullptr ||
+            ctx.gpu_state.device.mesh_regions.stt_active_element_count != ctx.mesh.n_elements)) {
+        reason = "GPU RK Zhang-Li STT requires the canonical target-element mask on device";
         return plan;
     }
     if (ctx.stt.slonczewski_enabled && gpu_rk_resolve_slonczewski_thickness(ctx) <= 0.0) {
