@@ -198,9 +198,10 @@ this path without a CPU fallback. Managed CPU and real CUDA tests compare a
 sinusoidal two-stage Heun step against an independent SI oracle; managed FEM
 CPU and real CUDA runtime tests also prove pulse-step clipping at `t_on` and
 `t_off`. The common native step policy handles pulse and PWL knots for both
-CPU and GPU, but
-this bounded evidence does not yet qualify rejected-step event bookkeeping,
-tabulated-artifact materialization, FP32, long trajectories, FEM
+CPU and GPU. A managed native FEM CPU Heun contract now injects a failure after
+candidate magnetization, verifies complete state rollback, and retries the same
+pulse at the same event knot. This bounded result does not yet qualify GPU or
+all-integrator rejected-step event bookkeeping, tabulated-artifact materialization, FP32, long trajectories, FEM
 multi-grid/convergence, or FEM↔FDM continuum agreement.
 
 #### 2.4.2 Stage-time envelope contract
@@ -220,11 +221,13 @@ an owned native buffer. The native FEM step wrapper now clips a trial step at
 the first future pulse/PWL knot inside the requested interval, converting
 stage-local knots to absolute time before the RK transaction starts. The
 event search is stateless (it uses the immutable descriptor and accepted
-`current_time`), so there is no mutable envelope cursor to restore; the
-existing RK transaction still needs a dedicated rejected-step test before
-rollback semantics can be qualified. The managed runtime evidence covers pulse
-knots on CPU and GPU; a native contract test covers PWL and stage-local knot
-conversion.
+`current_time`), so there is no mutable envelope cursor to restore. The managed
+native FEM CPU Heun contract covers the failure-after-candidate boundary: the
+magnetization, accepted time, and step index are restored, and a retry lands on
+the same pulse knot before the next knot. This is a bounded CPU proof, not a
+qualification of GPU, adaptive-energy rejection, or every RK integrator. The
+managed runtime evidence covers pulse knots on CPU and GPU; a native contract
+test covers PWL and stage-local knot conversion.
 
 ### 2.5 Torque transferred from solved spin transport
 
@@ -648,7 +651,8 @@ production qualification.
 - [x] FEM GPU strict residency path (bounded non-tabulated stage-time one-step FP64 reference)
 - [x] FEM stage-time descriptor and CPU/GPU SI-oracle tests
 - [x] FEM event-knot clipping for pulse/PWL envelopes (bounded CPU/GPU runtime and native contract tests)
-- [ ] Rejected-step rollback and event bookkeeping across all FEM integrators
+- [x] Bounded FEM CPU Heun rejected-step rollback and pulse event bookkeeping
+- [ ] Rejected-step rollback and event bookkeeping across GPU and all FEM integrators
 - [ ] Quantities, provenance, API, UI, and export
 - [ ] Managed runtime and browser validation evidence
 

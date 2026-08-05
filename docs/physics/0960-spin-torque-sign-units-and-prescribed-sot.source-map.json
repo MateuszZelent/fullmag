@@ -7,13 +7,13 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and non-tabulated stage-time FEM GPU reference realizations. Full trajectory, event alignment, multi-grid, and continuum qualification remain open."
+      "reason": "Canonical v2 thin-layer torque has an independent CPU double algebraic oracle; canonical prescribed SOT has bounded FEM CPU and non-tabulated stage-time FEM GPU reference realizations, including a managed CPU Heun rollback retry at the same pulse knot. Full trajectory, GPU/all-integrator rollback, multi-grid, and continuum qualification remain open."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "reference_executable",
-      "reason": "Managed CUDA Slonczewski one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, isolated 0.5x/1x/2x tangential current-scaling, constant-envelope prescribed-SOT one-step, and sinusoidal stage-time prescribed-SOT Heun SI-oracle contracts pass. Event alignment/rollback, full integrator-family, tabulated artifacts, multi-grid, and cross-backend qualification remain open."
+      "reason": "Managed CUDA Slonczewski one-step, bounded eight-step FP64 CPU↔GPU Heun trajectory, target-mask/current-reversal, isolated 0.5x/1x/2x tangential current-scaling, constant-envelope prescribed-SOT one-step, and sinusoidal stage-time prescribed-SOT Heun SI-oracle contracts pass. GPU event-aware rollback, full integrator-family, tabulated artifacts, multi-grid, and cross-backend qualification remain open; rollback is bounded only on the FEM CPU Heun lane."
     },
     {
       "solver": "FDM",

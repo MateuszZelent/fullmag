@@ -8050,7 +8050,7 @@ Wynik końcowy `exit=0` obejmuje:
 |---|---|---|
 | FEM CPU event clipping | `reference_executable` | managed pulse runtime + native PWL/stage-local contract |
 | FEM GPU event clipping | `reference_executable` | managed CUDA pulse runtime, wspólna orkiestracja, bez fallbacku |
-| Rejected-step rollback | `not_qualified` | brak testu wymuszonego odrzucenia z porównaniem stanu przed/po |
+| Rejected-step rollback | `reference_executable` (bounded CPU Heun) | nowy managed test wymusza awarię po kandydacie, porównuje stan przed/po i ponawia ten sam pulse knot; GPU, adaptive-energy i pozostałe integratory nadal otwarte |
 | Wszystkie integratory RK | `not_qualified` | obecny runtime test używa Heuna |
 | FEM↔FDM | `equivalence_established=false` | brak wspólnej siatki, pola, trajektorii oraz h/dt convergence |
 
@@ -8115,3 +8115,54 @@ wykonywalne CPU/MFEM common-limit dla STT oraz M1/M2 SHE, w tym 3D profile z
 monotoniczną zbieżnością spinu. Jest to jednak wąski, uczciwie opisany zakres
 referencyjny; nie zamyka produkcyjnego FEM STT/SOT/SHE ani pełnej parity FEM↔FDM.
 Ocena celu pozostaje **88% implementacji / 62% gotowości produkcyjnej**.
+
+## 32.80. FEM CPU rollback SOT pulse: odtworzenie stanu i ponowne lądowanie na knot (2026-08-05)
+
+### 32.80.1. Zakres dowodu
+
+Dodano osobną managed receptę `verify-fem-rk-sot-rollback-contract`, aby wynik
+nie był mieszany z szerokim inwentarzem źródeł FEM, który w tym dirty worktree
+wykrywa niezależny drift. Kontrakt uruchamia wyłącznie natywny
+`fem_rk_explicit_contract` w obrazie MFEM/CUDA; sama kwalifikowana ścieżka jest
+CPU-double i nie używa GPU fallbacku.
+
+Workload ma jeden węzeł magnetyczny, jawny `prescribed_sot.fullmag.v1` i
+obwiednię pulse `[1 ns, 2 ns)`. Żądany krok `1.5 ns` przecina oba końce
+impulsu. Failpoint `AfterCandidateMagnetization` jest uzbrajany przed pierwszą
+próbą.
+
+### 32.80.2. Wynik managed
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-rk-sot-rollback-contract
+exit=0
+```
+
+Wymuszona próba kończy się błędem, ale bez publikacji kandydata: magnetyzacja,
+`current_time=0` i `step_count=0` są identyczne jak przed próbą, a failpoint
+wykonuje się dokładnie raz. Po wyłączeniu failpointu trzy kolejne próby mają
+udokumentowane czasy i kroki:
+
+| Próba po rollbacku | Żądany `dt` | Zaakceptowany czas | Opublikowany `dt` | Powód |
+|---:|---:|---:|---:|---|
+| 1 | `1.5 ns` | `1.0 ns` | `1.0 ns` | `t_on` |
+| 2 | `1.5 ns` | `2.0 ns` | `1.0 ns` | `t_off` |
+| 3 | `1.5 ns` | `3.5 ns` | `1.5 ns` | poza pulse |
+
+To jest bezpośredni dowód, że rollback nie zużywa zdarzenia i nie przesuwa
+akceptowanego czasu przed retry. Jest to również dowód spójności półotwartego
+przedziału pulse z polityką event clipping.
+
+### 32.80.3. Granica kwalifikacji
+
+| Zakres | Status po teście | Pozostaje otwarte |
+|---|---|---|
+| FEM CPU Heun, failure-after-candidate + pulse knot | `reference_executable` | pełna macierz błędów/failpointów i stanów publikowanych |
+| FEM CPU adaptive-energy rejected attempt | `not_qualified` | osobny test odrzucenia energetycznego z tym samym eventem |
+| FEM GPU rollback/event knot | `not_qualified` | urządzeniowy rollback i rezydencja po awarii |
+| FEM RK4/RK23/RK45 rollback/event knot | `not_qualified` | testy każdego tableau oraz FSAL po retry |
+| PWL i stage-local rollback | `not_qualified` | obecny test native obejmuje ich konwersję/clipping, nie awarię po kandydacie |
+
+Wynik podnosi wyłącznie bounded FEM CPU rollback evidence. Nie zmienia statusu
+FEM GPU transportu, solved-current Oersteda, pełnej FEM↔FDM trajektorii ani
+globalnej oceny **88% implementacji / 62% gotowości produkcyjnej**.

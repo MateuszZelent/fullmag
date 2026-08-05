@@ -984,6 +984,87 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
     }
 }
 
+void cpu_sot_pulse_failure_rollback_preserves_event_knot() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    ctx.oersted = {};
+    ctx.state.current_time = 0.0;
+    ctx.state.step_count = 0;
+    ctx.sot.enabled = true;
+    ctx.sot.formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    ctx.sot.current_density_am2 = 1.0e11;
+    ctx.sot.xi_dl = 0.12;
+    ctx.sot.xi_fl = -0.02;
+    ctx.sot.thickness = 1.5e-9;
+    ctx.sot.envelope_kind = FULLMAG_FEM_TIME_PULSE;
+    ctx.sot.envelope_time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    ctx.sot.envelope_amplitude = 1.0;
+    ctx.sot.envelope_t_on_s = 1.0e-9;
+    ctx.sot.envelope_t_off_s = 2.0e-9;
+    ctx.sot.sigma = {0.0, 1.0, 0.0};
+    ctx.material_fields.material.saturation_magnetisation = 800.0e3;
+
+    const std::vector<double> initial_m = ctx.state.m_xyz;
+    const double initial_time = ctx.state.current_time;
+    const uint64_t initial_step = ctx.state.step_count;
+    ctx.stepper.failure_injection.next =
+        fullmag::fem::RkStepFailurePoint::AfterCandidateMagnetization;
+
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    const int failed_status = fullmag::fem::run_backend_step(
+        ctx, 1.5e-9, stats, error);
+    check(failed_status != FULLMAG_FEM_OK,
+          "SOT pulse injected failure must fail the FEM backend step");
+    check(!error.empty(), "SOT pulse injected failure must carry a reason");
+    check(ctx.stepper.failure_injection.injected_count == 1u,
+          "SOT pulse failpoint must execute exactly once");
+    check_vector_near(
+        ctx.state.m_xyz, initial_m, 0.0,
+        "SOT pulse rollback must restore magnetization before event knot");
+    check_near(
+        ctx.state.current_time, initial_time, 0.0,
+        "SOT pulse rollback must restore time before event knot");
+    check(ctx.state.step_count == initial_step,
+          "SOT pulse rollback must restore step index before event knot");
+
+    ctx.stepper.failure_injection.next = fullmag::fem::RkStepFailurePoint::None;
+    stats = {};
+    error.clear();
+    check(
+        fullmag::fem::run_backend_step(ctx, 1.5e-9, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check_near(
+        ctx.state.current_time, 1.0e-9, 1.0e-21,
+        "retry after SOT rollback must stop exactly at pulse onset");
+    check_near(
+        stats.dt_seconds, 1.0e-9, 1.0e-21,
+        "retry after SOT rollback must publish clipped pulse-onset dt");
+
+    stats = {};
+    error.clear();
+    check(
+        fullmag::fem::run_backend_step(ctx, 1.5e-9, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check_near(
+        ctx.state.current_time, 2.0e-9, 1.0e-21,
+        "second SOT pulse step must stop exactly at pulse offset");
+    check_near(
+        stats.dt_seconds, 1.0e-9, 1.0e-21,
+        "second SOT pulse step must publish clipped pulse-offset dt");
+
+    stats = {};
+    error.clear();
+    check(
+        fullmag::fem::run_backend_step(ctx, 1.5e-9, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check_near(
+        ctx.state.current_time, 3.5e-9, 1.0e-21,
+        "post-pulse SOT step must resume the requested dt");
+    check_near(
+        stats.dt_seconds, 1.5e-9, 1.0e-21,
+        "post-pulse SOT step must publish the unclipped dt");
+}
+
 void cpu_rk_success_commits_state_and_completion_once() {
     auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
     set_step_profile(ctx, true);
@@ -1185,6 +1266,7 @@ int main() {
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
     cpu_rk_guard_failures_preserve_committed_state();
     cpu_rk_failure_injection_rolls_back_complete_published_state();
+    cpu_sot_pulse_failure_rollback_preserves_event_knot();
     cpu_rk_success_commits_state_and_completion_once();
     profiler_off_does_not_collect_rk_transaction_telemetry();
     cpu_relaxation_energy_rejection_rolls_back_until_stagnation();
