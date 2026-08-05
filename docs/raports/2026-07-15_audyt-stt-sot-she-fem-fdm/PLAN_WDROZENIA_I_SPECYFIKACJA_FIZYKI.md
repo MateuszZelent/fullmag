@@ -8299,3 +8299,48 @@ Wynik zamyka tylko brakujący bounded CPU-Heun przypadek odrzucenia
 energetycznego; nie zmienia globalnej oceny **88% implementacji / 62%
 gotowości produkcyjnej** ani statusu produkcyjnego transportu, Oersteda i
 continuum FEM↔FDM.
+
+## 32.84. FEM CPU↔CUDA prescribed SOT przez wszystkie tableaus RK (2026-08-05)
+
+### 32.84.1. Zakres
+
+Dodano `native_fem_prescribed_sot_cpu_gpu_integrator_parity_when_mfem_stack_is_available`.
+Test tworzy ten sam pięciowęzłowy mesh i descriptor prescribed-SOT dla
+`Heun`, `Rk4`, `Rk23` i `Rk45`, uruchamia CPU oraz CUDA z `dt=1e-15 s`, a
+następnie porównuje pełne `m`, `max_rhs` i liczbę ewaluacji RHS. Jest to wspólny
+stage path bez adaptive timestep, demaga i pola zewnętrznego; maska celu i
+normalizacja SI pozostają aktywne.
+
+### 32.84.2. Wynik managed
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-prescribed-sot-integrator-parity-contract
+exit=0
+```
+
+Wynik testu:
+
+```text
+prescribed SOT Heun CPU/GPU m CPU/GPU parity: L2=4.452262e-16 Linf=2.220446e-16
+prescribed SOT Rk4 CPU/GPU m CPU/GPU parity: L2=4.452262e-16 Linf=2.220446e-16
+prescribed SOT Rk23 CPU/GPU m CPU/GPU parity: L2=4.452262e-16 Linf=2.220446e-16
+prescribed SOT Rk45 CPU/GPU m CPU/GPU parity: L2=4.452262e-16 Linf=2.220446e-16
+test result: ok. 1 passed; 0 failed; 972 filtered out
+```
+
+Dla Heun i RK4 liczba RHS była identyczna. Dla embedded RK23/RK45 kontrakt
+dopuszcza różnicę jednego wewnętrznego RHS wynikającą z final-refresh/FSAL;
+nie stwierdzono różnicy fizycznego `m` ani `max_rhs`.
+
+### 32.84.3. Granica kwalifikacji
+
+| Zakres | Status | Pozostaje otwarte |
+|---|---|---|
+| FEM CPU↔CUDA prescribed SOT, Heun/RK4/RK23/RK45, jeden krok FP64 | `reference_executable` | adaptive error/event rollback dla każdego tableau |
+| FEM GPU pulse/PWL/Sinc rollback | `not_qualified` | device snapshot/restore i event-aware retry |
+| FEM CPU↔CUDA długotrwała trajektoria dla RK4/RK23/RK45 | `not_qualified` | wielokrokowe artefakty i stabilność |
+
+Gate zamyka brak dowodu, że SOT jest testowane wyłącznie przez Heuna. Nie
+awansuje jeszcze `validated_workloads`, FP32, transportu SHE, solved-current
+Oersteda ani continuum FEM↔FDM; globalna ocena pozostaje **88% implementacji /
+62% gotowości produkcyjnej**.

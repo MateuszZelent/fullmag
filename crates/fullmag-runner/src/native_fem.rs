@@ -9658,6 +9658,90 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_prescribed_sot_cpu_gpu_integrator_parity_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        for integrator in [
+            IntegratorChoice::Heun,
+            IntegratorChoice::Rk4,
+            IntegratorChoice::Rk23,
+            IntegratorChoice::Rk45,
+        ] {
+            let mut plan = make_exchange_only_plan();
+            plan.external_field = None;
+            plan.fixed_timestep = Some(1.0e-15);
+            plan.integrator = Some(integrator);
+            plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+                formula_version: "prescribed_sot.fullmag.v1".to_string(),
+                operator_version: None,
+                realization_version: None,
+                target: None,
+                stack_normal: None,
+                lande_g: None,
+                active_node_mask: Some(vec![true, true, false, true, true]),
+                active_element_mask: None,
+                sot_current_density: Some(1.0e11),
+                sot_xi_dl: Some(0.12),
+                sot_xi_fl: Some(-0.02),
+                sot_sigma: Some([0.0, 1.0, 0.0]),
+                sot_thickness: Some(1.5e-9),
+                sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+                sot_drive: None,
+            });
+
+            let cpu_plan = native_plan_for_device(&plan, "cpu");
+            let gpu_plan = native_plan_for_device(&plan, "cuda");
+            assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+            let dt = plan.fixed_timestep.expect("fixed SOT integrator timestep");
+            let mut cpu = NativeFemBackend::create(&cpu_plan)
+                .unwrap_or_else(|error| panic!("native FEM SOT CPU {integrator:?} create: {error}"));
+            let mut gpu = NativeFemBackend::create(&gpu_plan)
+                .unwrap_or_else(|error| panic!("native FEM SOT GPU {integrator:?} create: {error}"));
+            let cpu_stats = cpu
+                .step(dt)
+                .unwrap_or_else(|error| panic!("native FEM SOT CPU {integrator:?} step: {error}"));
+            let gpu_stats = gpu
+                .step(dt)
+                .unwrap_or_else(|error| panic!("native FEM SOT GPU {integrator:?} step: {error}"));
+            let cpu_m = cpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT integrator CPU m");
+            let gpu_m = gpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT integrator GPU m");
+            assert_vector_field_parity(
+                &format!("prescribed SOT {integrator:?} CPU/GPU m"),
+                &cpu_m,
+                &gpu_m,
+                5e-7,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("prescribed SOT {integrator:?} CPU/GPU max_rhs"),
+                cpu_stats.max_dm_dt,
+                gpu_stats.max_dm_dt,
+                5e-7,
+                1e-9,
+            );
+            if matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45) {
+                assert!(
+                    (cpu_stats.rhs_evals as i64 - gpu_stats.rhs_evals as i64).abs() <= 1,
+                    "prescribed SOT {integrator:?} CPU/GPU embedded RHS count mismatch: cpu={}, gpu={}",
+                    cpu_stats.rhs_evals,
+                    gpu_stats.rhs_evals
+                );
+            } else {
+                assert_eq!(
+                    cpu_stats.rhs_evals, gpu_stats.rhs_evals,
+                    "prescribed SOT {integrator:?} CPU/GPU RHS count mismatch"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available() {
         if !native_cpu_gpu_parity_available(false) {
             return;

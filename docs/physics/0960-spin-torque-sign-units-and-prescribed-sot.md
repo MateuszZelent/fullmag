@@ -222,6 +222,13 @@ scalar RHS metrics agree at every accepted step. This is a bounded FEM
 CPU/GPU temporal-parity result; it does not qualify FP32, adaptive rejection,
 other RK tableaus, or continuum FEM↔FDM equivalence.
 
+The same descriptor is also exercised for one fixed-step CPU/CUDA trial with
+Heun, RK4, RK23, and RK45. Full magnetization and `max_rhs` agree for every
+tableau; embedded RK23/RK45 may differ by one internal RHS evaluation because
+of their final-refresh/FSAL accounting. This qualifies the bounded direct-SOT
+stage path across the supported tableaus, not event-aware rollback or adaptive
+GPU rejection.
+
 #### 2.4.2 Stage-time envelope contract
 
 For an explicit RK stage `i`, the source multiplier is evaluated at
@@ -675,6 +682,7 @@ and production qualification.
 - [x] Bounded FEM CPU Heun rejected-step rollback, energy rejection, and pulse event bookkeeping
 - [x] Bounded FEM CPU↔FDM prescribed-SOT common-limit (one-cell/multi-node, constant envelope)
 - [x] Bounded FEM CPU↔CUDA prescribed-SOT eight-step fixed-step trajectory parity
+- [x] Bounded FEM CPU↔CUDA prescribed-SOT parity for Heun/RK4/RK23/RK45
 - [ ] Rejected-step rollback and event bookkeeping across GPU and all FEM integrators
 - [ ] Quantities, provenance, API, UI, and export
 - [ ] Managed runtime and browser validation evidence
